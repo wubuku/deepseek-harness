@@ -896,6 +896,14 @@ describe('mapStopReason / mapUsage', () => {
     }))).toMatchObject({ kind: 'error', failure: { code: 'QUOTA' } })
     expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'HTTP 500: backend down' })))
       .toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+    // Gateways announce capacity pressure in prose without a 5xx status; the
+    // condition is transient server-side load and must retry as SERVER.
+    expect(mapStopReason(assistant({
+      stopReason: 'error',
+      errorMessage: 'Our servers are currently overloaded. Please try again later.',
+    }))).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+    expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'the upstream provider is overloaded' })))
+      .toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
     expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'provider timed out' })))
       .toMatchObject({ kind: 'error', failure: { code: 'TIMEOUT' } })
     expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'ECONNRESET socket closed' })))
