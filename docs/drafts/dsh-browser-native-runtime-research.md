@@ -14,6 +14,19 @@ description: "评估 DSH 浏览器原生运行时、云端工作区与可选本�
 
 建议采用 **Browser-first，而非强制 Browser-only** 的产品路线：浏览器承担交互式 Agent 计算，云端保存已提交事实并提供可选的持续执行能力，本机桥接只提供明确授权的操作系统能力。WASM 是补充工具能力的一种手段，不是迁移整个 DSH runtime 的前提。
 
+对“直接在浏览器运行 DSH”的可行性判定如下：
+
+| 运行目标 | 判定 | 说明 |
+|---|---|---|
+| 在 Dedicated Worker 中运行选定 DSH Host composition | 已有实现基础 | 现有 runtime 已能装载 Host tree 并连接页面 Client |
+| 不依赖配套本地 Node Host 运行 Agent Loop | 架构上可行，尚未完成 live-loop 验收 | 需要确定性模型与工具闭环验证 |
+| 在真实浏览器中接入真实模型 | 路径可行，尚未端到端验证 | 需要目标 Worker runtime、模型代理、流式与取消测试 |
+| 原封不动运行完整 Node 版 DSH | 不可作为目标 | Node native module、系统进程和任意二进制需要替代 provider |
+| 仅依赖浏览器实现页面关闭后的持续执行 | 不可行 | 需要具有独立生命周期的云端 worker |
+| 在 Main Thread 中运行 Host 与 Agent Loop | 不属于建议架构 | Main Thread 继续承载 Client Cordis、Client model 与 UI |
+
+本文所说的“直接在浏览器运行”指运行时不依赖配套的本地 Node Host，DSH Host 与 Agent Loop 驻留 Dedicated Worker。它不表示无需预构建镜像、无需 Node 兼容层、无需远程模型服务，也不表示可以离线使用全部能力。
+
 ## Table of Contents
 
 - [调研范围与证据边界](#调研范围与证据边界)
@@ -48,6 +61,8 @@ description: "评估 DSH 浏览器原生运行时、云端工作区与可选本�
 | 建议设计 | 面向目标产品的方案，不代表已经实现或已经确定的技术选型 |
 
 本文依据源码与已有测试内容评估实现基础，未重新执行浏览器 preview、真实模型调用、OPFS 恢复或多标签页并发实验。因此，“存在实现与验收代码”不等于“本次调研已实测通过”，更不等于“已满足生产环境要求”。
+
+Browser-native 描述 Agent 计算的部署位置，不描述模型、Workspace、身份认证和持久化服务的位置。浏览器中的 Agent Loop 仍然调用云端模型代理、Cloud Workspace 与 Cloud Session；“无配套 Node Host”只排除为浏览器会话运行本地或云端 Node 进程作为 Agent 执行者，不等于离线运行或无后端产品。
 
 这是一份架构调研稿，不替代各实现包的行为说明。当前行为以对应源码和 package README 为准；建议设计需要通过后续决策记录、实现和验收转化为产品承诺。
 
@@ -184,7 +199,7 @@ Worker 从镜像内启动 Host，页面通过 postMessage 上的 synthetic HTTP 
 
 兼容层的精确能力范围应以 runtime README 和对应实现为准，而不是根据模块名判断。
 
-“浏览器可运行”的验收标准也不是源码零 Node import：`agent-loop` 自身直接导入 `node:crypto` 的 `randomUUID`，由兼容层的 crypto 实现承接。正确标准是可达依赖闭包内的每个 Node builtin 和 native 依赖，都由 Worker runtime 提供真实替代实现，或在 packer 阶段被明确识别为不可用并 fail loud；不存在未解析、未声明或静默走 Node-only 分支的依赖。
+“浏览器可运行”的验收标准也不是源码零 Node import：`agent-loop` 自身直接导入 `node:crypto` 的 `randomUUID`，由兼容层的 crypto 实现承接。正确标准是可达依赖闭包内的每个 Node builtin 和 native 依赖，都由 Worker runtime 提供真实替代实现，或被明确识别为不可用并 fail loud；不存在未解析、未声明或静默走 Node-only 分支的依赖。当前 packer 只把静态闭包中的部分缺失依赖转化为构建失败，部分外部 unresolved request 会留到运行时才暴露，因此 Agent Loop 验收应产出机器生成的可达依赖报告：区分真实实现、结构性 stub、明确不支持项、未解析外部依赖与 native 依赖，并证明被执行路径不经过 stub 或 Node-only 分支。
 
 ### MemoryVfs 留有持久化扩展接口
 
@@ -391,6 +406,8 @@ Provider 注册某个 Service Definition 时，应满足该服务当前消费者
 
 Cloud Session 应复用当前 Session event log 与 surface/projection 语义——`turn/start`、`step/start`、`assistant/message`、`tool/call` 与 `tool/result` 的 `callId` 关联、`assistant/attempt`、surface replacement 与恢复语义——而不是为云端另定义一组平行事件。外部 wire protocol 可以采用不同 carrier 与路由，但必须保留事件顺序、序号连续、source attribution 与重连 baseline 语义。
 
+Browser 与 Cloud 执行都必须保持 model-visible ⟺ logged 不变量：进入模型请求的输入，以及模型后续可见的 Assistant 与工具结果，必须能够从 Session event log 重建。瞬时 token delta 可以在 attempt settlement 前保持非持久状态，但已结算的 request context、Assistant message、tool call/result 与 source attribution 不能只存在于 UI delta、Client model 或 Worker 内存中。
+
 ### 将 OPFS 作为副本，而不是隐藏的第二事实源
 
 建议显式区分已同步数据、待同步修改和可重建缓存。云端确认状态与本地工作状态可以暂时不同，但必须能够判断差异、恢复同步并处理冲突。
@@ -421,8 +438,8 @@ Shell、Docker 和本机浏览器控制具有更大的副作用范围，不宜�
 
 | 阶段 | 交付范围 | 验收条件 |
 |---|---|---|
-| 1. 浏览器确定性执行闭环 | 在现有 Worker runtime 中接入测试模型与测试工具 | 无配套 Node Host；完成 prompt → tool call → tool result → final answer；覆盖流式、取消、异常和并发归属 |
-| 2. 真实模型接入 | 同域认证代理与目标 provider 适配 | 在真实浏览器中验证增量输出、工具参数、错误、取消和用量；平台 key 不进入浏览器 |
+| 1. 浏览器确定性执行闭环 | 在现有 Worker runtime 中接入 scripted 模型适配器与测试工具，并产出可达依赖闭包报告 | 无配套 Node Host 与网络模型；适配器至少执行两次模型调用，完成 prompt → 流式 tool call → 实际工具执行 → tool result → 第二次模型请求 → final response；覆盖模型流取消、工具 dispatch 前与执行中取消、并行工具结果仍按模型顺序提交、异常、并发发起者归属，以及同一 Worker 生命周期内 Session event readback |
+| 2. 真实模型接入 | 同域认证代理与目标 provider 适配 | 在真实浏览器中验证增量输出、工具参数、错误、取消和用量；分别确认浏览器停止消费、代理传播取消与上游连接终止，不以传播成功承诺上游生成或计费立即停止；平台 key 不进入浏览器 |
 | 3. 浏览器持久化 | OPFS-backed sink、恢复和状态提示 | 刷新后恢复；写入失败可观察；内存、本地持久化和云端确认不混淆 |
 | 4. Cloud Session | 远端存储、查询与 owner 协议 | 双写者冲突被拒；旧代际不能继续 append；断线后的结果可查询或明确未知 |
 | 5. Cloud Workspace | Workspace 身份、文件版本、内容服务和授权 view | 两客户端基于版本提交；冲突明确；跨租户访问被拒；大目录按需取数 |
@@ -431,7 +448,7 @@ Shell、Docker 和本机浏览器控制具有更大的副作用范围，不宜�
 | 8. Durable 执行 | 云端 worker、接管、崩溃恢复与 supervisor | 有序 handoff 在声明的安全点继续；异常退出从最近云端确认状态恢复并关闭被中断的 turn；旧 owner 被隔离；未完成副作用可对账或明确未知 |
 | 9. 扩展能力 | 进程执行、Git、容器、离线合并、多 Worker Agent | 每项独立定义能力、资源上限、失败行为和验收 |
 
-阶段 1 的目标是证明 Agent core 的真实执行，而不是只展示历史。阶段 2 再验证真实 provider，避免把浏览器运行时问题与模型网络问题混在一起。
+阶段 1 的目标是证明 Agent core 的真实执行，而不是只展示历史：第二次模型请求必须实际包含第一次的工具结果，最终响应来自第二次模型调用。阶段 2 再验证真实 provider，避免把浏览器运行时问题与模型网络问题混在一起。
 
 Cloud Session 和 Cloud Workspace 可以并行设计，但应共享身份和授权原则，而不是共享一个职责不明的“大状态服务”。
 
@@ -448,14 +465,15 @@ Native Bridge 不是浏览器原生 runtime 的前置条件。首个可用版本
 - 运行时第三方代码的分发、签名、lowering 与执行隔离没有方案；首期镜像打包只是受限形态。
 - Session 与 Workspace 双服务提交的对账协议（operation id、receipt、恢复查询）需要随 Cloud 服务一并设计。
 - runtime、packer、模块转换协议与镜像需要配套的兼容性检查和升级策略；不能默认任意版本互换。
+- 浏览器产品化指标尚未测量：初始镜像下载大小、cold boot 与 hydration 时间、首次 Agent 响应延迟、Worker 内存高水位、长 Session 投影内存、OPFS 写入与恢复耗时、command Worker 启动开销，以及浏览器支持矩阵与 cross-origin isolation 依赖。产品化决策应以目标浏览器实测为准，并记录测试镜像、Session 与 Workspace 规模及设备等级，不预先承诺数字。
 
 ## 结论
 
-该架构值得继续推进，理由不是“浏览器已经足够强大”，而是 DSH 已经具备两项直接相关的代码基础：**Worker 内的 Host 装载实现，以及通过现有服务接口提供远程能力的 provider 模式。**是否继续投入，建议由三个递进的决策门决定：
+该架构值得继续推进，理由不是“浏览器已经足够强大”，而是 DSH 已经具备两项直接相关的代码基础：**Worker 内的 Host 装载实现，以及通过现有服务接口提供远程能力的 provider 模式。**是否继续投入，建议由三项递进的验收条件决定：
 
-1. **Browser live Agent loop。** Worker 中完成 prompt → mock model 流式 → tool call → tool result → second model step → final response，覆盖取消、`turn`/`step` 边界事件、并发发起者归属与刷新恢复。未通过前不建设云端状态服务。
-2. **持久化与失败语义可观察。** 内存成功、本地持久化、云端提交三种状态可区分；checkpoint 失败 fail closed；OPFS 与云端失败在 UI 与恢复流程中可见；副作用结果未知时不自动重试。
-3. **云端授权与所有权通过对抗验证。** principal 到 Session/Workspace/Blob/租约的重新授权、旧 owner fencing、双写者拒绝、Browser/Cloud 安全点 handoff 与跨租户拒绝都有验收；不互信执行具备进程级以上隔离。
+1. **浏览器 live Agent loop 验收。** Worker 中完成 prompt → scripted model 流式 → tool call → tool result → 第二次模型请求 → final response，覆盖取消、`turn`/`step` 边界事件与并发发起者归属，并在同一 Worker 生命周期内可从 Session event 重建模型可见内容。该验收未通过前，不以 Cloud Session、Cloud Workspace 或 UI 建设替代执行闭环验证；Cloud 服务的接口、身份和授权设计可以并行。
+2. **持久化与失败状态验收。** 内存成功、本地持久化、云端提交三种状态可区分；checkpoint 失败 fail closed；OPFS 与云端失败在 UI 与恢复流程中可见；副作用结果未知时不自动重试。
+3. **云端授权与执行所有权验收。** principal 到 Session/Workspace/Blob/租约的重新授权、旧 owner fencing、双写者拒绝、Browser/Cloud 安全点 handoff 与跨租户拒绝都有验收；不互信执行具备进程级以上隔离。
 
 最终目标不是把 Node 应用的所有能力复制到浏览器，而是让同一套 Agent 与工具服务接口在不同执行位置获得明确、可验证的能力，并使状态提交、权限和故障恢复具有一致语义。
 
