@@ -228,7 +228,7 @@ Client 平面经 `remotes → gateway → connection → webserver` 分层（[ap
 - 该 sandbox 隔离全局但不是安全边界，服务可达真实运行时；
 - 不安装 npm 依赖、不修改 `cordis.yml`、不编辑仓库文件；
 - 浏览器半边是受限纯 JavaScript，经守卫的 slots 与服务注册 UI；
-- Web bundle 装载 runner 与 UI 基础设施，但模型可见的 `tool-cordis` 是 opt-in：由 `cordis` preset 或显式 overlay（如 [示例配置](../../apps/cli/config/examples/cordis/cordis.yml)）加入，默认 Web 会话不具备该能力。
+- Web bundle 装载 runner 与 UI 基础设施，但模型可见的 `tool-cordis` 是 opt-in：由 `cordis` preset（[`presets/cordis/agent.cordis.yml`](../../packages/preset/agent-presets/presets/cordis/agent.cordis.yml)）或显式 overlay 加入，默认 Web 会话不具备该能力。
 
 持久化 preset 创作是复制式：系统 preset 只读，创建副本后在用户目录编辑。因此准确表述是：DSH 支持受信任 Agent 在运行时定义和装载受限临时扩展；不支持不可信 Agent 安全地重写核心并永久部署。`cordis` preset 自身把模型写入的代码标记为等同 Shell 访问的信任级别。
 
