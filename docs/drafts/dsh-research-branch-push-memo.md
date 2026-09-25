@@ -17,11 +17,17 @@ description: "在 wubuku/deepseek-harness 研究 fork 上存档研究文档并�
 | 远端 | 地址 | 用途 |
 |---|---|---|
 | `origin` | `https://github.com/wubuku/deepseek-harness.git` | 研究用 fork，研究成果推送到这里 |
-| `upstream` | `https://github.com/deepseek-ai/deepseek-harness.git` | 官方仓库，只用于同步 `master` |
+| `upstream` | `https://github.com/deepseek-ai/deepseek-harness.git` | 官方仓库，用于解析选定的 release tag 作为研究基线 |
 
 `origin` 的 fetch 走 HTTPS，push 走 SSH。这个不对称是刻意的，原因见后文。
 
-本地 `master` 跟踪 `upstream/master`，`research` 跟踪 `origin/research`。研究文档只提交到 `research`，不要推到 `master`。
+本地 `master` 可以跟踪 `upstream/master`，但 `research` 不以它为隐含基线。当前 `research` 基于 `upstream` 的 `dsh-v0.1.7-rc.2`，其新增内容限于研究文档和配对清单；研究文档只提交到 `research`，不要推到 `master`。
+
+## 研究基线与低冲突更新
+
+研究分支应尽量只包含相对选定上游 tag 的新增研究内容。不要把 `upstream/master` 直接合并到 `research`，也不要把与研究无关的产品源码修复混入研究提交；这会让后续切换到新的 release tag 时产生大范围冲突。
+
+需要更新基线时，先抓取目标 tag，再从该 tag 建立临时工作点，并只重放研究提交或应用研究文档的差异。完成后检查 `git diff <tag>..research`：结果应只包含 `docs/drafts/` 下的研究文档和必要的研究文档清单改动。若必须改写已推送的 `research` 历史，先记录远端 OID，再使用带 lease 的 `git push --force-with-lease`。
 
 ## 推送前的前置检查
 
@@ -42,7 +48,7 @@ pnpm run test:docs
 
 ### 原因一：OAuth token 缺少 workflow scope
 
-同步上游 `master` 后，分支上会带上 `.github/workflows/` 下若干文件的改动。GitHub 对 workflow 文件的创建、更新和删除都强制要求 token 具备 `workflow` scope，缺少时远端直接拒绝：
+如果把上游 `master` 直接合并到研究分支，分支上可能带上 `.github/workflows/` 下若干文件的改动。GitHub 对 workflow 文件的创建、更新和删除都强制要求 token 具备 `workflow` scope，缺少时远端直接拒绝：
 
 ```text
 ! [remote rejected] research -> research (refusing to allow an OAuth App to
@@ -104,7 +110,7 @@ git push origin research
 
 ## 依赖未装齐时的处理
 
-`pre-push` 钩子会运行增量 typecheck。同步上游 `master` 后 lockfile 可能新增依赖，本地未安装时 typecheck 会以 `Cannot find module` 失败，例如：
+`pre-push` 钩子会运行增量 typecheck。切换到新的上游 tag 后 lockfile 可能新增依赖，本地未安装时 typecheck 会以 `Cannot find module` 失败，例如：
 
 ```text
 packages/boot/hmr/tests/profile.spec.ts(10,27): error TS2307: Cannot find module 'chokidar'

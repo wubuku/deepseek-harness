@@ -103,7 +103,7 @@ Agent Loop 通过 `ctx.llm`、`ctx.sessions`、`ctx.tools`、`ctx.fs`、`ctx.san
 
 ### Agent Preset 适合产品能力分级
 
-不同 SaaS 档位可以表达为不同的 Agent Preset：只读检索、编码、研究、自动化、企业私有工具。这比为每个档位复制 Agent Loop 更可维护。需要区分两个轴：Profile 决定部署哪个应用组合，Agent Preset 决定某个 Agent 拥有哪些工具与 Prompt（见 [agent-presets](../../packages/preset/agent-presets/README.md)）。产品档位通常落在 Preset 上，部署形态（是否有浏览器客户端、是否走 JSON-RPC）落在 Profile 上。
+不同 SaaS 档位可以表达为不同的 Agent Preset：只读检索、编码、研究、自动化、企业私有工具。这比为每个档位复制 Agent Loop 更可维护。需要区分两个轴：Profile 决定部署哪个应用组合，Agent Preset 决定某个 Agent 拥有哪些工具与 Prompt（见 [agent-preset](../../packages/preset/agent-preset/README.md)）。产品档位通常落在 Preset 上，部署形态（是否有浏览器客户端、是否走 JSON-RPC）落在 Profile 上。
 
 ### Session event log 适合审计与恢复
 
