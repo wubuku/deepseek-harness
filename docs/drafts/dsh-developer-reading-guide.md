@@ -82,7 +82,7 @@ Profile 定义见 [app-boot](../../packages/boot/app-boot/README.md)：`web` 是
 
 Bundle 是分发格式而非编译产物：package manifest 声明 `dsh.bundle` 的包才是 bundle layer。`dsh plugin` 把安装委托给 pnpm，只有声明为 bundle 的依赖进入 profile 层，普通依赖不会自动变成组合层。
 
-Agent Preset 见 [agent-presets](../../packages/preset/agent-presets/README.md)：preset 是每会话组合，`standard` 是完整编码 Agent，`ptc` 以 PTC 呈现替代普通 workflow 工具，`minimal` 是固定 Prompt 加单一持久 Shell，`cordis` 附加运行时检查与动态组合工具。preset 以 standing mount 按代共享，会话按 scope 加入；切换 preset 的公开操作只允许在空 Session 上进行，Turn 开始后会收到 `agent-preset/locked`。
+Agent Preset 见 [agent-preset](../../packages/preset/agent-preset/README.md)：preset 是每会话组合，`standard` 是完整编码 Agent，`ptc` 以 PTC 呈现替代普通 workflow 工具，`minimal` 是固定 Prompt 加单一持久 Shell，`cordis` 附加运行时检查与动态组合工具。preset 以 standing mount 按代共享，会话按 scope 加入；切换 preset 的公开操作只允许在空 Session 上进行，Turn 开始后会收到 `agent-preset/locked`。
 
 Dynamic Cordis Package 是第四种机制：进程内、会话拥有、版本化的临时扩展，详见[动态插件与自修改边界](#动态插件与自修改边界)。
 
@@ -144,7 +144,7 @@ E. Client and Transport Plane
 
 ### 第 8 步：Preset 与动态扩展
 
-读 [agent-presets README](../../packages/preset/agent-presets/README.md)、四个 [preset 文件](../../packages/preset/agent-presets/presets/standard/agent.cordis.yml)（同目录含 `ptc`/`minimal`/`cordis`）以及 [extensions 组](../../packages/extensions/README.md)下四个包的 README。
+读 [agent-preset README](../../packages/preset/agent-preset/README.md)、四个 [preset 文件](../../packages/bundle/web-app/presets/standard.patch.yml)（同目录含 `ptc`/`minimal`/`cordis`）以及 [extensions 组](../../packages/extensions/README.md)下四个包的 README。
 
 ## Cordis 机制精读要点
 
@@ -228,7 +228,7 @@ Client 平面经 `remotes → gateway → connection → webserver` 分层（[ap
 - 该 sandbox 隔离全局但不是安全边界，服务可达真实运行时；
 - 不安装 npm 依赖、不修改 `cordis.yml`、不编辑仓库文件；
 - 浏览器半边是受限纯 JavaScript，经守卫的 slots 与服务注册 UI；
-- Web bundle 装载 runner 与 UI 基础设施，但模型可见的 `tool-cordis` 是 opt-in：由 `cordis` preset（[`presets/cordis/agent.cordis.yml`](../../packages/preset/agent-presets/presets/cordis/agent.cordis.yml)）或显式 overlay 加入，默认 Web 会话不具备该能力。
+- Web bundle 装载 runner 与 UI 基础设施，但模型可见的 `tool-cordis` 是 opt-in：由 `cordis` preset（[`presets/cordis.patch.yml`](../../packages/bundle/web-app/presets/cordis.patch.yml)）或显式 overlay 加入，默认 Web 会话不具备该能力。
 
 持久化 preset 创作是复制式：系统 preset 只读，创建副本后在用户目录编辑。因此准确表述是：DSH 支持受信任 Agent 在运行时定义和装载受限临时扩展；不支持不可信 Agent 安全地重写核心并永久部署。`cordis` preset 自身把模型写入的代码标记为等同 Shell 访问的信任级别。
 

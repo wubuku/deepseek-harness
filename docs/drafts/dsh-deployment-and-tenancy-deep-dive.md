@@ -49,7 +49,7 @@ DSH 只支持通过命名 profile 启动 Node 应用。profile 按顺序组合 b
 
 Host 服务通常在 profile 启动时装载并由同一棵树共享，包括 filesystem provider、Session persistence、storage、settings、credentials、attachments、spill store、subagent registry、HTTP server 和 API Gateway。一个 Node 进程还共享堆、模块缓存、`process.env` 和操作系统权限。
 
-标准 Agent preset 属于 Agent 可见的组合。preset roster 为每个 preset id 的每个 composition 文件 generation 建立一个 single-flight standing mount；同一 generation 的 Agent 共享工具和提示注册。文件变化后，未来 Agent 使用新 generation，已经加入的 Agent 继续使用旧 generation。Session log、inbox、Agent 状态以及插件按 Session 或 Agent 建立的可变状态仍各自归属，详见 [agent-presets](../../packages/preset/agent-presets/src/index.ts) 和 [standard preset](../../packages/preset/agent-presets/presets/standard/agent.cordis.yml)。
+标准 Agent preset 属于 Agent 可见的组合。preset roster 为每个 preset id 的每个 composition 文件 generation 建立一个 single-flight standing mount；同一 generation 的 Agent 共享工具和提示注册。文件变化后，未来 Agent 使用新 generation，已经加入的 Agent 继续使用旧 generation。Session log、inbox、Agent 状态以及插件按 Session 或 Agent 建立的可变状态仍各自归属，详见 [agent-preset](../../packages/preset/agent-preset/src/index.ts) 和 [standard preset](../../packages/bundle/web-app/presets/standard.patch.yml)。
 
 Cordis scope 控制注册可见性，不隔离进程资源。当前 Web Session Controller 优先复用 live Agent；它没有按 HTTP 请求释放 Agent 的通用路径，Agent 会一直存在到拥有其生命周期的组件或整棵树将其 dispose。
 
@@ -73,7 +73,7 @@ POSIX 的锁绑定 inode，绝不能删除仍由 live writer 使用的 `session.
 
 ### 标准 preset 的 Agent 能力
 
-标准 preset 组合文件读写、文件搜索、Shell、filesystem Skills、工作区指令和 `present` 等编码能力。`tool-fs` 需要 `ctx.fs`；`skill-filesystem` 直接读取宿主文件系统而不注入 `ctx.fs`，`agent-instructions` 读取工作区指令；`present` 需要 filesystem 和 Session projection 服务。完整条目以 [standard preset](../../packages/preset/agent-presets/presets/standard/agent.cordis.yml) 为准。
+标准 preset 组合文件读写、文件搜索、Shell、filesystem Skills、工作区指令和 `present` 等编码能力。`tool-fs` 需要 `ctx.fs`；`skill-filesystem` 直接读取宿主文件系统而不注入 `ctx.fs`，`agent-instructions` 读取工作区指令；`present` 需要 filesystem 和 Session projection 服务。完整条目以 [standard preset](../../packages/bundle/web-app/presets/standard.patch.yml) 为准。
 
 `tool-fs-search` 是一个重要例外：它不注入 `ctx.fs`，而是通过 `ctx.subprocess.spawn()` 调用 npm 依赖携带的 `@vscode/ripgrep`。因此它不要求系统安装 `rg`，也不经过 Shell，但仍需要本地 subprocess 能力和可访问的工作目录，详见 [filesystem search tools](../../packages/fs/tool-fs-search/src/index.ts)。
 
@@ -99,7 +99,7 @@ Harness home、临时目录以及启用的 Host provider 仍需可写位置。�
 
 ### 无模型可见文件能力
 
-这类部署需要从自定义 profile 和 preset 中移除所有模型可见的文件与进程能力，包括直接访问宿主文件系统的 `skill-filesystem`、注入 `fs` 的 `tool-fs` 与 `present`、基于 subprocess 的文件搜索、工作区指令和 Shell。配置行 id 与 package 名并不总相同，因此应以当前 [base composition](../../packages/bundle/base/cordis.patch.yml) 和 [standard preset](../../packages/preset/agent-presets/presets/standard/agent.cordis.yml) 为准，而不是维护一份复制的完整清单。
+这类部署需要从自定义 profile 和 preset 中移除所有模型可见的文件与进程能力，包括直接访问宿主文件系统的 `skill-filesystem`、注入 `fs` 的 `tool-fs` 与 `present`、基于 subprocess 的文件搜索、工作区指令和 Shell。配置行 id 与 package 名并不总相同，因此应以当前 [base composition](../../packages/bundle/base/cordis.patch.yml) 和 [standard preset](../../packages/bundle/web-app/presets/standard.patch.yml) 为准，而不是维护一份复制的完整清单。
 
 移除 Agent 工具不会自动移除 Host 对磁盘的使用。完整 Web GUI 仍需要为 Session persistence/query、workspace storage、attachments 和 uploads 提供相容实现；不能通过删除几个文件工具就获得无持久磁盘的 Web，详见 [Session Controller](../../packages/api/session-controller/src/index.ts)。
 
@@ -185,7 +185,7 @@ Agent 提供 `cancel()`、`whenIdle()` 和生命周期扩展点。`agent/pre-ste
 ## Further Exploration
 
 - [DSH Architecture](../architecture.md) — profile 组合、应用启动、Agent loop 和能力 provider 的总体地图。
-- [Standard preset](../../packages/preset/agent-presets/presets/standard/agent.cordis.yml) — 标准 Agent 当前挂载的工具与提示组合。
+- [Standard preset](../../packages/bundle/web-app/presets/standard.patch.yml) — 标准 Agent 当前挂载的工具与提示组合。
 - [JSONL Session persistence](../../packages/session/session-persistence-jsonl/README.md) — Session durability、物理存储限制和跨进程单写者租约。
 - [Sandbox](../../packages/sandbox/sandbox/README.md) — same-world confinement、平台 runner 与外部隔离责任。
 - [Browser connection](../../packages/client/connection/README.md) — Web launch token、cookie、Host/Origin 检查和远程暴露限制。
