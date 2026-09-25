@@ -82,6 +82,18 @@ describe('RepositoryCleaner', () => {
     expect(existsSync(join(root, 'native/system/tsconfig.tsbuildinfo'))).toBe(false)
   })
 
+  it('keeps dedicated TypeScript outputs scoped to their own directory', async () => {
+    const root = fixture()
+    addProject(root, 'apps/desktop-tests', 'lib/desktop-keyboard-test-types')
+    write(join(root, 'apps/desktop-tests/lib/desktop-keyboard-test-types/index.d.ts'))
+    write(join(root, 'apps/desktop-tests/lib/index.js'))
+
+    await new RepositoryCleaner(root).clean()
+
+    expect(existsSync(join(root, 'apps/desktop-tests/lib/desktop-keyboard-test-types'))).toBe(false)
+    expect(existsSync(join(root, 'apps/desktop-tests/lib/index.js'))).toBe(true)
+  })
+
   it('refuses project outputs reached through a symlink outside the repository', async () => {
     const root = fixture()
     const externalProject = fixture()

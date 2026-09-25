@@ -122,8 +122,6 @@ export class RepositoryCleaner {
     const outputs = new Set<string>()
     const pending = [join(this.root, 'tsconfig.json')]
     const visited = new Set<string>()
-    const nativeEntryOutput = join(this.root, 'native/system/packages/entry/lib')
-
     while (pending.length > 0) {
       const nextConfigPath = pending.pop()
       if (nextConfigPath === undefined) break
@@ -134,14 +132,12 @@ export class RepositoryCleaner {
       const parsed = parseConfig(configPath)
       if (parsed.options.outDir !== undefined) {
         const typesDirectory = resolve(parsed.options.outDir)
+        // The usual `lib/types` output shares its parent with tsdown bundles,
+        // so remove the complete `lib` tree. Dedicated outputs such as the
+        // Desktop keyboard-test declarations must remain scoped to themselves.
         const outputDirectory = basename(typesDirectory) === 'types'
           ? dirname(typesDirectory)
-          : typesDirectory === nativeEntryOutput
-            ? typesDirectory
-            : undefined
-        if (outputDirectory === undefined) {
-          throw new Error(`clean: expected TypeScript outDir to end in /types: ${repositoryPath(this.root, typesDirectory)}`)
-        }
+          : typesDirectory
         this.assertRepositoryTarget(outputDirectory)
         outputs.add(outputDirectory)
       }
