@@ -240,7 +240,7 @@ pending work 已写入外部队列
 owner lease 已释放
 ```
 
-列表中的“等待中的审批”不能只检查 Session event。`userQuestions.ask()` 和审批请求的等待 Promise 绑定当前进程；只有 pending interaction、调用者归属和答案已经转移到外部持久服务，Worker 才能安全终止。平台还必须确认没有需要当前进程继续持有的 PTY、subprocess 或 Executor 任务，并在终止前关闭或 fencing Session writer。停止流程是：拒绝新任务、停止调度、等待安全点、flush Session、持久化 pending inbox 与 job 状态、释放 owner lease、关闭流、终止进程。
+列表中的“等待中的审批”不能只检查 Session event。阻塞式 `userQuestions.ask()` 和审批请求的等待 Promise 绑定当前进程；`askTimed()` 可以在前台等待窗口结束后返回 `pending`，并由 `userQuestions` projection 从 Session 事件重建为 `continued` 问题。之后的 `answer` Remote 方法会把迟到答案作为 `user-question-reply` 送入新的或恢复的根 Agent，但不会恢复原来的 Promise，也不会为已经结束的 Tool call 伪造结果。审批仍是一次性、同进程的 `asked`/`decided` 审计机制，不提供通用的 continued 路径。平台仍必须持久化交互归属、恢复所需的 Session 状态，并处理 PTY、subprocess 和 Executor 任务的所有权；停止流程是：拒绝新任务、停止调度、等待安全点、flush Session、保存可恢复状态、释放 owner lease、关闭流、终止进程。
 
 不能把 `kill` 当作普通缩零。模型流、Shell、外部 API、文件写入、浏览器自动化和审批都无法在进程被杀后继续。恢复时不能假设原来的 Promise 会在新进程继续、模型流会从原位置接续、工具调用可以安全重试、或文件写入没有发生。正确做法是标记旧 Worker 失效、由新 Worker 取得新 generation、恢复最后一个安全 Session 状态、把未确认的工具结果标为未知，再由策略决定查询、人工确认或重新执行。当前 DSH 没有内置这套跨进程接管流程，它属于平台侧需要实现的部分。
 
@@ -457,7 +457,7 @@ DSH 适合作为云端 SaaS Agent 的 Agent Execution Plane，不适合作为完
 
 推荐的初始架构是一个租户一个 DSH Worker 进程、多 Session、一个 Session 同时只有一个 owner、Session 与 Workspace 外部持久化、空闲可缩零、Shell 与任意代码与 native 工具交给 External Executor。这里的“一租户一 Worker”是路由、故障和资源管理选择，不是租户安全隔离承诺；互不信任租户必须再加容器、microVM 或等价执行边界。扩展顺序是先按租户拆进程而不是按 Session 拆，再按资源与信任级别分池，最后在必要时引入更强的 OS、container 或 microVM 边界。
 
-最终可以这样划分职责：Tenant 是授权、配额、数据与计费边界；Session 是 Agent 对话与执行历史边界；Worker 是可回收的 Agent 执行所有者；Workspace 是可版本化的文件数据边界；Executor 是高风险副作用执行边界；SaaS Control Plane 是身份、调度、路由、授权与恢复的协调者。DSH 当前提供事件日志、checkpoint 所需的扩展点和进程内行为，但不提供跨 Worker ownership、pending interaction 移交、统一执行世界、Workspace writer fencing 或 Session/Workspace 配对恢复协议。
+最终可以这样划分职责：Tenant 是授权、配额、数据与计费边界；Session 是 Agent 对话与执行历史边界；Worker 是可回收的 Agent 执行所有者；Workspace 是可版本化的文件数据边界；Executor 是高风险副作用执行边界；SaaS Control Plane 是身份、调度、路由、授权与恢复的协调者。DSH 当前提供事件日志、checkpoint 所需的扩展点、timed user question 的特定 continued 路径和进程内行为，但不提供跨 Worker ownership、通用 pending interaction 移交、统一执行世界、Workspace writer fencing 或 Session/Workspace 配对恢复协议。
 
 ## Further Exploration
 
@@ -481,6 +481,6 @@ DSH 适合作为云端 SaaS Agent 的 Agent Execution Plane，不适合作为完
 
 本文是 `docs/drafts/` 中的单语研究草稿，不是 DSH 已实现的产品契约，也不构成性能、安全或合规保证。文中 Control Plane、Worker Manager、External Executor、Cloud Workspace、lease 与 fencing 均不存在于当前仓库，属于平台侧设计建议；进程数、配额、时限和阶段划分需要按实际威胁模型与压测结果调整。
 
-`scripts/translation-pairing.manifest.json` 将本文排除在双语配对之外，网站也不发布它。下一步如果进入实现，应由独立 Agent Note 定义 tenant 资源归属、Worker activity 与 drain、Session owner 与 generation、pending interaction 移交和 Executor 任务协议，并在实现时更新拥有这些行为的 package README、持久化类型确认、两个 SDK 的投影与快照。
+`scripts/translation-pairing.manifest.json` 将本文排除在双语配对之外，网站也不发布它。下一步如果进入实现，应由独立 Agent Note 定义 tenant 资源归属、Worker activity 与 drain、Session owner 与 generation、通用 pending interaction 移交和 Executor 任务协议，并在实现时更新拥有这些行为的 package README、持久化类型确认、两个 SDK 的投影与快照。
 
 </details>

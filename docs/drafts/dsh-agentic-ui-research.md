@@ -246,8 +246,8 @@ CrewAI 的优势主要在 Flow、多 Agent、状态和长任务编排，UI 由�
 | 持久呈现元数据 | `output.presentationMeta` 随 Tool result 持久化 | 当前源码；仅顶层执行路径投影 | 呈现数据可随已提交事实重建；不等于完整 UI 状态 |
 | 聊天内 Tool 调用树 | `tool.call.toolview` keyed slot、root 与 PTC 子调用、generic fallback | 当前 Client 实现与 README | 已实现按 Tool 名注册的调用树卡片；不等于通用动态 UI |
 | 业务 UI 插件化 | 业务包只注册 wire Tool 名与原子视图 | 当前 Client 实现与 README | 新业务能力通过插件加入，不改 agent-loop |
-| 结构化用户输入 | `tool-ask-user` 提供 `ask_user_question`，`ui-user-questions` 提供 Web composer takeover，经 `ctx.userQuestions` seam 协作 | 当前工具与 Client 协同实现 | Agent 可暂停并获得结构化答案；待提交草稿是页面级非持久状态；子 Agent 调用被拒（`DELEGATED_CALLER`） |
-| 文件交付投影 | `packages/fs/tool-present` 记录 `deliverables/presented` | 当前源码 | Tool 结果可驱动用户可访问交付物 |
+| 结构化用户输入 | `tool-ask-user` 提供 `ask_user_question`，`ui-user-questions` 提供 Web composer takeover，经 `ctx.userQuestions` seam 协作 | 当前工具、Session projection 与 Client 协同实现 | Agent 可进行定时前台等待；超时后问题以 `continued` 状态保留，迟到答案作为普通 follow-up/steering 消息送入根 Agent；未提交草稿仍是页面级非持久状态；子 Agent 调用被拒（`DELEGATED_CALLER`） |
+| 文件交付投影 | `packages/deliverables/tool-present` 记录 `deliverables/presented` | 当前源码 | Tool 结果可驱动用户可访问交付物 |
 | Session 事件回放 | `tool/call`、`tool/result` 与持久化展示元数据 | 当前事件目录与投影实现 | 已提交调用、结算结果和部分 Tool 卡片可重建；未提交草稿、临时 UI 状态与 PTC 中间值不在完整回放范围 |
 | 浏览器运行时基础 | Dedicated Worker 装载预打包插件树与内存 VFS | experimental 包；preview 验收不含真实模型请求 | Worker Host、模块加载与页面隧道可启动；不构成真实模型与工具闭环的完成证据 |
 
@@ -267,7 +267,7 @@ Web Client 不消费 Host 层 `presentCall` 和 `presentResult` 的返回值，�
 |---|---|---|
 | 能力单元没有统一公开声明 | Tool schema、Tool presenter、Client view 和业务工作流存在关联，但没有一个面向 Agent 编排的统一 descriptor | Agent 难以可靠判断某个能力何时可用、需要什么前置状态和会产生什么副作用 |
 | 缺少通用受限 UI catalog | 当前主路径是按 Tool 名注册预制 view，而不是 A2UI 式 surface catalog | 不能宣称模型已经可以在 DSH 中现场组合任意业务 UI |
-| 问答草稿不持久 | 问答 UI 的草稿、当前题目和交互状态保存在页面级非持久 slot store | 整页刷新后不能自动恢复未提交回答；Session 内导航可以保留 |
+| 未提交问答草稿不持久 | 浏览器 UI 的未提交输入和编辑状态保存在页面级非持久 slot store；已记录的问题、`open`/`continued` 状态和结算结果由 `userQuestions` Session projection 提供 | 整页刷新后不能恢复未提交回答草稿；已记录的问题可以由 Session projection 重新展示 |
 | 部分交互不能由子 Agent 直接发起 | `ask_user_question` 拒绝非根调用者并返回 `DELEGATED_CALLER` | 需要由拥有用户交互权的父 Agent 接管问题 |
 | PTC 中间值不可完整回放 | PTC dispatch 记录调用和结算事实，但任意中间绑定值不进入 Session 历史 | 不能把每个 PTC 中间 UI 状态都当作可恢复工作流状态 |
 | Worker 本地持久化未完成 | WebWorker runtime 使用内存 VFS，Session 日志在 Worker 生命周期内落在内存明文路径 | 页面或 Worker 退出后的本地恢复仍需要独立设计 |
@@ -371,7 +371,7 @@ DSH 的规则是：进入模型请求的内容必须能从 Session 日志重建�
 
 选择一个有多步状态和明确审批的业务域，例如发布审批、工单 triage、采购审批或合同审阅，定义 3–5 个能力单元。
 
-每个能力单元共同提供 Tool schema、业务视图、pending/result/error/approval 状态、权限判断和 Session 事件。先复用 `tool.call.toolview`、`ask_user_question` 和现有 Conversation Node，不引入通用 UI 生成器。
+每个能力单元共同提供 Tool schema、业务视图、pending/result/error/approval 状态、权限判断和 Session 事件。先复用 `tool.call.toolview`、timed/continued `ask_user_question` 和现有 Conversation Node，不引入通用 UI 生成器。
 
 验收分两层：第一层使用确定性模型或 scripted Agent，验证能力单元选择结果、Tool 参数、UI action、Session event、Tool result、失败和恢复都能按预期发生；第二层接入真实模型，验证自然语言到能力单元选择的准确性、误选行为、参数预填和拒绝路径。两层都要求刷新后已提交调用和结果仍可重建。
 

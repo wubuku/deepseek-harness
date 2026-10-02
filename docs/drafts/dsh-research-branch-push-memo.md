@@ -21,7 +21,7 @@ description: "在 wubuku/deepseek-harness 研究 fork 上存档研究文档并�
 
 `origin` 的 fetch 走 HTTPS，push 走 SSH。这个不对称是刻意的，原因见后文。
 
-本地 `master` 可以跟踪 `upstream/master`，但 `research` 不以它为隐含基线。当前 `research` 基于 `upstream` 的 `dsh-v0.1.7-rc.2`，其新增内容限于研究文档和配对清单；研究文档只提交到 `research`，不要推到 `master`。
+本地 `master` 可以跟踪 `upstream/master`，但 `research` 不以它为隐含基线。当前 `research` 基于 `upstream` 的 `dsh-v0.2.0-rc.2`；相对该 tag 的差异包括研究文档、翻译配对清单，以及为本地构建清理专用 TypeScript 输出而修改的脚本和测试。研究成果只提交到 `research`，不要推到 `master`。
 
 ## 研究基线与低冲突更新
 

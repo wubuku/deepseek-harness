@@ -153,9 +153,9 @@ Agent 提供 `cancel()`、`whenIdle()` 和生命周期扩展点。`agent/pre-ste
 
 ### 交互与后台工作不会自动跨进程挂起
 
-`userQuestions.ask()` 等待当前进程中的 answerer waterfall。审批会把 asked/decided 结果写入 Session 作为审计事实，但等待答案的 Promise 仍属于当前进程。进程退出后，Session log 本身不能恢复未完成的提问或审批，详见 [user questions](../../packages/interaction/user-questions/src/index.ts) 和 [user approval](../../packages/interaction/user-approval/src/index.ts)。
+阻塞式 `userQuestions.ask()` 等待当前进程中的 answerer waterfall。`askTimed()` 可以在前台等待窗口结束后返回 `pending`，由 `userQuestions` projection 从 Session 事件重建为 `continued` 问题；之后的 `answer` Remote 方法会把答案作为 `user-question-reply` 送入新的或恢复的根 Agent。这个路径不会恢复原来的 Promise，也不会为已经结束的 Tool call 伪造结果。审批会把 `asked`/`decided` 结果写入 Session 作为审计事实，但仍不提供同等的 continued-question 恢复路径，详见 [user questions](../../packages/interaction/user-questions/src/index.ts) 和 [user approval](../../packages/interaction/user-approval/src/index.ts)。
 
-短生命周期 HTTP runner 如果需要在请求之间恢复交互，就必须另行持久化 pending interaction、调用者归属和答案，并在重新取得 Session 写租约后恢复执行。它还必须禁用不能在请求结束前完成的后台能力，或把其所有权转交给长期存活的 worker；DSH 当前没有通用的请求挂起与后台任务移交协议。
+短生命周期 HTTP runner 如果需要在请求之间恢复阻塞式交互或后台工作，就必须另行持久化 pending interaction、调用者归属和答案，并在重新取得 Session 写租约后恢复执行；对于 timed user question，Session projection 和 `answer` Remote 方法已经提供了特定的 continued 路径，但仍要求新进程能恢复根 Agent，且不恢复原 Tool call。runner 还必须禁用不能在请求结束前完成的后台能力，或把其所有权转交给长期存活的 worker；DSH 当前没有通用的请求挂起与后台任务移交协议。
 
 ## 部署选择
 

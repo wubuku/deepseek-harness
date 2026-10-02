@@ -216,7 +216,7 @@ Host 平面拥有进程级共享服务与权威状态：`ctx.tools`、`ctx.llm`�
 
 Agent Preset 平面提供每个 Agent 的 scoped 贡献：工具、persona、prompt sections、skills、压缩、PTC 呈现、委派工具。preset 文件的注释明确划分归属：注册表、沙箱与审批栈、持久化、模型路由留在 Host；preset 内需要 realm 的 service 必须放在 `isolate` 组，否则会向进程全局 realm 泄漏并在挂载时被拒绝。
 
-Client 平面经 `remotes → gateway → connection → webserver` 分层（[api-gateway](../api-gateway.md)）：Client model 镜像 Host 状态，UI 经 typed slots 组合，浏览器按 client module graph 懒加载。Host/Client 是所有权与编译面分离，不总是两个进程：Web 是 Node Host 加浏览器 Client，Desktop 是 Node Host 加 Electron renderer（`dsh-app://` 与帧管道，无监听端口），headless/sdk/acp 是 Host/stdio 组合、不需要浏览器。TypeScript 侧以 `tsconfig.host.json` 与 `tsconfig.client.json` 两个聚合体避免 Context 声明合并冲突（[development](../development.md)）。
+Client 平面经 `remotes → gateway → connection → webserver` 分层（[api-gateway](../api-gateway.md)）：Client model 镜像 Host 状态，UI 经 typed slots 组合，浏览器按 client module graph 懒加载。Host/Client 是所有权与编译面分离，不总是两个进程：Web 是 Node Host 加浏览器 Client，Desktop 是 Node Host 加 Electron renderer（`dsh-app://` 与帧管道，无监听端口），headless/sdk/acp 是 Host/stdio 组合、不需要浏览器。Desktop 还是受支持的 Electron 应用，而不是 npm CLI 可启动的普通 profile：`desktop` 名称由 CLI 保留，npm 安装的 `dsh` 拒绝启动、配置导出和插件管理，Desktop 安装的 bundled command 才能使用 Electron 自带 runtime 管理 Electron 所有的 Desktop profile；命令注册是 Desktop 原生菜单动作，不是安装器的自动副作用。TypeScript 侧以 `tsconfig.host.json` 与 `tsconfig.client.json` 两个聚合体避免 Context 声明合并冲突（[development](../development.md)）。
 
 ## 动态插件与自修改边界
 

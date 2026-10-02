@@ -219,7 +219,7 @@ Host Worker 与 command Worker 的文件语义也不同：Host 内的 `node:fs` 
 
 ### Preview 验收不等于 live Agent 回路验收
 
-[preview-boot.e2e.ts](../../apps/web/tests/preview-boot.e2e.ts) 覆盖 Host 启动、空镜像入口、预置 Workspace 与 Session 发现、部分 Remote 修改，以及历史中的工具卡、子代理目录和分页展示。
+[preview-boot.e2e.ts](../../apps/web/tests/preview-boot.e2e.ts) 覆盖 Host 启动、空镜像入口、预置 Workspace 与 Session 发现、部分 Remote 修改，以及历史中的工具卡、子代理目录和分页展示。当前 Worker preview 还提供了通过 ConfigEditor 编辑 Profile 配置、由 HMR 排队并提交配置变更、由 Plugin Manager 加载和编辑 Profile，以及通过 `xdg-open` 在页面内查看 VFS 配置文件的路径；Plugin Manager 的包安装等操作会因浏览器 Worker 缺少 `execa` 而明确失败。
 
 这些工具与子代理记录来自 fixture，不是测试期间新执行的 Agent 回合。因此，现有覆盖能够支持以下判断：
 
@@ -227,7 +227,7 @@ Host Worker 与 command Worker 的文件语义也不同：Host 内的 `node:fs` 
 - VFS 中的 Session 数据可以被发现和投影。
 - 部分 Remote 写入路径已有浏览器验收代码。
 
-它不能证明真实 prompt → model → tool → model 回路、并发子代理执行、模型取消或崩溃后的持续执行已经完成。
+它不能证明真实 prompt → model → tool → model 回路、并发子代理执行、模型取消或崩溃后的持续执行已经完成；Profile 编辑和配置文件查看也仍然只覆盖当前 Worker 生命周期，不构成跨重启持久化或浏览器内的完整包管理能力。
 
 preview 中的 `credentials/set/describe/unset` 也只验证 Remote 调用与 VFS-backed provider 的写入读取路径。文件型 credentials provider 不隔离同一执行用户下的秘密，它不是平台托管 key 的 browser-native 方案；平台密钥应留在服务端，浏览器只接收引用、configured 状态和必要的短期授权。
 
