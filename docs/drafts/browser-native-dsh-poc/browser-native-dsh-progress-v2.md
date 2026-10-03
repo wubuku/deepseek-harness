@@ -6,13 +6,13 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 当前状态
 
-- **阶段**：Phase 0，重新规划和基线核对。
+- **阶段**：Phase 1，开始实现 custom Worker 骨架；v2 规划和严格审计已完成。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
 - **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
 - **当前分支**：`research-browser-native-poc`。
 - **checkpoint**：提交主题为 `docs: checkpoint browser-native llm proxy poc`；不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='checkpoint browser-native llm proxy poc' --oneline` 定位。
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
-- **连续无修改审计计数**：0；v2 规划文档写入后必须完成三轮连续无修改检查。
+- **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
 
 ## 已核实的基线
 
@@ -38,6 +38,30 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 | --- | --- | --- | --- |
 | 2026-10-03 | 检查隔离 worktree 和 checkpoint | 通过 | worktree 干净，领先 `origin/research-browser-native-poc` 一个 checkpoint commit |
 | 2026-10-03 | 阅读 `apps/web/src/main.ts`、`preview.ts`、WebWorker runtime、packer、LLM 和 Session persistence 源码 | 通过 | 已确认 v2 应复用 existing UI/Host，不再使用独立 HTML/loop |
+| 2026-10-03 | 三轮严格规划审计 | 通过 | 发现并修复 attribution header、flush durability 顺序和进度标题问题；之后连续三轮无修改 |
+| 2026-10-03 | `pnpm run test:docs` | 通过 | doc-quick 21 passed、0 failed、0 skipped |
+| 2026-10-03 | `pnpm run verify-repository-references` | 通过 | maintained files 无禁止 commit identifier 或组织 URL |
+| 2026-10-03 | `pnpm run doc-typecheck` | 通过 | 83 个代码块编译；76 个显式忽略；其余 catalog/type-equivalence 通过 |
+| 2026-10-03 | `pnpm run doc-sync` | 通过 | 43 passed、0 failed、0 skipped |
+| 2026-10-03 | `git diff --check` | 通过 | 规划文档无 whitespace 错误 |
+
+## 最近修复的问题
+
+### Attribution header 必须由 backend 注入
+
+- **发现时间**：2026-10-03。
+- **范围**：`packages/llm/llm/src/index.ts`、`packages/llm/llm/src/attribution.ts`、现有 provider adapter，以及 v2 计划的 Remote LLM proxy。
+- **问题**：正式 `LlmAdapter` 约定每个 provider HTTP request 都必须带 `attributionHeaders()`。浏览器 Worker 不能可靠设置 `User-Agent`，原计划只描述了 Worker 到 same-origin backend 再到 upstream 的路径，没有规定真实 upstream 请求如何履行这项约定。
+- **处理**：在 v2 计划的 `RemoteLlmAdapter` 和 Provider security 章节明确由 backend upstream adapter 调用当前 DSH attribution helper 或版本受控 bridge；要求同名 header 不可被覆盖，禁止把 session、prompt、用户标识和 secret 放进 attribution，并要求 upstream mock contract test 逐请求断言公开 header。
+- **结果**：该问题已修复；连续无修改审计计数重置为 0，必须重新完成三轮只读审计。
+
+### Flush receipt 的本地 durability 顺序必须明确
+
+- **发现时间**：2026-10-03。
+- **范围**：v2 计划的 Session backend storage 和失败恢复章节。
+- **问题**：原文把临时文件替换和 `close` 作为 crash durability barrier，但没有要求临时文件与父目录 `fsync`，也没有区分进程重启恢复和介质、备份或跨主机灾备保证。
+- **处理**：补充 POSIX 的写入、文件 `fsync`、原子 `rename`、父目录 `fsync` 顺序；补充 Windows 的可验证范围；把 `flush` receipt 限定为本地提交顺序完成，并定义已 flush prefix 的进程崩溃 RPO、实际测量的 RTO 和不提供的灾备保证。
+- **结果**：该问题已修复；连续无修改审计计数重置为 0，必须重新完成三轮只读审计。
 
 ## 审计记录
 

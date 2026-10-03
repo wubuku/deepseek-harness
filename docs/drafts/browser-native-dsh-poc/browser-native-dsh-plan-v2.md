@@ -217,6 +217,8 @@ v2 采用现有 `preview.html` 作为 browser-native 的实验入口，而不是
 
 adapter 必须遵循现有 `signal` 取消语义。Worker 终止、Agent abort 或 UI 取消会中断 fetch；backend 应中断上游请求或至少停止向已关闭的 client 写入。provider HTTP 状态、上游 request id、rate limit 和 schema refusal 映射为 DSH `LlmError` 可表达的 provider-neutral failure，不把上游凭据或完整 header 回传浏览器。
 
+上游请求的产品归属由 backend 负责。现有 `LlmAdapter` 要求每个 provider HTTP request 都包含 `attributionHeaders()`；浏览器 Worker 不能把 `User-Agent` 当作可靠的自定义请求头发送，因此不能把这项责任交给 `RemoteLlmAdapter`。backend 发出的每个真实 provider request 必须使用当前 DSH `@deepseek-ai/dsh-llm` 的 `attributionHeaders()` 生成公开产品身份，或通过一个等价且版本受控的 backend bridge 调用同一实现；不得手写会随版本漂移的 product/version 值。这个 header 只能包含公开产品身份，不得包含 session id、request id、prompt、用户标识、路径、API key 或其他 secret。backend contract test 必须让 upstream mock 直接断言 attribution header 存在且值正确；real-provider E2E 只检查该公开 header 不含 secret，不把它误判为凭据泄漏。
+
 model catalog 只声明 runner 配置允许的 model，至少支持一个 scripted provider 用于无 key 测试和一个 real provider 用于用户提供的 env-file 测试。真实 provider 的 key 选择发生在 backend，按显式 provider/model allow-list 选择，不接受浏览器传入任意 upstream URL 或任意 credential。
 
 ### 6.3 为什么不新增 loop plugin
@@ -246,7 +248,7 @@ Backend wire DTO 不是 TypeScript same-process value，必须做运行时解析
 
 ### 7.3 Backend storage
 
-PoC backend 可以使用 `data-dir/sessions/<session-id>.json` 和原子替换写入，前提是存储格式包含正式 `header`、`inheritedEventCount`、`events`、`revision`、`durableThroughSeq` 和 owner metadata，并在 `flush` 后使用文件 rename/close 作为本地 durability barrier。它不是生产数据库替代品；README 必须写明本地文件 store 的 crash、备份和多进程限制。
+PoC backend 可以使用 `data-dir/sessions/<session-id>.json` 和原子替换写入，前提是存储格式包含正式 `header`、`inheritedEventCount`、`events`、`revision`、`durableThroughSeq` 和 owner metadata。POSIX 写入顺序必须是：创建同目录临时文件、写完整可恢复前缀、调用临时文件的 `fsync`、关闭临时文件、原子 `rename` 替换正式文件，再对父目录执行 `fsync`；不能把 `rename` 或普通 `close` 单独当成 crash durability barrier。Windows 使用当前 Node/文件系统可提供的句柄同步和原子替换语义，并在 README 中明确无法由该 PoC 证明断电级保证的部分。`flush` receipt 只承诺 backend 已完成这条本地提交顺序，并可在支持的主机上通过进程崩溃/重启恢复对应前缀；它不承诺备份、磁盘介质、跨主机复制或灾备。它不是生产数据库替代品；README 必须写明本地文件 store 的 crash、备份和多进程限制。
 
 每次 append 先验证 next seq 和 owner token，再把事件放入当前 generation；`flush` 将完整的可恢复前缀写入临时文件并原子替换正式文件，随后返回 `durableThroughSeq`。backend restart 只恢复上一次成功 flush 的前缀。未 flush 的 append 可以丢失，但不能在 read 中返回一个跨重启后不存在的“已成功 durable”前缀。
 
@@ -292,6 +294,8 @@ Backend 使用 newline-delimited JSON，每行对应一个正式 DSH `StreamChun
 
 真实 provider key 只能从 runner 明确指定的 env-file 或环境变量读取。当前本机 real-provider 配置使用 `OPENAI_NEXT_GPT_BASE_URL`、`OPENAI_NEXT_GPT_COMPLETIONS_PATH`、`OPENAI_NEXT_GPT_MODEL`、`OPENAI_NEXT_GPT_API_KEY` 和 `OPENAI_NEXT_GROK_API_KEY`；实现不得把这些变量的值写入仓库，配置文件只作为本机输入。GPT route 使用显式 base URL、completions path 和 model；Grok route 使用后端维护的兼容 endpoint/model allow-list，不能让浏览器提交任意 upstream URL、model、API key、Authorization header 或额外 provider options。启动时只检查 key 存在和 provider allow-list，不把 key 打到日志；`/api/browser-native/config` 若存在，只返回 provider/model 名称和能力，不返回 key。Playwright 测试必须检查页面 console、performance resource、Worker message 和 Session log 不包含 key 的值或 `Authorization` header。
 
+backend 的 upstream adapter 必须在生成 Authorization 或 provider-specific headers 后，再合并不可覆盖的 `attributionHeaders()`；调用方提供的同名 header 不能覆盖 DSH attribution。backend contract test 至少覆盖：正常 scripted/real route、上游返回错误、取消请求和错误 provider 配置，并在每个会实际调用 upstream mock 的路径上断言公开 attribution header；不需要真实 provider key 的测试也必须保留这一断言。若 docs-owned backend 不能直接加载已构建的 `@deepseek-ai/dsh-llm`，实施者必须先记录可重复的 source/artifact 加载方式或建立极小的、版本绑定的 bridge，不得静默复制一个未注明来源的常量。
+
 ## 九、页面、Worker 和 execution world
 
 ### 9.1 页面保持现有 UI
@@ -330,7 +334,7 @@ flushed    backend 已原子替换 durable artifact，并返回 durableThroughSe
 recovered  backend restart 后重新读取同一 flushed prefix
 ```
 
-`append` resolve 只能承诺 `accepted`；`SessionHandle.flush()` resolve 才能承诺 `flushed`。Worker 终止后重启，测试只要求保留最后一次 flush 返回的前缀。UI 中正在流式生成的未 flush 尾部可以显示失败或重新生成，但不能伪装成已恢复。
+`append` resolve 只能承诺 `accepted`；`SessionHandle.flush()` resolve 才能承诺 `flushed`。本 PoC 的可测 RPO 是：对已返回 `flushed` receipt 的 seq，在 backend 进程崩溃并重新打开同一 data-dir 后不得丢失；未 flush 的尾部允许丢失。它不定义跨主机或备份 RPO。RTO 只记录 backend 重新监听后完成 Session `open/read` 恢复所需的实际耗时，不将一次本地测试结果写成服务等级目标。Worker 终止后重启，测试只要求保留最后一次 flush 返回的前缀。UI 中正在流式生成的未 flush 尾部可以显示失败或重新生成，但不能伪装成已恢复。
 
 ### 10.2 Session 与 UI 恢复
 
