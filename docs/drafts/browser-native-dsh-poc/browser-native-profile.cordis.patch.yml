@@ -1,0 +1,19 @@
+# Profile overlay used only by the browser-native preview PoC.
+# The base Web roster remains intact; this replaces the local JSONL persistence
+# row, registers the two Worker-side remote providers, and selects their route.
+
+- id: session-persistence-jsonl
+  disabled: true
+
+- id: agent-default-model
+  config:
+    provider: browser-native
+    model: browser-native
+
+- insert:
+    - id: session-persistence-browser-native
+      name: './browser-native-session-persistence.js'
+
+    - id: llm-browser-native
+      name: './browser-native-llm.js'
+      inject: [llm]

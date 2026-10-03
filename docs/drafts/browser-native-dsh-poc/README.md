@@ -6,13 +6,62 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## Summary
 
-本目录包含两个阶段的研究材料。旧版是协议级独立 loop 实验；当前目标是 v2：保留现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop`，只把 Host 运行到 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施入口是 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，进度入口是 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。v2 尚未完成可运行入口；在 v2 实现文件出现并通过浏览器验收前，不能把本 README 下面的旧 `run.mjs` 命令当作 v2 启动方式。
+本目录包含两个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，可恢复进度和验证记录见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
 旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。
 
-## v2 当前状态
+## v2 运行入口
 
-v2 的目标入口必须使用现有 `AppWebEntry`、现有 DSH Web UI 和由 Worker 承载的真实 Host，具体启动命令要在 Phase 1 实现后根据实际 preview/custom Worker 接线补入。当前不要通过旧 `run.mjs`、`public/index.html` 或旧版浏览器测试宣称 v2 已经运行；这些文件属于下方标明的历史协议实验。
+v2 使用现有 `AppWebEntry`、现有 DSH Web UI 和由 Worker 承载的真实 Host。先构建 preview，再从本目录的 launcher 启动同源 Session/LLM backend：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
+  --port 4185 \
+  --data-dir /tmp/browser-native-dsh-v2 \
+  --llm scripted
+```
+
+然后打开 launcher 输出的 `preview.html?browser-native=1&preview-fixture=none` 地址。`browser-native=1` 是显式 opt-in；不带该参数的默认 preview 仍使用上游 overlay 列表和 acceptance。
+
+真实 provider 只在 backend 进程读取本机环境文件：
+
+```sh
+node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
+  --port 4185 \
+  --data-dir /tmp/browser-native-dsh-v2-real \
+  --llm real \
+  --env-file /path/to/deepseek-harness/docs/drafts/.env
+```
+
+API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
+
+## v2 验证
+
+后端契约测试覆盖 Session create/list/open/read/append/flush/close、owner fencing、崩溃后的 durability、scripted LLM stream、OpenAI-compatible stream、非法请求和 secret redaction：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+```
+
+浏览器 E2E 会自行启动 v2 backend，使用真实 Chromium 打开现有 DSH `preview.html`，选择 workspace，通过真实 Web UI 提交一轮消息，再从 backend 读取并核对正式 Session 事件。独立 worktree 不复制 `node_modules` 时，使用拥有 Playwright 依赖的 checkout 提供模块路径：
+
+```sh
+DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modules/playwright/index.mjs \
+DSH_POC_LLM=scripted \
+node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
+```
+
+真实 provider 需要本机 `.env` 和 Node 24 的环境代理支持；脚本只输出模式、模型、Session id、事件数量和路由名，不输出密钥：
+
+```sh
+DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modules/playwright/index.mjs \
+DSH_POC_LLM=real \
+DSH_POC_ENV_FILE=/path/to/deepseek-harness/docs/drafts/.env \
+node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
+```
+
+该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件和 `ctx.agentLoop` 的一轮真实交互；旧版测试不能替代它。
 
 ## 历史协议实验：运行
 

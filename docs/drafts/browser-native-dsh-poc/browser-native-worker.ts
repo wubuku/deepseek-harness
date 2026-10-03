@@ -24,6 +24,7 @@ import { installCryptoGlobals } from '../../../packages/experimental/webworker-r
 import { isShellStartFrame } from '../../../packages/experimental/webworker-runtime/src/shell/process/protocol.ts'
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
+import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -51,7 +52,7 @@ self.addEventListener('message', (event: MessageEvent) => {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
     const created = createWorkerHost({
-      staticModules: createNodeBuiltins(),
+      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules() },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,

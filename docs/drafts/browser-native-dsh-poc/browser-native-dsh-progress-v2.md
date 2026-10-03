@@ -6,11 +6,11 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 当前状态
 
-- **阶段**：Phase 1 已完成，进入 Phase 2：正式 Remote SessionPersistence provider。
+- **阶段**：Phase 3，v2 PoC 已可运行；最终 build、默认 preview acceptance、浏览器 E2E、文档门禁和 typecheck 已通过，待提交。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
 - **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
 - **当前分支**：`research-browser-native-poc`。
-- **checkpoint**：最近的 Phase 1 接线提交主题为 `feat(docs): route preview through browser-native worker`；本次收口后会再建立一个 checkpoint。不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位。
+- **checkpoint**：最近的实现 checkpoint 提交主题为 `chore(docs): close browser-native worker phase`；当前未提交改动包含 v2 backend/provider、测试和收口文档。不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位。
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
 - **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
 
@@ -25,12 +25,12 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 - [x] v2 规划文档完成并通过连续三轮只读检查。
 - [x] custom Worker entry 启动现有 Web UI 和完整 Host。
-- [ ] Remote Session backend/provider 通过正式 persistence contract。
-- [ ] Remote LLM adapter 通过 scripted backend 触发真实 `ctx.agentLoop`。
-- [ ] 真实 provider 通过同源 backend proxy。
-- [ ] Worker/backend restart 后恢复已 flush Session。
-- [ ] 目录外变更全部登记并验证可删除或可重放。
-- [ ] Playwright 浏览器 E2E、docs gates、build smoke 和工作区清理。
+- [x] Remote Session backend/provider 通过正式 persistence contract。
+- [x] Remote LLM adapter 通过 scripted backend 触发真实 `ctx.agentLoop`。
+- [x] 真实 provider 通过同源 backend proxy。
+- [x] Worker/backend restart 后恢复已 flush Session。
+- [x] 目录外变更全部登记并验证可删除或可重放。
+- [x] Playwright 浏览器 E2E、docs gates、build smoke 和工作区清理。
 
 ## 关键验证记录
 
@@ -44,6 +44,11 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 | 2026-10-03 | `pnpm run doc-typecheck` | 通过 | 83 个代码块编译；76 个显式忽略；其余 catalog/type-equivalence 通过 |
 | 2026-10-03 | `pnpm run doc-sync` | 通过 | 43 passed、0 failed、0 skipped |
 | 2026-10-03 | `git diff --check` | 通过 | 规划文档无 whitespace 错误 |
+| 2026-10-03 | `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` | 通过 | 6/6；覆盖 Session CRUD、sequence conflict、owner fencing、close durability、backend restart、scripted stream、OpenAI-compatible stream、invalid request 和 secret redaction |
+| 2026-10-03 | `DSH_POC_LLM=scripted node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs` | 通过 | 真实 Chromium 加载现有 DSH Web UI，Session 17 个事件 durable，浏览器 API 路由为 session list/create/append/flush 和 llm |
+| 2026-10-03 | `DSH_POC_LLM=real node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs` | 通过 | 使用本机 `.env` 和真实 HTTP 代理；真实模型 `gpt-5.6-sol`，最后一次严格断言运行 Session 17 个事件 durable；测试未输出或向浏览器暴露 API key |
+| 2026-10-03 | `pnpm run test:docs`; `pnpm run verify-repository-references`; `pnpm run doc-sync`; `pnpm run doc-typecheck` | 通过 | doc-quick 21/21，doc-sync 43/43，repository references 通过，83 个代码块编译；完整 client typecheck 仍需单独运行 |
+| 2026-10-03 | `pnpm run typecheck` | 通过 | host build、desktop bundle 和 client contracts typecheck 全部通过；构建过程只有既有跨平台 native package warnings |
 | 2026-10-03 | 新增 `browser-native-worker.ts` 并将 `apps/web/src/preview.ts` 的 Worker import 指向该文件 | 通过 | 只替换 preview 的 Worker bundle，保留 `chooseWorkerHostSource`、`connectWorkerHost`、AppWebEntry 和 tunnel；目录外接线已登记为 BN-P1-001 |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` | 失败，尚未验证 custom Worker | Worker runtime 和 packer 子构建通过；Vite 在既有 `apps/web/src/main.ts` import `@deepseek-ai/dsh-client-ui-theme/brand-font.css` 处无法解析。已确认源码存在而 package export 指向的 `lib/styles/brand-font.css` 尚未生成；先构建 UI theme 包再重试 |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-client-ui-theme run bundle` | 通过 | 生成 package export 所需的 `lib/styles/brand-font.css` 和 theme client bundles；产物为忽略的构建输出 |
@@ -52,9 +57,19 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 | 2026-10-03 | `pnpm run build:lib:client` | 通过 | 生成当前 checkout 的 client package `lib` artifacts；日志包含既有 workspace platform warnings，无编译失败 |
 | 2026-10-03 | 重试 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`（补齐 client artifacts 后） | 通过 | Vite 生成 docs-owned Worker bootstrap、preview VFS image 和 fixture overlay |
 | 2026-10-03 | `pnpm exec vitest run apps/web/tests/preview-boot.e2e.ts --config vitest.web.config.ts` | 通过 | 真实 Chromium 启动 custom Worker；观察到 Worker Host tree active、tunnel 和现有 DSH Web UI 可交互 |
-| 2026-10-04 | Phase 1 收口 | 通过 | 将 BN-P1-001 标记为 implemented；当前进入正式 SessionPersistence provider 实现，不把旧独立 PoC 当作 v2 入口 |
+| 2026-10-03 | Phase 1 收口 | 通过 | 将 BN-P1-001 标记为 implemented；当前进入正式 SessionPersistence provider 实现，不把旧独立 PoC 当作 v2 入口 |
+| 2026-10-03 | Phase 2 接入决策核对 | 通过 | `worker-host.ts` 会从 `home/profiles/preview/cordis.patch.yml` 读取 profile patch；PoC 通过 home VFS overlay 替换 JSONL row，并由 static module factory 在 active Worker loader 中取得正式 `SessionPersistence`/`LlmAdapter` class，避免重复 runtime identity |
+| 2026-10-03 | Phase 2 首版实现 | 待验证 | 新增 `browser-native-providers.ts`、`backend-v2.mjs`、profile patch 和 VFS overlay；Worker static modules 注册正式 SessionPersistence/LLM provider，preview 追加 profile overlay；下一步运行构建和 provider contract tests |
+| 2026-10-03 | preview acceptance 首次运行 | 失败 | provider rows 以静态包名出现时，Worker plugin inventory 对 `require.resolve.paths()` 的 `null` 返回值报错并禁用 provider，随后 `connection` 未激活；未修改通用 loader，改为 VFS-local relative plugin entries 转发 static modules |
+| 2026-10-03 | 第二轮浏览器启动诊断 | 已定位并修复待验证 | Worker home overlay 的实际路径是 `/dsh/home/cordis.patch.yml`，不是 profile 子目录；同时 `llm-browser-native` 需要 `inject: [llm]`。overlay 已改为 `home/cordis.patch.yml` 并重新打包，下一步重跑 preview acceptance |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`（补齐 client artifacts 后） | 通过 | Vite 生成 docs-owned Worker bootstrap、既有 Web UI assets 和 preview VFS image；packer unresolved third-party request 列表与上游 baseline 一致，未出现构建失败 |
 | 2026-10-03 | `pnpm exec vitest run apps/web/tests/preview-boot.e2e.ts --config vitest.web.config.ts` | 通过 | 1 file、1 test passed；真实 Chromium 通过空 preview 和 seeded preview boot，Host tree/tunnel/UI acceptance 成立 |
+| 2026-10-03 | 默认 preview overlay 回归分析 | 已定位并修复 | Phase 2 首版无条件追加 browser-native profile overlay，导致空 preview 的既有 `data overlays=0` acceptance 失败；已改为仅在 `?browser-native=1` 时追加 overlay，并登记 BN-P2-002；默认 acceptance 已重新通过，下一步验证 opt-in browser-native 入口 |
+| 2026-10-03 | v2 backend 启动入口核对 | 发现缺口 | `backend-v2.mjs` 只有导出 API，没有用户可直接执行的 launcher；之前残留的临时 Node 进程占用 4185 且 health 无响应。下一步新增 docs-owned `run-v2.mjs`，统一参数、env-file、distRoot、信号关闭和启动输出 |
+| 2026-10-03 | Session 持久化 live-write 路径诊断 | 已定位，待修复 | 真实 Chromium 已完成 `session/create` 和 LLM 请求，但 backend 没有收到事件追加/flush；对照正式 JSONL provider 后确认 remote provider 未安装 `session/event`、`session/flush`、`session/disposed` listeners。下一步按正式 live-write contract 补齐事件路由、flush barrier、close drain 和 service-wide flush |
+| 2026-10-03 | live-write 修复和恢复验证 | 通过 | 新 bundle 已通过真实 Chromium 完成 Agent Loop；network trace 包含 create/append/flush，backend 写入正式 Session event 文件；重启 backend 后 `session/list` 读回同一 Session，刷新 Worker 后 Web UI 恢复该会话。下一步修正 scripted prompt 选择并接入本机 HTTP proxy 后测试 real provider |
+| 2026-10-03 | scripted 消息选择、LLM owner fencing 和 HTTP proxy | 待验证 | backend 不再把 runtime-context 当作 scripted 用户问题；LLM 请求携带可选 `sessionId`/owner token，backend 对有 Session 身份的请求执行 owner 校验；real mode 使用 `HTTPS_PROXY`/`https_proxy` 等 HTTP(S) proxy 变量并拒绝未实现的 SOCKS-only 路径。下一步重建并运行 scripted/real 浏览器测试 |
+| 2026-10-03 | real mode proxy 依赖修正 | 已定位，待修复 | 隔离 worktree 无法解析裸 `undici`，因此不把 `ProxyAgent` 作为 docs-owned runtime 依赖；改用 Node 24 的 `--use-env-proxy`，launcher 在 real mode 自动 re-exec，并把大小写代理变量映射到 Node 识别的名称 |
 
 ## 最近修复的问题
 
@@ -110,6 +125,11 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 - **发现**：计划只要求读取 env-file/环境变量，没有记录 real-provider 所需的配置键名；中断后实施者仍需回看会话上下文才能接入 OpenAI Next GPT/Grok。
 - **处理**：补充 `OPENAI_NEXT_GPT_BASE_URL`、`OPENAI_NEXT_GPT_COMPLETIONS_PATH`、`OPENAI_NEXT_GPT_MODEL`、`OPENAI_NEXT_GPT_API_KEY` 和 `OPENAI_NEXT_GROK_API_KEY` 的用途，明确只传入本机配置、后端 allow-list 和禁止提交值。
 - **结果**：real-provider 接入上下文自包含；审计计数重置为 0，必须重新完成三轮连续无修改检查。
+
+### 实现验证：v2 backend 和真实 Web UI 已完成端到端闭环
+
+- **范围**：docs-owned `backend-v2.mjs`、Worker-side Session/Llm providers、opt-in preview overlay、backend contract tests 和 browser-native v2 Playwright E2E。
+- **结果**：scripted 和 real 两种模式均通过真实 Chromium；页面使用现有 DSH Web UI 和真实 Host/Agent Loop，backend 保存正式 Session header/events，LLM API key 只留在 Node backend。浏览器脚本用 Session event 轮询等待 live-write queue 排空，避免把 UI 已显示误判为持久化已完成。
 
 ## 恢复入口
 
