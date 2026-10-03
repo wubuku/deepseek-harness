@@ -25,11 +25,11 @@ description: "Browser-native DSH PoC 的版本化协议 owner：SessionPersisten
 
 ## 一、通用约束
 
-所有 JSON DTO 都必须是 plain JSON object，拒绝数组、null、未知顶层协议版本、重复字段无法可靠表示的输入、非有限数字、控制字符和超过 PoC 限额的字符串或数组。
+所有 JSON DTO 都必须是 plain JSON object，拒绝数组、null、未知顶层协议版本、重复字段无法可靠表示的输入、非有限数字、身份字段中的 NUL/DEL 控制字符和超过 PoC 限额的字符串或数组。用户文本可以包含普通换行；内容字段的更细粒度 schema 由对应 operation 负责。
 
-除 GET stat 请求外，所有请求都必须带 `protocolVersion: 1` 和非空 `requestId`；需要 Session 的请求还必须带 `sessionId`。`requestId` 是一次逻辑操作的幂等键，重试相同逻辑操作时必须保持不变。
+Session 和 LLM API 请求（包括 GET stat）都必须带 `protocolVersion: 1`；静态资源和 health probe 不参与此协议版本校验。除 GET stat 外，所有 Session 和 LLM API 请求都必须带非空 `requestId`。需要 Session 的请求还必须带 `sessionId`。stat 将 `protocolVersion` 和 `sessionId` 放在查询参数中；Session mutation 和 body-based read 的 `requestId` 是幂等键，重试相同逻辑操作时必须保持不变；LLM 的 `requestId` 只作调用关联标识，是否可重试由 provider adapter 决定。
 
-跨 boundary 的 id 在 TypeScript 中使用对应的 branded type；wire 上仍然是受长度和字符集限制的字符串。Session event 和 header 不在本文重新定义，必须直接使用 `@deepseek-ai/dsh-session` 的当前格式和 `@deepseek-ai/dsh-session-persistence` 的 validator。
+跨 boundary 的 id 在 TypeScript 中使用对应的 branded type；wire 上仍然是受长度和字符集限制的字符串。正式 DSH 接入时，Session event 和 header 必须使用 `@deepseek-ai/dsh-session` 的当前格式和 `@deepseek-ai/dsh-session-persistence` 的 validator。当前目录内 PoC 为了保持零核心改动，使用最小 JSON-safe event/header fixture；它验证的是 transport、ownership 和 durability 语义，不是正式 DSH Session format 的兼容性证据。
 
 ### 1.1 基本限额
 
@@ -39,9 +39,12 @@ description: "Browser-native DSH PoC 的版本化协议 owner：SessionPersisten
 maxRequestBytes: 1 MiB
 maxResponseLineBytes: 1 MiB
 maxSessionEventBatch: 256 events
+maxDurableSessionEvents: 1000000 events per persisted Session
 maxToolArgumentsBytes: 64 KiB
 maxToolResultBytes: 64 KiB
+maxLlmMessages: 256 messages per request
 maxLlmStreamItems: 10000 per request
+maxLlmStreamBytes: 8 MiB per response
 ```
 
 实际实现如果使用更小的值是允许的，但必须在响应中返回稳定的 `REQUEST_TOO_LARGE` 或 `STREAM_LIMIT`，不能截断后当作成功。
@@ -68,6 +71,7 @@ interface SessionCreateResponse {
   header: SessionHeader
   inheritedEventCount: number
   nextSeq: number
+  backendRevision: string
   owner: SessionOwnerReceipt
 }
 ```
@@ -91,6 +95,7 @@ interface SessionOpenResponse {
   header: SessionHeader
   inheritedEventCount: number
   nextSeq: number
+  backendRevision: string
   owner?: SessionOwnerReceipt
 }
 
@@ -119,11 +124,13 @@ interface SessionRenewResponse {
   protocolVersion: 1
   requestId: string
   sessionId: string
+  nextSeq: number
+  backendRevision: string
   owner: SessionOwnerReceipt
 }
 ```
 
-`renew` 只能延长仍然有效的当前 owner lease；它不改变 `generation`，不追加 Session event，也不改变 `backendRevision`。Worker 必须在 `expiresAt` 之前定期 renew；renew 失败或 lease 过期后，remote handle 停止 mutation，并要求重新 `open('write')`。lease 过期后到达的旧 renew 必须返回 `SESSION_OWNERSHIP_LOST`，新 write open 才能取得递增的 generation。相同 `requestId` 的 renew 重试返回第一次的 owner receipt，不得再次改变 lease 语义。
+`renew` 只能延长仍然有效的当前 owner lease；它不改变 `generation`，不追加 Session event，也不改变 `backendRevision`。Worker 必须在 `expiresAt` 之前定期 renew；renew 失败或 lease 过期后，remote handle 停止 mutation，并要求重新 `open('write')`。lease 过期后到达的旧 renew 必须返回 `SESSION_OWNERSHIP_LOST`，新 write open 在当前 backend 状态中取得递增的 generation。PoC 只在 `flush` 时持久化 generation，因此 backend 在未 flush 的 owner claim 后重启时不保证数值跨重启连续；旧 owner token 仍因进程重启而失效。相同 `requestId` 的 renew 重试返回第一次的 owner receipt，不得再次改变 lease 语义。
 
 ### 2.3 Read
 
@@ -143,6 +150,7 @@ interface SessionReadResponse {
   eventState: 'owned' | 'shared-frozen'
   events: SessionEvent[]
   nextSeq: number
+  durableThroughSeq: number
   backendRevision: string
 }
 ```
@@ -212,11 +220,14 @@ interface SessionCloseResponse {
   sessionId: string
   closed: boolean
   ownerReleased: boolean
+  nextSeq: number
+  durableThroughSeq: number
+  durabilityReceipt?: string
   backendRevision: string
 }
 ```
 
-`flush` 成功才允许 Worker 把对应的 event prefix 当作 crash-reopenable。`close` 释放 owner，不删除 Session；close 是幂等的，已经失效的 owner 只能得到明确的 ownership result，不能重新获得写权。
+`flush` 成功才允许 Worker 把对应的 event prefix 当作 crash-reopenable。`close` 释放 owner；包含事件的 Session 保留，尚未写入任何事件且从未 flush 的空 Session 可以由这个 PoC 清理。保留的 Session 支持相同 request id 的 close replay；空 Session 清理后不再保留 replay record，因此客户端不能把清理后的 Session 当作可查询资源重试。已经失效的 owner 只能得到明确的 ownership result，不能重新获得写权。
 
 ### 2.6 Stat
 
@@ -252,20 +263,14 @@ interface BrowserLlmRequest {
   sessionId: string
   ownerToken: string
   generation: number
-  provider: string
   model: string
   messages: RequestMessage[]
-  system?: string
-  tools?: ToolSchema[]
-  toolHistory?: ToolHistory
-  reasoningEffort?: string
-  maxTokens?: number
-  temperature?: number
-  stop?: string[]
 }
 ```
 
-`RequestMessage`、`ToolSchema` 和 `ToolHistory` 的语义来自 `@deepseek-ai/dsh-llm`；wire codec 只负责 schema validation、结构化 clone 和 transport encoding，不改变模型可见内容。`ownerToken` 和 `generation` 把模型调用绑定到当前 Session write owner，防止已经失去写权的 Worker 继续发起可计费的请求。
+当前 PoC 只实现 `model` 和 `messages`；没有把 DSH 的完整 `GenerateOptions` 暴露为浏览器协议字段。`RequestMessage` 的当前 PoC 形式是带 `role` 和不超过 64 KiB 的文本 `content` 的 plain object；assistant message 可以额外带 allowlisted 的 `toolCall`。未来增加系统提示、工具 schema 或采样参数时，必须先扩展 DTO、后端 allowlist 和测试；不能因为字段名与 DSH 内部类型相同就直接透传。`ownerToken` 和 `generation` 把模型调用绑定到当前 Session write owner，防止已经失去写权的 Worker 继续发起可计费的请求。
+
+LLM 请求中的 `requestId` 是调用关联标识，不表示 backend 会重放或合并已经发出的模型调用；当前 scripted route 不提供 LLM replay。客户端不能把连接超时当作模型调用未发生，并在没有 provider-specific 幂等保证时自动重发。
 
 Backend 必须根据已授权 Session policy 重新解析 provider/model，并拒绝请求中的 `baseURL`、Authorization、API key、cookie、任意 header、代理设置、任意 tool executor 或 secret reference value。
 
@@ -288,13 +293,10 @@ type BrowserLlmStreamItem =
 interface LlmWireError {
   code: string
   message: string
-  status?: number
-  requestId?: string
-  retryable?: boolean
 }
 ```
 
-错误 message 不应包含 API key、Authorization、Cookie、完整 prompt 或 provider secret。provider-specific detail 只能在 server diagnostic 中保留，不能直接下发到页面。
+当前 PoC 只允许 `code` 和 `message`；错误 message 不应包含 API key、Authorization、Cookie、完整 prompt 或 provider secret。未来增加 `status`、`requestId` 或 `retryable` 等字段时，必须先更新 Worker exact-key 校验、后端 allowlist 和回归测试，不能仅修改文档。
 
 -----
 
@@ -304,11 +306,15 @@ interface LlmWireError {
 
 ```text
 interface BrowserToolCall {
-  protocolVersion: 1
-  kind: 'browser-tool-call'
   callId: string
   name: 'browser_echo'
   args: { text: string }
+}
+
+interface BrowserToolCallEnvelope {
+  protocolVersion: 1
+  kind: 'browser-tool-call'
+  call: BrowserToolCall
 }
 ```
 
@@ -318,6 +324,18 @@ interface BrowserToolCall {
 
 ```text
 interface BrowserToolResultOk {
+  callId: string
+  ok: true
+  result: { text: string; length: number }
+}
+
+interface BrowserToolResultError {
+  callId: string
+  ok: false
+  error: { code: string; message: string }
+}
+
+interface BrowserToolResultEnvelope {
   protocolVersion: 1
   kind: 'browser-tool-result'
   callId: string
@@ -325,7 +343,7 @@ interface BrowserToolResultOk {
   result: { text: string; length: number }
 }
 
-interface BrowserToolResultError {
+interface BrowserToolResultErrorEnvelope {
   protocolVersion: 1
   kind: 'browser-tool-result'
   callId: string
@@ -334,7 +352,9 @@ interface BrowserToolResultError {
 }
 ```
 
-Main Thread 只能针对一个 pending call id 返回一次 result；Worker 只能接受当前请求对应的 result。未知、重复或过期 call id 必须被丢弃并记录诊断，不得改变 Session。
+`type` 是页面与 Worker 使用的本地控制字段，不属于上述 bridge DTO。Main Thread 只能针对一个 pending call id 返回一次 result；Worker 只能接受当前请求对应的 result。未知、重复或过期 call id 必须被丢弃并记录诊断，不得改变 Session。
+
+当前 PoC 的 pending browser Tool 等待时间为 10 秒；超时返回 `TOOL_TIMEOUT`，不会自动重放该 Tool。页面或 Worker 之后到达的旧 result 仍会被丢弃。
 
 -----
 
@@ -344,17 +364,19 @@ PoC 使用以下稳定错误码：`PROTOCOL_UNSUPPORTED`、`INVALID_REQUEST`、`
 
 HTTP status 是 transport signal，不能替代业务 error code。JSON/NDJSON error body 必须包含 code 和安全 message；客户端需要保留 code 并把不可恢复错误传给 DSH failure normalization。
 
-客户端取消必须触发 AbortSignal、停止消费 stream、通知 backend 取消 admitted request，并释放本地 pending state。取消不等于回滚已经提交的 Session event 或已经发生的外部副作用。
+正式 provider route 的客户端取消必须触发 AbortSignal、停止消费 stream、按 provider adapter 的取消能力通知 backend，并释放本地 pending state。当前 PoC 只有 scripted stream，没有独立 cancel route；断开连接只停止当前客户端消费，不承诺撤销已经开始的 backend work。取消不等于回滚已经提交的 Session event 或已经发生的外部副作用。
 
 -----
 
 ## 六、幂等、所有权和持久性
 
-Mutation 的判断顺序必须是：解析协议版本 → 验证 request schema → 验证 Session identity → 验证 owner/generation → 检查 request id replay record → 验证 expected seq → 提交 batch/lease mutation → 返回 receipt。
+Mutation 的判断顺序必须是：解析协议版本 → 验证 request schema 和字段值 → 验证 Session identity → 检查 exact request-id replay record → 若没有 replay 才验证 owner/generation → 验证 expected seq → 提交 batch/lease mutation → 返回 receipt。Exact replay 只返回此前已经提交的 immutable receipt，不重新执行 mutation，因此不会让旧 owner 恢复写权；未知字段和值仍然在 Session lookup 前拒绝，避免错误地报告为 `SESSION_NOT_FOUND`。
 
-Backend 在同一个 Session 内按 `requestId` 保存最小 replay record，至少包括 operation kind、request digest、result digest、nextSeq 和 durableThroughSeq。相同 request id 但 payload digest 不同必须返回 `INVALID_REQUEST`，不能复用旧结果。
+Backend 在同一个 Session 内按 `requestId` 保存最小 replay record，至少包括 operation kind、request digest、result digest、nextSeq 和 durableThroughSeq。当前 backend 只把不含 owner receipt 的 `read`、`append`、`flush` 和 `close` replay 持久化；`create`、`open` 和 `renew` 的 replay 只在进程内保留，因为它们的 response 含有绑定当前 backend 进程的 owner token，不能在重启后返回。重启后客户端必须重新 `open('write')`。replay 表按自有键查找，不得把对象原型属性当成已提交的 request。相同 request id 但 payload digest 不同必须返回 `INVALID_REQUEST`，不能复用旧结果。
 
-`backendRevision` 只用于诊断和读缓存失效，不作为跨 backend 的全局时间或 Session format version。`generation` 是 owner fencing token；它单调递增，但不能替代 event seq。
+`backendRevision` 只用于诊断和读缓存失效，不作为跨 backend 的全局时间或 Session format version。`generation` 是当前 backend 状态中的 owner fencing token；它不能替代 event seq，也不承诺成为跨重启全局单调时钟。
+
+当前 PoC backend 对同一 `sessionId` 的 Session operation 和 `stat` 串行处理，使异步 flush、owner release 和 replay receipt 使用同一个可观察的 Session 状态。LLM stream 不持有该队列；它只在响应开始前校验 owner，避免长时间的上游 stream 阻塞 lease renew。该保证只覆盖单个 backend 进程；多节点部署仍需要持久化存储提供事务或锁。
 
 `durabilityReceipt` 是 opaque string。PoC 不应伪造 WAL LSN、数据库 commit timestamp 或跨区域复制确认；临时目录 backend 只能返回它真实实现的本地 durability receipt。
 

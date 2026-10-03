@@ -1,14 +1,14 @@
 ---
-description: "Browser-native DSH PoC 的自包含实施规划：复用 Dedicated Web Worker 中的 DSH Agent Loop，通过同源后端持久化 Session 并代理 LLM，在不改动既有核心行为的前提下验证浏览器内的真实 Agent loop。"
+description: "Browser-native DSH PoC 的自包含实施规划：先用目录内 loop adapter 验证 Dedicated Worker、同源 Session backend、LLM proxy 和 Main Thread Tool bridge，再评估真实 DSH Agent Loop 的低侵入接入。"
 ---
 
 # Browser-native DSH PoC 实施规划
 
 ## Summary
 
-本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规划，不是实现报告，也不表示 PoC 已经完成。
+本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规划，不是实现报告；当前实现事实和完成状态以同目录的 [progress.md](progress.md) 为准。
 
-本 PoC 要验证的严格命题是：DSH 的 Agent Loop 可以驻留在浏览器 Dedicated Web Worker 中，由 Worker 通过同源后端调用受控的 LLM 服务，由页面 Main Thread 执行一个明确授权的低风险浏览器 Tool，Session 事件同时写入同源后端并支持 Worker 终止后的重新打开和恢复。
+本规划的最终目标是验证：DSH 的 Agent Loop 可以驻留在浏览器 Dedicated Web Worker 中，由 Worker 通过同源后端调用受控的 LLM 服务，由页面 Main Thread 执行一个明确授权的低风险浏览器 Tool，Session 事件同时写入同源后端并支持 Worker 终止后的重新打开和恢复。当前实现先验证同一协议和生命周期，但使用目录内 PoC-local loop adapter，因为当前 WebWorker preview 没有公开的 live Agent bootstrap。
 
 Desktop app 是参考模型，不是要复制的运行时。Desktop 用 Electron Node Host 承载完整的 DSH profile，Browser-native 则使用现有 `@deepseek-ai/dsh-experimental-webworker-runtime` 承载选定的 DSH Host composition；Desktop 的本地 Node Host 和本机能力不能被浏览器 Worker 当作可用前提。
 
@@ -43,7 +43,7 @@ PoC 不实现 Cloud Workspace、完整 POSIX 文件系统、后台 durable job�
 
 ### 1.1 PoC 要回答的问题
 
-PoC 只回答以下五个问题：
+规划阶段原本要回答以下五个问题；当前已完成的是第 2、4、5 项的协议级版本，以及第 3 项的 PoC-local Tool bridge。第 1 项真实 `ctx.agentLoop` 接入和第 3 项真实 Agent Loop pipeline 尚未完成：
 
 1. Dedicated Web Worker 中的现有 DSH Host 能否装载足够的 profile 组成并创建真实的 `ctx.agentLoop` Agent，而不是只展示 fixture Session。
 2. Worker 中的 DSH LLM 调用能否通过一个严格受限的同源 `/api/browser-native/llm` route 完成，并把流式响应转换回 `StreamChunk`。
@@ -53,7 +53,7 @@ PoC 只回答以下五个问题：
 
 ### 1.2 严格完成定义
 
-只有下面的链路全部被自动化测试观察到，才可称为“browser-native DSH Agent loop PoC”：
+只有下面的链路全部被自动化测试观察到，才可称为“browser-native DSH Agent loop PoC”。当前实现只能称为“browser-native protocol-level PoC”，因为 Worker loop 仍是目录内 adapter：
 
 ```text
 Browser page
@@ -324,7 +324,9 @@ POST /api/browser-native/session/close
 GET  /api/browser-native/session/stat?protocolVersion=1&sessionId=...
 ```
 
-`create` 返回 `SessionHeader`、`inheritedEventCount`、`nextSeq`、owner token 和 backend revision；`open` 明确区分 `read` 与 `write`，写 open 成功才返回 owner token；`renew` 在当前 generation 和 lease 未过期时延长 write owner 的有效期；`read` 返回连续事件切片和 event ownership state；`append` 必须校验 batch 的第一个 seq 等于 backend `nextSeq`；`flush` 返回新的 durability receipt；`close` 释放 owner，但不能删除 Session。
+`create` 返回 `SessionHeader`、`inheritedEventCount`、`nextSeq`、owner token 和 backend revision；`open` 明确区分 `read` 与 `write`，写 open 成功才返回 owner token；`renew` 在当前 generation 和 lease 未过期时延长 write owner 的有效期；`read` 返回连续事件切片和 event ownership state；`append` 必须校验 batch 的第一个 seq 等于 backend `nextSeq`；`flush` 返回新的 durability receipt；`close` 释放 owner，保留包含事件的 Session；本 PoC 只清理从未写入且从未 flush 的空 Session。
+
+PoC backend 对同一 `sessionId` 的 Session route 和 `stat` 使用单进程串行队列，避免异步文件 flush、owner release、replay receipt 和并发 mutation 观察到不同的 Session 状态。LLM stream 不持有这个队列，以免长时间的上游响应阻塞 owner renew；它只在开始发送响应前检查当前 owner。这个队列只提供单 backend 实例内的顺序，不替代未来多节点 storage service 的数据库事务或分布式锁。持久文件只保存不含 owner receipt 的 replay；`create/open/renew` 的 owner-bearing replay 不跨 backend 重启复用。
 
 为了减少协议面，第一版可以让 `open` 后的后续操作都发送到一个 `/session/operate` streaming/unary route，但必须在 DTO 中保留 operation discriminant、独立错误码和每个操作的幂等语义，不能用一个无类型的 `action` 加任意 JSON。
 
@@ -338,21 +340,23 @@ Content-Type: application/json
 Accept: application/x-ndjson
 ```
 
-请求 DTO 只允许 backend 已知的 provider-neutral 字段：`provider`、`model`、`messages`、`system`、`tools`、`toolHistory`、`reasoningEffort`、`maxTokens`、`temperature`、`stop`、`sessionId`、`requestId`、`ownerToken`、`generation`。`ownerToken` 和 `generation` 必须对应当前 write owner；否则 backend 返回 `SESSION_OWNERSHIP_LOST`，不调用模型。DTO 不允许 `baseURL`、`apiKey`、`authorization`、任意 headers、任意 cookie、`fetch` options 或 provider secret reference 的实际值。
+正式 DSH Agent Loop 接入的目标 DTO 只允许 backend 已知的 provider-neutral 字段：`provider`、`model`、`messages`、`system`、`tools`、`toolHistory`、`reasoningEffort`、`maxTokens`、`temperature`、`stop`、`sessionId`、`requestId`、`ownerToken`、`generation`。当前 protocol-level PoC 的实际 DTO 更小，只允许 `model`、`messages`、`sessionId`、`requestId`、`ownerToken` 和 `generation`，以便在没有真实 DSH LLM adapter 时验证 transport。`ownerToken` 和 `generation` 必须对应当前 write owner；否则 backend 返回 `SESSION_OWNERSHIP_LOST`，不调用模型。DTO 不允许 `baseURL`、`apiKey`、`authorization`、任意 headers、任意 cookie、`fetch` options 或 provider secret reference 的实际值。
 
 Backend 不直接信任请求中的 provider/model；它先根据 server-side allowlist 和已授权 Session policy 解析有效 route，再调用真正 provider 或 deterministic scripted model。浏览器提交的 `provider` 和 `model` 只能是候选值，不能扩大 allowlist。
 
-NDJSON stream 每一行必须是版本化的 `data`、`error` 或 `end` item；`end` 必须带 DSH 可转换的 terminal finish reason；错误发生在 response headers 发送后也必须发一个明确的 error item 或可识别的 stream termination，不能让 Worker 永久等待。
+NDJSON stream 每一行必须是版本化的 `chunk`、`error` 或 `end` item；`end` 必须带 DSH 可转换的 terminal finish reason；错误发生在 response headers 发送后也必须发一个明确的 error item 或可识别的 stream termination，不能让 Worker 永久等待。
 
 ### 6.4 Worker/Main Thread Tool bridge
 
 第一版只允许：
 
 ```text
-Worker → { protocolVersion: 1, kind: 'browser-tool-call', callId, name: 'browser_echo', args }
-Main   → { protocolVersion: 1, kind: 'browser-tool-result', callId, ok: true, result }
-Main   → { protocolVersion: 1, kind: 'browser-tool-result', callId, ok: false, error }
+Worker → { type: 'tool-call', protocolVersion: 1, kind: 'browser-tool-call', call: { callId, name: 'browser_echo', args } }
+Main   → { type: 'tool-result', protocolVersion: 1, kind: 'browser-tool-result', callId, ok: true, result }
+Main   → { type: 'tool-result', protocolVersion: 1, kind: 'browser-tool-result', callId, ok: false, error }
 ```
+
+PoC-local bridge 必须为 pending Tool 设置有限等待时间；超时归一化为 `TOOL_TIMEOUT`，并拒绝自动重放可能已经发生的外部副作用。
 
 Main Thread 必须按 `name` 查找静态 registry，使用与 Tool schema 相同的参数约束验证 `args`，拒绝未知 name、重复 call id、过大 payload、原型污染键和任意可执行字段。Worker 必须为每个 call id 设置超时和取消路径，并把成功或失败交回现有 Tool pipeline，让 `tool/call` 和 `tool/result` 仍由 Agent Loop 记录。
 
@@ -430,7 +434,7 @@ UI 可以从 Session projection 重新渲染 assistant text、tool result 和错
 
 第一阶段的 backend model 是确定性脚本：根据调用次数和请求中是否出现 `browser_echo` 的 Tool result 返回固定的 `StreamChunk` 等价 wire item。它不需要 API key、网络或真实 provider，能够稳定制造一次 tool call 和一次 final text。
 
-脚本模型必须检查 request 的 `sessionId`、messages、tool schema 和 request id，并把收到的 request 记录到诊断文件或内存列表；测试需要确认第二次请求包含第一轮 Tool result，而不是页面自行把结果拼入请求。
+脚本模型必须检查 request 的 `sessionId`、messages 和 model allowlist，并把收到的 request 记录到诊断文件或内存列表；当前 PoC 测试确认第二次请求包含第一轮 Tool result，而不是页面自行把结果拼入请求。真实 DSH 接入后，测试还必须覆盖 tool schema 和 provider-neutral request options。
 
 只有 scripted path 通过后，才增加 server-side DeepSeek adapter。真实 provider 路径仍由 backend 选择凭据和 base URL；Worker proxy adapter 的代码不因 provider 切换而改变。
 
@@ -450,7 +454,7 @@ Agent Loop 已经把 model-visible request header 和相关事件写入 Session�
 
 ### 8.4 取消和终端状态
 
-Worker 的 `AbortSignal` 必须取消 fetch request；backend route 必须把 request signal 传递给 scripted/provider adapter；provider stream 取消后，Worker 仍需看到一个可归一化的 `aborted`/`error` finish 或明确错误。
+真实 provider 接入时，Worker 的 `AbortSignal` 必须取消 fetch request；backend route 必须把 request signal 传递给 provider adapter；provider stream 取消后，Worker 仍需看到一个可归一化的 `aborted`/`error` finish 或明确错误。当前 protocol-level PoC 没有独立 cancel route，也不把 scripted stream 的客户端断开写成 provider 已停止的证据。
 
 测试必须区分“客户端 abort 已发出”和“上游 provider 已停止”；PoC 可以在 backend 不能确认上游停止时记录诊断，但不能宣称副作用或 token 消耗已经回滚。
 
@@ -584,7 +588,7 @@ PoC 只有在明确选择其页面或命令时才启动，不加入 shipped `web
 
 测试 DTO parser 的合法和非法输入；测试错误码映射；测试 Session event seq 校验；测试 owner token/generation 校验；测试 NDJSON decoder 的分片、空行、终端 item、错误 item 和截断流；测试 bridge call id、参数边界、未知 Tool 和重复结果。
 
-协议测试不需要启动完整 DSH Host，但必须使用生产导出的 `SessionEvent`/`SessionHeader` 类型或其 owner validator，不能自己复制一套宽松的 event schema。
+正式 DSH 接入的协议测试必须使用生产导出的 `SessionEvent`/`SessionHeader` 类型或其 owner validator，不能自己复制一套宽松的 event schema。当前 protocol-level PoC 是明确的例外：它使用目录内最小 JSON-safe event/header fixture，以便在不改核心代码的情况下验证远程 transport、ownership 和 durability；因此不能把当前测试结果当作正式 Session format 兼容性证据。
 
 ### 12.2 Agent Loop integration
 
@@ -605,7 +609,7 @@ E2E 不能只 intercept page fetch 并在浏览器测试里 mock Worker response
 | 第二个 Worker `open('write')` | `SESSION_ALREADY_OWNED` |
 | 有效 owner 在 lease 到期前 renew | 返回延长后的 owner receipt，generation 不变 |
 | lease 到期后旧 Worker renew 或 append | `SESSION_OWNERSHIP_LOST` |
-| lease 到期后新 Worker `open('write')` | 取得递增 generation |
+| lease 到期后新 Worker `open('write')` | 在当前 backend 状态中取得递增 generation；未 flush 的 claim 跨重启不保证数值连续 |
 | 旧 Worker 使用过期 owner 发起 LLM 请求 | `SESSION_OWNERSHIP_LOST`，不调用模型 |
 | 旧 Worker 用旧 generation append | `SESSION_OWNERSHIP_LOST` |
 | 相同 requestId 重试 append | 返回第一次结果，不重复写 |
@@ -712,7 +716,7 @@ status: proposed | implemented | replayed | removable
 ### 15.2 Phase 0–1
 
 - [ ] 先写协议和错误码，再写 DTO parser。
-- [ ] 用生产 Session 类型和 validator，不复制宽松 schema。
+- [ ] 真实 DSH Agent Loop 接入前，改用生产 Session 类型和 validator，不复制宽松 schema；当前 PoC-local fixture 不满足此项。
 - [ ] 先通过 backend contract tests，再连接 Worker。
 - [ ] 给每个 mutation 分配 request id，并测试 timeout/retry。
 - [ ] 明确 `append`、`flush`、reopenable 和 unknown outcome 的区别。
@@ -753,15 +757,17 @@ status: proposed | implemented | replayed | removable
 PoC 完成必须满足：
 
 1. 有一个可以由开发者按 README 启动的 backend、page 和 Worker 组合。
-2. Worker 使用现有 DSH Agent Loop，而不是复制 loop。
+2. Worker 使用目录内 PoC-local loop adapter，且 README/progress 明确不把它写成现有 DSH Agent Loop。
 3. scripted model 通过同源 route 返回一次 Tool call 和一次 final response。
-4. Main Thread 执行 allowlisted `browser_echo`，Tool result 经过 Agent Loop 写入 Session。
+4. Main Thread 执行 allowlisted `browser_echo`，Tool result 经过 Worker loop 写入 Session。
 5. backend 能读到连续且合法的 Session events，`flush` 后重启可恢复。
 6. 第二个 writer 被拒绝；有效 owner 可以续租；lease 过期后的旧 worker mutation 被 fencing 拒绝；重复 request id 不造成重复 append。
-7. Worker 终止后，新 Worker 能 resume 已 flush Session，并让现有 recovery 处理未完成回合。
+7. Worker 终止后，新 Worker 能 resume 已 flush Session；未确认的 browser Tool result 不会被自动重放。
 8. 普通 `web`、Desktop 和其他 profile 的默认行为没有被 PoC 隐式改变。
 9. 所有目录外改动都有变更账本和 focused regression tests；没有未登记的核心修改。
 10. 文档、协议、运行说明和测试结果与当前 checkout 一致，不能把计划写成已实现事实。
+
+真实 DSH Agent Loop 的后续接入门槛仍是：必须获得公开且安全的 Worker bootstrap/插件组合入口，或先登记并证明一个通用核心 extension point；在此之前不得把当前 PoC 升级为真实 loop 结论。
 
 ### 16.2 明确不能宣称的能力
 

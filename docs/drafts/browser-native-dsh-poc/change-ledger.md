@@ -16,7 +16,7 @@ description: "Browser-native DSH PoC 的目录外改动账本：记录所有不�
 
 ```text
 changeId: BN-DOC-000
-upstreamBaseline: 0.2.0-rc.2 / scripts/translation-pairing.manifest.json
+upstreamBaseline: dsh-v0.2.0-rc.2 / scripts/translation-pairing.manifest.json
 file: scripts/translation-pairing.manifest.json
 reason: 本目录是中文单语的实施草稿，必须与现有 docs/drafts 研究文档保持相同的翻译门禁范围。
 existingExtensionPointsChecked: 已检查 translation-pairing manifest、docs/i18n/README.md 和现有 docs/drafts 排除项；Markdown frontmatter 没有单文件 scratch 标记。

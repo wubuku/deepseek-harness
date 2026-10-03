@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browser-native DSH PoC</title>
+    <style>
+      :root { color-scheme: light; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f5f7fa; color: #18212f; }
+      body { max-width: 1060px; margin: 0 auto; padding: 32px; }
+      h1 { font-size: 24px; margin: 0 0 8px; }
+      p { color: #526173; line-height: 1.5; }
+      section { background: #fff; border: 1px solid #dbe2ea; border-radius: 6px; padding: 18px; margin-top: 16px; }
+      label { display: block; font-size: 12px; color: #526173; margin-bottom: 6px; }
+      input, textarea { width: 100%; box-sizing: border-box; border: 1px solid #b8c3d1; border-radius: 4px; padding: 9px; font: inherit; color: inherit; }
+      textarea { min-height: 64px; resize: vertical; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+      button { border: 1px solid #8797aa; background: #fff; border-radius: 4px; padding: 8px 12px; font: inherit; cursor: pointer; }
+      button:hover { background: #edf2f7; }
+      #status { font-weight: 700; color: #14532d; }
+      pre { white-space: pre-wrap; overflow: auto; background: #111827; color: #d1fae5; padding: 12px; border-radius: 4px; min-height: 72px; }
+      @media (max-width: 700px) { body { padding: 16px; } .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <h1>Browser-native DSH PoC</h1>
+    <p>Protocol-level PoC: a Dedicated Worker runs the local loop adapter, the same-origin backend stores flushed Session events and proxies a scripted model, and the Main Thread owns one allowlisted browser tool.</p>
+    <section>
+      <div class="grid">
+        <div>
+          <label for="session-id">Session id</label>
+          <input id="session-id" autocomplete="off">
+        </div>
+        <div>
+          <label for="prompt">Prompt</label>
+          <textarea id="prompt">Please echo a greeting through the browser tool.</textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="start" type="button">Start Worker</button>
+        <button id="close" type="button">Close Worker</button>
+        <button id="stop" type="button">Terminate Worker</button>
+        <button id="resume" type="button">Resume Session</button>
+        <button id="reset" type="button">New Session</button>
+      </div>
+      <p>Status: <span id="status">idle</span></p>
+    </section>
+    <section>
+      <h2>Final response</h2>
+      <pre id="final">No final response yet.</pre>
+    </section>
+    <section>
+      <h2>Session events</h2>
+      <pre id="events">[]</pre>
+    </section>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
