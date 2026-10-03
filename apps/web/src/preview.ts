@@ -4,7 +4,7 @@
  * chooser; the unchanged Host connector then owns the Worker handshake.
  * Everything after those calls is the served startup chain verbatim.
  */
-import DshWorker from '@deepseek-ai/dsh-experimental-webworker-runtime/worker?worker'
+import DshWorker from '../../../docs/drafts/browser-native-dsh-poc/browser-native-worker.ts?worker'
 import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
