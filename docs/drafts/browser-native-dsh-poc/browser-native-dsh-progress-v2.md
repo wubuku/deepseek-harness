@@ -6,11 +6,11 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 当前状态
 
-- **阶段**：Phase 1，custom Worker 骨架已写入，正在验证 Vite Worker bundle 和现有 preview acceptance。
+- **阶段**：Phase 1 已完成，进入 Phase 2：正式 Remote SessionPersistence provider。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
 - **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
 - **当前分支**：`research-browser-native-poc`。
-- **checkpoint**：提交主题为 `docs: checkpoint browser-native llm proxy poc`；不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='checkpoint browser-native llm proxy poc' --oneline` 定位。
+- **checkpoint**：最近的 Phase 1 接线提交主题为 `feat(docs): route preview through browser-native worker`；本次收口后会再建立一个 checkpoint。不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位。
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
 - **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
 
@@ -23,7 +23,7 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 实施顺序
 
-- [ ] v2 规划文档完成并通过连续三轮只读检查。
+- [x] v2 规划文档完成并通过连续三轮只读检查。
 - [x] custom Worker entry 启动现有 Web UI 和完整 Host。
 - [ ] Remote Session backend/provider 通过正式 persistence contract。
 - [ ] Remote LLM adapter 通过 scripted backend 触发真实 `ctx.agentLoop`。
@@ -44,12 +44,15 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 | 2026-10-03 | `pnpm run doc-typecheck` | 通过 | 83 个代码块编译；76 个显式忽略；其余 catalog/type-equivalence 通过 |
 | 2026-10-03 | `pnpm run doc-sync` | 通过 | 43 passed、0 failed、0 skipped |
 | 2026-10-03 | `git diff --check` | 通过 | 规划文档无 whitespace 错误 |
-| 2026-10-03 | 新增 `browser-native-worker.ts` 并将 `apps/web/src/preview.ts` 的 Worker import 指向该文件 | 待验证 | 只替换 preview 的 Worker bundle，保留 `chooseWorkerHostSource`、`connectWorkerHost`、AppWebEntry 和 tunnel；目录外接线已登记为 BN-P1-001 |
+| 2026-10-03 | 新增 `browser-native-worker.ts` 并将 `apps/web/src/preview.ts` 的 Worker import 指向该文件 | 通过 | 只替换 preview 的 Worker bundle，保留 `chooseWorkerHostSource`、`connectWorkerHost`、AppWebEntry 和 tunnel；目录外接线已登记为 BN-P1-001 |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` | 失败，尚未验证 custom Worker | Worker runtime 和 packer 子构建通过；Vite 在既有 `apps/web/src/main.ts` import `@deepseek-ai/dsh-client-ui-theme/brand-font.css` 处无法解析。已确认源码存在而 package export 指向的 `lib/styles/brand-font.css` 尚未生成；先构建 UI theme 包再重试 |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-client-ui-theme run bundle` | 通过 | 生成 package export 所需的 `lib/styles/brand-font.css` 和 theme client bundles；产物为忽略的构建输出 |
 | 2026-10-03 | 重试 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` | 失败，尚未验证 custom Worker | UI theme 产物问题解决后，Vite 在既有 `@deepseek-ai/dsh-client-web` package entry 处失败；继续补齐当前 checkout 的 workspace build artifacts |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-client-web run bundle` | 失败，命令不适用 | `dsh-client-web` 没有 package-local `bundle` script；仓库根级 `build:lib:client` 是声明的 client artifact 构建入口 |
 | 2026-10-03 | `pnpm run build:lib:client` | 通过 | 生成当前 checkout 的 client package `lib` artifacts；日志包含既有 workspace platform warnings，无编译失败 |
+| 2026-10-03 | 重试 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`（补齐 client artifacts 后） | 通过 | Vite 生成 docs-owned Worker bootstrap、preview VFS image 和 fixture overlay |
+| 2026-10-03 | `pnpm exec vitest run apps/web/tests/preview-boot.e2e.ts --config vitest.web.config.ts` | 通过 | 真实 Chromium 启动 custom Worker；观察到 Worker Host tree active、tunnel 和现有 DSH Web UI 可交互 |
+| 2026-10-04 | Phase 1 收口 | 通过 | 将 BN-P1-001 标记为 implemented；当前进入正式 SessionPersistence provider 实现，不把旧独立 PoC 当作 v2 入口 |
 | 2026-10-03 | `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`（补齐 client artifacts 后） | 通过 | Vite 生成 docs-owned Worker bootstrap、既有 Web UI assets 和 preview VFS image；packer unresolved third-party request 列表与上游 baseline 一致，未出现构建失败 |
 | 2026-10-03 | `pnpm exec vitest run apps/web/tests/preview-boot.e2e.ts --config vitest.web.config.ts` | 通过 | 1 file、1 test passed；真实 Chromium 通过空 preview 和 seeded preview boot，Host tree/tunnel/UI acceptance 成立 |
 

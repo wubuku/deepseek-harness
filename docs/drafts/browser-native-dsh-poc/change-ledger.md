@@ -26,7 +26,7 @@ consumersUpdated: `apps/web/src/preview.ts` 继续调用上游 `chooseWorkerHost
 tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`; 现有 `apps/web/tests/preview-boot.e2e.ts`; docs-owned Worker 的 `node --check`/TypeScript build path; `git diff --check`。
 syncReplaySteps: 从 upstream 更新时重新对比 `apps/web/src/preview.ts` 和 `webworker-runtime/src/worker.ts` 的初始化顺序；优先把新增 static module seam 接回上游 Worker entry，若上游支持可配置 Worker factory 则删除本地复制的 entry，只保留 docs provider。
 deleteCondition: v2 PoC 移除或上游 preview 提供等价的 Worker injection hook；删除该 import 后普通 preview boot acceptance 仍通过。
-status: proposed
+status: implemented
 ```
 
 ### BN-DOC-001：browser-native PoC v2 重新规划
