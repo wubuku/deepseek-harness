@@ -16,6 +16,7 @@ const TOOL_TIMEOUT_MS = 10_000
 
 let active = false
 let sessionId
+let activeModel = 'poc-scripted'
 let owner
 let events = []
 let renewTimer
@@ -188,7 +189,7 @@ async function streamLlm() {
       sessionId,
       ownerToken: owner.ownerToken,
       generation: owner.generation,
-      model: 'poc-scripted',
+      model: activeModel,
       messages: messagesFromEvents(),
     }),
   })
@@ -387,6 +388,7 @@ async function start(message) {
   active = true
   try {
     sessionId = message.sessionId
+    activeModel = message.model === 'real' ? 'real' : 'poc-scripted'
     postMessage({ type: 'status', value: 'opening-session', sessionId })
     const opened = await openOrCreate(sessionId)
     owner = opened.owner

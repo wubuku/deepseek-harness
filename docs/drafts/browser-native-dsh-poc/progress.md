@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的实施进度、验证记录和恢复入�
 
 ## 当前状态
 
-状态：协议级 PoC 已完成；真实 DSH `ctx.agentLoop` 接入未完成，作为后续独立评估项保留。
+状态：协议级 PoC 已完成；真实后端 provider proxy 和真实 Chromium E2E 已完成；真实 DSH `ctx.agentLoop` 接入未完成，作为后续独立评估项保留。
 
 实施 worktree：`research-browser-native-poc`。
 
@@ -16,7 +16,7 @@ description: "Browser-native DSH PoC 的实施进度、验证记录和恢复入�
 
 ## 完成目标
 
-按 [implementation-plan.md](implementation-plan.md) 实现并验证最小闭环：浏览器页面启动 Worker，Worker 运行目录内的 PoC-local Agent-loop adapter，通过同源后端完成 Session 状态存储和 scripted LLM proxy，经过 typed `browser_echo` Tool bridge 返回最终结果，并支持 flush 后的新 Worker resume。
+按 [implementation-plan.md](implementation-plan.md) 实现并验证最小闭环：浏览器页面启动 Worker，Worker 运行目录内的 PoC-local Agent-loop adapter，通过同源后端完成 Session 状态存储和 scripted/real LLM proxy，经过 typed `browser_echo` Tool bridge 返回最终结果，并支持 flush 后的新 Worker resume。
 
 第一阶段先用 PoC-local loop adapter 验证协议和生命周期；当前 checkout 的 WebWorker preview 只有 Host tree/fixture boot，没有现成的 live Agent bootstrap。只有确认现有 WebWorker runtime 能在不修改核心代码的前提下承载真实 DSH Agent Loop 后，才把实现升级为真实 `ctx.agentLoop` 闭环。任何暂时不能满足真实 DSH Loop 完成定义的阶段，都必须在本文件和 README 中明确标注为 partial PoC。
 
@@ -44,7 +44,7 @@ description: "Browser-native DSH PoC 的实施进度、验证记录和恢复入�
 
 ```text
 docs/drafts/browser-native-dsh-poc/
-├── backend.mjs              # 同源 HTTP backend、文件持久化、scripted LLM proxy
+├── backend.mjs              # 同源 HTTP backend、文件持久化、scripted/real LLM proxy
 ├── protocol.mjs             # backend/Node tests 使用的 DTO 校验、限额和错误定义；Worker 保持 browser-local guards
 ├── run.mjs                  # 启动 backend 的开发入口
 ├── public/
@@ -53,14 +53,15 @@ docs/drafts/browser-native-dsh-poc/
 │   └── worker.js             # PoC-local Agent loop、Session adapter、LLM client
 └── tests/
     ├── backend.test.mjs      # Session、lease、幂等和恢复测试
-    └── browser.e2e.mjs       # 浏览器 Worker/Tool/恢复闭环测试
+    ├── browser.e2e.mjs       # 浏览器 Worker/Tool/恢复闭环测试
+    └── browser.real.e2e.mjs  # 真实 provider、真实 Chromium 和 Session 持久化测试
 ```
 
 ### Phase 1：Session backend 和协议 adapter
 
 状态：已完成。
 
-当前实现：`backend.mjs` 提供 exact Session routes、JSON 文件 flush、owner lease、renew、request-id replay 和 scripted LLM route；`public/` 提供 Dedicated Worker 与 Main Thread Tool bridge。
+当前实现：`backend.mjs` 提供 exact Session routes、JSON 文件 flush、owner lease、renew、request-id replay、scripted route 和 OpenAI-compatible real provider route；`public/` 提供 Dedicated Worker 与 Main Thread Tool bridge。
 
 已完成：Node contract tests 覆盖 flush/reopen、request-id replay、owner fencing/renew、sequence conflict atomicity 和 NDJSON terminal item。
 
@@ -68,11 +69,11 @@ docs/drafts/browser-native-dsh-poc/
 
 结果：最近一次记录的 backend contract tests `node --test docs/drafts/browser-native-dsh-poc/tests/backend.test.mjs` 为 21 passed、0 failed；阶段早期的 17/20 passed 记录只保留在下方历史日志中。
 
-### Phase 2：Worker loop 和 scripted LLM
+### Phase 2：Worker loop 和 LLM proxy
 
 状态：已完成。
 
-当前实现：Worker 通过同源 backend 完成两次 scripted LLM request，并把 Session event 在每次 mutation 后 flush；页面 Main Thread 提供 `browser_echo`。
+当前实现：Worker 通过同源 backend 完成两次 LLM request，request 可以选择 scripted fixture 或 backend 配置的真实 OpenAI-compatible provider；Session event 在每次 mutation 后 flush；页面 Main Thread 提供 `browser_echo`。
 
 退出条件：Worker 通过同源 backend 完成一次包含 `browser_echo` Tool 的 agent turn，Session flush 后可读取连续 event。
 
@@ -119,9 +120,11 @@ docs/drafts/browser-native-dsh-poc/
 
 ### Phase 5：真实 DSH Agent Loop 和 provider proxy
 
-状态：未实施，明确不属于当前协议级 PoC 的完成范围。
+状态：真实 provider proxy 已完成；真实 DSH `ctx.agentLoop` 接入未实施，明确不属于当前协议级 PoC 的完成范围。
 
-原因：当前 WebWorker preview 没有公开的 live Agent bootstrap，且把真实 `ctx.agentLoop` 接入浏览器需要新增 image/plugin/bootstrap 组装路径。Provider credentials 仍不得进入浏览器；未来若实施，应先登记核心代码或 profile 变更，再增加真实 provider proxy 和对应 snapshot/e2e 覆盖。
+已完成：backend 读取启动时提供的 `.env`，按配置选择 GPT/Grok provider，密钥只留在 backend；real route 将受限 PoC messages 转换为 OpenAI-compatible Chat Completions request，固定注入 `browser_echo` schema，解析上游 SSE 并输出 PoC NDJSON；页面通过 config route 只看到 mode/provider/model。`browser.real.e2e.mjs` 使用真实 Chromium、真实上游模型和真实 JSON Session store 验证 `user.message → assistant.tool-call → tool.result → assistant.final` 以及 `durableThroughSeq = 3`。
+
+保留限制：当前 WebWorker preview 没有公开的 live Agent bootstrap，把真实 `ctx.agentLoop` 接入浏览器仍需要新增 image/plugin/bootstrap 组装路径。Provider credentials 仍不得进入浏览器；未来若实施真实 DSH loop，应先登记核心代码或 profile 变更，再增加正式 provider adapter、snapshot 和 e2e 覆盖。
 
 ## 当前决策日志
 
@@ -206,6 +209,12 @@ docs/drafts/browser-native-dsh-poc/
 - 2026-10-03：修复后的第 1 轮只读审计发现文档把 owner `generation` 写成跨重启必然递增的全局值，但当前 backend 只在 flush 时持久化 generation；未 flush 的 owner claim 在重启后可能重复数值，旧 token 仍会被进程重启 fencing。已先登记该语义缺口，下一步同步 protocol/implementation plan 的 generation 说明。本次发现使连续无修改审计计数重置为 0。
 - 2026-10-03：generation 语义已同步到 `protocol.md` 和 `implementation-plan.md`：当前 backend 只保证当前状态中的递增，不把未 flush claim 的数值连续性写成跨重启保证。随后运行 `pnpm run test:docs`（21 passed、0 failed、0 skipped）和 `pnpm run doc-sync`（43 passed、0 failed、0 skipped）；focused 结果仍为 5 个 PoC JavaScript 文件通过 `node --check`、backend 21 passed、browser 6 passed。现在开始修复后的连续三轮只读检查，计数为 0。
 - 2026-10-03 17:33 CST：连续三轮只读审计完成，期间没有发现需要修改的内容。第 1 轮检查了当前测试摘要、7 个 PoC JavaScript 的语法、backend contract tests（21 passed）和 browser E2E（6 passed）；第 2 轮交叉核对了实现路由、协议限额、PoC-local/真实 DSH 边界和文档门禁，`pnpm run test:docs` 为 21 passed、0 failed、0 skipped，`pnpm run doc-sync` 为 43 passed、0 failed、0 skipped；第 3 轮验证了 README 启动 smoke、health/静态页面/Session create-append-flush-stat、13 个文件的尾换行、`git diff --check` 和目录范围。三轮均无发现、无修复，审计计数达到 3；当前仍只包含 `docs/drafts/browser-native-dsh-poc/` 内的变更。
+- 2026-10-03：复核用户提供的 backend provider 配置，先以不打印凭据的方式验证 `/v1/models` 和 `gpt-5.6-sol` Chat Completions 可用；此前 PoC 仅允许 `poc-scripted`，不能宣称真实 LLM 已完成。
+- 2026-10-03：新增 real provider route：backend 读取显式 `--env-file` 或环境变量，按 model 选择 GPT/Grok key，向 OpenAI-compatible Chat Completions 发送固定 `browser_echo` tool schema，解析 SSE tool call/text delta，再输出浏览器协议 NDJSON；浏览器和 Session event 中不出现 provider secret。
+- 2026-10-03：首次真实 provider Playwright E2E 因上游默认推理耗时超过 180 秒失败；诊断确认 loop、Tool bridge 和 Session 没有错误，真实 backend 浏览器流程随后完成。为减少 real E2E 的无界等待，GPT provider request 明确发送 `reasoning_effort: low`，Grok 可由环境变量覆盖。
+- 2026-10-03：`tests/browser.real.e2e.mjs` 使用真实 Chromium、真实 backend、真实上游模型和真实 JSON Session store 通过：`1 passed、0 failed`，观察到 `user.message`、`assistant.tool-call`、`tool.result`、`assistant.final` 四个事件，`durableThroughSeq = 3`；测试输出只报告 mode/provider/model/event types/sequence，不打印凭据或完整 prompt。
+- 2026-10-03：用 `run.mjs --llm real --env-file ...` 启动真实 dev server，并用独立 Playwright 脚本连接 `http://127.0.0.1:<port>/` 完成最终验收。默认 `gpt-5.6-sol` 运行通过，真实浏览器观察到 `browser tool: browser_echo` 和 `completed`，Session 读取到四个连续事件，`durableThroughSeq = 3`，config response 未暴露 `apiKey`。同一验收期间 provider 曾有两次超过 180 秒未返回的尝试，随后重试成功；这属于上游服务延迟波动，不能被 PoC 当作稳定性保证。
+- 2026-10-03：再次用实际 `run.mjs` dev server 和真实 Chromium 做状态轮询验收，通过两次真实 LLM 请求完成 `user.message → assistant.tool-call → tool.result → assistant.final`，浏览器无 page error，Session read 返回 `durableThroughSeq = 3`。随后复跑目录内 `tests/browser.real.e2e.mjs` 时，固定 180 秒等待的两次尝试都因上游首轮响应延迟超时；这不否定已成功的真实 dev-server 闭环，但说明当前 real provider 测试不能作为稳定 SLA，后续应增加显式 upstream timeout/retry 和诊断耗时记录。文档门禁同时通过：`pnpm run test:docs` 为 21 passed、`pnpm run doc-sync` 为 43 passed，8 个 PoC JavaScript 文件通过 `node --check`，无残留 dev server。
 
 ## 恢复入口
 

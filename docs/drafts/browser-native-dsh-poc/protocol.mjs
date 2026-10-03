@@ -7,6 +7,7 @@ export const MAX_DURABLE_EVENTS = 1_000_000
 export const MAX_TEXT_BYTES = 64 * 1024
 export const MAX_LLM_MESSAGES = 256
 export const MAX_LLM_STREAM_ITEMS = 10_000
+export const MAX_LLM_STREAM_BYTES = 8 * 1024 * 1024
 export const MAX_RESPONSE_LINE_BYTES = 1024 * 1024
 export const MAX_JSON_DEPTH = 64
 export const OWNER_LEASE_MS = 15_000

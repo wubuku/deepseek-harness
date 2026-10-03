@@ -1,5 +1,5 @@
 ---
-description: "Browser-native DSH PoC 的自包含实施规划：先用目录内 loop adapter 验证 Dedicated Worker、同源 Session backend、LLM proxy 和 Main Thread Tool bridge，再评估真实 DSH Agent Loop 的低侵入接入。"
+description: "Browser-native DSH PoC 的自包含实施规划：用目录内 loop adapter 验证 Dedicated Worker、同源 Session backend、真实 OpenAI-compatible LLM proxy 和 Main Thread Tool bridge，再评估真实 DSH Agent Loop 的低侵入接入。"
 ---
 
 # Browser-native DSH PoC 实施规划
@@ -8,7 +8,7 @@ description: "Browser-native DSH PoC 的自包含实施规划：先用目录内 
 
 本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规划，不是实现报告；当前实现事实和完成状态以同目录的 [progress.md](progress.md) 为准。
 
-本规划的最终目标是验证：DSH 的 Agent Loop 可以驻留在浏览器 Dedicated Web Worker 中，由 Worker 通过同源后端调用受控的 LLM 服务，由页面 Main Thread 执行一个明确授权的低风险浏览器 Tool，Session 事件同时写入同源后端并支持 Worker 终止后的重新打开和恢复。当前实现先验证同一协议和生命周期，但使用目录内 PoC-local loop adapter，因为当前 WebWorker preview 没有公开的 live Agent bootstrap。
+本规划的最终目标是验证：DSH 的 Agent Loop 可以驻留在浏览器 Dedicated Web Worker 中，由 Worker 通过同源后端调用受控的 LLM 服务，由页面 Main Thread 执行一个明确授权的低风险浏览器 Tool，Session 事件同时写入同源后端并支持 Worker 终止后的重新打开和恢复。当前实现已经验证 scripted 和真实 OpenAI-compatible provider 的同一协议与生命周期，但使用目录内 PoC-local loop adapter，因为当前 WebWorker preview 没有公开的 live Agent bootstrap。
 
 Desktop app 是参考模型，不是要复制的运行时。Desktop 用 Electron Node Host 承载完整的 DSH profile，Browser-native 则使用现有 `@deepseek-ai/dsh-experimental-webworker-runtime` 承载选定的 DSH Host composition；Desktop 的本地 Node Host 和本机能力不能被浏览器 Worker 当作可用前提。
 
@@ -43,7 +43,7 @@ PoC 不实现 Cloud Workspace、完整 POSIX 文件系统、后台 durable job�
 
 ### 1.1 PoC 要回答的问题
 
-规划阶段原本要回答以下五个问题；当前已完成的是第 2、4、5 项的协议级版本，以及第 3 项的 PoC-local Tool bridge。第 1 项真实 `ctx.agentLoop` 接入和第 3 项真实 Agent Loop pipeline 尚未完成：
+规划阶段原本要回答以下五个问题；当前已完成的是第 2、4、5 项的协议级版本、第 3 项的 PoC-local Tool bridge，以及真实 provider proxy 的浏览器 E2E。第 1 项真实 `ctx.agentLoop` 接入和第 3 项真实 Agent Loop pipeline 尚未完成：
 
 1. Dedicated Web Worker 中的现有 DSH Host 能否装载足够的 profile 组成并创建真实的 `ctx.agentLoop` Agent，而不是只展示 fixture Session。
 2. Worker 中的 DSH LLM 调用能否通过一个严格受限的同源 `/api/browser-native/llm` route 完成，并把流式响应转换回 `StreamChunk`。
@@ -335,10 +335,13 @@ PoC backend 对同一 `sessionId` 的 Session route 和 `stat` 使用单进程�
 第一版使用：
 
 ```text
+GET  /api/browser-native/config
 POST /api/browser-native/llm
 Content-Type: application/json
 Accept: application/x-ndjson
 ```
+
+`config` 只返回 `llmMode`、非敏感的 provider 和 model，不返回 API key、base URL、请求 header 或环境变量。页面使用它把 mode selector 初始化为 scripted 或 real；真正的 provider credential 选择只发生在 backend。
 
 正式 DSH Agent Loop 接入的目标 DTO 只允许 backend 已知的 provider-neutral 字段：`provider`、`model`、`messages`、`system`、`tools`、`toolHistory`、`reasoningEffort`、`maxTokens`、`temperature`、`stop`、`sessionId`、`requestId`、`ownerToken`、`generation`。当前 protocol-level PoC 的实际 DTO 更小，只允许 `model`、`messages`、`sessionId`、`requestId`、`ownerToken` 和 `generation`，以便在没有真实 DSH LLM adapter 时验证 transport。`ownerToken` 和 `generation` 必须对应当前 write owner；否则 backend 返回 `SESSION_OWNERSHIP_LOST`，不调用模型。DTO 不允许 `baseURL`、`apiKey`、`authorization`、任意 headers、任意 cookie、`fetch` options 或 provider secret reference 的实际值。
 
@@ -432,11 +435,11 @@ UI 可以从 Session projection 重新渲染 assistant text、tool result 和错
 
 ### 8.1 先实现 scripted model，再接真实 provider
 
-第一阶段的 backend model 是确定性脚本：根据调用次数和请求中是否出现 `browser_echo` 的 Tool result 返回固定的 `StreamChunk` 等价 wire item。它不需要 API key、网络或真实 provider，能够稳定制造一次 tool call 和一次 final text。
+第一阶段的 backend model 是确定性脚本：根据调用次数和请求中是否出现 `browser_echo` 的 Tool result 返回固定的 `StreamChunk` 等价 wire item。它不需要 API key、网络或真实 provider，能够稳定制造一次 tool call 和一次 final text，作为 keyless contract test 的基线。
 
 脚本模型必须检查 request 的 `sessionId`、messages 和 model allowlist，并把收到的 request 记录到诊断文件或内存列表；当前 PoC 测试确认第二次请求包含第一轮 Tool result，而不是页面自行把结果拼入请求。真实 DSH 接入后，测试还必须覆盖 tool schema 和 provider-neutral request options。
 
-只有 scripted path 通过后，才增加 server-side DeepSeek adapter。真实 provider 路径仍由 backend 选择凭据和 base URL；Worker proxy adapter 的代码不因 provider 切换而改变。
+scripted path 通过后，PoC 增加了 server-side OpenAI-compatible adapter。真实 provider 路径仍由 backend 选择凭据、base URL、completions path 和 model；Worker proxy adapter 的代码不因 provider 切换而改变。当前 real mode 使用 backend 固定的 `browser_echo` tool schema、OpenAI-compatible Chat Completions request 和 SSE-to-NDJSON 转换；GPT 默认使用 `reasoning_effort: low`，以减少真实 E2E 的不确定等待时间。
 
 ### 8.2 Worker-side `browser-proxy` adapter
 
@@ -454,7 +457,7 @@ Agent Loop 已经把 model-visible request header 和相关事件写入 Session�
 
 ### 8.4 取消和终端状态
 
-真实 provider 接入时，Worker 的 `AbortSignal` 必须取消 fetch request；backend route 必须把 request signal 传递给 provider adapter；provider stream 取消后，Worker 仍需看到一个可归一化的 `aborted`/`error` finish 或明确错误。当前 protocol-level PoC 没有独立 cancel route，也不把 scripted stream 的客户端断开写成 provider 已停止的证据。
+真实 provider 接入时，Worker 的 `AbortSignal` 必须取消 fetch request；backend route 必须把 request signal 传递给 provider adapter；provider stream 取消后，Worker 仍需看到一个可归一化的 `aborted`/`error` finish 或明确错误。当前 protocol-level PoC 的 real route 已把浏览器连接断开映射为上游 fetch 的 AbortSignal，但没有独立 cancel route，也不把客户端断开写成 provider 已停止或计费已回滚的证据。
 
 测试必须区分“客户端 abort 已发出”和“上游 provider 已停止”；PoC 可以在 backend 不能确认上游停止时记录诊断，但不能宣称副作用或 token 消耗已经回滚。
 
@@ -544,9 +547,9 @@ PoC 只有在明确选择其页面或命令时才启动，不加入 shipped `web
 
 退出条件：同一组 backend contract tests 可以替换内存 store 和临时目录 store，且前者不被误认为 crash durability 证据。
 
-### Phase 2：Worker boot 和 scripted LLM adapter
+### Phase 2：Worker boot 和 LLM adapter
 
-实施内容：使用现有 Worker runtime image 和独立 PoC bootstrap，在 Worker 中装载 `ctx.agentLoop`、remote Session adapter 和 browser proxy adapter；scripted model 通过同源 route 返回一次文本或固定 finish。
+实施内容：使用现有 Worker runtime image 和独立 PoC-local loop adapter，在 Worker 中装载 remote Session adapter 和 browser proxy adapter；scripted model 通过同源 route 返回一次文本或固定 finish，real mode 通过同一 Worker request DTO 访问 backend provider proxy。当前不宣称已装载真实 `ctx.agentLoop`。
 
 必须验证：Worker 能创建 Session；Agent Loop 产生 request header 和 assistant message；LLM adapter 发送 strict DTO；stream 有 terminal finish；abort 能结束 fetch；Session event 通过 remote adapter append/flush，而不是只留在 Worker 内存。
 
@@ -572,13 +575,13 @@ PoC 只有在明确选择其页面或命令时才启动，不加入 shipped `web
 
 退出条件：故障矩阵中的每个点都有明确的“保留、拒绝、未知或可重试”结果，且没有测试依赖 sleep 猜测时序。
 
-### Phase 5：真实 provider proxy，可选
+### Phase 5：真实 provider proxy
 
-实施内容：只在 Phase 0–4 通过后加入 backend-side DeepSeek adapter；provider key、base URL、retry 和 attribution 均留在 backend；Worker 仍使用相同 `browser-proxy` adapter。
+实施内容：在 Phase 0–4 之后加入 backend-side OpenAI-compatible adapter；provider key、base URL、completions path、model、reasoning effort 和 attribution 均留在 backend；Worker 仍使用相同的 browser protocol adapter。real mode 与 scripted mode 共享 Session、Tool bridge 和 Worker loop，不共享真实 provider 的凭据或 response object。
 
-必须验证：真实 provider request 不含浏览器 secret；provider errors 转成稳定 `LlmFailure`；stream finish、abort、timeout、rate limit 和 request id diagnostics 正常；keyless test 仍由 scripted model 覆盖。
+必须验证：真实 provider request 不含浏览器 secret；provider errors 转成稳定的 PoC error；stream finish、abort、timeout、rate limit 和 request id diagnostics 正常；keyless test 仍由 scripted model 覆盖；真实 Chromium E2E 能观察到真实 tool call、页面 Tool result、最终响应和 flushed Session。
 
-退出条件：真实 provider 只增加一个 backend adapter，不改变 Worker Agent Loop、Session protocol 或 browser Tool protocol。
+退出条件：真实 provider 只增加一个 backend adapter，不改变 Worker Agent Loop、Session protocol 或 browser Tool protocol。当前退出条件已由 `tests/browser.real.e2e.mjs` 以真实 provider 配置、真实 Chromium 和真实 Session backend 验证；真实 DSH `ctx.agentLoop` 接入仍不属于本阶段。
 
 -----
 
@@ -724,9 +727,11 @@ status: proposed | implemented | replayed | removable
 ### 15.3 Phase 2–3
 
 - [ ] Worker 复用现有 `createWorkerHost`/`connectWorkerHost`，不复制 runtime。
-- [ ] Worker 使用现有 `ctx.agentLoop`，不新增 BrowserAgentLoop。
+- [x] 当前 PoC 使用目录内 loop adapter，不新增 BrowserAgentLoop，也不修改现有 `ctx.agentLoop`。
+- [ ] 未来真实 DSH loop 接入必须先获得公开、安全的 Worker bootstrap/插件扩展点，再使用生产 Agent Loop 和 Session 类型。
 - [ ] LLM route 不接受任意 URL、key、headers 或 secret。
 - [ ] 先用 scripted model，确认第二次 request 由 loop 重建。
+- [x] 使用真实 Chromium 和 real provider route 验证第二次 request 由 loop 重建，并把真实 final response 写入 Session。
 - [ ] Main Thread 只暴露静态 `browser_echo`，不开放 arbitrary code。
 - [ ] Tool result 只经 Agent Loop 进入 Session。
 
@@ -735,8 +740,8 @@ status: proposed | implemented | replayed | removable
 - [ ] 注入 crash/timeout/late response，而不是用固定 sleep 假设顺序。
 - [ ] 验证 owner renewal、lease expiry、owner fencing、single writer 和 idempotent append。
 - [ ] 验证 Worker restart 后 Session resume。
-- [ ] 只有 scripted model 通过后才接真实 provider。
-- [ ] 真实 provider credentials 仅存在 backend。
+- [x] scripted model 通过后再接入真实 provider；两条路径共享 browser protocol 和 Session contract。
+- [x] 真实 provider credentials 仅存在 backend；real E2E 不 mock LLM response。
 - [ ] 记录任何目录外改动并补齐 `change-ledger.md`。
 
 ### 15.5 每次提交前
@@ -759,13 +764,14 @@ PoC 完成必须满足：
 1. 有一个可以由开发者按 README 启动的 backend、page 和 Worker 组合。
 2. Worker 使用目录内 PoC-local loop adapter，且 README/progress 明确不把它写成现有 DSH Agent Loop。
 3. scripted model 通过同源 route 返回一次 Tool call 和一次 final response。
-4. Main Thread 执行 allowlisted `browser_echo`，Tool result 经过 Worker loop 写入 Session。
-5. backend 能读到连续且合法的 Session events，`flush` 后重启可恢复。
-6. 第二个 writer 被拒绝；有效 owner 可以续租；lease 过期后的旧 worker mutation 被 fencing 拒绝；重复 request id 不造成重复 append。
-7. Worker 终止后，新 Worker 能 resume 已 flush Session；未确认的 browser Tool result 不会被自动重放。
-8. 普通 `web`、Desktop 和其他 profile 的默认行为没有被 PoC 隐式改变。
-9. 所有目录外改动都有变更账本和 focused regression tests；没有未登记的核心修改。
-10. 文档、协议、运行说明和测试结果与当前 checkout 一致，不能把计划写成已实现事实。
+4. real mode 通过后端 provider proxy 返回真实 Tool call 和 final response；浏览器测试不把 LLM response mock 掉。
+5. Main Thread 执行 allowlisted `browser_echo`，Tool result 经过 Worker loop 写入 Session。
+6. backend 能读到连续且合法的 Session events，`flush` 后重启可恢复。
+7. 第二个 writer 被拒绝；有效 owner 可以续租；lease 过期后的旧 worker mutation 被 fencing 拒绝；重复 request id 不造成重复 append。
+8. Worker 终止后，新 Worker 能 resume 已 flush Session；未确认的 browser Tool result 不会被自动重放。
+9. 普通 `web`、Desktop 和其他 profile 的默认行为没有被 PoC 隐式改变。
+10. 所有目录外改动都有变更账本和 focused regression tests；没有未登记的核心修改。
+11. 文档、协议、运行说明和测试结果与当前 checkout 一致，不能把计划写成已实现事实。
 
 真实 DSH Agent Loop 的后续接入门槛仍是：必须获得公开且安全的 Worker bootstrap/插件组合入口，或先登记并证明一个通用核心 extension point；在此之前不得把当前 PoC 升级为真实 loop 结论。
 
@@ -775,7 +781,7 @@ PoC 完成必须满足：
 
 ### 16.3 下一阶段建议
 
-只有 PoC DoD 通过后，才评估是否把 Session backend 换成 PostgreSQL/对象存储、是否增加真实 provider route、是否新增正式 experimental package、是否提供 Cloud Workspace、是否支持跨 tab attach 或是否需要通用 Host bootstrap extension point。
+只有 PoC DoD 通过后，才评估是否把 Session backend 换成 PostgreSQL/对象存储、是否新增正式 experimental package、是否提供 Cloud Workspace、是否支持跨 tab attach 或是否需要通用 Host bootstrap extension point。真实 provider proxy 已属于当前 PoC 的已验证实现，不再作为下一阶段待办；下一阶段应转向 provider failure semantics、真实 DSH Agent Loop bootstrap 和生产级授权。
 
 后续每一个扩展都应先更新本目录的协议、故障矩阵和变更账本，再写代码；不要从一个通过的 `browser_echo` demo 直接推导出生产级 Agent 平台结论。
 

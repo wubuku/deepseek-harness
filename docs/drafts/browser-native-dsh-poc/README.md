@@ -1,14 +1,14 @@
 ---
-description: "运行目录内 Browser-native DSH PoC 的协议级实现，验证同源 Session backend、LLM proxy、Dedicated Worker loop 和 Main Thread Tool bridge。"
+description: "运行目录内 Browser-native DSH PoC 的协议级实现，验证同源 Session backend、真实 OpenAI-compatible LLM proxy、Dedicated Worker loop 和 Main Thread Tool bridge。"
 ---
 
 # Browser-native DSH PoC
 
 ## Summary
 
-本目录包含一个不修改 DSH 核心代码的协议级 PoC。页面启动 Dedicated Worker，Worker 运行目录内的 Agent-loop adapter；同源 Node backend 提供 Session 状态存储和 scripted LLM proxy；页面 Main Thread 只执行 allowlisted `browser_echo` Tool。所有代码和运行数据约束都在本目录内，实施决策见 [implementation-plan.md](implementation-plan.md)，wire 语义见 [protocol.md](protocol.md)，进度和当前限制见 [progress.md](progress.md)。
+本目录包含一个不修改 DSH 核心代码的协议级 PoC。页面启动 Dedicated Worker，Worker 运行目录内的 Agent-loop adapter；同源 Node backend 提供 Session 状态存储，并在 real mode 下把受限请求代理到后端配置的 OpenAI-compatible Chat Completions 服务；页面 Main Thread 只执行 allowlisted `browser_echo` Tool。所有代码和运行数据约束都在本目录内，实施决策见 [implementation-plan.md](implementation-plan.md)，wire 语义见 [protocol.md](protocol.md)，进度和当前限制见 [progress.md](progress.md)。
 
-当前实现验证的是 Browser-native transport、Session durability、owner fencing、LLM streaming、Tool bridge 和 Worker resume。Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。真实 DSH Agent Loop 接入仍是后续独立评估项。
+当前实现验证的是 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume。Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。真实 DSH Agent Loop 接入仍是后续独立评估项。
 
 ## Run
 
@@ -17,6 +17,18 @@ description: "运行目录内 Browser-native DSH PoC 的协议级实现，验证
 ```sh
 node docs/drafts/browser-native-dsh-poc/run.mjs --port 4175 --data-dir /tmp/dsh-browser-native-poc
 ```
+
+上面的命令启动确定性的 scripted model。要启动真实后端 LLM 代理，使用只存在于本机的 `.env` 文件：
+
+```sh
+node docs/drafts/browser-native-dsh-poc/run.mjs \
+  --port 4175 \
+  --data-dir /tmp/dsh-browser-native-poc-real \
+  --llm real \
+  --env-file /path/to/deepseek-harness/docs/drafts/.env
+```
+
+`--env-file` 只由 Node backend 读取。API key 不会发送给浏览器、Dedicated Worker、Session event、页面状态或日志；页面只看到 `real` mode、provider 和 model 名称。real mode 的 GPT 默认使用配置文件中的 `OPENAI_NEXT_GPT_MODEL`，并把 `reasoning_effort` 默认设为 `low`；Grok 可以通过对应的环境变量和 model 选择使用。
 
 然后打开 `http://127.0.0.1:4175/`，点击 `Start Worker`。预期流程是：
 
@@ -45,9 +57,19 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modu
   node docs/drafts/browser-native-dsh-poc/tests/browser.e2e.mjs
 ```
 
+真实 provider 的浏览器端到端测试必须显式提供本机 `.env` 和 Playwright：
+
+```sh
+DSH_POC_ENV_FILE=/path/to/deepseek-harness/docs/drafts/.env \
+DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwright@<version>/node_modules/playwright/index.mjs \
+  node --test --test-timeout=360000 docs/drafts/browser-native-dsh-poc/tests/browser.real.e2e.mjs
+```
+
+该测试使用真实 Chromium、真实 backend、真实上游模型请求和真实 Session 持久化；它不 mock LLM response。测试输出只报告 mode、provider、model、event types 和 durable sequence，不打印凭据或完整 prompt。
+
 ## Scope
 
-backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件加原子 rename 写入 durable file；backend 重启只读取已 flush 事件。owner token 和 lease 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。scripted LLM 固定返回一次 `browser_echo` call 和一次 final response。
+backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件加原子 rename 写入 durable file；backend 重启只读取已 flush 事件。owner token 和 lease 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。scripted mode 固定返回一次 `browser_echo` call 和一次 final response；real mode 将同一组受限消息转换为 OpenAI-compatible tool call，解析上游 SSE，再转换为浏览器协议的 NDJSON。
 
 本目录没有加入根级 npm script、package manifest、Web profile、Desktop profile 或正式 DSH package。若后续证明必须修改目录外代码，先按 [change-ledger.md](change-ledger.md) 登记原因、扩展点、测试和 upstream 重放步骤。
 

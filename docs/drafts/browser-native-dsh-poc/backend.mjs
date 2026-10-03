@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 import {
   MAX_BODY_BYTES,
   MAX_DURABLE_EVENTS,
+  MAX_LLM_STREAM_BYTES,
+  MAX_RESPONSE_LINE_BYTES,
   MAX_TEXT_BYTES,
   OWNER_LEASE_MS,
   PocError,
@@ -34,6 +36,7 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PUBLIC_ROOT = resolve(HERE, 'public')
+const DEFAULT_ENV_FILE = resolve(HERE, '..', '.env')
 
 const REPLAY_OPERATIONS = new Set(['create', 'open', 'renew', 'read', 'append', 'flush', 'close'])
 const DURABLE_REPLAY_OPERATIONS = new Set(['read', 'append', 'flush', 'close'])
@@ -90,6 +93,72 @@ function digestFor(value) {
 /** @param {object} value */
 function clone(value) {
   return structuredClone(value)
+}
+
+/** @param {string} text */
+function parseDotEnv(text) {
+  const values = {}
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (line.length === 0 || line.startsWith('#')) continue
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (match === null) continue
+    let value = match[2].trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    values[match[1]] = value
+  }
+  return values
+}
+
+/** @param {{ envFile?: string }} options */
+async function readProviderEnvironment(options) {
+  const values = {}
+  const candidates = [options.envFile, process.env.DSH_POC_ENV_FILE, DEFAULT_ENV_FILE]
+  for (const candidate of candidates) {
+    if (candidate === undefined) continue
+    try {
+      Object.assign(values, parseDotEnv(await readFile(candidate, 'utf8')))
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue
+      throw error
+    }
+  }
+  return { ...values, ...process.env }
+}
+
+/** @param {{ llmMode?: string, model?: string, envFile?: string, fetchImpl?: typeof fetch }} options */
+async function createLlmConfig(options) {
+  const mode = options.llmMode ?? process.env.DSH_POC_LLM_MODE ?? 'scripted'
+  if (mode !== 'scripted' && mode !== 'real') throw new Error('llm mode must be scripted or real')
+  if (mode === 'scripted') return { mode, model: 'poc-scripted', provider: 'scripted', fetchImpl: options.fetchImpl ?? fetch }
+
+  const environment = await readProviderEnvironment(options)
+  const model = options.model ?? environment.OPENAI_NEXT_GPT_MODEL
+  if (typeof model !== 'string' || model.length === 0) throw new Error('OPENAI_NEXT_GPT_MODEL is required for real LLM mode')
+  const baseUrl = model.startsWith('grok-')
+    ? (environment.OPENAI_NEXT_GROK_BASE_URL ?? environment.OPENAI_NEXT_GPT_BASE_URL)
+    : environment.OPENAI_NEXT_GPT_BASE_URL
+  const completionsPath = model.startsWith('grok-')
+    ? (environment.OPENAI_NEXT_GROK_COMPLETIONS_PATH ?? environment.OPENAI_NEXT_GPT_COMPLETIONS_PATH)
+    : environment.OPENAI_NEXT_GPT_COMPLETIONS_PATH
+  const apiKey = model.startsWith('grok-') ? environment.OPENAI_NEXT_GROK_API_KEY : environment.OPENAI_NEXT_GPT_API_KEY
+  const reasoningEffort = model.startsWith('grok-')
+    ? environment.OPENAI_NEXT_GROK_REASONING_EFFORT
+    : (environment.OPENAI_NEXT_GPT_REASONING_EFFORT ?? 'low')
+  if (typeof baseUrl !== 'string' || baseUrl.length === 0) throw new Error('LLM base URL is required for real LLM mode')
+  if (typeof completionsPath !== 'string' || completionsPath.length === 0) throw new Error('LLM completions path is required for real LLM mode')
+  if (typeof apiKey !== 'string' || apiKey.length === 0) throw new Error('LLM API key is required for real LLM mode')
+  return {
+    mode,
+    model,
+    provider: model.startsWith('grok-') ? 'grok' : 'gpt',
+    url: new URL(completionsPath, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString(),
+    apiKey,
+    reasoningEffort,
+    fetchImpl: options.fetchImpl ?? fetch,
+  }
 }
 
 /** @param {import('node:http').IncomingMessage} request */
@@ -494,8 +563,201 @@ async function handleSession(store, body, operation) {
   return response
 }
 
-/** @param {any} store @param {any} body @param {import('node:http').ServerResponse} response @param {import('node:http').IncomingMessage} request */
-async function handleLlm(store, body, response, request) {
+const BROWSER_ECHO_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_echo',
+    description: 'Echo text through the browser Main Thread tool.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'Text to echo.' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+}
+
+/** @param {any[]} messages */
+function toOpenAiMessages(messages) {
+  let lastToolCallId
+  return messages.map(message => {
+    if (message.role === 'user') return { role: 'user', content: message.content }
+    if (message.role === 'assistant') {
+      if (message.toolCall === undefined) return { role: 'assistant', content: message.content }
+      lastToolCallId = message.toolCall.callId
+      return {
+        role: 'assistant',
+        content: message.content || null,
+        tool_calls: [{
+          id: message.toolCall.callId,
+          type: 'function',
+          function: { name: message.toolCall.name, arguments: JSON.stringify(message.toolCall.args) },
+        }],
+      }
+    }
+    if (lastToolCallId === undefined) throw new PocError('INVALID_REQUEST', 'tool message has no preceding browser tool call')
+    return { role: 'tool', tool_call_id: lastToolCallId, content: message.content }
+  })
+}
+
+/** @param {any} value */
+function safeProviderError(value) {
+  if (value instanceof PocError) return value
+  if (value?.name === 'AbortError') return new PocError('CANCELED', 'LLM request was canceled', 499)
+  return new PocError('UPSTREAM_LLM_FAILED', 'upstream LLM request failed', 502, { cause: value })
+}
+
+/** @param {any} item */
+function providerToolCall(item) {
+  const choice = item?.choices?.[0]
+  const delta = choice?.delta
+  if (delta === undefined || delta === null || typeof delta !== 'object') return undefined
+  const tool = Array.isArray(delta.tool_calls) ? delta.tool_calls[0] : undefined
+  return tool === undefined ? undefined : tool
+}
+
+/** @param {{id?: string, name: string, arguments: string}} toolCall */
+function validateProviderToolCall(toolCall) {
+  if (typeof toolCall.name !== 'string' || toolCall.name !== 'browser_echo') {
+    throw new PocError('UPSTREAM_LLM_FAILED', 'model returned an unsupported browser tool', 502)
+  }
+  let args
+  try { args = JSON.parse(toolCall.arguments) } catch (error) {
+    throw new PocError('UPSTREAM_LLM_FAILED', 'model returned invalid browser tool arguments', 502, { cause: error })
+  }
+  if (args === null || typeof args !== 'object' || Array.isArray(args)
+    || Object.keys(args).length !== 1 || typeof args.text !== 'string'
+    || args.text.length === 0 || Buffer.byteLength(args.text, 'utf8') > MAX_TEXT_BYTES) {
+    throw new PocError('UPSTREAM_LLM_FAILED', 'model returned invalid browser tool arguments', 502)
+  }
+  return { callId: typeof toolCall.id === 'string' && toolCall.id.length > 0 ? toolCall.id : randomUUID(), name: 'browser_echo', args }
+}
+
+/** @param {any} config @param {any} body @param {import('node:http').ServerResponse} response @param {import('node:http').IncomingMessage} request */
+async function proxyRealLlm(config, body, response, request) {
+  const controller = new AbortController()
+  const abort = () => {
+    if (!response.writableEnded) controller.abort()
+  }
+  request.once('aborted', abort)
+  response.once('close', abort)
+  const hasToolResult = body.messages.some(message => message.role === 'tool')
+  const upstreamBody = {
+    model: config.model,
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a browser-native agent. On the first turn, call browser_echo exactly once with a concise greeting. After receiving its tool result, answer the user briefly and do not call another tool.',
+      },
+      ...toOpenAiMessages(body.messages),
+    ],
+    tools: [BROWSER_ECHO_TOOL],
+    tool_choice: hasToolResult ? 'none' : { type: 'function', function: { name: 'browser_echo' } },
+    max_tokens: 512,
+    stream: true,
+    ...(config.reasoningEffort === undefined ? {} : { reasoning_effort: config.reasoningEffort }),
+  }
+  let upstream
+  try {
+    upstream = await config.fetchImpl(config.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify(upstreamBody),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    throw safeProviderError(error)
+  }
+  if (!upstream.ok) {
+    throw new PocError('UPSTREAM_LLM_FAILED', `upstream LLM request failed with HTTP ${upstream.status}`, 502)
+  }
+  if (upstream.body === null) throw new PocError('UPSTREAM_LLM_FAILED', 'upstream LLM response has no body', 502)
+
+  response.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-browser-native-protocol': String(PROTOCOL_VERSION),
+  })
+  let streamBytes = 0
+  let toolCall
+  let textSeen = false
+  const send = item => {
+    if (!response.destroyed) response.write(`${JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...item })}\n`)
+  }
+  const sendProviderError = error => {
+    if (!response.destroyed && !response.writableEnded) {
+      const safe = safeProviderError(error)
+      send({ kind: 'error', error: { code: safe.code, message: safe.message } })
+      response.end()
+    }
+  }
+  const handleData = data => {
+    if (data === '[DONE]') return true
+    let item
+    try { item = JSON.parse(data) } catch (error) {
+      throw new PocError('UPSTREAM_LLM_FAILED', 'upstream LLM returned invalid stream data', 502, { cause: error })
+    }
+    const choice = item?.choices?.[0]
+    const delta = choice?.delta
+    if (typeof delta?.content === 'string' && delta.content.length > 0) {
+      textSeen = true
+      send({ kind: 'chunk', chunk: { type: 'text', text: delta.content } })
+    }
+    const providerTool = providerToolCall(item)
+    if (providerTool !== undefined) {
+      toolCall ??= { id: '', name: '', arguments: '' }
+      if (typeof providerTool.id === 'string' && providerTool.id.length > 0) toolCall.id = providerTool.id
+      if (typeof providerTool.function?.name === 'string') toolCall.name = providerTool.function.name
+      if (typeof providerTool.function?.arguments === 'string') toolCall.arguments += providerTool.function.arguments
+    }
+    if (choice?.finish_reason === 'tool_calls' && toolCall !== undefined) {
+      send({ kind: 'chunk', chunk: { type: 'tool-call', ...validateProviderToolCall(toolCall) } })
+      send({ kind: 'end', finish: 'tool-call' })
+      return true
+    }
+    if (choice?.finish_reason === 'stop') {
+      if (!textSeen && toolCall === undefined) throw new PocError('UPSTREAM_LLM_FAILED', 'model returned no text or tool call', 502)
+      send({ kind: 'end', finish: 'stop' })
+      return true
+    }
+    return false
+  }
+  const reader = upstream.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let done = false
+  try {
+    while (!done) {
+      const next = await reader.read()
+      buffer += decoder.decode(next.value ?? new Uint8Array(), { stream: !next.done })
+      let newline
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, '')
+        buffer = buffer.slice(newline + 1)
+        const bytes = Buffer.byteLength(line, 'utf8')
+        if (bytes > MAX_RESPONSE_LINE_BYTES) throw new PocError('STREAM_LIMIT', 'upstream LLM stream line exceeds the PoC limit', 502)
+        streamBytes += bytes + 1
+        if (streamBytes > MAX_LLM_STREAM_BYTES) throw new PocError('STREAM_LIMIT', 'upstream LLM stream exceeds the PoC limit', 502)
+        if (line.startsWith('data:')) done = handleData(line.slice(5).trim())
+      }
+      if (Buffer.byteLength(buffer, 'utf8') > MAX_RESPONSE_LINE_BYTES) throw new PocError('STREAM_LIMIT', 'upstream LLM stream line exceeds the PoC limit', 502)
+      if (next.done) break
+    }
+    const tail = buffer.trim()
+    if (!done && tail.length > 0 && tail.startsWith('data:')) done = handleData(tail.slice(5).trim())
+    if (!done && !controller.signal.aborted) throw new PocError('UPSTREAM_LLM_FAILED', 'upstream LLM stream ended without a terminal item', 502)
+    if (!response.writableEnded && !response.destroyed) response.end()
+  } catch (error) {
+    if (controller.signal.aborted) return
+    sendProviderError(error)
+  } finally {
+    request.off('aborted', abort)
+    response.off('close', abort)
+  }
+}
+
+/** @param {any} store @param {any} body @param {import('node:http').ServerResponse} response @param {import('node:http').IncomingMessage} request @param {any} config */
+async function handleLlm(store, body, response, request, config) {
   assertEnvelope(body)
   assertAllowedKeys(body, ['protocolVersion', 'requestId', 'sessionId', 'ownerToken', 'generation', 'model', 'messages'])
   const sessionId = assertSessionId(body.sessionId)
@@ -504,7 +766,12 @@ async function handleLlm(store, body, response, request) {
   assertMessages(body.messages)
   const session = store.get(sessionId)
   store.assertCurrentOwner(session, body.ownerToken, body.generation)
-  if (body.model !== 'poc-scripted') throw new PocError('MODEL_NOT_ALLOWED', 'only poc-scripted is available', 403)
+  if (body.model !== 'poc-scripted' && body.model !== 'real') throw new PocError('MODEL_NOT_ALLOWED', 'model is not enabled by this PoC', 403)
+  if (body.model === 'real') {
+    if (config.mode !== 'real') throw new PocError('MODEL_NOT_ALLOWED', 'real LLM mode is not enabled', 403)
+    await proxyRealLlm(config, body, response, request)
+    return
+  }
   response.writeHead(200, {
     'content-type': 'application/x-ndjson; charset=utf-8',
     'cache-control': 'no-store',
@@ -597,11 +864,21 @@ async function serveStatic(response, path) {
 export async function createBrowserNativeServer(options) {
   const store = new SessionStore(options.dataDir)
   await store.load()
+  const llmConfig = await createLlmConfig(options)
   const server = createHttpServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://browser-native-poc.invalid')
       if (request.method === 'GET' && url.pathname === '/api/browser-native/health') {
         sendJson(response, 200, { protocolVersion: PROTOCOL_VERSION, ok: true })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/config') {
+        sendJson(response, 200, {
+          protocolVersion: PROTOCOL_VERSION,
+          llmMode: llmConfig.mode,
+          model: llmConfig.model,
+          provider: llmConfig.provider,
+        })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/stat') {
@@ -621,7 +898,7 @@ export async function createBrowserNativeServer(options) {
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/llm') {
         const body = await readBody(request)
-        await handleLlm(store, body, response, request)
+        await handleLlm(store, body, response, request, llmConfig)
         return
       }
       if (request.method === 'GET') {

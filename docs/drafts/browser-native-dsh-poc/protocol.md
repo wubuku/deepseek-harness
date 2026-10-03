@@ -27,7 +27,7 @@ description: "Browser-native DSH PoC 的版本化协议 owner：SessionPersisten
 
 所有 JSON DTO 都必须是 plain JSON object，拒绝数组、null、未知顶层协议版本、重复字段无法可靠表示的输入、非有限数字、身份字段中的 NUL/DEL 控制字符和超过 PoC 限额的字符串或数组。用户文本可以包含普通换行；内容字段的更细粒度 schema 由对应 operation 负责。
 
-Session 和 LLM API 请求（包括 GET stat）都必须带 `protocolVersion: 1`；静态资源和 health probe 不参与此协议版本校验。除 GET stat 外，所有 Session 和 LLM API 请求都必须带非空 `requestId`。需要 Session 的请求还必须带 `sessionId`。stat 将 `protocolVersion` 和 `sessionId` 放在查询参数中；Session mutation 和 body-based read 的 `requestId` 是幂等键，重试相同逻辑操作时必须保持不变；LLM 的 `requestId` 只作调用关联标识，是否可重试由 provider adapter 决定。
+Session 和 LLM API 请求（包括 GET stat）都必须带 `protocolVersion: 1`；静态资源和 health probe 不参与此协议版本校验。配置 probe `GET /api/browser-native/config` 只返回非敏感的 mode/provider/model 信息。除 GET stat 和 config 外，所有 Session 和 LLM API 请求都必须带非空 `requestId`。需要 Session 的请求还必须带 `sessionId`。stat 将 `protocolVersion` 和 `sessionId` 放在查询参数中；Session mutation 和 body-based read 的 `requestId` 是幂等键，重试相同逻辑操作时必须保持不变；LLM 的 `requestId` 只作调用关联标识，是否可重试由 provider adapter 决定。
 
 跨 boundary 的 id 在 TypeScript 中使用对应的 branded type；wire 上仍然是受长度和字符集限制的字符串。正式 DSH 接入时，Session event 和 header 必须使用 `@deepseek-ai/dsh-session` 的当前格式和 `@deepseek-ai/dsh-session-persistence` 的 validator。当前目录内 PoC 为了保持零核心改动，使用最小 JSON-safe event/header fixture；它验证的是 transport、ownership 和 durability 语义，不是正式 DSH Session format 的兼容性证据。
 
@@ -268,9 +268,9 @@ interface BrowserLlmRequest {
 }
 ```
 
-当前 PoC 只实现 `model` 和 `messages`；没有把 DSH 的完整 `GenerateOptions` 暴露为浏览器协议字段。`RequestMessage` 的当前 PoC 形式是带 `role` 和不超过 64 KiB 的文本 `content` 的 plain object；assistant message 可以额外带 allowlisted 的 `toolCall`。未来增加系统提示、工具 schema 或采样参数时，必须先扩展 DTO、后端 allowlist 和测试；不能因为字段名与 DSH 内部类型相同就直接透传。`ownerToken` 和 `generation` 把模型调用绑定到当前 Session write owner，防止已经失去写权的 Worker 继续发起可计费的请求。
+当前 PoC 的 `model` 只允许 `poc-scripted` 或 `real`。`poc-scripted` 使用确定性 backend fixture；`real` 不把 provider model、base URL 或 credential 暴露给浏览器，而是由 backend 根据启动时加载的环境配置选择 provider 和 model。当前 GPT 配置中的 model 是 `gpt-5.6-sol`，real GPT request 默认发送 `reasoning_effort: low`；Grok 的 model/key/path 选择仍完全由 backend 配置决定。没有把 DSH 的完整 `GenerateOptions` 暴露为浏览器协议字段。`RequestMessage` 的当前 PoC 形式是带 `role` 和不超过 64 KiB 的文本 `content` 的 plain object；assistant message 可以额外带 allowlisted 的 `toolCall`。未来增加系统提示、工具 schema 或采样参数时，必须先扩展 DTO、后端 allowlist 和测试；不能因为字段名与 DSH 内部类型相同就直接透传。`ownerToken` 和 `generation` 把模型调用绑定到当前 Session write owner，防止已经失去写权的 Worker 继续发起可计费的请求。
 
-LLM 请求中的 `requestId` 是调用关联标识，不表示 backend 会重放或合并已经发出的模型调用；当前 scripted route 不提供 LLM replay。客户端不能把连接超时当作模型调用未发生，并在没有 provider-specific 幂等保证时自动重发。
+LLM 请求中的 `requestId` 是调用关联标识，不表示 backend 会重放或合并已经发出的模型调用；scripted 和 real route 都不提供 LLM replay。客户端不能把连接超时当作模型调用未发生，并在没有 provider-specific 幂等保证时自动重发。real route 在 backend 内把 PoC message DTO 转换为 OpenAI-compatible Chat Completions request，并由 backend 固定提供 `browser_echo` tool schema；浏览器不能提交任意 tool executor、provider URL 或 HTTP header。
 
 Backend 必须根据已授权 Session policy 重新解析 provider/model，并拒绝请求中的 `baseURL`、Authorization、API key、cookie、任意 header、代理设置、任意 tool executor 或 secret reference value。
 
@@ -285,7 +285,7 @@ type BrowserLlmStreamItem =
 
 `StreamChunkWire` 是对 DSH `StreamChunk` 的显式 JSON 映射；实现不得直接对带 prototype、Error、AbortSignal 或 provider-private object 的运行时值调用 JSON.stringify。
 
-正常响应必须恰好有一个 `end`；错误响应必须有一个 `error` 或 HTTP error，且 Worker 不得把缺少终止 item 的连接关闭当作成功。
+正常响应必须恰好有一个 `end`；错误响应必须有一个 `error` 或 HTTP error，且 Worker 不得把缺少终止 item 的连接关闭当作成功。scripted route 直接生成这些 item；real route 解析上游 SSE 的 text delta、function tool call 和 finish reason，再生成相同的 PoC NDJSON，不把 provider-private response 透传给浏览器。
 
 ### 3.3 LLM error
 
@@ -364,7 +364,7 @@ PoC 使用以下稳定错误码：`PROTOCOL_UNSUPPORTED`、`INVALID_REQUEST`、`
 
 HTTP status 是 transport signal，不能替代业务 error code。JSON/NDJSON error body 必须包含 code 和安全 message；客户端需要保留 code 并把不可恢复错误传给 DSH failure normalization。
 
-正式 provider route 的客户端取消必须触发 AbortSignal、停止消费 stream、按 provider adapter 的取消能力通知 backend，并释放本地 pending state。当前 PoC 只有 scripted stream，没有独立 cancel route；断开连接只停止当前客户端消费，不承诺撤销已经开始的 backend work。取消不等于回滚已经提交的 Session event 或已经发生的外部副作用。
+正式 provider route 的客户端取消必须触发 AbortSignal、停止消费 stream、按 provider adapter 的取消能力通知 backend，并释放本地 pending state。当前 PoC real route 在浏览器连接中断时向上游 fetch 传递 AbortSignal，但没有独立 cancel route；断开连接只表示 backend 尝试取消上游请求，不承诺 provider 已撤销已经开始的推理或计费。取消不等于回滚已经提交的 Session event 或已经发生的外部副作用。
 
 -----
 

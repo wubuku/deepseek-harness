@@ -1,5 +1,6 @@
 const sessionInput = document.querySelector('#session-id')
 const promptInput = document.querySelector('#prompt')
+const llmModeInput = document.querySelector('#llm-mode')
 const status = document.querySelector('#status')
 const eventsOutput = document.querySelector('#events')
 const finalOutput = document.querySelector('#final')
@@ -10,7 +11,7 @@ const resumeButton = document.querySelector('#resume')
 const resetButton = document.querySelector('#reset')
 
 let worker
-let lastState = { sessionId: '', events: [], final: '', status: 'idle', owner: undefined }
+let lastState = { sessionId: '', events: [], final: '', status: 'idle', owner: undefined, llmMode: 'poc-scripted', model: 'poc-scripted' }
 const seenToolCallIds = new Set()
 
 function hasExactKeys(value, keys) {
@@ -49,7 +50,7 @@ function installWorker({ resume = false } = {}) {
     const message = event.data
     if (message.type === 'ready') {
       setStatus(resume ? 'resuming-worker' : 'starting-worker')
-      currentWorker.postMessage({ type: 'start', sessionId: id, prompt: promptInput.value })
+      currentWorker.postMessage({ type: 'start', sessionId: id, prompt: promptInput.value, model: llmModeInput.value })
     } else if (message.type === 'status') {
       setStatus(message.value)
     } else if (message.type === 'owner') {
@@ -143,15 +144,28 @@ resetButton.addEventListener('click', () => {
   const value = `browser-native-${crypto.randomUUID()}`
   sessionInput.value = value
   localStorage.setItem('browser-native-dsh-poc-session', value)
-  lastState = { sessionId: value, events: [], final: '', status: 'idle', owner: undefined }
+  lastState = { sessionId: value, events: [], final: '', status: 'idle', owner: undefined, llmMode: llmModeInput.value, model: llmModeInput.value }
   renderEvents()
   setStatus('new-session-ready')
 })
 
 sessionInput.value = localStorage.getItem('browser-native-dsh-poc-session') ?? `browser-native-${crypto.randomUUID()}`
 localStorage.setItem('browser-native-dsh-poc-session', sessionInput.value)
-lastState = { ...lastState, sessionId: sessionInput.value }
+lastState = { ...lastState, sessionId: sessionInput.value, llmMode: llmModeInput.value, model: llmModeInput.value }
 renderEvents()
+
+void fetch('/api/browser-native/config')
+  .then(response => response.ok ? response.json() : undefined)
+  .then(config => {
+    if (config === undefined || (config.llmMode !== 'scripted' && config.llmMode !== 'real')) return
+    llmModeInput.value = config.llmMode === 'real' ? 'real' : 'poc-scripted'
+    lastState = { ...lastState, llmMode: llmModeInput.value, model: config.model }
+  })
+  .catch(() => {})
+
+llmModeInput.addEventListener('change', () => {
+  lastState = { ...lastState, llmMode: llmModeInput.value, model: llmModeInput.value }
+})
 
 window.__browserNativePoc = {
   start: () => startButton.click(),

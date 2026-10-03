@@ -24,7 +24,7 @@
   </head>
   <body>
     <h1>Browser-native DSH PoC</h1>
-    <p>Protocol-level PoC: a Dedicated Worker runs the local loop adapter, the same-origin backend stores flushed Session events and proxies a scripted model, and the Main Thread owns one allowlisted browser tool.</p>
+    <p>Protocol-level PoC: a Dedicated Worker runs the local loop adapter, the same-origin backend stores flushed Session events and proxies either a scripted model or a real OpenAI-compatible provider, and the Main Thread owns one allowlisted browser tool.</p>
     <section>
       <div class="grid">
         <div>
@@ -34,6 +34,13 @@
         <div>
           <label for="prompt">Prompt</label>
           <textarea id="prompt">Please echo a greeting through the browser tool.</textarea>
+        </div>
+        <div>
+          <label for="llm-mode">LLM mode</label>
+          <select id="llm-mode">
+            <option value="poc-scripted">Scripted test model</option>
+            <option value="real">Real backend provider</option>
+          </select>
         </div>
       </div>
       <div class="actions">
