@@ -10,6 +10,8 @@ description: "Browser-native DSH PoC 的目录外改动账本：记录所有不�
 
 任何修改 `docs/drafts` 之外文件的实施者，都必须在提交该修改前增加一条记录，写明当前 DSH 版本、文件、必要性、被检查过的扩展点、测试、上游同步步骤和删除条件。没有登记的目录外修改视为 PoC 未完成，而不是“实现细节”。
 
+当前实现遵守这一原则：backend、Worker、profile overlay、launcher 和 browser-native tests 全部位于本目录；目录外只保留已登记的 `apps/web/src/preview.ts` opt-in 接线和 `scripts/translation-pairing.manifest.json` scratch 文档登记。当前没有 DSH 核心 package、Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
+
 ## 当前登记
 
 ### BN-P1-001：preview 使用 docs-owned browser-native Worker entry
@@ -28,6 +30,10 @@ syncReplaySteps: 从 upstream 更新时重新对比 `apps/web/src/preview.ts` �
 deleteCondition: v2 PoC 移除或上游 preview 提供等价的 Worker injection hook；删除该 import 后普通 preview boot acceptance 仍通过。
 status: implemented
 ```
+
+### 目录外改动审计结论
+
+截至当前 v2 实现收口，`git diff-tree --name-status` 中唯一的运行时目录外文件是 `apps/web/src/preview.ts`；它只在 `?browser-native=1` 时追加 docs-owned Worker 和 profile overlay。`packages/` 没有 browser-native 专用分支。未来从 upstream tag 或 main 重放时，先重放本文件已登记的最小 preview patch，再运行默认 preview acceptance 和 browser-native v2 E2E；如果上游提供等价 Worker/profile injection hook，则删除该 patch，并验证普通 preview 与 opt-in preview 都通过。
 
 ### BN-P2-001：browser-native preview profile 与远程 provider
 

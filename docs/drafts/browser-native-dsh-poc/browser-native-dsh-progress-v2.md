@@ -6,13 +6,34 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 当前状态
 
-- **阶段**：Phase 3，v2 PoC 已可运行；最终 build、默认 preview acceptance、浏览器 E2E、文档门禁和 typecheck 已通过，待提交。
+- **阶段**：已完成 v2 PoC；preview build、默认 preview acceptance、scripted/real 浏览器 E2E、文档门禁和 typecheck 已通过。当前保留一个可供人工验收的 real-mode server 实例。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
 - **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
 - **当前分支**：`research-browser-native-poc`。
-- **checkpoint**：最近的实现 checkpoint 提交主题为 `chore(docs): close browser-native worker phase`；当前未提交改动包含 v2 backend/provider、测试和收口文档。不要在维护文档中固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位。
+- **checkpoint**：实现已提交并推送到 `origin/research-browser-native-poc`；维护文档不固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位最近的实现提交。后续文档 review 产生的新提交应继续保持本文件、README 和 change ledger 一致。
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
 - **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
+
+## 当前人工验收实例
+
+- **启动日期**：2026-10-03。
+- **模式**：`real`，backend 选择 `gpt-5.6-sol`；API key 只从主 worktree 的本机 `.env` 读取，不写入本目录、进程输出或浏览器。
+- **命令**：
+
+  ```sh
+  export https_proxy=http://127.0.0.1:9981 http_proxy=http://127.0.0.1:9981 all_proxy=socks5://127.0.0.1:9981
+  node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
+    --port 4185 \
+    --data-dir /tmp/browser-native-dsh-v2-acceptance \
+    --llm real \
+    --env-file /Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/docs/drafts/.env
+  ```
+- **访问地址**：`http://127.0.0.1:4185/preview.html?browser-native=1&preview-fixture=none`。
+- **健康检查**：`GET /api/browser-native/health` 返回 protocol v1、`real` mode 和 `gpt-5.6-sol`；preview HTML 返回 HTTP 200。
+- **本地代理注意事项**：验收浏览器/HTTP 请求访问 loopback 时应把 `127.0.0.1,localhost` 加入 `NO_PROXY`/`no_proxy`；上游 real LLM 请求仍使用 Node 24 的环境代理支持。
+- **停止方式**：在启动该实例的终端发送 `Ctrl-C`；`/tmp/browser-native-dsh-v2-acceptance` 是可删除的本地测试数据目录，不属于仓库。
+
+该实例只用于人工验收；它不改变 v2 的验证结论，也不把一次 real provider 请求提升为生产可用性或 SLA 证明。
 
 ## 已核实的基线
 
@@ -33,6 +54,8 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 - [x] Playwright 浏览器 E2E、docs gates、build smoke 和工作区清理。
 
 ## 关键验证记录
+
+下表保留实施过程中的诊断记录；其中“待验证”和“待修复”描述记录当时的状态，不代表当前收口状态。当前状态以表后的最终验证记录、[README.md](README.md) 和本文件的“收口状态”为准。
 
 | 时间 | 命令/动作 | 结果 | 备注 |
 | --- | --- | --- | --- |
@@ -140,5 +163,9 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 3. [`change-ledger.md`](change-ledger.md)，确认目录外改动和删除条件。
 4. `git status --short --branch`、`git log -5 --oneline --decorate`。
 5. 只运行当前阶段需要的最小验证；不要把旧 PoC 的 `run.mjs` 或旧事件 DTO 当成 v2 的入口。
+
+## 收口状态
+
+v2 实现已经完成并有 pushed checkpoint；本次文档 review 只修订 `docs/drafts/browser-native-dsh-poc/` 内的描述，不新增 DSH 核心代码。目录外运行时接线仍只由 [change-ledger.md](change-ledger.md) 中的 BN-P1-001、BN-P2-001 和 BN-P2-002 负责；任何后续目录外修改都必须先登记再实施。
 
 规划文档写入后，三轮审计的结论由执行者写入本文件。无问题轮次只在对话中报告，不修改本文件，以免把文档写操作误计为无修改轮次。

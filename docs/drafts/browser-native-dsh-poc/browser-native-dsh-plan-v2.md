@@ -2,11 +2,11 @@
 description: "Browser-native DSH PoC v2 的自包含实施规格：复用现有 DSH Web UI 和 Cordis Host，把真实 Agent Loop 放入 Dedicated Worker，并通过同源后端提供正式 SessionPersistence 与 LLM 代理。"
 ---
 
-# Browser-native DSH PoC v2 实施规划
+# Browser-native DSH PoC v2 实施规划与当前状态
 
 ## Summary
 
-本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规格，不是独立 Demo 的设计，也不是对普通 Web、Desktop 或 Headless profile 的重构提案。目标是在现有 DSH Web UI 的基础上增加一个可独立启动的 browser-native PoC 变体：页面继续使用 `AppWebEntry` 和现有 Client 插件，Dedicated Worker 继续通过 `appBoot.boot()` 启动真实 DSH Host，`ctx.agentLoop` 在 Worker 中运行，Session 事件通过同源后端的正式 `SessionPersistence` provider 持久化，LLM 请求通过同源 backend proxy 转发到真实 provider。
+本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规格和当前实现参照，不是独立 Demo 的设计，也不是对普通 Web、Desktop 或 Headless profile 的重构提案。当前 checkout 已完成这份规格中的 v2 PoC：页面继续使用 `AppWebEntry` 和现有 Client 插件，Dedicated Worker 继续通过 `appBoot.boot()` 启动真实 DSH Host，`ctx.agentLoop` 在 Worker 中运行，Session 事件通过同源后端的正式 `SessionPersistence` provider 持久化，LLM 请求通过同源 backend proxy 转发到 scripted 或真实 provider。历史计划段落保留实施决策和约束；已验证事实以本文件、[README.md](README.md) 和 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md) 的当前状态为准。
 
 旧版本 PoC 已在本目录的 checkpoint 中验证了同源 LLM proxy、JSON Session store 和浏览器 Worker 通信，但它使用独立 HTML、PoC-local agent loop 和自定义事件 DTO。那份实现不能作为本目标的完成结果，因为它没有运行 DSH 的 Cordis 插件组合，也没有让现有 Web UI 消费正式 Session、Agent 和 Remote API。旧实现保留在 checkpoint 中作为协议实验记录；v2 重新使用 DSH 的真实运行时。
 
@@ -415,9 +415,9 @@ runner 只监听 loopback；backend 检查 HTTP method、content type、origin/f
 
 ## 十三、预期文件和变更账本
 
-### 13.1 目录内新增文件
+### 13.1 当前目录内文件和职责
 
-实现优先放入以下目录，文件名可以在实施时细化但职责不能漂移：
+下面是当前实现实际使用的文件。旧版 `backend.mjs`、`public/`、`protocol*`、`implementation-plan.md` 和 `progress.md` 保留为历史协议实验，不是 v2 的运行入口或完成证据：
 
 ```text
 docs/drafts/browser-native-dsh-poc/
@@ -425,25 +425,27 @@ docs/drafts/browser-native-dsh-poc/
   browser-native-dsh-progress-v2.md
   change-ledger.md
   browser-native-worker.ts
-  remote-session-persistence.ts
-  remote-llm-adapter.ts
+  browser-native-providers.ts
+  browser-native-session-persistence.js
+  browser-native-llm.js
+  browser-native-profile.cordis.patch.yml
+  browser-native-profile-overlay.tar.gz
   backend-v2.mjs
-  overlay-v2.mjs
   run-v2.mjs
   tests/backend-v2.test.mjs
-  tests/provider-v2.test.ts
-  tests/browser-native.v2.e2e.ts
+  tests/browser-native-v2.e2e.mjs
 ```
 
 如果测试 runner 或 Vite 对 `.ts`、`.mjs` 的入口要求不同，以当前仓库的既有 launcher 为准；不得为了方便新增一个绕过 `dsh` profile 约束的产品启动 bin。PoC runner 是 docs 目录内的实验脚本，不是发布包入口。
 
-### 13.2 允许的目录外改动
+### 13.2 当前目录外改动
 
-预期最多需要：
+当前 checkout 只有一项运行时接线和一项文档门禁登记在 `docs/drafts` 之外：
 
-- `apps/web/src/preview.ts`：把实验 preview 的 Worker import 接到 docs-owned custom Worker；
-- 必要时 `packages/experimental/webworker-runtime`：只增加可配置 static module/overlay seam，不改变 Host/transport 语义；
-- 必要时 `packages/experimental/webworker-packer`：只增加对 browser-native overlay 的显式输入，不把 docs 目录变成隐式 workspace package。
+- `apps/web/src/preview.ts`：保留上游 `chooseWorkerHostSource` 和 `connectWorkerHost`，仅在 `browser-native=1` 时加载 docs-owned Worker 与 profile overlay；默认 preview 路径不变。
+- `scripts/translation-pairing.manifest.json`：登记本目录为中文 scratch 文档，避免为研究草稿伪造完整英文 counterpart。
+
+没有修改 `packages/core/agent-loop`、`packages/core/session`、`packages/llm/llm`、普通 Web profile、Desktop profile 或 Headless profile。未来若必须增加 `packages/experimental/webworker-runtime` 或 packer 改动，必须先新增账本条目、写出最小复现和删除条件；当前实现不包含这类改动。
 
 禁止把 provider 逻辑、backend route 或独立 UI 放入普通产品 package。每项目录外改动都要先登记 [change-ledger.md](change-ledger.md)，并写明：基线文件、最小差异、验证命令、upstream 重放方式、PoC 移除后的删除条件。
 
@@ -470,4 +472,4 @@ docs/drafts/browser-native-dsh-poc/
 
 ## Dev Note
 
-本文是研究分支中的 drafts 规格，未宣称已实现。实施者必须以当前 checkout 的源码和测试为准；如果上游更新改变了任一引用入口，先修订本规格和进度文件，再继续编码。目录外代码若无法在后续同步 upstream 时删除，必须停止并重新评估是否仍属于 PoC 的最小范围。
+本文是研究分支中的 drafts 规格，同时保留已完成 v2 PoC 的设计依据。当前实现事实、已运行命令和限制必须与 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md) 和 [README.md](README.md) 保持一致；如果上游更新改变了任一引用入口，先核对源码、修订本规格和进度文件，再继续重放。目录外代码若无法在后续同步 upstream 时删除，必须停止并重新评估是否仍属于 PoC 的最小范围。

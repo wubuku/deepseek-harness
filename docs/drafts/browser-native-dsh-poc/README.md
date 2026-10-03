@@ -36,6 +36,14 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
 
 API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
 
+## 当前实现快照
+
+v2 当前不是独立的 HTML demo。浏览器加载现有 `preview.html`，页面仍由 `AppWebEntry` 和 DSH Web UI 渲染；只有 URL 带 `browser-native=1` 时，`apps/web/src/preview.ts` 才追加本目录的 profile overlay，并把 Worker entry 切换到 [`browser-native-worker.ts`](browser-native-worker.ts)。Worker 使用现有 `appBoot.boot()`、Cordis composition、Session Controller 和 `ctx.agentLoop`；[`browser-native-providers.ts`](browser-native-providers.ts) 只提供正式 `SessionPersistence` 和 `LlmAdapter` 的远程实现。
+
+同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
+
+当前实现的目录边界是：backend、Worker、profile overlay、launcher 和 v2 tests 全部在 `docs/drafts/browser-native-dsh-poc/`；唯一的运行时代码接线是已登记的 [`apps/web/src/preview.ts`](../../../apps/web/src/preview.ts)，它只为 opt-in preview 选择 docs-owned Worker 和 overlay。没有修改 `packages/core/agent-loop`、Session format、普通 Web profile、Desktop profile 或 Headless profile。完整的目录外改动、删除条件和 upstream 重放步骤见 [change-ledger.md](change-ledger.md)。
+
 ## v2 验证
 
 后端契约测试覆盖 Session create/list/open/read/append/flush/close、owner fencing、崩溃后的 durability、scripted LLM stream、OpenAI-compatible stream、非法请求和 secret redaction：
@@ -61,7 +69,7 @@ DSH_POC_ENV_FILE=/path/to/deepseek-harness/docs/drafts/.env \
 node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
 ```
 
-该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件和 `ctx.agentLoop` 的一轮真实交互；旧版测试不能替代它。
+该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件和 `ctx.agentLoop` 的一轮真实交互；旧版测试不能替代它。real E2E 是一次真实 provider 闭环，不是可用性、吞吐量、SLA、灾备或生产安全性证明。
 
 ## 历史协议实验：运行
 
@@ -124,7 +132,9 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 ## Scope
 
-backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件加原子 rename 写入 durable file；backend 重启只读取已 flush 事件。owner token 和 lease 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。scripted mode 固定返回一次 `browser_echo` call 和一次 final response；real mode 将同一组受限消息转换为 OpenAI-compatible tool call，解析上游 SSE，再转换为浏览器协议的 NDJSON。
+backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；backend 重启只读取已 flush 事件。owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
+
+这个本地 JSON store 不是 PostgreSQL、S3、HA 或生产多租户实现；它不提供跨进程 owner lease、跨重启 mutation replay、跨主机复制、备份保证或灾备 RPO/RTO。当前 browser-native E2E 只证明一次 Worker、同源 backend、正式 Session provider、真实 `ctx.agentLoop` 和 scripted/real LLM route 的闭环。
 
 本目录没有加入根级 npm script、package manifest、Web profile、Desktop profile 或正式 DSH package。旧版命令和测试不证明 v2 的 DSH Host、正式 Session provider 或真实 `ctx.agentLoop`。若后续证明必须修改目录外代码，先按 [change-ledger.md](change-ledger.md) 登记原因、扩展点、测试和 upstream 重放步骤。
 
