@@ -1,16 +1,22 @@
 ---
-description: "运行目录内 Browser-native DSH PoC 的协议级实现，验证同源 Session backend、真实 OpenAI-compatible LLM proxy、Dedicated Worker loop 和 Main Thread Tool bridge。"
+description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留 DSH Web UI、真实 Host/Agent Loop，并通过同源 Session backend 和 LLM proxy 接入浏览器 Worker。"
 ---
 
 # Browser-native DSH PoC
 
 ## Summary
 
-本目录包含一个不修改 DSH 核心代码的协议级 PoC。页面启动 Dedicated Worker，Worker 运行目录内的 Agent-loop adapter；同源 Node backend 提供 Session 状态存储，并在 real mode 下把受限请求代理到后端配置的 OpenAI-compatible Chat Completions 服务；页面 Main Thread 只执行 allowlisted `browser_echo` Tool。所有代码和运行数据约束都在本目录内，实施决策见 [implementation-plan.md](implementation-plan.md)，wire 语义见 [protocol.md](protocol.md)，进度和当前限制见 [progress.md](progress.md)。
+本目录包含两个阶段的研究材料。旧版是协议级独立 loop 实验；当前目标是 v2：保留现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop`，只把 Host 运行到 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施入口是 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，进度入口是 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。v2 尚未完成可运行入口；在 v2 实现文件出现并通过浏览器验收前，不能把本 README 下面的旧 `run.mjs` 命令当作 v2 启动方式。
 
-当前实现验证的是 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume。Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。真实 DSH Agent Loop 接入仍是后续独立评估项。
+旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。
 
-## Run
+## v2 当前状态
+
+v2 的目标入口必须使用现有 `AppWebEntry`、现有 DSH Web UI 和由 Worker 承载的真实 Host，具体启动命令要在 Phase 1 实现后根据实际 preview/custom Worker 接线补入。当前不要通过旧 `run.mjs`、`public/index.html` 或旧版浏览器测试宣称 v2 已经运行；这些文件属于下方标明的历史协议实验。
+
+## 历史协议实验：运行
+
+以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。
 
 在仓库根目录执行：
 
@@ -42,7 +48,7 @@ opening-session
 
 点击 `Close Worker` 验证 graceful close；它会先 flush 并释放 owner。点击 `Terminate Worker` 则模拟没有执行 `close` 的 Worker crash；等待约 15 秒让 owner lease 过期后，再点击 `Resume Session`。页面应从 backend 读取已 flush 的 Session events，并显示 `resumed-from-flushed-session`。强制 terminate 不能当作 graceful shutdown。
 
-## Tests
+## 历史协议实验：测试
 
 后端 contract tests 不需要安装新增依赖：
 
@@ -71,7 +77,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件加原子 rename 写入 durable file；backend 重启只读取已 flush 事件。owner token 和 lease 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。scripted mode 固定返回一次 `browser_echo` call 和一次 final response；real mode 将同一组受限消息转换为 OpenAI-compatible tool call，解析上游 SSE，再转换为浏览器协议的 NDJSON。
 
-本目录没有加入根级 npm script、package manifest、Web profile、Desktop profile 或正式 DSH package。若后续证明必须修改目录外代码，先按 [change-ledger.md](change-ledger.md) 登记原因、扩展点、测试和 upstream 重放步骤。
+本目录没有加入根级 npm script、package manifest、Web profile、Desktop profile 或正式 DSH package。旧版命令和测试不证明 v2 的 DSH Host、正式 Session provider 或真实 `ctx.agentLoop`。若后续证明必须修改目录外代码，先按 [change-ledger.md](change-ledger.md) 登记原因、扩展点、测试和 upstream 重放步骤。
 
 ## Dev Note
 

@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本：记录所有不�
 
 ## 当前登记
 
+### BN-DOC-001：browser-native PoC v2 重新规划
+
+```text
+changeId: BN-DOC-001
+upstreamBaseline: dsh-v0.2.0-rc.2 / apps/web/src/preview.ts, packages/experimental/webworker-runtime
+file: docs/drafts/browser-native-dsh-poc/browser-native-dsh-plan-v2.md; docs/drafts/browser-native-dsh-poc/browser-native-dsh-progress-v2.md; docs/drafts/browser-native-dsh-poc/README.md
+reason: 旧 PoC 使用独立 HTML、PoC-local loop 和自定义事件，不能证明现有 DSH Web UI、Cordis 插件组合和真实 ctx.agentLoop 在浏览器 Worker 中运行。
+existingExtensionPointsChecked: 已核对 AppWebEntry、preview Worker tunnel、appBoot.boot、WorkerHostOptions.staticModules、webworker packer、LlmAdapter 和 SessionPersistence；v2 首选通过 custom Worker entry、static modules 和 profile overlay 接入。
+whyDraftOnlyWasInsufficient: 旧实现代码不能仅靠文档声明变成真实 DSH runtime，因此先新增自包含 v2 规格和恢复进度记录，再按规格重做实现。
+behaviorChange: 当前只有文档变化；没有修改普通 Web、Desktop、Headless profile 或 DSH 核心运行时。
+consumersUpdated: 本 README 指向 v2 规划和进度；旧协议文档继续作为历史实验记录。
+tests: 规划文档写入后运行 docs gates、Markdown link/budget 检查和 git diff --check；实现前必须完成连续三轮无修改只读审计。
+syncReplaySteps: 从 upstream 更新时先保存本账本和 v2 tests，重新核对 preview/runtime/packer/LLM/Session 入口，再按 v2 规划重放最小 docs 外接线；若 upstream 提供正式 Worker plugin injection 或 remote persistence hook，则改用该入口并删除本地 seam。
+deleteCondition: v2 实现已使用上游正式 hook，或 v2 PoC 被移除；删除 browser-native 专用目录外接线后普通 preview 和 Web tests 仍通过。
+status: proposed
+```
+
 ### BN-DOC-000：将 PoC 草稿目录登记为中文 scratch 文档
 
 ```text
