@@ -4,13 +4,13 @@ description: "基于 DSH 当前 checkout 和公开仓库证据，核实官方 We
 
 # DeepSeek Harness 是否存在“云端 Agent”的开源实现？
 
-**核验日期：2026-10-04；DSH checkout：0.2.0-rc.2**
+**核验日期：2026-10-05；DSH checkout：0.2.0-rc.2**
 
 ## Summary
 
-结论是肯定的，但必须先限定“云端 Agent”的含义：截至 2026 年 10 月 4 日，已经有多个公开仓库把 DeepSeek Harness（DSH）部署或改造为可以通过浏览器使用的远程、多用户 Agent 系统。其中至少三个项目可以从仓库元数据和许可证文件确认采用 MIT 许可证：[`GuoMonth/dsh-multi-tenant`](https://github.com/GuoMonth/dsh-multi-tenant)、[`eskim2001/dshcloud`](https://github.com/eskim2001/dshcloud) 和 [`HuChundong/HamsterHQ`](https://github.com/HuChundong/HamsterHQ)。
+结论是肯定的，但必须先限定“云端 Agent”的含义：截至 2026 年 10 月 5 日，已经有多个公开仓库把 DeepSeek Harness（DSH）部署或改造为可以通过浏览器使用的远程、多用户 Agent 系统。其中至少三个项目可以从仓库元数据和许可证文件确认采用 MIT 许可证：[`GuoMonth/dsh-multi-tenant`](https://github.com/GuoMonth/dsh-multi-tenant)、[`eskim2001/dshcloud`](https://github.com/eskim2001/dshcloud) 和 [`HuChundong/HamsterHQ`](https://github.com/HuChundong/HamsterHQ)。
 
-这些项目并不代表同一种技术路线：前两个主要是在 DSH 之上增加控制面、身份认证、实例编排和持久化环境；HamsterHQ 通过网关隧道和每租户 Sandbox 把官方 DSH 作为依赖运行；另一些 Cloudflare 项目则重新实现了 Harness 核心，使用自己的 Worker、Durable Object、工具和前端，不能称为“把官方 DSH 原样搬到云上”。
+这些项目并不代表同一种技术路线：`dsh-multi-tenant` 和 `dshcloud` 主要是在 DSH 之上增加控制面、身份认证、实例编排和持久化环境；HamsterHQ 保留每租户 DSH backend 和 Cordis 扩展方式，但使用独立前端、认证网关和每租户 Sandbox；另一些 Cloudflare 项目则重新实现了 Harness 核心，使用自己的 Worker、Durable Object、工具和前端，不能称为“把官方 DSH 原样搬到云上”。
 
 原始报告有两个方向性正确、但需要收紧的判断：
 
@@ -19,13 +19,14 @@ description: "基于 DSH 当前 checkout 和公开仓库证据，核实官方 We
 
 因此，更准确的最终判断是：
 
-> **DSH 官方提供了可被云平台承载的 Agent Runtime 和浏览器 Remote Host；社区已经出现多个 MIT 许可的多用户云部署项目；但“官方 Cloud Agent API”和“官方多租户 SaaS”仍不是当前仓库已经交付的产品。**
+> **DSH 官方提供了可被云平台承载的 Agent Runtime 和浏览器 Remote Host；社区已经出现多个 MIT 许可的多用户云部署项目，但它们仍处于 Alpha、Early Development 或研究型阶段；“官方 Cloud Agent API”和“官方多租户 SaaS”仍不是当前仓库已经交付的产品。**
 
 本文只回答“当前是否已有实现以及它们做到什么程度”，不替代同目录的云 SaaS 设计稿、租户隔离研究或 Remote Durable Workspace 研究。平台侧的 Worker、配额、外部执行器和工作区设计，分别见：
 
 - [基于 DSH 实现云端 SaaS Agent](dsh-cloud-saas-agent-research.md)
 - [部署、租户隔离与请求执行参考](dsh-deployment-and-tenancy-deep-dive.md)
 - [Remote Durable Workspace 研究](dsh-remote-durable-workspace-pgfs-research.md)
+- [三个本地 checkout 的代码解读备忘录](dsh-cloud-projects-local-code-reading-memo.md)
 
 ## 1. “云端 Agent”必须拆成四个层级
 
@@ -77,7 +78,9 @@ L4: tenant/auth/control plane ──> worker/sandbox/workspace ──> Agent run
 3. README、架构文档、Docker/Helm/Worker 配置和测试：判断项目到底运行官方 DSH、增加外部平台，还是重写 Harness 核心。
 4. 项目自述的成熟度和验证范围：只能作为项目自述，不能升级为独立生产认证。
 
-Star、Fork 和 README 中的“production-ready”不是安全、性能或生产采用证据。本文记录的 GitHub metadata 和 README 都以 **2026-10-04** 的核验为准；这些字段会随仓库变化，不能当成永久事实。
+Star、Fork、贡献者归因数和 README 中的“production-ready”都不是安全、性能或生产采用证据。本文记录的 GitHub metadata、发行记录和 README 都以 **2026-10-05** 的核验为准；这些字段会随仓库变化，不能当成永久事实。贡献者归因数不是仓库总 commit 数，只能作为提交活动的粗略信号。
+
+本次对三个主要项目检查了仓库 metadata、`LICENSE`、README、公开 release/tag、近期提交、Issues、Actions 和贡献者归因；没有在本机完成三者的完整安装、容器启动、双用户验收或生产环境部署。因此下文的“成熟度”是基于公开证据的工程判断，不是运行时认证或第三方口碑评级。未找到足够的独立生产案例、系统性第三方评测或安全审计报告时，本文会明确写成“尚未证实”，而不会把 Star 数或项目自述升级成口碑结论。
 
 ## 3. DSH 官方已经提供什么
 
@@ -254,12 +257,12 @@ ACP 证明 DSH 可以被程序化驱动，不能证明：
 
 ### 5.1 直接部署官方 DSH 的平台型实现
 
-| 项目 | 许可证 | 主要路线 | 与官方 DSH 的关系 | 当前可确认的限制 |
-|---|---|---|---|---|
-| [`GuoMonth/dsh-multi-tenant`](https://github.com/GuoMonth/dsh-multi-tenant) | MIT | Kubernetes、OIDC、每用户持久环境、Helm/npm 安装器 | 使用原生 DSH UI；平台和 `dsh-isolated-runtime` 在外部编排 | README 自述为 Alpha、Linux/amd64、DSH 0.2.0-rc.2、单平台副本；备份、高可用和跨节点灾备不在当前保证内 |
-| [`eskim2001/dshcloud`](https://github.com/eskim2001/dshcloud) | MIT | 控制面、邀请/用户、配额、每 Workspace 容器、持久数据和 Traefik | 实例镜像安装官方 `@deepseek-ai/dsh` npm 包 | README 明确写 Early development、不是 production-ready；安装器会修改主机、使用 Docker socket，生产安全仍需按其安全文档审查 |
-| [`HuChundong/HamsterHQ`](https://github.com/HuChundong/HamsterHQ) | MIT | 外部 gateway、每租户 Sandbox、WebSocket tunnel、JWT/数据库和微 VM | DSH 是 npm 依赖；新增能力主要通过 Cordis plugins，官方 DSH 后端留在每租户 Sandbox | 一个 gateway replica；Docker simulation 中模型凭据在 Sandbox；Sandbox 会被回收，正在进行的 turn 可能丢失；生产 CubeSandbox 路线与本地模拟不是同一安全级别 |
-| [`vocsong/deepseek-harness-portal`](https://github.com/vocsong/deepseek-harness-portal) | **未确认标准许可证** | Portal 登录、Cloudflare Tunnel、每用户一个 DSH 容器 | README 自述为原生 DSH 实例的多租户入口 | GitHub metadata 没有识别到许可证，仓库根目录也没有可确认的 LICENSE；可以称为公开代码项目，不能在本报告中确认其为 OSI 开源软件 |
+| 项目 | 许可证 | 主要路线 | 与官方 DSH 的关系 | 公开关注度与活动信号 | 当前可确认的限制 |
+|---|---|---|---|---|---|
+| [`GuoMonth/dsh-multi-tenant`](https://github.com/GuoMonth/dsh-multi-tenant) | MIT（[`LICENSE`](https://github.com/GuoMonth/dsh-multi-tenant/blob/main/LICENSE)） | Kubernetes、OIDC、每用户持久环境、Helm/npm 安装器 | 使用原生 DSH UI；平台和 `dsh-isolated-runtime` 在外部编排 | 12 Stars、2 Forks、3 个开放 Issue；主要贡献者归因 408 次；最新 push 为 2026-09-29；连续 Alpha release，最新 `v0.10.0-alpha.1` | README 自述为 Alpha、Linux/amd64、DSH 0.2.0-rc.2、单平台副本；备份、高可用和跨节点灾备不在当前保证内 |
+| [`eskim2001/dshcloud`](https://github.com/eskim2001/dshcloud) | MIT（[`LICENSE`](https://github.com/eskim2001/dshcloud/blob/main/LICENSE)） | 控制面、邀请/用户、配额、每 Workspace 容器、持久数据和 Traefik | 实例镜像安装官方 `@deepseek-ai/dsh` npm 包 | 90 Stars、6 Forks、1 个开放 Issue；主要贡献者归因 106 次；最新 push 为 2026-09-20；有 `v0.1.15` release 和公开 Demo | README 明确写 Early development、不是 production-ready；安装器会修改主机、使用 Docker socket，生产安全仍需按其安全文档审查 |
+| [`HuChundong/HamsterHQ`](https://github.com/HuChundong/HamsterHQ) | MIT（[`LICENSE`](https://github.com/HuChundong/HamsterHQ/blob/main/LICENSE)） | 独立前端、外部 gateway、每租户 Sandbox、WebSocket tunnel、JWT/数据库和微 VM | DSH 是 npm 依赖；新增能力主要通过 Cordis plugins，官方 DSH backend 留在每租户 Sandbox；不是把官方静态 Web 前端直接暴露出来 | 6 Stars、2 Forks、无开放 Issue；主要贡献者归因 83 次；最新 push 为 2026-09-24；有 CI/Pages workflow，但没有正式 GitHub Release | 一个 gateway replica；只有 Cube 路径尝试通过 egress 隐藏真实模型凭据，Docker simulation 或不可拦截 endpoint 不具备同等保证；Sandbox 会被回收，正在进行的 turn 可能丢失；生产 CubeSandbox 路线与本地模拟不是同一安全级别 |
+| [`vocsong/deepseek-harness-portal`](https://github.com/vocsong/deepseek-harness-portal) | **未确认标准许可证** | Portal 登录、Cloudflare Tunnel、每用户一个 DSH 容器 | README 自述为原生 DSH 实例的多租户入口 | 没有足够的公开 Stars/活动证据支持成熟度判断 | GitHub metadata 没有识别到许可证，仓库根目录也没有可确认的 LICENSE；可以称为公开代码项目，不能在本报告中确认其为 OSI 开源软件 |
 
 这四个项目的共同点是：它们把租户认证、入口路由或实例生命周期放在 DSH 之外，至少部分保留官方 DSH Web UI 或官方 DSH npm 包。它们的隔离单位也明显不同：
 
@@ -272,7 +275,24 @@ portal        user → one container + Cloudflare Tunnel
 
 这组项目足以推翻“社区没有 DSH 云端实现”的旧结论，但不足以证明已经存在一个通用、成熟、可互换的 Cloud Agent 标准。
 
-### 5.2 `GuoMonth/dsh-multi-tenant`：最直接的 DSH 多租户部署样例之一
+### 5.2 公开关注度和开发活跃度的正确解读
+
+在三个有明确 MIT 许可证的项目中，`dshcloud` 的公开 Star/Fork 数最高，`dsh-multi-tenant` 的发行频率和贡献者归因数最强，HamsterHQ 的公开关注度最低但仍有可观的单维护者工程投入。这个排序只能描述 GitHub 上可见的兴趣和开发信号，不能直接转换成生产可靠性排序：
+
+| 维度 | `dsh-multi-tenant` | `dshcloud` | HamsterHQ |
+|---|---:|---:|---:|
+| Stars / Forks | 12 / 2 | 90 / 6 | 6 / 2 |
+| 开放 Issues | 3 | 1 | 0 |
+| 主要贡献者归因数 | 408 | 106 | 83 |
+| 最新公开 push | 2026-09-29 | 2026-09-20 | 2026-09-24 |
+| Release 信号 | 连续 Alpha release，最新 `v0.10.0-alpha.1` | `v0.1.15`，之后仍有提交但没有更高版本 release | 没有正式 GitHub Release |
+| 公开成熟度自述 | Alpha | Early development、not production-ready | 独立项目，具备 Docker simulation 和 CubeSandbox 路线，但未宣称生产成熟 |
+
+这些数字应与其来源一起阅读：仓库 [metadata](https://api.github.com/repos/GuoMonth/dsh-multi-tenant)、[release 列表](https://github.com/GuoMonth/dsh-multi-tenant/releases)、[contributors](https://github.com/GuoMonth/dsh-multi-tenant/graphs/contributors)、[issues](https://github.com/GuoMonth/dsh-multi-tenant/issues)；[`dshcloud` metadata](https://api.github.com/repos/eskim2001/dshcloud)、[release 列表](https://github.com/eskim2001/dshcloud/releases)、[contributors](https://github.com/eskim2001/dshcloud/graphs/contributors)、[issues](https://github.com/eskim2001/dshcloud/issues)；HamsterHQ 的 [metadata](https://api.github.com/repos/HuChundong/HamsterHQ)、[contributors](https://github.com/HuChundong/HamsterHQ/graphs/contributors)、[issues](https://github.com/HuChundong/HamsterHQ/issues) 和 [Actions](https://github.com/HuChundong/HamsterHQ/actions)。这些链接是可变的查询入口，不是固定快照；再次做架构决策时应按具体 release 或 commit 重新核验。
+
+没有足够的独立生产案例、第三方评测或安全审计证据支持“口碑很好”或“已经被广泛采用”。更严谨的表述是：`dshcloud` 获得了最多公开关注，`dsh-multi-tenant` 显示出最强的近期发布活动，HamsterHQ 具有较清晰的隔离架构但社区验证最少。
+
+### 5.3 `GuoMonth/dsh-multi-tenant`：开发最活跃的 Kubernetes 部署样例之一
 
 仓库 README 的可核查事实包括：
 
@@ -283,7 +303,7 @@ portal        user → one container + Cloudflare Tunnel
 - 每个用户有独立 PVC，平台控制面和 `dsh-isolated-runtime` 负责资源与生命周期；
 - 仓库提供 MIT `LICENSE`。
 
-它更像“围绕 DSH 的云部署产品化尝试”，而不是改写 DSH 的 Agent Loop。其最重要的证据边界也写在 README：备份、高可用和跨节点灾备不属于当前保证，存储容量也不一定在每一种 StorageClass 上形成硬配额。
+它更像“围绕 DSH 的云部署产品化尝试”，而不是改写 DSH 的 Agent Loop。代码级阅读显示，平台只在私有 SQLite 中保存 `EnvironmentBinding`、allocation key、精确 Namespace/Sandbox/PVC UID 和不确定状态；用户 DSH Session、HOME、工具、凭据和 workspace 位于用户 PVC 的 `dsh`、`home` 和 `workspace` 目录。平台通过固定的 runtime Connector 转发 HTTP/WS，并在撤权时中断已建立的连接；它没有把 Session event log、Kubernetes 状态和运行中 Pod 合并成一个事务。其最重要的证据边界也写在 README：备份、高可用和跨节点灾备不属于当前保证，存储容量也不一定在每一种 StorageClass 上形成硬配额。
 
 因此，它可以被归为：
 
@@ -293,7 +313,9 @@ portal        user → one container + Cloudflare Tunnel
 
 不能进一步归为“已经解决通用 Cloud Agent durability”。
 
-### 5.3 `eskim2001/dshcloud`：独立控制面和 Workspace 容器
+它的成熟度判断是：**活跃的 Alpha 级内部平台，适合可信组织的技术试点，不适合作为未经审查的公网 SaaS 基础设施。** 它在三个项目中具有最强的版本推进信号，但公开 Fork、Issue 和第三方部署证据仍然很少。
+
+### 5.4 `eskim2001/dshcloud`：产品表面最完整，但明确不是生产版
 
 该仓库的 README 和镜像 Dockerfile 给出了更完整的平台构成：
 
@@ -305,11 +327,13 @@ portal        user → one container + Cloudflare Tunnel
 
 但该项目自己的 README 明确要求把它当作测试机和早期开发项目：安装器会创建存储池、写入 `/etc/fstab`、占用 `80/443`，运行的容器还涉及 Docker socket。也就是说，它是“已经实现了不少平台组件的开源项目”，不是“已经通过独立生产安全审计的 SaaS”。
 
-它的关键价值在于把 DSH 作为固定版本的实例镜像运行，而不是尝试在一个共享 Node 进程里用 tenant id 做软隔离。关键风险则是平台权限很高、宿主机改动很重，升级与灾备语义需要严格按其当前文档执行。
+代码级阅读进一步确认，它把每个 Workspace 放进独立 DSH 容器，并由宿主数据目录或 Docker volume 承载 `/data/home/workspace`、用户 home、配置和 Session；入口由 Traefik、forward-auth、HMAC gate token 和容器内 Caddy 组成，HTTP/WS 都重新检查 owner 和 access lease。Linux 池化部署使用 XFS project quota，同时限制字节和 inode；没有宿主池时 `diskMb` 不能证明硬磁盘配额。生命周期队列只在单控制面进程内串行化，reconciler 不能提供跨副本 fencing 或统一恢复点。它的关键价值在于把 DSH 作为固定版本的实例镜像运行，而不是尝试在一个共享 Node 进程里用 tenant id 做软隔离；关键风险则是平台权限很高、宿主机改动很重，升级与灾备语义需要严格按其当前文档执行。
 
-### 5.4 `HuChundong/HamsterHQ`：以插件和隧道扩展官方 DSH
+仓库 README 还公开了控制台和 Workspace 的在线 Demo，这说明产品表面比另外两个项目更完整，但不等于 Demo 已经证明生产安全、可靠性或数据恢复。它的成熟度判断是：**功能丰富的 Early Development / Alpha 自托管平台，适合 Demo、内部实验和平台原型，不应直接称为生产级 Cloud Agent 平台。**
 
-HamsterHQ 的 README 对自身定位很明确：它是独立的、非官方的多租户 DSH 云部署。其架构选择包括：
+### 5.5 `HuChundong/HamsterHQ`：隔离架构清晰，但不是原生 UI 的简单包装
+
+HamsterHQ 的 README 对自身定位很明确：它是独立的、非官方的多租户 DSH 云部署，采用独立前端 shell，而不是把官方 Web 静态资源直接作为唯一前端入口；租户 backend 仍然是官方 DSH Web profile。其架构选择包括：
 
 - 每租户一个 DSH backend；
 - Sandbox 主动拨号到 gateway，gateway 不需要直接访问 Sandbox 的入站端口；
@@ -318,11 +342,25 @@ HamsterHQ 的 README 对自身定位很明确：它是独立的、非官方的�
 - 租户的模型密钥通过生产环境的 egress 替换机制避免直接落入 Sandbox；
 - DSH 作为 npm 依赖，新增的隧道、租户、预览、调度和品牌能力主要通过 Cordis plugin 加入。
 
-这是“保持上游 DSH 核心、在外部补平台能力”的典型例子，也直接说明一个重要事实：如果 DSH 的 Web/API 认证是进程级的，那么互不信任租户通常需要进程、容器或 microVM 级别的隔离，而不是只新增一个前端 tenant 字段。
+这是“保持上游 DSH backend、在外部补平台能力、通过 Cordis plugin 加功能”的典型例子，也直接说明一个重要事实：如果 DSH 的 Web/API 认证是进程级的，那么互不信任租户通常需要进程、容器或 microVM 级别的隔离，而不是只新增一个前端 tenant 字段。
 
-项目的已知限制同样不能省略：本地 Docker 模拟与生产 CubeSandbox 的安全边界不同；gateway 目前是单副本；Sandbox 回收时正在进行的工作可能丢失；Postgres 持久化的是 Session 等控制面状态，不代表运行中进程状态同样可恢复。
+代码级阅读把这些限制具体化为：Gateway 的 Postgres 保存账户、token、sandbox registry、tenant secrets、model key 和 audit；DSH Session、workspace、HOME 与浏览器 profile 在租户 volume；tunnel、PTY、浏览器进程和正在执行的 Agent turn不属于同一个恢复域。Cube 路径可以用 JuiceFS/S3-backed volume 保留文件和 Session，但文档明确允许 metadata/object 异步确认，节点丢失可能丢最后时刻的写入；Docker simulation 没有同等的 microVM 隔离和 volume 证明。Gateway 目前是单副本，`gateway_id` 虽然入库但尚未形成路由 fencing；Sandbox 回收时正在进行的工作可能丢失。
 
-### 5.5 `vocsong/deepseek-harness-portal`：公开代码，但许可证不能确认
+它的成熟度判断是：**架构设计较成熟的 Alpha / research-grade 项目，但整体产品和运维成熟度低。** 83 次主要贡献者归因和持续 CI 说明维护者投入过工程工作，但 6 Stars、2 Forks、没有正式 Release、没有可见的第三方部署证据，说明社区验证仍然有限；“没有开放 Issue”不能解释成“没有 Bug”。
+
+### 5.5.1 本地代码阅读后的共同结论
+
+本地 clone 的源码阅读把三个项目从“README 上的云端 DSH”进一步区分成三种不同的控制面设计。详细文件范围、证据等级和未运行声明见[代码解读备忘录](dsh-cloud-projects-local-code-reading-memo.md)；以下结论来自各仓库的源码、配置、制品类型、测试和验收脚本，而不是只来自项目自述。
+
+| 项目 | 代码确认的最小隔离单位 | 控制面持久化 | 用户 DSH 状态 | 最重要的恢复限制 |
+|---|---|---|---|---|
+| `dshcloud` | Workspace 容器、独立网络、宿主端口和数据目录 | PostgreSQL instance 元数据、状态和资源声明 | 容器 `/data`，包括 workspace、home、配置和 Session | PostgreSQL、`/data`、PTY、浏览器和外部副作用不在同一提交域；队列不是跨副本 fencing |
+| `dsh-multi-tenant` | owner 对应的 Namespace、Sandbox、Pod、PVC、ServiceAccount 和 NetworkPolicy | 私有 SQLite binding journal，记录 allocation/UID/revision/未知结果 | 用户 PVC 的 workspace、home 和 dsh 目录 | Chart 固定单平台副本；PVC 不等于备份；平台不提供 Session/Pod/PVC 统一事务 |
+| HamsterHQ | 每租户 DSH 进程；Docker 模拟为容器，Cube 路径为独立 Sandbox/microVM | PostgreSQL account、token、sandbox registry、secret、model key 和 audit | 租户 volume 的 workspace、DSH state、HOME 和浏览器 profile | Gateway 单副本；tunnel/PTY/Agent turn 不可恢复；Cube volume 的异步写确认允许节点故障丢末端写入 |
+
+三个项目都证明了“把官方 DSH 放在服务端隔离环境中，让浏览器访问它”是可行的，但没有一个项目证明“浏览器执行 Agent Loop”。它们的 Agent Loop 分别仍然运行在容器、Kubernetes workload 或 Sandbox 内；浏览器只是客户端或展示层。
+
+### 5.6 `vocsong/deepseek-harness-portal`：公开代码，但许可证不能确认
 
 该仓库 README 描述了：一个 Portal 负责登录、管理员/用户 API 和反向代理，Cloudflare Tunnel 把每个用户路由到自己的 DSH 容器，用户的 home/workspace volume 独立保存。它是原报告中“每用户隔离容器”主张的可核验来源之一。
 
@@ -378,7 +416,7 @@ Cloudflare 上的 DSH/Harness 重实现或移植
 
 原稿把 `AgentsDanceAI/deepseek-harness-cloud` 和后续 `AIStore` 描述成最像完整 Cloud Agent SaaS 的项目，并进一步给出 Source-Available / Community License 判断。
 
-截至 2026-10-04，本次核验没有找到足够证据确认这一组主张：
+截至 2026-10-05，本次核验没有找到足够证据确认这一组主张：
 
 - `AgentsDanceAI` GitHub 组织公开仓库列表中没有 `deepseek-harness-cloud` 或 `AIStore`；
 - GitHub repository search 没有返回这两个确切仓库；
@@ -574,6 +612,10 @@ DSH 官方当前没有作为完整产品交付：
 最准确的一句话是：
 
 > **DSH 已经是一个适合被云平台承载的 Agent Runtime；社区已经把它包装成多个早期的多租户 Cloud Agent 部署；但“官方 Remote API”与“官方 Cloud Agent 产品”仍然是两个尚未合并的概念。**
+
+如果只比较这三个直接部署型项目，可以作出更具体但仍然有限的判断：`dshcloud` 的产品表面和公开关注度最高，但 README 明确禁止生产使用；`dsh-multi-tenant` 的近期开发和 release 活动最强，但仍是 Alpha、单平台副本且没有 HA/DR 保证；HamsterHQ 的 runtime isolation、outbound tunnel 和 Cordis plugin 分层最有架构研究价值，但社区关注度最低、没有正式 Release，且本地 Docker 模式与 CubeSandbox 生产模式不能混为一谈。三者都应称为早期 Cloud Agent 部署或平台原型，而不是已经广泛生产验证的成熟 SaaS。
+
+还需要把这项结论与当前的 browser-native DSH 目标区分开来：上述项目主要是“浏览器访问服务端 DSH Agent Runtime”，Agent Loop 仍在服务器、容器、Kubernetes Pod 或 microVM 内执行；它们没有直接证明“Agent Loop 在浏览器中执行、同域代理 LLM、Session 状态由后端持久化”的 browser-native 方案已经被社区完整实现。
 
 ## Further Exploration
 
