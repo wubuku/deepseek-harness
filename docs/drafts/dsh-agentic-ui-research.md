@@ -1,479 +1,436 @@
 ---
-description: "调研 Agent 将 Web App 业务操作抽象为可唤起的界面能力、在对话中动态呈现并串联工作流的实践、DSH 代码基础、绑定模型、目标能力单元模型与实施建议。"
+description: "对共享 ChatGPT 对话中的 Agentic UI 方案逐项做事实核查，结合 DeepSeek Harness 当前 checkout 的代码考古，评估既有 SaaS GUI 在 DSH Chat UI 中复用的拓扑、职责、安全边界与最小落地闭环。"
 ---
 
-# DSH Agentic UI：把业务操作抽象为 Agent 可唤起的界面能力
+# DSH Agentic UI：共享对话事实核查、代码考古与 SaaS 落地方案
 
 ## Summary
 
-将 Web App 的业务操作同时建模为 Agent 可调用的 Tool 和用户可操作的 UI，并由 Agent 在对话过程中选择、预填、唤起和串联这些能力单元，是一个具有产品价值和技术基础的方向；本文的判断基于调研时点可访问的公开资料，不把它表述为尚无人实践的空白领域，也不表述为永久成立的市场结论。
+本文核查共享对话 `https://chatgpt.com/share/6acb63a5-9554-83ea-a2f5-c5c6da6b7f29` 中关于 Agentic UI、OpenAI Apps SDK、A2UI、MCP Apps、AG-UI、CopilotKit 和 DeepSeek Harness 的断言，并把结论映射到 DSH 当前 `research` checkout 的源码、文档、测试和 Git 历史。
 
-本次调研覆盖的公开方案（A2UI、MCP Apps、OpenAI Apps SDK、AG-UI、CopilotKit、Vercel AI SDK、assistant-ui、CrewAI、Adaptive Cards、Slack Block Kit）已分别覆盖 Tool 调用、对话内 UI、结构化用户输入、流式状态或工作流编排中的部分能力；在本次调研覆盖的公开方案中，尚未发现同时面向任意存量 Web App、并统一处理业务语义、强绑定 UI、模型选择、用户输入、工作流、权限、审计、Session 回放和浏览器原生执行位置的完整方案。
+核心判断是：既有 SaaS 可以把 Agent 作为新的任务编排入口，把经过批准的业务 UI 带入 Chat UI，但 DSH 当前提供的是 Tool 执行、事件回放、Tool view 和 Conversation Node 扩展点，不是一套现成的 CRM Agentic UI 协议。
 
-本文的正式架构原则是：**能力单元在设计上强绑定，UI 与执行在传输上分离；Agent 的主要价值是选择、预填、串联和恢复已绑定的能力单元，而不是为核心事务现场生成任意 UI。**
-
-DSH 已经具备这条路线的大部分基础：工具注册与执行流水线、按 Tool 名寻址的调用卡片、结构化人机问答、事件源 Session 投影，以及浏览器 Dedicated Worker 运行基础；主要缺口是能力单元的统一声明与编排语义、受限 catalog 的安全边界、待提交交互与浏览器本地持久化。
-
-| 判断项 | 当前结论 |
-|---|---|
-| 方向是否具有 UI/UX 革命性 | 是，但革命点主要是从页面导航转向 Agent 编排的任务表面，不是简单把卡片放进消息泡 |
-| 是否已经有人做过 | 调研时点已有大量相关实践；本次调研覆盖的公开方案中，没有一个完整覆盖任意存量 Web App、强绑定业务 UI、Agent 编排、审计回放和浏览器原生运行的组合 |
-| UI 与 Tool 是否应完全解耦 | 不应。业务能力与其主 UI 通常共同设计；协议和运行时仍需要把执行与渲染分成不同声明面 |
-| DSH 是否已有可复用基础 | 有。Tool、Tool 呈现、Conversation Node、UI slot、结构化问答和 Session 投影已经形成连续链路 |
-| DSH 最大产品化缺口 | 能力单元的统一声明与编排语义，以及待提交交互、浏览器本地持久化和跨页面恢复 |
-| 推荐首个实现目标 | 一个具有审批和多步状态的垂直业务流程，而不是通用的任意页面生成器 |
-
-原始设想中的“动态唤出哪个业务功能的 UI”比“模型自由生成任意 UI 树”更适合作为生产主航道；实施上不应从通用页面生成器开始，而应从一个强绑定能力单元组成的垂直流程开始。
+第一阶段应验证一条强绑定闭环：`自然语言 → 业务 Tool → 既有表单 → 原有 SaaS API → 权威结果 → Agent 继续处理`，而不是先建设任意 UI 生成器、DOM 自动点击器或未隔离的多租户 DSH 公网服务。
 
 ## Table of Contents
 
-- [调研范围与问题设定](#调研范围与问题设定)
-- [核心架构判断：UI 与业务能力的绑定模型](#核心架构判断ui-与业务能力的绑定模型)
-- [外部生态调研](#外部生态调研)
-- [DSH 当前代码审计](#dsh-当前代码审计)
-- [目标能力单元模型](#目标能力单元模型)
-- [安全与可靠性](#安全与可靠性)
-- [实施路线](#实施路线)
-- [开放问题](#开放问题)
+- [研究对象与证据边界](#研究对象与证据边界)
+- [共享对话断言逐项核验](#共享对话断言逐项核验)
+- [外部生态的职责分层](#外部生态的职责分层)
+- [DSH 代码考古](#dsh-代码考古)
+- [DSH 当前能力与明确缺口](#dsh-当前能力与明确缺口)
+- [推荐集成拓扑](#推荐集成拓扑)
+- [能力单元与状态归属](#能力单元与状态归属)
+- [最小垂直样板](#最小垂直样板)
+- [安全、租户与恢复](#安全租户与恢复)
+- [实施路线与验收](#实施路线与验收)
 - [结论](#结论)
 - [Further Exploration](#further-exploration)
 - [Dev Note](#dev-note)
 
 -----
 
-## 调研范围与问题设定
+## 研究对象与证据边界
 
-本文面向正在评估 DSH 浏览器原生运行时、Agent 主导的 Web App 和业务 UI 插件化的工程师，回答以下问题：
+### 研究输入
 
-1. Web App 的业务操作是否可以同时成为 Agent Tool 和对话内 UI 能力？
-2. Agent 是否可以在用户对话中选择合适的业务 UI，收集输入并继续工作流？
-3. 调研时点有哪些协议、产品和框架已经实现这类能力？
-4. UI 与业务能力之间应该如何划分所有权、声明面和运行时职责？
-5. DSH 当前代码库已经具备什么，缺什么，应该从哪里开始验证？
+共享页面在浏览器中显示的标题是“调研 Agentic UI 进展”，内容由两段连续对话组成：前半段讨论 Intelligent UI、CRM、CopilotKit、AG-UI、MCP Apps 和 A2UI，后半段把目标收敛为“用 DeepSeek Harness 作为 Agent 底座，把已有 SaaS GUI 带进 Chat UI”。
 
-本文使用四类标记区分陈述性质；未标注的段落默认为设计判断：
+直接使用 `curl` 读取共享页面时连接被远端重置；随后使用真实无头浏览器加载页面，页面返回 HTTP 200，并从浏览器渲染结果提取正文。抓取过程的临时证据保存在 `/tmp/chatgpt-share.body.txt`、`/tmp/chatgpt-share.html`、`/tmp/chatgpt-share.responses.json` 和 `/tmp/chatgpt-share.png`，这些文件不是本报告的持久证据源。
 
-| 标记 | 含义 | 在文中的标注方式 |
-|---|---|---|
-| 当前实现 | 可以由 DSH 源码、package README、测试或已提交 Session 结构直接确认 | DSH 审计表格逐行标注证据性质；关键事实段落显式标注 |
-| 外部事实 | 由外部项目调研时点的官方规范、文档或官方博客确认 | 生态调研章节整体标注，并带时点限定 |
-| 设计判断 | 根据当前实现和外部事实得出的架构结论 | 默认类别，标题标注“设计判断” |
-| 建议目标 | 尚未实现、需要新增协议或验证的设计 | 实施路线与目标模型章节标题标注“建议目标” |
+本报告的外部事实以 2026 年 10 月 11 日可访问的官方页面、规范或项目源码为准；外部项目的版本和页面状态可能继续变化，链接只表示本次核查入口。
 
-本文的外部实践判断基于本次调研时点可访问的官方规范、官方文档和官方博客；协议状态、产品能力和生态集成可能继续变化。本文不把“未发现完整方案”表述为“市场上不存在完整方案”；部分参考链接保留版本号或固定 commit，用于锚定调研证据。
+本报告的 DSH 事实针对当前本地 `research` checkout，其代码基线日期为 2026 年 10 月 6 日；本地 `upstream/master` 已包含更晚提交，因此本文不把 upstream 的后续变化隐含为当前 checkout 的能力。
 
-本文的术语约定：
+### 术语约定
 
-| 术语 | 约定 |
+| 术语 | 本文含义 |
 |---|---|
-| Tool | 模型可调用的业务操作；中文正文统一大写首字母，代码字段保持原样 |
-| UI surface | 一个能力单元在宿主中的一次界面实例，可以是消息内卡片、消息内展开面板、侧栏或受信 widget |
-| 能力单元 | 业务所有者共同维护的 Tool、主 UI、状态、权限与恢复语义的组合单位；最小声明见[目标能力单元模型](#目标能力单元模型) |
-| 能力 descriptor | 能力单元对外发布的声明数据；模型面与呈现面分开提供 |
-| Host / Client / renderer | Host 指运行 Agent Loop 与服务 seam 的进程；Client 指浏览器端应用；renderer 指 Client 中实际渲染 UI 的部分 |
-| 呈现 | presentation 的中文对应；`presentCall`、`presentResult`、`presentationMeta` 等代码名保留原样 |
-| 工作流与 Flow | “工作流”指多步业务流程的统称；Flow 指具体的工作流运行时或状态机形态 |
+| Agent-mediated UI reuse | Agent 根据目标和上下文选择既有业务 UI，在对话内呈现并等待用户操作；它不是任意 HTML/JavaScript 生成。 |
+| 能力单元 | 由同一业务所有者共同维护的 Tool、主 UI、输入映射、权限、生命周期、结果引用和恢复语义。 |
+| UI surface | 能力单元在宿主中的一次可见实例，可以是消息内卡片、展开面板、侧栏或受信 widget。 |
+| Tool | 模型可调用的业务操作或查询；“打开界面”的 Tool 与“提交业务命令”的 Tool 可以不同。 |
+| Host | 拥有权威状态、业务 API、Session 和 Agent Runtime 的服务或进程。 |
+| Client | 浏览器中的 DSH Web Client 或 SaaS 自己的 Chat UI。 |
 
-“浏览器原生”沿用此前调研的定义：DSH Host 和 Agent Loop 驻留 Dedicated Worker，不依赖配套的本地 Node Host；它不表示不需要预构建镜像、不需要兼容层、不需要远程模型，也不表示所有 Node 或操作系统能力都能在浏览器内提供。
+### 证据等级
 
-## 核心架构判断：UI 与业务能力的绑定模型
+| 标记 | 证据来源 |
+|---|---|
+| 共享对话原文 | 从共享页面正文逐项抄录并核查的主张，正文用“共享对话称”指代。 |
+| 外部事实 | 官方规范、官方开发者文档或被核查项目的官方源码。 |
+| DSH 当前实现 | 当前 checkout 的源码、README、架构文档、测试和实际 Git 历史。 |
+| 设计判断 | 根据上述证据得出的推荐，不应误读为 DSH 已实现的接口。 |
 
-### 强绑定是业务设计常态（设计判断）
+-----
 
-核心业务 UI 通常不是通用字段渲染器的结果，而是业务能力的具体投影：
+## 共享对话断言逐项核验
 
-- 退款表单的字段、顺序、资格条件和确认文案表达退款规则。
-- 发票表格的批量操作、状态筛选和权限按钮表达财务流程。
-- 发布审批 UI 的环境选择、风险展示、审批节点和回滚入口表达发布状态机。
-- 采购表单的预算、供应商、成本中心和审批链表达组织授权关系。
+### 总体核验结论
 
-如果将这些 UI 交给通用表单生成器，将业务规则留在 Tool 的服务端实现，将工作流状态留在另一个系统，三个部分就可能出现字段、状态和失败语义不一致。
+共享对话对目标产品形态的理解是正确的：重点不是让模型临时画一个 CRM，也不是让浏览器 Agent 通过 DOM 代替用户点击，而是让 Agent 成为既有 SaaS 的新入口，并在同一任务记录中选择、预填、呈现和串联既有业务能力。
 
-### 共同设计，分离传输（架构原则）
+共享对话对外部生态的方向判断大体正确，但有两处需要明确修正：第一，不能把 OpenAI widget 的交互状态与 CRM 权威数据持久化混为一谈，也不能把“状态不跨聊天保留”写成绝对规则；第二，DSH 的 `tool.call.toolview` 和 `ConversationNodeDefinition` 是扩展点，不是已经完成的 CRM Agentic UI 协议，尤其没有自动提供表单提交、业务事务或 Agent continuation。
 
-更准确的关系是：能力所有者共同维护 Tool、主 UI 和工作流；运行时通过不同的声明面和传输通道把它们投影到模型、Client、Session 和其他 Host。
+### 断言核验表
 
-当前实现已经体现了这个模式的一部分：`ToolDefinition` 可以声明 Host-local 的纯函数 `presentCall` 和 `presentResult`，但内置 Web Client 不消费这些返回值；Client 通过 `tool.call.toolview` 按 wire Tool 名选择 renderer，并从原始调用参数、结果内容、失败状态和持久化的 `output.presentationMeta` 派生卡片。`presentationMeta` 作为 Tool result 的持久化展示数据进入 Session；它不等于完整的 UI 状态，并且当前实现只在顶层工具执行路径投影该元数据，PTC 子调用不适用同一投影。
-
-因此这不是 UI 与 Tool 的完全解耦，而是**所有权绑定、运行时分离**：Tool 所有者决定它如何被呈现，Client 决定如何在当前宿主中渲染，Session 决定哪些事实必须可重建。
-
-### 分层处理的是信任域和变化率（设计判断）
-
-UI 描述层的独立性主要来自三个事实：
-
-1. 执行端和渲染端可能位于不同进程、不同设备或不同组织的 Host 中。
-2. 模型输出、外部 Tool 资源和用户输入都必须经过宿主校验，不能直接获得任意代码执行权限。
-3. 业务规则和视觉设计的变化率不同，且同一业务能力可能需要 Web、移动端、Slack、语音和自动化等不同呈现。
-
-因此，UI 描述是跨信任域的传输契约和宿主适配面，不是业务能力的替代所有者。
-
-### 绑定强度谱（设计判断）
-
-| 场景 | 绑定强度 | 推荐模式 | 代表实践 |
+| 共享对话断言 | 结论 | 核验与修正 | 对 DSH 方案的影响 |
 |---|---|---|---|
-| 只读摘要、对比、解释和轻量查询 | 弱 | catalog 组件组合或 Tool result 映射 | assistant-ui `present`、A2UI dynamic |
-| 常规事务表单、审批和配置变更 | 强 | Tool 与业务视图共同注册 | DSH `tool.call.toolview`、A2UI fixed、MCP widget |
-| 表格、画布、地图和 3D 等领域编辑器 | 很强 | Tool 关联受信嵌入式 widget | MCP Apps iframe |
-| 高频、稳定且依赖肌肉记忆的操作 | 不进入 Agent UI | 传统直接操作界面 | 现有 Web 组件 |
+| Intelligent UI 可以创建可交互小工具，但不是自动创建完整 CRM 后端的平台 | 基本正确 | 这是合理的产品边界判断，但 `Intelligent UI` 不是一个足以定义实现边界的稳定协议名；完整 CRM 仍需要开发者拥有的业务服务、鉴权、数据模型、事务和审计。 | DSH 方案必须把 SaaS 后端视为权威业务系统，不把 Chat UI 当数据库。 |
+| 交互状态刷新后可能保留，但不会跨聊天保留 | 过于绝对 | 当前 OpenAI Apps/Plugins 文档已提供 widget-scoped persistence、`ui/update-model-context` 和服务端保存状态的机制；这些能力不等于自动跨租户保存 CRM 数据，但足以否定“一律不能跨聊天”的表述。 | 报告应区分 widget 草稿、Session 事实和 CRM 业务数据三种状态。 |
+| Apps SDK + MCP + 自己的后端可以做长期使用的 CRM | 正确 | Apps SDK/MCP 负责 Host 与 Tool/widget 的连接，开发者仍要实现应用逻辑、后端授权和持久化。 | 该模式与“既有 SaaS API 继续负责业务”一致。 |
+| CopilotKit Components as Tools 可把既有 React 组件带入聊天 | 正确但不完整 | 官方 `useComponent` 文档支持注册 React 组件和 props；基础组件呈现本身不自动完成提交处理、业务授权、事务或服务端写入。`useFrontendTool` 解决的是前端工具和状态协作，不替代后端权限。 | React SaaS 可把它作为参考；DSH 仍需自己实现 Client slot 和业务 action seam。 |
+| 旧页面可用 iframe、Web Component 或微前端嵌入 | 作为集成策略成立 | 它解决的是交付和隔离，不会自动解决 Cookie、跨域、尺寸、路由、全局 Context、弹窗、下载和回调通信。MCP Apps 的 sandbox iframe 也是受控 widget，不是任意页面无改动嵌入的保证。 | 复杂旧模块可先嵌入，但应把嵌入层当过渡或受信 widget，而非第一阶段所有 UI 的默认形态。 |
+| A2UI 用声明式结构和宿主 catalog 生成 UI | 正确 | 官方页面当前仍将 v0.9.1 标为 Current/Production，将 v1.0 标为 Candidate；规范包含 `createSurface`、`updateComponents`、`updateDataModel` 和 `deleteSurface` 等消息。共享对话中的版本判断在本次核查时点仍成立。 | A2UI 可以作为受限声明式 catalog 的后续研究方向，但不会把已有 React/Vue 页面自动转换成 A2UI 组件。 |
+| AG-UI 是 Agent 与前端的事件协议，不是完整 UI 组件协议 | 正确 | AG-UI 负责运行、Tool call、状态、流式输出、中断和人机协作等事件；它不替代业务组件目录或后端事务语义。 | DSH 若需要跨 Runtime 的事件协议，可借鉴其分层，但不应把它当 CRM renderer。 |
+| MCP Apps 是 Tool 关联的交互式 UI | 正确 | 当前 MCP Apps 文档把 Tool 与 `ui://` resource 关联，Host 在沙箱 iframe 中加载 widget，widget 通过受控消息与 Host/Tool 通信；规范已进入稳定扩展文档。 | 适合未来把 SaaS 能力交付到外部 MCP Host，不是 DSH 内部组件复用的必要前提。 |
+| `dsh-frontend-tools` 已经很接近目标 | 部分正确 | 官方仓库 `lukaiwuyi/dsh-frontend-tools` 通过 loopback WebSocket 将 Web/Electron/Tauri/Node 应用的前端函数注册为 DSH Tool，并把调用转回原应用；它证明“Agent 调用既有应用能力”可行，但没有证明“既有 GUI 组件直接渲染进 DSH Chat transcript”。 | 它是前端能力桥接参考，不是目标 Agent-mediated UI reuse 的完整实现。 |
+| DSH 的 `tool.call.toolview` 可把业务组件显示在工具调用卡片中 | 正确但共享示例不准确 | 当前 slot 按 wire Tool name keyed dispatch，renderer 收到 `preparing`、`start`、`result` 三种 phase 和阶段化 `block`，不是示例中的简化 `{ block }` API。 | 可以从一个自定义 Tool view 开始，但表单提交和 Agent continuation 仍需另行设计。 |
+| `ConversationNodeDefinition + conversation.chat.node` 可呈现持续业务节点 | 扩展能力成立 | `ConversationNodeDefinition` 把事件匹配、状态折叠、Location 数据和最终 Node 投影分开；`conversation.chat.node` 再按 kind 选择 renderer。它不自动声明业务事件、不调用 SaaS API，也不替代权限或工作流。 | 复杂、跨轮次、可回放的业务 UI 才应升级为 Chat Node。 |
+| DSH 可以直接嵌入任意 SaaS | 不应这样表述 | DSH Web Client 是由 `dsh.client`、`./client` bundle、Host boot graph 和构建产物组成的插件应用；代码库没有“把任意 SaaS 现有 React tree 原封不动装入 DSH”的通用保证。 | 需要选择“DSH Web 为壳”或“SaaS 为壳、DSH Runtime 为后端”两种拓扑之一。 |
+| 默认 DSH Web 可直接作为多租户公网 Agent 服务 | 错误且危险 | `SAFETY.md` 明确 DSH 是未经安全审计的 developer preview，可能执行模型生成代码和命令、加载插件并访问被授予的资源；沙箱和审批不等于生产隔离。 | 必须裁剪 Tool profile、绑定可信租户上下文并单独完成隔离和威胁建模。 |
 
-选择绑定强度时至少应考虑副作用重量、领域特异控件密度、审计要求、用户操作频率和跨宿主复用范围。
+### 核验后的产品命题
 
-### 消息泡不是唯一容器（设计判断）
+正确的产品命题不是“在聊天中生成一个 CRM”，而是“在既有 SaaS 的权威业务能力之上，增加一个由 Agent 编排的任务入口”。
 
-消息泡适合承载短生命周期、与当前 Agent 步骤直接相关的输入、确认、摘要和状态。
+正确的技术命题也不是“把页面塞进气泡”，而是“让一个能力单元同时拥有 Tool 语义、主 UI、输入映射、权限、生命周期、审计和恢复规则，再让 Agent 选择该能力单元”。
 
-复杂表格、画布、地图、时间轴或需要持续编辑的对象不应被强制压缩进消息泡：消息流的纵向结构不利于密集比较，普通卡片也无法承载复杂编辑器。能力单元可以在消息中提供入口和上下文，再由 Host 展开为同一任务记录下的 inline surface、侧栏面板或受信 widget；任务完成后，用户仍可以通过该入口回到业务对象。
+-----
 
-关键要求不是所有 UI 使用同一容器，而是用户动作、Tool call、工作流步骤和 Session 事实保持关联。“渲染在当前页面”指交互不发生页面跳转、事实回到同一任务记录，而不是一切 UI 都塞进单个消息泡。
+## 外部生态的职责分层
 
-### Agent 的自由度应放在编排上（设计判断）
+### 不是同一类技术
 
-在核心业务场景中，Agent 的主要价值不需要自由生成 UI：
-
-1. 根据用户目标和当前状态选择哪个能力单元。
-2. 从上下文中提取并预填能力单元的参数。
-3. 将前一能力单元的结果传递给下一能力单元。
-4. 在用户修改、拒绝、暂停或失败后重新选择下一步。
-5. 解释当前状态、需要用户补充的字段和即将产生的副作用。
-
-这五件事都不需要解耦业务 UI 与业务能力；原始设想中的“动态唤出”正是指这个自由度。
-
-### “自动生成 UI”不是同一个反面对象（设计判断）
-
-“不应从通用页面生成器开始”针对的只是一类做法。本文区分四种形态，避免把所有动态 UI 一并否定：
-
-1. **从 Tool JSON Schema 自动生成生产事务表单**：不作为核心业务主路径；领域校验、状态、权限和恢复语义无法从 Schema 推出。
-2. **从受限 catalog 组合只读或低副作用 UI**：可以采用，作为摘要、比较、解释的间隙层。
-3. **Tool 关联业务自有 widget（受信嵌入式）**：适合复杂强绑定 UI，如 MCP Apps 模式。
-4. **模型输出任意 HTML/JavaScript 并在宿主执行**：禁止。
-
-## 外部生态调研
-
-本节内容均为外部事实，能力与状态以调研时点为准；正文已在关键处标注时点与证据边界。
-
-### Google A2UI
-
-[A2UI](https://a2ui.org/) 是 Google 发布的 Agent-to-UI 声明式协议。本次调研访问官方网站时，v0.9.1 标记为 Current/Production，v1.0 标记为 Candidate；这是调研时点的外部资料状态，不构成 DSH 的依赖或版本承诺。
-
-A2UI 通过 `createSurface`、`updateComponents`、`updateDataModel` 和 `deleteSurface` 等消息逐步建立和更新 UI surface，支持组件 catalog、数据绑定、JSON Pointer、用户输入和 action。组件由宿主预先实现，Agent 传输的是声明式数据和结构，不是任意可执行前端代码。
-
-[A2UI 的生态比较文档](https://a2ui.org/introduction/agent-ui-ecosystem/) 将 A2UI 与 MCP Apps、AG-UI、A2A 等定位为互补关系：A2UI 负责 UI 描述，其他协议负责工具、Agent 间通信或 Agent 与用户之间的运行时连接。
-
-本文把“catalog 内由 Agent 组合组件结构”的模式统称为 dynamic UI：固定业务流程优先采用由能力所有者预先确定的组件结构与字段约束，dynamic UI 适合开放式、探索性、摘要或低副作用场景。A2UI 对本文的关键启示是：动态 UI 可以存在，但生产场景仍依赖宿主批准的 catalog。
-
-### MCP Apps 与 OpenAI Apps SDK
-
-[MCP Apps SEP-1865](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp) 调研时已进入 Final 状态。它允许 MCP Tool 关联 `ui://` HTML 资源，Host 在沙箱 iframe 中加载 UI，widget 通过 JSON-RPC 消息与 Host 和 Tool 通信。
-
-MCP Apps 的典型交付单位是 Tool 与 widget 的共同实现。Tool 负责业务能力，widget 负责在宿主中显示业务数据、接收用户动作和发起后续调用；二者通过明确的资源标识和消息协议关联，而不是由模型从通用字段自动生成完整生产界面。
-
-OpenAI Apps SDK 采用相近的 Tool 加 widget 模式，主要面向 ChatGPT Host。此次调研中 OpenAI 开发者页面部分请求返回 403，因此关于 OpenAI 页面具体字段的判断依据为官方页面搜索结果、官方示例入口和 MCP 官方迁移资料，本文不将其表述为逐行核验结果。
-
-MCP Apps 对本文的关键启示是：复杂业务 UI 可以作为 Tool 的受信呈现资源提供，但 Host 必须控制沙箱、消息权限、用户同意和资源审计。
-
-### AG-UI
-
-[AG-UI](https://docs.ag-ui.com/introduction) 是面向 Agent 与用户应用的开放事件协议，覆盖 run 和 step 生命周期、文本、Tool call、状态、活动、打断和子 Agent 等事件。
-
-AG-UI 官方明确说明它不是 Generative UI schema，而是连接 Agent 与用户应用的双向运行时；它可以承载 A2UI、MCP-UI、Open-JSON-UI 或应用自定义的 UI 数据。
-
-AG-UI 对本文的关键启示是：UI 描述和 Agent 运行时应避免混为一个协议。无论能力单元的 UI 是固定组件、嵌入式 widget 还是声明式 surface，都需要一个能表达执行状态、用户动作、暂停和恢复的事件连接。
-
-### CopilotKit
-
-CopilotKit 将 React 前端与 Agent 运行时连接起来，支持 Tool rendering、frontend tools、human-in-the-loop、shared state 和 A2UI。
-
-其固定 schema 模式通常由开发者预先定义组件和呈现结构，Tool 提供数据；dynamic 模式允许 Agent 在预设 catalog 内生成更灵活的 UI。两者都没有消除业务能力和 UI 之间的共同设计关系。
-
-CopilotKit 与 AG-UI 的官方示例展示了对话内图表、可双向编辑的任务画布和暂停等待用户选择时间后继续等模式。它证明了本文设想的交互链路可以落地，但工作流和业务副作用仍由接入的 Agent 后端或 Flow 负责。
-
-### Vercel AI SDK
-
-[Vercel AI SDK 的官方示例](https://github.com/vercel/ai/blob/c3c189c0/content/docs/06-advanced/07-rendering-ui-with-language-models.mdx)（链接固定到调研时的文档版本）展示了 Tool 返回结构化对象后，客户端依据 Tool result 渲染 React 组件的模式。
-
-这种模式适合开发者已知 Tool 和已知 UI 的应用：模型调用 `getWeather`，Tool 返回结构化天气结果，客户端选择 `WeatherCard`。它并不试图让模型直接发出可执行 React 代码。
-
-Vercel 还提供将 MCP Apps 接入 AI SDK 应用的方案，其中 widget 仍以沙箱资源形式运行。对本文的关键启示是：Tool result 驱动 UI 是成熟的工程路径，但业务组件通常由应用开发者拥有。
-
-### assistant-ui
-
-[assistant-ui 的 Generative UI 文档](https://www.assistant-ui.com/docs/tools/generative-ui) 同时支持已知 Tool UI 和 `present` 工具。`present` 让模型从开发者提供的组件词汇中组合 JSON UI tree，默认组件涵盖卡片、事实、表格、图表、表单和控件。
-
-这类能力适合摘要、比较、解释和轻量探索性界面。对于高副作用的业务操作，仍需要将组件、字段和动作与能力单元绑定，并为确认、错误和权限提供稳定语义。
-
-### CrewAI
-
-[CrewAI 的 Generative UI 文档](https://docs.crewai.com/v1.15.22/en/guides/frontend/generative-ui)（版本号链接用于固定调研证据）将 Tool-based UI、Agentic UI、A2UI 和 Human-in-the-loop 与 CrewAI Flow 结合。
-
-CrewAI 的优势主要在 Flow、多 Agent、状态和长任务编排，UI 由前端集成和 AG-UI/A2UI 等机制提供。它说明业务工作流是独立的工程问题，不能由 UI 描述协议单独承担。
-
-### Adaptive Cards 与 Slack Block Kit
-
-[Adaptive Cards](https://learn.microsoft.com/en-us/microsoft-copilot-studio/adaptive-cards-overview) 提供跨宿主的 JSON 卡片、输入和动作，适合审批、问答和结果展示，但不定义 Agent Tool discovery、通用 Agent 事件流或工作流状态机。
-
-[Slack Block Kit 的 Agent 体验更新](https://slack.dev/build-richer-agent-experiences-with-block-kit/) 增加了 Card、Alert、Carousel、Data Table、Work Object 和 Code 等面向 Agent 输出的组件方向。它说明成熟消息宿主正在把 Agent 输出从纯文本扩展为可读、可操作的结构化消息，但 Block Kit 仍然是 Slack 宿主的 UI 体系，不是通用 Agent UI 协议。
-
-### 能力矩阵（本次调研的定性比较）
-
-下表是本次调研依据各项目官方文档作出的定性比较，不是官方功能认证；“强/弱/部分”描述该方案对某层职责的覆盖程度。
-
-| 方案 | Tool 调用 | Agent 事件流 | UI 描述 | 与业务 UI 绑定 | 工作流 | 适用 Host |
-|---|---|---|---|---|---|---|
-| A2UI | 间接（依赖外部工具协议） | 否 | 声明式组件 catalog | fixed 模式强，dynamic 模式弱 | 否 | 多端 renderer |
-| MCP Apps | 强（MCP Tool） | 部分（由宿主实现） | 沙箱 widget 资源 | 强（Tool 与 widget 共同交付） | 否 | MCP 宿主 |
-| AG-UI | 承载调用事件 | 强 | 不提供 | 不负责 | 否 | 前端应用 |
-| CopilotKit | 强 | 强 | React 集成与 A2UI | 可强可弱 | 依赖后端 Flow | React |
-| Vercel AI SDK | 强 | 框架内部 | Tool result 到 React | 通常强 | 不负责 | Web 应用 |
-| assistant-ui | Tool UI | 框架内部 | `present` 组件词汇 | 可强可弱 | 不负责 | React |
-| Adaptive Cards | 不负责 | 不负责 | JSON 卡片 | 由宿主与机器人决定 | 不负责 | 企业宿主 |
-| Slack Block Kit | 不负责 | 不负责 | Block 组件 | Slack 专属 | 不负责 | Slack |
-
-### 生态结论
-
-当前生态的单项能力在调研时点已相当成熟：MCP Apps 适合 Tool 关联受信 widget，A2UI 适合受限声明式 UI，AG-UI 适合 Agent 与前端事件连接，应用 SDK 适合快速实现 Tool result 到 UI 的映射，Flow 引擎适合多步工作流。
-
-在本次调研覆盖的公开方案中，尚未发现一个同时面向任意存量 Web App、统一处理业务语义、强绑定 UI、模型选择、用户输入、工作流、权限、审计、Session 回放和浏览器原生执行位置的完整方案；本结论限于调研时点与已覆盖资料。
-
-## DSH 当前代码审计
-
-### 已具备的能力（当前实现）
-
-| 能力 | 当前证据 | 证据性质 | 对本文的意义 |
+| 方案 | 主要解决的问题 | 不应替代的职责 | 与 DSH 的关系 |
 |---|---|---|---|
-| Tool 注册和执行 | `packages/core/tools` 的 `ToolDefinition`、输入 schema、输出定义与执行上下文 | 当前源码与测试 | 能力单元可以以现有 Tool 执行入口为基础 |
-| Tool 执行扩展 | `tools/pre-execute`、`tools/execute`、`tools/post-execute`、`tools/result` 事件 | 当前源码与事件目录 | 审批、包装、结果处理和观察点留在工具执行管线 |
-| Tool 自带呈现声明 | `ToolDefinition.presentCall`、`presentResult` | 当前源码；Host-local 纯函数 | 工具所有者可声明呈现意图；Web Client 不直接消费这些值 |
-| 持久呈现元数据 | `output.presentationMeta` 随 Tool result 持久化 | 当前源码；仅顶层执行路径投影 | 呈现数据可随已提交事实重建；不等于完整 UI 状态 |
-| 聊天内 Tool 调用树 | `tool.call.toolview` keyed slot、root 与 PTC 子调用、generic fallback | 当前 Client 实现与 README | 已实现按 Tool 名注册的调用树卡片；不等于通用动态 UI |
-| 业务 UI 插件化 | 业务包只注册 wire Tool 名与原子视图 | 当前 Client 实现与 README | 新业务能力通过插件加入，不改 agent-loop |
-| 结构化用户输入 | `tool-ask-user` 提供 `ask_user_question`，`ui-user-questions` 提供 Web composer takeover，经 `ctx.userQuestions` seam 协作 | 当前工具、Session projection 与 Client 协同实现 | Agent 可进行定时前台等待；超时后问题以 `continued` 状态保留，迟到答案作为普通 follow-up/steering 消息送入根 Agent；未提交草稿仍是页面级非持久状态；子 Agent 调用被拒（`DELEGATED_CALLER`） |
-| 文件交付投影 | `packages/deliverables/tool-present` 记录 `deliverables/presented` | 当前源码 | Tool 结果可驱动用户可访问交付物 |
-| Session 事件回放 | `tool/call`、`tool/result` 与持久化展示元数据 | 当前事件目录与投影实现 | 已提交调用、结算结果和部分 Tool 卡片可重建；未提交草稿、临时 UI 状态与 PTC 中间值不在完整回放范围 |
-| 浏览器运行时基础 | Dedicated Worker 装载预打包插件树与内存 VFS | experimental 包；preview 验收不含真实模型请求 | Worker Host、模块加载与页面隧道可启动；不构成真实模型与工具闭环的完成证据 |
+| CopilotKit Components as Tools | React 组件注册、组件 props、聊天内呈现和前端工具协作 | 业务数据库、后端授权、跨租户隔离、事务和审计 | 可作为 React 组件复用的交互参考；不直接成为 DSH API。 |
+| MCP Apps | Tool 关联 widget resource、sandbox iframe、Host/widget 消息通信 | 业务工作流、租户身份和数据库事务 | 适合跨 Host 分发受信业务 widget。 |
+| OpenAI Apps/Plugins SDK | 在 ChatGPT Host 中接入 MCP Tool、widget 和 widget-scoped context/state | SaaS 的权威业务数据和产品级权限模型 | 可验证“聊天作为应用 Host”的产品形态，但不是 DSH 的运行时实现。 |
+| AG-UI | Agent 与前端之间的流式事件、Tool call、状态和中断 | UI 组件 catalog、业务命令和持久化 | 可借鉴事件分层；DSH Session 仍是自己的回放来源。 |
+| A2UI | 通过宿主已实现的 catalog 声明式创建和更新 surface | 既有页面自动迁移、业务授权和事务 | 可作为低副作用、受限 catalog 的候选协议。 |
+| dsh-frontend-tools | 让现有应用的前端函数成为 DSH Tool | 直接把既有 GUI 渲染进 DSH transcript | 最接近 DSH 生态的能力桥接样例，但方向是“调用应用能力”。 |
 
-### 关键架构事实（当前实现）
+### 对既有 SaaS 的选择原则
 
-Web Client 不消费 Host 层 `presentCall` 和 `presentResult` 的返回值，而是从原始调用参数、结果内容、失败状态和持久化元数据派生卡片。UI 因此不是独立的第二事实源，React 组件状态也不决定 Session 历史。
+如果既有 SaaS 使用 React，并且表单、表格、选择器已经脱离页面路由和全局 Context，优先采用共享组件或共享浏览器安全 package。
 
-`ui-conversation` 将 Session event 和客户端临时事件折叠为 Conversation Node；`ui-tool` 再从 `tool-call` 节点派生调用树。业务包只注册 wire Tool 名与原子视图；调用/结果配对、生命周期和 root/subcall 拓扑由 Runtime 权威维护。
+如果既有 SaaS 是耦合严重的 React SPA、Vue、Angular 或老旧多页模块，先考虑 Web Component、微前端或 sandbox widget，把大模块作为过渡；不要为了验证 Agentic UI 先重写整个前端。
 
-`docs/architecture.md` 将模型适配器、Tool registry、Session log 和 agent-loop 都定义为 Cordis 插件，并明确没有需要打补丁的特权内核。这使能力单元可以通过插件共同加入 Tool、事件投影和 UI slot。
+如果业务是只读摘要、比较、解释或低副作用探索，受限 catalog 或 A2UI 式声明式 surface 可以降低适配成本；如果业务是合同、审批、删除、批量写入或高价值交易，使用能力所有者预先绑定的固定 UI 和明确确认。
 
-仓库规则要求进入模型请求的内容必须能从 Session 日志重建。对动态 UI 的含义是：任何会影响后续模型请求的用户输入、UI action、业务选择或 Tool 结果都需要对应的 Session 事件；草稿、焦点、展开状态不必进入，Agent 若要依据它们继续执行，就必须在提交点形成明确事件。同时注意 Session 是 append-only 事件日志，持久性由 flush barrier 决定，不是自动落盘。
+无论选择哪种 UI 复用方式，业务写入都应落到既有 SaaS API 或同一业务服务，而不是由 Agent 输出的 JSON、前端隐藏按钮或 DOM 操作决定授权。
 
-### 当前缺口（当前实现的边界）
+-----
 
-| 缺口 | 当前边界 | 影响 |
+## DSH 代码考古
+
+### 历史演进说明了什么
+
+DSH 的相关代码不是一次性为 Agentic UI 设计的，但 Git 历史呈现出一条清晰的演进方向：先把 Tool 输出和呈现意图分开，再把 Tool UI 从会话壳中抽成 keyed plugin，随后建立事件到 Conversation Node 的通用折叠器，最后补足 Tool 的准备、开始和结算生命周期。
+
+2026 年 7 月的 canonical typed tool outputs 变更引入了 `ToolOutputDefinition` 的 schema、model-facing render 和 replayable `presentationMeta`；这使 Tool 的业务结果、模型文本和持久呈现元数据有了不同声明面。
+
+2026 年 8 月的 Tool presentation extraction 将 Tool 调用树和原子 Tool view 迁入 `ui-tool`，明确“业务包只注册 wire Tool 名和原子视图，Runtime 负责 call/result 配对和 root/subcall 拓扑”。
+
+2026 年 8 月 9 日的 conversation node engine 和随后 target-owned snapshot 变更，把事件匹配、状态折叠、View target 和渲染器拆开；这正是后续业务 Chat Node 可以复用的基础，但它仍然是通用投影机制，不是 CRM 业务协议。
+
+2026 年 8 月下旬的 raw-event tool-card 重构让 Tool 卡片从原始 Session 事件和结果元数据派生，而不是把一套独立 UI 状态当成第二个事实源。
+
+2026 年 9 月的 preparing/start/result 生命周期变更又补上了流式准备阶段和派发后的明确状态，适合呈现“等待输入、执行中、成功、失败、停止”等能力单元生命周期。
+
+这条历史路径的结论是：DSH 最适合承载“事件驱动的能力投影”，而不是承载模型任意生成和执行前端代码。
+
+### 当前代码地图
+
+| DSH 机制 | 当前证据 | 能做什么 | 不能从中推导什么 |
+|---|---|---|---|
+| Tool canonical output | `packages/core/tools/src/index.ts:212`、`:1831` | 用 schema 验证成功值，生成模型内容，并可为顶层结果生成 JSON `presentationMeta`。 | 不会生成 CRM 表单，也不会自动调用 SaaS API。 |
+| Tool render intent | `packages/core/tools/src/index.ts:282`、`packages/core/tools/src/presentation.ts:1` | `presentCall`/`presentResult` 提供纯、可回放的 provider-neutral render intent。 | 它是呈现意图，不是业务 UI 执行器或用户提交通道。 |
+| Session tool history | `docs/subsystems/session.md:102`、`:121` | `tool/call` 与 `tool/result` 通过 `callId` 配对；结果可携带 JSON `meta`，回放时复现呈现所需数据。 | 不会自动记录浏览器未提交草稿、焦点或任意 React state。 |
+| Tool view slot | `packages/client/ui-tool/src/client/contract/slots.ts:14`、`:97` | 按 wire Tool name 注册自定义 renderer，处理 `preparing`、`start`、`result` 三个 phase。 | 不提供通用 `submitToAgent()`；当前 owner props 主要是身份、阶段 block、文件打开和 inspect 回调。 |
+| Tool UI mounting | `packages/client/ui-tool/src/client/apply.ts:35` | 把 `tool-call` Chat Node 接到 Tool call tree，再把原子调用分发给 keyed Tool view。 | 不改变 Agent Loop，不自动建立业务 API 或事务。 |
+| Chat Node slot | `packages/client/ui-chat/src/client/contract/slots.ts:151`、`:200` | 按 Chat Node kind 注册 renderer，可接收 turn data、disclosure 和 Host callback。 | 不负责定义事件、不负责把表单 action 写入 Session。 |
+| Conversation definition | `packages/client/ui-conversation/src/client/contract/conversation.ts:195` | `match`、`start`、`update`、`buildLocationData` 和 `buildViewNode` 把事件折叠为可回放业务 Node。 | 不代表已经有一套 CRM Agentic UI descriptor。 |
+| Definition registry | `packages/client/ui-conversation/src/client/conversation/event-registry.ts:4` | 业务插件以 effect-owned registry 注册和撤销 Definition。 | 不替代业务服务授权和工作流执行。 |
+| Web Client ownership | `docs/subsystems/web-client.md:9` | Host 拥有权威状态、持久化、mutation ordering 和 access policy；Client 通过 Remote/服务回调呈现。 | 不保证 DSH 可以无改造地成为任意 SaaS 的外壳。 |
+| Browser plugin graph | `packages/client/modules/README.md:28` | 通过 `dsh.client`、`./client` bundle 和构建产物加载 Web 插件，缺失 bundle 会在激活时失败。 | 不支持把网络返回的任意 UI 代码当作安全插件动态执行。 |
+| Client layering | `packages/client/AGENTS.md:39`、`:149` | 组件只接收 typed props；跨 feature 共享 UI 应放入 `ui-primitives` 或独立浏览器安全包，并通过 Slots 组合。 | 业务插件不能直接 runtime-import 另一个 feature plugin 的内部组件。 |
+| User question seam | `docs/subsystems/user-questions.md:5`、`:273` | 已有结构化用户提问、超时、答案回放和 root-agent 约束。 | 它不是任意业务表单 action 的通用协议；CRM 表单需要新的明确 seam 或复用其可表达范围。 |
+
+### 关键边界：Tool view 不是业务执行层
+
+共享对话中的示意组件 `CustomerFormToolView({ block })` 可以表达 UI 方向，但不能作为 DSH 当前 API 的可复制代码。实际 `ToolCallOwnerProps` 通过 slot runtime 提供 `callId`、`toolName`、阶段化 `block`、`openFile`、`inspect`、图片加载器和 disclosure 等能力；业务表单所需的认证上下文、API client、提交回调和 Agent continuation 都必须由新的业务插件显式提供。
+
+同样，`ConversationNodeDefinition` 的 `buildViewNode` 只负责从已记录事件构造 Node；它不会替代 `ToolDefinition.execute`，也不会因为用户点击 React 按钮就自动生成 `tool/call`、业务审计事件或下一轮模型请求。
+
+因此，第一阶段必须把“呈现界面”“提交业务命令”“把权威结果告知 Agent”当成三个不同的工程问题逐一打通，而不是把它们都藏在 renderer 里。
+
+-----
+
+## DSH 当前能力与明确缺口
+
+### 已具备的基础
+
+DSH 已具备足够开始 PoC 的连续链路：模型可以调用 Tool；Tool 可以返回结构化结果和持久化呈现元数据；Session 可以记录和回放 `tool/call`/`tool/result`；Conversation assembler 可以把事件折叠为 Chat Node；`ui-tool` 可以按 Tool 名挂载自定义视图；`ui-chat` 可以按 Node kind 挂载业务 renderer。
+
+DSH 的插件体系也允许在不修改 agent-loop 的前提下共同注册 Host Tool、Session event projection、Conversation Definition 和 Client slot。该方向符合仓库“Plugins, not loop changes”和“Model-visible ⟺ logged”的架构规则。
+
+### 仍然缺少的产品化能力
+
+| 缺口 | 现状 | 必须补的设计 |
 |---|---|---|
-| 能力单元没有统一公开声明 | Tool schema、Tool presenter、Client view 和业务工作流存在关联，但没有一个面向 Agent 编排的统一 descriptor | Agent 难以可靠判断某个能力何时可用、需要什么前置状态和会产生什么副作用 |
-| 缺少通用受限 UI catalog | 当前主路径是按 Tool 名注册预制 view，而不是 A2UI 式 surface catalog | 不能宣称模型已经可以在 DSH 中现场组合任意业务 UI |
-| 未提交问答草稿不持久 | 浏览器 UI 的未提交输入和编辑状态保存在页面级非持久 slot store；已记录的问题、`open`/`continued` 状态和结算结果由 `userQuestions` Session projection 提供 | 整页刷新后不能恢复未提交回答草稿；已记录的问题可以由 Session projection 重新展示 |
-| 部分交互不能由子 Agent 直接发起 | `ask_user_question` 拒绝非根调用者并返回 `DELEGATED_CALLER` | 需要由拥有用户交互权的父 Agent 接管问题 |
-| PTC 中间值不可完整回放 | PTC dispatch 记录调用和结算事实，但任意中间绑定值不进入 Session 历史 | 不能把每个 PTC 中间 UI 状态都当作可恢复工作流状态 |
-| Worker 本地持久化未完成 | WebWorker runtime 使用内存 VFS，Session 日志在 Worker 生命周期内落在内存明文路径 | 页面或 Worker 退出后的本地恢复仍需要独立设计 |
-| Client 首帧等待完整 entry roster | renderer 没有 Suspense 或按 entry 的懒加载 | 动态增加业务 UI 包时，加载和版本管理仍是产品化问题 |
-| 浏览器插件运行时安装未形成方案 | Worker 运行的是预打包、版本化 VFS image，overlay 只能替换 `home/` 与 `workspace/` 下的文件 | 不能把能力单元默认理解为可从网络任意安装的第三方代码 |
+| 统一能力 descriptor | Tool schema、Tool presenter、Tool view、业务 API 和工作流彼此可关联但没有统一声明 | 定义能力 id、版本、主 UI、输入映射、权限、风险、生命周期、结果引用和恢复规则。 |
+| UI action 到 Agent 的通道 | Tool view 当前没有通用业务提交或 continuation API | 定义带 session、surface、action、request id 和权限上下文的 Client→Host command seam，或明确采用 user-question/follow-up 模式。 |
+| 业务事件 | DSH 有通用 Session/Conversation 机制，但没有 CRM 事件 | 声明 merge-extensible `customer/*` 事件，定义哪些 action 进入 Session、哪些只留在 Client 草稿。 |
+| 权威业务状态 | Web Client 能呈现 Session，但 CRM 数据仍属于 SaaS 后端 | 让 Tool 和 UI 通过同一业务 API 读取和写入，避免把 DSH Session 当 CRM 数据库。 |
+| 复杂跨轮次 UI | Chat Node 扩展点存在，但没有业务 Node | 仅为需要跨轮次、跨刷新或独立生命周期的流程增加 Definition 和 renderer。 |
+| 旧前端复用 | DSH 不知道 SaaS 的路由、Context、状态管理和组件依赖 | 抽取共享 browser-safe package，或通过 Web Component/microfrontend/widget 适配。 |
+| 多租户安全 | DSH 安全文件明确不承诺生产隔离 | 创建受限 profile、可信身份绑定、服务端授权和独立资源隔离，不暴露默认完整工具集。 |
+| 浏览器/云端交接 | 当前 Web Client/Worker 运行能力不等于可恢复的业务工作流 | 定义 owner、checkpoint、取消、未知副作用和重新接管规则。 |
 
-### 审计结论（设计判断）
+-----
 
-DSH 已经形成“模型 Tool → durable Tool call/result → Session event fold → Conversation Node → keyed UI view”的链路。它目前更接近**能力单元的事件驱动投影系统**，而不是通用的模型 UI 生成系统。
+## 推荐集成拓扑
 
-这是一个有利的起点：核心业务能力优先采用强绑定 Tool + View，不需要重写现有执行和回放机制；受限 catalog 可以作为只读摘要、解释和轻量组合能力增加，而不必取代稳定的业务视图。
+### 拓扑 A：DSH Web 作为 Agent 工作区
 
-## 目标能力单元模型
+```text
+用户
+  ↓
+DSH Web Client（Chat、Tool view、Chat Node）
+  ↓ Remote / Session / Agent Runtime
+crm-agent-ui（DSH Host + Client plugin）
+  ↓
+既有 SaaS API（身份、权限、事务、数据库、审计）
+```
 
-本节全部为建议目标，不是当前已实现的 DSH 结构。
+该拓扑最接近共享对话的“在 DSH 已有 Web UI 基础上增加 Agentic UI”。`crm-agent-ui` 可以在 Host 侧注册业务 Tool，在 Client 侧注册 `tool.call.toolview` 或 `conversation.chat.node`，并把 SaaS 的共享组件或 widget 作为 renderer 的依赖。
 
-### 目标交互流程
+它的优点是可以直接复用 DSH 的 Session、Agent Loop 和现有 Chat UI；代价是 SaaS 必须维护 DSH Web 的 profile、bundle、client package 和与登录态的集成，不能把“可加载插件”误认为“任意前端可嵌入”。
 
-用户表达任务目标，Agent 根据当前 Session、权限、业务状态和已有结果选择能力单元；能力单元提供与业务规则绑定的 UI；用户在 UI 中补充或确认输入；Tool 执行真实业务操作；结果和必要的 UI 状态进入事件流，驱动下一步选择或结束流程。每一步的用户动作都与已提交的 Session 事实关联，未提交的草稿停留在 Client。
+### 拓扑 B：SaaS 作为产品外壳，DSH 作为 Agent Runtime
+
+```text
+用户
+  ↓
+既有 SaaS Shell（既有路由、组件、登录态、租户上下文、Chat 区域）
+  ↓ 受控 Agent/Session/Tool API
+DSH Runtime（裁剪后的 profile 或独立服务）
+  ↓
+既有 SaaS API 和数据库
+```
+
+该拓扑保留 SaaS 原有的导航、设计系统、权限上下文和组件树，Chat UI 由 SaaS 自己承载；DSH 的 Tool、Session 和 Agent Runtime 通过服务接口接入。它通常更适合最终产品化，但需要 SaaS 自己承担 Chat transcript、事件订阅、Tool view 生命周期和浏览器恢复的集成成本。
+
+### 选型建议
+
+如果目标是尽快验证 DSH 的 Web UI 扩展机制，先做拓扑 A 的一个受限 profile 和 `crm-agent-ui`；如果目标是长期成为独立 SaaS 产品，应该从一开始保留拓扑 B 作为迁移方向，不要把 DSH 默认 Web profile 当作最终多租户外壳。
+
+两种拓扑都必须遵守同一分工：DSH 负责编排和会话事实，SaaS 后端负责业务事实，Client 负责草稿与呈现，Agent 不拥有越权的租户或用户身份。
+
+-----
+
+## 能力单元与状态归属
 
 ### 能力单元的最小声明
 
-| 声明部分 | 作用 |
+建议每个业务能力单元至少拥有以下声明；这是一项新的产品设计，不是 DSH 当前已有的单一接口。
+
+| 声明 | 作用 |
 |---|---|
-| `id` 与版本 | 稳定标识能力及其兼容版本 |
-| Model Tool | 模型可调用的名称、输入、输出和描述 |
-| Primary View | 能力的主交互 UI 或受信 widget，以及宿主内的呈现位置（消息内卡片、展开面板、侧栏） |
-| Lifecycle | idle、pending、awaiting-input、approved、running、success、failure、cancelled 等状态 |
-| Preconditions | 前置业务状态、所需资源和可见条件 |
-| Authorization | 用户、租户、角色和独立审批要求 |
-| Side Effects | 只读、写入、破坏性动作、外部副作用和幂等要求 |
-| Input Binding | UI 字段如何映射到 Tool 输入，哪些字段可从上下文预填 |
-| Output References | 输出如何被后续能力单元引用 |
-| Recovery | 取消、重试、补偿、未知结果和人工介入规则 |
-| Host Fallback | 当前宿主不支持主 UI 时的降级呈现 |
-| Presentation Version | UI 变化与旧 Session 回放的兼容策略 |
+| `id`、版本和兼容范围 | 稳定识别 `customer.create`、`customer.search` 等能力，并支持旧 Session 回放。 |
+| Model Tool | Tool name、描述、参数 schema、只读/写入性质和结果字段。 |
+| Primary View | 既有 React component、Web Component、iframe/widget 或固定降级卡片。 |
+| Input Binding | 哪些字段可由 Agent 预填，哪些字段必须用户确认，如何映射到业务命令。 |
+| Authorization | 所需资源、租户、角色、审批等级和服务端重检条件。 |
+| Lifecycle | `awaiting-input`、`approved`、`running`、`success`、`failure`、`cancelled`、`unknown` 等状态。 |
+| Side Effects | 只读、写入、删除、外部通知、幂等键和不可重试动作。 |
+| Output References | 后续能力引用的对象 id、版本、来源事件和权限范围。 |
+| Recovery | 取消、重试、超时、未知结果、补偿和人工接管。 |
+| Host Fallback | 不支持复杂 widget 时的只读摘要、链接或普通 Tool result。 |
+| Presentation Version | renderer 更新后旧 Session 如何降级、迁移或显示历史快照。 |
 
-例如，`release.select_scope` 不只是一个 JSON Schema。它还需要声明可选择的环境、灰度比例的业务限制、当前用户是否有修改权限、提交后是否需要审批、输出如何传给 `release.request_approval`，以及浏览器刷新后哪些选择已提交、哪些仍是草稿。
+### Tool、UI 和业务命令必须分开
 
-### Tool、UI、工作流与 Session 的关系
+`customer.open_create_surface` 可以是无副作用的呈现 Tool，参数包含允许预填的初始字段；`customer.create` 才是实际业务命令，负责服务端授权、校验、事务、幂等和审计。呈现表单不等于客户已经创建成功。
 
-能力单元由业务所有者共同维护上述声明；运行时把不同声明面投影给模型（Tool schema 与业务语义）、Client（呈现与交互约束）、Session（可重建事实）和工作流（步骤与补偿）。模型面不混入呈现词汇，呈现面不承担业务授权，两个声明面由同一个能力包维护。
+表单可以直接调用现有 SaaS API，也可以把用户确认后的结构化输入交给 Agent 再调用 `customer.create`；选择哪种方式取决于业务是否需要 Agent 在多个命令之间继续编排。无论采用哪种方式，最终授权和数据变更都必须由服务端完成。
 
-### 能力单元之间的数据流
+### 状态所有者
 
-能力单元之间的连接不应只依赖模型重新描述上一 Tool 的自然语言结果。需要传递给下一步的业务对象、版本、权限范围和结构化字段，应通过带有稳定引用的 Session 或工作流状态传递；引用至少包含来源能力 id、对象 id 与版本，使下一步 Tool 能在服务端重新验证。模型可见文本负责解释和选择，不作为数据完整性的来源。
+| 状态 | 推荐所有者 | 是否进入 Session |
+|---|---|---|
+| 输入框草稿、焦点、展开状态 | Client/Host UI | 默认不进入；除非恢复需求明确要求持久化。 |
+| 用户已确认的字段 | 业务 action 或 user interaction seam | 会影响模型/Tool 的字段必须形成可重建事件。 |
+| 业务对象和事务结果 | SaaS 后端 | 业务数据库是权威来源；Session 只保留引用和对话证据。 |
+| Agent 当前步骤和 Tool 结果 | DSH Agent Runtime/Session | 进入 DSH 事件流。 |
+| 可回放的业务 Chat Node | Conversation Definition | 从事件和可信后端引用重新派生。 |
 
-### 状态归属
+模型后续会看到的内容必须能够从 Session 日志重建。用户只在浏览器里填写但尚未提交的草稿可以留在 Client；一旦 Agent 要根据该草稿继续作出决定，就需要把确认后的结构化数据通过受控事件或用户消息送入模型上下文。
 
-| 状态 | 推荐所有者 |
-|---|---|
-| UI 草稿 | Client/Host；非持久，或显式草稿事件 |
-| 已确认的用户选择 | Session 或工作流状态 |
-| 业务执行状态 | 后端 Tool/工作流服务 |
-| Agent 当前步骤 | Agent Loop / 工作流 |
-| 可回放卡片 | Session 事件投影 |
+-----
 
-不能用一个 React surface state 同时承担草稿、审批、业务提交和恢复状态；只有已确认并会影响后续模型或 Tool 的状态才进入对应的 Session 或工作流事实。
+## 最小垂直样板
 
-## 安全与可靠性
+### 推荐样板：`customer.create`
 
-### 模型不能直接获得代码执行权限
+第一阶段只实现一个既有客户创建表单，不同时建设客户列表、详情页、动态 DSL、外部 Host 分发和复杂工作流。
 
-模型输出的 UI 描述、Tool 参数和用户输入都必须视为不可信数据。renderer 只接受预批准的组件、属性和 action；业务 Tool 在执行前重新验证租户、身份、权限、业务状态、幂等键和副作用范围。
+```text
+用户：帮我新增 ABC 公司，销售负责人先选张三。
+  ↓
+Agent 选择 customer.open_create_surface
+  ↓
+DSH tool.call.toolview 呈现既有 CustomerForm，预填允许的字段
+  ↓
+用户在表单内修改、校验并点击保存
+  ↓
+crm-agent-ui 通过既有 SaaS API 提交 customer.create
+  ↓
+SaaS 后端完成租户/用户授权、业务校验、事务、幂等和审计
+  ↓
+前端显示权威结果，并通过明确的 DSH interaction seam 送入后续 Agent 处理
+  ↓
+Agent 继续安排 followup.create，或结束任务
+```
 
-MCP Apps 的 sandbox iframe、A2UI 的 catalog 和 DSH 的 Tool approval seam 都体现了同一原则：模型可以提出选择，宿主和执行端决定是否允许。
+### 这个样板实际要验证的接口
 
-### 受限 catalog 不拥有业务副作用
+1. Host 侧是否能在受限 profile 中注册 `customer.open_create_surface` 和 `customer.create`，并让 Tool schema 表达只读/写入和必要的输入字段。
+2. Client 侧是否能在 `tool.call.toolview` 中按真实 phase props 渲染现有 `CustomerForm`，而不是依赖不稳定的工具卡片内部结构。
+3. 既有 `CustomerForm` 是否能脱离页面级路由、全局 Context、固定布局和隐式导航，或是否需要抽取独立 browser-safe package。
+4. 表单提交后，如何把 `requestId`、`sessionId`、`callId`、业务对象 id 和服务端结果绑定到 DSH 可回放事实；当前 Tool view slot 没有现成的通用业务 action continuation，需要新增或复用明确的 Client/Host seam。
+5. API 返回超时或未知结果时，Agent 是否停止自动重试并进入人工查询/对账路径，而不是重复创建客户。
+6. 刷新、重连、Session replay 和组件版本变化后，用户能否看到“已提交结果”“未提交草稿丢失”或“旧 renderer 不可用”等明确状态。
 
-受限 UI catalog 只负责声明式呈现和收集输入，不直接执行业务副作用。每个会改变业务状态的 action 必须解析为已注册能力单元的 Tool call，重新经过权限、审批、业务状态、幂等和结果记录流程。catalog 适合摘要、比较、解释和轻量选择，不应成为事务写入或高风险操作的旁路。
+### `tool.call.toolview` 与 Chat Node 的选择
 
-### UI action 必须有明确身份和权限
+先使用 `tool.call.toolview`，当 UI 只依附于一个 Tool call、展示生命周期短、提交结果能由该 call 或后续明确 action 关联时，它的实现面最小。
 
-按钮、选择器和表单提交不应只产生一个前端回调。每个会影响 Agent 或业务状态的 action 都应带有稳定 action id、关联的 Tool call 或能力单元 id、Session 身份、授权上下文和可重建的参数摘要。
+当 UI 需要跨多个 Agent 轮次保持身份、在事件变化后独立更新、展示审批/执行/回滚状态，或者需要在 Chat transcript 中稳定回放时，再为业务事件注册 `ConversationNodeDefinition` 并增加 `conversation.chat.node` renderer。
 
-UI 只能提示用户确认，不能代替服务端授权。高风险动作需要独立的 approval 语义，不能仅靠隐藏按钮、页面路由或模型提示词限制。
+不要为了“看起来更像应用”而一开始就创建 Chat Node；Node 会增加事件定义、状态折叠、版本回放、分组和测试责任。
 
-### 权限分层
+-----
 
-能力发现权限、对象读取权限、字段展示权限、提交权限和批准权限不是同一项权限。UI 可以在没有提交权限时展示只读结果；Agent 可以知道某个能力存在，但不能因此获得执行授权；最终 Tool 服务端必须按照当前请求主体和业务状态重新验证。
+## 安全、租户与恢复
 
-### 不可信内容与注入
+### 不执行模型生成的任意前端代码
 
-能力单元的业务数据、Tool result、网页内容和用户自定义文本不能自动获得系统提示或 Tool policy 的优先级。后续模型请求应区分系统规则、能力 descriptor、Tool result、用户输入和外部数据的来源；UI 显示层可以渲染不可信内容，但不能因为内容中出现指令文本就改变权限、审批或 Tool 选择约束。
+Agent 只能选择由业务包注册的 `surfaceId` 或 Tool name，并传入经过 schema 校验的参数；Client 通过固定映射找到组件或 widget。禁止把模型返回的任意 HTML、JavaScript、模块 URL 或 React component name 直接执行。
 
-### 进入模型请求的内容必须能从日志重建
+A2UI catalog、MCP widget 和 Web Component 都只能扩大已批准的呈现词汇，不能扩大业务授权。每个 action 仍要映射到一个明确的业务命令和服务端权限检查。
 
-DSH 的规则是：进入模型请求的内容必须能从 Session 日志重建，新的模型可见输入需要对应的 Session 事件。任何进入后续模型请求的用户输入、UI action、业务选择或 Tool 结果都必须满足这条规则。
+### 不用 DOM 自动点击作为主架构
 
-未提交的输入草稿、焦点、展开状态和临时动画不必进入 Session；如果 Agent 会依据它们继续执行，就必须在提交点形成明确事件，并区分草稿、确认、执行和结果。
+浏览器自动化可以作为旧系统的短期兼容手段，但不应替代正式业务 API。DOM 选择器、焦点、弹窗、异步加载和布局变化会让关键写入变成脆弱的页面自动化；自动点击也无法证明后端授权、事务提交和结果确认。
 
-### 不应自动重试未知副作用
+### 多租户最小权限
 
-网络断线、页面关闭、Worker 终止或云端 handoff 可能使 Tool 的副作用结果处于未知状态。Agent 不应仅因为没有收到结果就自动再次执行；应查询操作状态、要求人工对账或将结果标记为未知。
+生产部署不能把默认 DSH Web profile 的 shell、文件系统、任意代码执行、网络访问、第三方插件加载和工作区能力全部暴露给 SaaS 用户。业务 profile 应只装所需 Tool，并对 Tool registry、Host API、Session storage、浏览器模块和外部 widget 分别做 allowlist。
 
-## 实施路线
+租户 id、用户 id、角色和资源范围必须来自可信服务端 session 或签名上下文；模型参数中出现的 `tenantId`、`userId` 或资源 id 只能作为请求数据，不能作为授权依据。每个业务命令都要由 SaaS 后端重新确定调用者和租户。
 
-本节的阶段 A–D 与样板均为建议目标，不是当前已实现的 DSH 结构。
+### 审计和幂等
 
-### 阶段 A：强绑定 Tool UI 垂直样板
+每个 UI action 至少应关联 `sessionId`、`callId`、能力版本、surface 实例 id、业务 request id、操作者、租户、服务端结果和审计记录。写入命令必须携带服务端生成或验证的幂等键；前端重复点击、网络重试和 Agent 重试不能产生重复业务对象。
 
-选择一个有多步状态和明确审批的业务域，例如发布审批、工单 triage、采购审批或合同审阅，定义 3–5 个能力单元。
+若请求已经到达服务端但响应丢失，结果是“未知”，不是“失败”。Agent 应调用查询/对账能力或要求人工确认，不能因为 UI 仍显示提交按钮就自动再次创建。
 
-每个能力单元共同提供 Tool schema、业务视图、pending/result/error/approval 状态、权限判断和 Session 事件。先复用 `tool.call.toolview`、timed/continued `ask_user_question` 和现有 Conversation Node，不引入通用 UI 生成器。
+### 回放与版本
 
-验收分两层：第一层使用确定性模型或 scripted Agent，验证能力单元选择结果、Tool 参数、UI action、Session event、Tool result、失败和恢复都能按预期发生；第二层接入真实模型，验证自然语言到能力单元选择的准确性、误选行为、参数预填和拒绝路径。两层都要求刷新后已提交调用和结果仍可重建。
+Session 回放只能重建已提交事件和结果元数据，不能假定 React 内存 state、未提交表单或 PTC 中间绑定值存在。业务 Node 应保存足够的稳定引用和版本；renderer 不兼容旧事件时必须显示降级摘要或不可用原因，而不是把新版本字段静默解释成旧语义。
 
-### 阶段 B：能力单元编排声明
+-----
 
-为 Agent 编排增加并行于模型 Tool schema 的能力 descriptor，内容可以包括能力用途、前置状态、只读或写入性质、破坏性、需要的用户确认、输入依赖、输出引用和可继续动作。
+## 实施路线与验收
 
-descriptor 应区分四种可用性：不可发现、可发现但不可执行、可执行但需要补充输入、可执行但需要独立审批。在能力已知不可用时，应由 Agent 或 Host 先呈现原因和可行替代路径，而不是依赖 Tool 调用失败后再显示错误。
+### 阶段 0：盘点和边界
 
-该描述不应把 UI 词汇混入模型面向的 Tool schema。模型需要业务语义和操作约束，Client 需要呈现和交互约束；两者由同一个能力包共同维护，但通过不同声明面提供。
+选择客户创建、客户搜索、联系人选择器、客户详情和跟进任务中的 3 至 5 个真实组件，记录它们对路由、Context、缓存、导航、权限和 API 的依赖。
 
-验收应包括：Agent 不能在缺少前置状态或权限时选择能力；同一个能力单元可以在不同模型和 Host 上使用；descriptor 版本变化不会让旧 Session 无法解释已提交调用。
+同时固定 DSH checkout、profile 和 SaaS 登录态集成方式，明确哪些 DSH Tool 会保留、哪些 shell/filesystem/code 能力会移除；不要以默认 Web profile 的成功启动代替威胁建模。
 
-### 阶段 C：受限 UI catalog 作为补充机制
+### 阶段 1：一个 Tool view 闭环
 
-为只读摘要、对比、解释和轻量输入增加受限 `UiSurface` 或等价 catalog。catalog 只包含宿主已经实现并批准的组件、属性和 action；Tool 或 Agent 只能引用 catalog，不得传输任意 HTML/JavaScript。
+实现 `crm-agent-ui` 的一个 Host Tool、一个 Client `tool.call.toolview`、一个既有 `CustomerForm`、一个真实 SaaS API 调用和一个可验证的 DSH continuation seam。
 
-catalog 只负责呈现和收集输入，不执行业务副作用；每个改变业务状态的 action 都解析为已注册能力单元的 Tool call，重新经过权限、审批、幂等和结果记录。
+验收必须包含成功、字段校验失败、无权限、租户不匹配、取消、网络断开、重复提交、服务端超时、未知结果和页面刷新；每种情况都要有用户可见结果和可重建记录。
 
-`UiSurface` 必须明确持久化策略：把完整 surface 描述写入 Session，或只写入能力 id、版本、数据引用和已提交 action、由当前 renderer 重新派生。两种模式都需要定义 catalog 版本不兼容、surface 重连和旧 Session 回放失败时的降级显示。
+### 阶段 2：业务 Chat Node
 
-验收应包括：非法组件和属性在渲染前被拒绝；action 与 Tool 或能力单元身份关联；surface 删除、更新和重连有明确事件；动态 UI 不会绕过 Tool approval 和服务端权限检查。
+只有当第一阶段证明 UI 需要跨轮次持续显示，才增加 `customer/*` 事件、`ConversationNodeDefinition`、`conversation.chat.node` renderer 和 replay snapshot。将事件到 Node 的规则写在业务包，不改 agent-loop。
 
-### 阶段 D：工作流和浏览器原生运行
+### 阶段 3：复杂模块和受限 catalog
 
-把多步流程建模为可观察的状态机或 Flow（工作流的一种具体运行时形态；不引入 Flow 时也可以由 Agent Loop 直接串联），明确每个步骤的 owner、输入、输出、暂停点、取消语义、重试策略、幂等键和补偿动作。UI 是状态投影，不隐式承担跨步骤副作用。
+对无法拆分的旧模块增加 Web Component、microfrontend 或 MCP-style widget 适配；对只读摘要和轻量组合研究受限 catalog/A2UI。此阶段才评估 iframe 沙箱、跨 Host 交付和 catalog 版本治理。
 
-在 Dedicated Worker 中运行 Agent Loop 和 UI bridge，模型请求可以经由同域代理或远程服务，浏览器工具与云端工具通过同一能力声明和执行语义区分提供者。
+### 阶段 4：工作流和云端/浏览器交接
 
-浏览器原生验收应分别验证浏览器停止消费、代理传播取消、上游连接终止、Tool 副作用未知、Session flush 失败和页面退出后的恢复，不以单次 UI 展示替代执行闭环验证。
+将多步审批、批量变更或长期执行建模为明确的 workflow/Flow，定义每一步的 owner、checkpoint、取消、补偿、幂等和未知结果处理，再决定是否把 Agent Loop 或 UI bridge 放入 Dedicated Worker。
 
-### 建议样板：发布审批
+### 首阶段不建议建设
 
-用户提出“把 v1.8 发布到灰度，先检查变更和风险”。Agent 选择 `release.inspect`，在消息流中呈现变更摘要和风险表；随后唤出 `release.select_scope` 的环境和比例选择 surface；再调用 `release.request_approval`；用户确认后调用 `release.start_canary`；同一条任务记录继续展示进度、失败、回滚或需要人工处理的状态。
+- 任意 HTML/JavaScript 生成和执行。
+- 通过 DOM 自动点击传统 GUI 作为关键写入路径。
+- 从 Tool JSON Schema 自动推导完整生产事务表单。
+- 把 DSH 默认完整 profile 直接暴露为未隔离的多租户公网服务。
+- 同时引入 A2UI、AG-UI、MCP Apps、CopilotKit 并把协议数量误当作产品闭环。
 
-这个样板验证的重点不是卡片是否具有通用性，而是每个 UI action 是否能关联到稳定的能力单元和 Session 事实，Agent 是否能在用户修改选择后正确重新参数化下一步，副作用不明时是否避免重复执行。
-
-## 开放问题
-
-- 能力单元的 Tool、主 UI、工作流和呈现 descriptor 是否应由一个 package 提供，还是由多个插件通过稳定 registry 组合；拆分条件应以角色是否独立演化为准。
-- 能力 descriptor 如何同时服务模型选择、权限预检、UI 路由和产品可观测性，而不把 Client 细节泄漏到模型提示词。
-- UI action、Tool call、approval、workflow step 和 Session event 之间使用哪些稳定 id，如何支持旧版本 Session 回放。
-- 能力 descriptor 的四种可用性（不可发现、可发现但不可执行、需补充输入、需独立审批）分别由哪个组件判定和呈现。
-- `UiSurface` 的持久化策略选择：完整 surface 描述入库，还是只入库能力引用与已提交 action；catalog 版本不兼容时的降级由谁承担。
-- Agent 如何在多个候选能力单元语义相近时选择正确单元，是否需要显式前置状态、拒绝条件和示例，而不能只依赖自然语言描述。
-- Worker 内 OPFS 或云端 Session 的写入确认如何与 Agent loop 的 checkpoint policy 对齐。
-- 浏览器执行和云端持续执行之间如何交接已提交状态，如何隔离旧 owner，如何处理正在进行的模型流、Tool Promise 和审批等待。
-- 第三方能力包是否允许在浏览器中加载，如何验证签名、版本、依赖闭包、资源上限和租户隔离。
-- 哪些业务操作仍应保留传统页面，因为它们需要高频重复输入、密集比较或对空间布局有强依赖。
+-----
 
 ## 结论
 
-Agent 在对话中选择业务功能、唤起与该功能强绑定的 UI、收集用户输入并串联后续操作，在调研时点已经具备可验证的技术路径，也已由多个生态项目分别实践。
+共享对话的核心方向成立：Agent 可以成为既有 SaaS 的另一种交互入口，在 Chat UI 中选择、预填、呈现并串联既有业务界面，同时继续使用原有 API、鉴权、事务、持久化和审计。
 
-“UI 与业务能力完全解耦后由模型自由生成”不是生产业务 UI 的主航道。更可靠的方向是本文的架构原则：能力单元在设计上强绑定，UI 与执行在传输上分离；能力所有者共同维护 Tool、UI、状态、权限和工作流，Agent 在这些能力单元之间进行选择、预填、串联和恢复，Host 负责安全渲染，Session 负责记录可重建事实。
+事实核查后的重要限定是：OpenAI widget state 不是 CRM 权威数据；CopilotKit Components as Tools 不是完整业务提交系统；A2UI 是受宿主 catalog 约束的声明式 UI，不会自动迁移旧页面；MCP Apps 是 Tool/widget 交付机制；AG-UI 是事件连接层；`dsh-frontend-tools` 是前端能力桥而不是 Chat UI renderer。
 
-DSH 当前的 Tool 呈现、事件源 Session、Conversation Node、按 Tool 名注册的 UI slot、结构化问答 seam 和浏览器 Worker runtime 已经支持这一架构的核心部分。下一步不应从通用页面生成器开始，而应从一个强绑定能力单元组成的垂直流程开始，再根据只读组合和跨 Host 需求增加受限 UI catalog 或受信嵌入式 widget。
+DSH 当前 checkout 已经提供实现这条路线的主要插槽：Tool 的纯呈现和 JSON `presentationMeta`、append-only Session、按 Tool 名的 `tool.call.toolview`、按 Node kind 的 `conversation.chat.node`、事件到 Node 的 `ConversationNodeDefinition`，以及可构建的 Web Client plugin graph。
 
-这个方向的革命性不在于把现有页面缩小后放进消息泡，而在于把用户目标、业务能力、界面输入、权限、执行状态和工作流恢复统一到同一个 Agent 可编排的任务记录中。
+DSH 当前没有提供的部分同样重要：通用业务 UI descriptor、表单 action 到 Agent 的 continuation 协议、CRM 业务事件、租户级安全隔离和任意 SaaS GUI 的自动嵌入。它们需要在 `crm-agent-ui` 或 SaaS 自己的集成层中明确设计和测试。
+
+因此，最稳妥的第一步是：固定一个 DSH 版本和受限 profile，创建一个 `crm-agent-ui` 插件，只做 `customer.create` 的既有表单复用，接通真实 SaaS API、服务端授权、幂等、Session 关联和 Agent continuation；成功后再决定哪些能力升级为 Chat Node，哪些旧模块走 widget，哪些只读场景采用受限 catalog。
+
+-----
 
 ## Further Exploration
 
-### 协议和规范
+### 共享对话
 
-- [A2UI](https://a2ui.org/) — Google 的 Agent-to-UI 项目、版本状态和概念说明。
+- [共享 ChatGPT 对话](https://chatgpt.com/share/6acb63a5-9554-83ea-a2f5-c5c6da6b7f29) — 本报告逐项核查的原始材料。
+
+### 外部协议和框架
+
+- [A2UI](https://a2ui.org/) — 官方概览、版本状态和组件 catalog。
 - [A2UI v0.9.1 specification](https://a2ui.org/specification/v0.9.1-a2ui/) — surface、组件、数据绑定和 action 消息。
-- [A2UI ecosystem comparison](https://a2ui.org/introduction/agent-ui-ecosystem/) — A2UI、MCP Apps、AG-UI 和 A2A 的定位关系。
-- [MCP Apps SEP-1865](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp) — Tool 关联 UI resource、sandbox 和 Host 通信。
-- [AG-UI overview](https://docs.ag-ui.com/introduction) — Agent 与用户应用的事件协议。
-- [AG-UI and Generative UI specs](https://docs.ag-ui.com/concepts/generative-ui-specs) — AG-UI 与 A2UI、MCP-UI、Open-JSON-UI 的关系。
+- [A2UI ecosystem](https://a2ui.org/introduction/agent-ui-ecosystem/) — A2UI、MCP Apps、AG-UI 和 A2A 的互补关系。
+- [MCP Apps documentation](https://apps.extensions.modelcontextprotocol.io/) — Tool、`ui://` resource、sandbox widget 和 Host 集成。
+- [MCP Apps SEP-1865](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp) — MCP interactive UI 扩展提案和消息模型。
+- [AG-UI introduction](https://docs.ag-ui.com/introduction) — Agent 与前端的事件协议。
+- [AG-UI generative UI specs](https://docs.ag-ui.com/concepts/generative-ui-specs) — AG-UI 与 A2UI/MCP-UI 等 UI 描述机制的分层关系。
+- [CopilotKit tool-based generative UI](https://docs.copilotkit.ai/generative-ui/tool-based) — React 组件作为工具的呈现模型。
+- [CopilotKit tool rendering](https://docs.copilotkit.ai/generative-ui/tool-rendering) — Tool call 到自定义 UI 的渲染模型。
+- [CopilotKit frontend tools](https://docs.copilotkit.ai/reference/hooks/useFrontendTool) — 前端工具和浏览器状态协作。
+- [OpenAI Apps/Plugins SDK ChatGPT UI](https://developers.openai.com/plugins/build/chatgpt-ui) — 当前 OpenAI widget/ChatGPT Host 文档入口。
+- [OpenAI Apps/Plugins SDK reference](https://developers.openai.com/plugins/reference) — Tool、widget context 和 Host 交互参考。
+- [dsh-frontend-tools](https://github.com/lukaiwuyi/dsh-frontend-tools) — DSH loopback WebSocket 前端能力桥。
 
-### 应用框架
+### DSH 当前代码和文档
 
-- [CopilotKit A2UI](https://docs.copilotkit.ai/generative-ui/a2ui) — React、fixed schema、dynamic schema 和 A2UI 集成。
-- [CopilotKit on AgentCore](https://www.copilotkit.ai/blog/generative-ui-on-agentcore-with-copilotkit) — AG-UI、图表、共享状态和 Human-in-the-loop 示例。
-- [Vercel AI SDK: rendering UI with language models](https://github.com/vercel/ai/blob/c3c189c0/content/docs/06-advanced/07-rendering-ui-with-language-models.mdx) — Tool result 到 React UI 的实现模式；链接固定到调研时的文档版本。
-- [Vercel AI SDK MCP Apps](https://vercel.com/kb/guide/ai-sdk-mcp-apps) — 将 MCP Apps 接入 AI SDK 应用的 Host 模式。
-- [assistant-ui Generative UI](https://www.assistant-ui.com/docs/tools/generative-ui) — `present` Tool 和组件词汇组合。
-- [CrewAI Generative UI](https://docs.crewai.com/v1.15.22/en/guides/frontend/generative-ui) — Agentic UI、Tool-based UI 和 Flow 集成；版本号链接用于固定调研证据。
-- [OpenAI Apps SDK reference](https://developers.openai.com/apps-sdk/reference) — OpenAI Apps SDK 的 Tool 与 widget 资料；调研时部分页面返回 403，未逐行核验。
-- [OpenAI Apps SDK: build ChatGPT UI](https://developers.openai.com/apps-sdk/build/chatgpt-ui) — ChatGPT 宿主中的组件构建资料；证据边界同上。
-
-### 宿主 UI 体系
-
-- [Adaptive Cards overview](https://learn.microsoft.com/en-us/microsoft-copilot-studio/adaptive-cards-overview) — JSON 卡片、输入和动作。
-- [Slack Block Kit agent experiences](https://slack.dev/build-richer-agent-experiences-with-block-kit/) — 消息宿主中的 Agent 结构化 UI。
-
-### DSH 代码与架构
-
-- [DSH architecture](../architecture.md) — Cordis 插件组合、Agent Loop、Session 和能力扩展点。
-- [DSH tools subsystem](../subsystems/tools.md) — Tool schema、执行流水线和 presentation 类型。
-- [DSH tools package](../../packages/core/tools/README.md) — presentCall/presentResult 与 Client 派生卡片的 transport 拆分。
-- [DSH Web Client architecture](../subsystems/web-client.md) — Client、Host、Session 投影和 UI 责任划分。
-- [DSH conversation subsystem](../subsystems/conversation.md) — Conversation Node、事件折叠和回放。
-- [DSH user-questions subsystem](../subsystems/user-questions.md) — 提问 seam 与应答方 waterfall。
-- [DSH WebWorker runtime](../../packages/experimental/webworker-runtime/README.md) — Dedicated Worker、VFS 镜像和浏览器兼容层。
-- [DSH client Tool UI](../../packages/client/ui-tool/README.md) — Tool 调用树、keyed slot 和内置卡片。
-- [DSH client question UI](../../packages/client/ui-user-questions/README.md) — composer takeover、plan-review 卡片和草稿持久边界。
-- [DSH ask-user tool](../../packages/interaction/tool-ask-user/README.md) — 结构化问题、答案和取消语义。
+- [DSH architecture](../architecture.md) — Cordis 插件、Agent Loop、Session 和应用入口。
+- [Web Client architecture](../subsystems/web-client.md) — Host、Remote、Client model、Conversation 和 Slots 的职责。
+- [Conversation assembly](../subsystems/conversation.md) — Event-to-Node、View target 和回放模型。
+- [Sessions](../subsystems/session.md) — append-only event log、`tool/call`、`tool/result` 和 `meta`。
+- [User Interaction](../subsystems/user-questions.md) — 结构化用户输入 seam 和 root-agent 约束。
+- [Client Modules](../../packages/client/modules/README.md) — Web plugin manifest、bundle 和构建要求。
+- [Client Tool UI](../../packages/client/ui-tool/README.md) — Tool call tree、keyed Tool view 和 lifecycle props。
+- [DSH safety notice](../../SAFETY.md) — developer preview、权限和隔离限制。
 
 -----
 
 ## Dev Note
 
-本文是 Agentic UI 架构调研与建议稿。其中“目标能力单元模型”“实施路线”和“安全与可靠性”中的部分条目为建议目标，不代表 DSH 已经实现通用动态 UI、能力 descriptor、受限 catalog、业务能力 marketplace 或浏览器跨刷新持久化；外部生态结论限于调研时点与已覆盖资料。当前实现、配置和限制由对应 package README、架构文档、Session 格式文档和测试维护；若采用本文建议，应分别为能力单元声明、UI catalog、编排事件和 Browser runtime 建立正式决策记录与验收测试。
+本文是基于共享对话、外部官方资料和当前本地 checkout 的研究草稿，不是 DSH 已提交的产品设计或安全认证。能力单元 descriptor、业务 UI action seam、CRM 事件、租户隔离 profile 和 `crm-agent-ui` 都需要单独的设计、代码、测试、Session snapshot 和安全审查。
+
+外部页面中的版本、产品名称和文档路径会继续变化；如果把本文建议推进为实现，应在开发开始时重新核查官方规范和当前目标 checkout，并把实际运行结果写入对应包 README、测试和升级指南。
