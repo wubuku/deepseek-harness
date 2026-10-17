@@ -10,6 +10,8 @@ description: "增量验证 assistant-ui 作为聊天层、Browser-Native DSH 保
 
 这个 PoC 使用 assistant-ui 的 `useExternalStoreRuntime`，不是 `useLocalRuntime`、AI SDK runtime 或 assistant-ui Cloud history；因此 assistant-ui 只消费 DSH Session 投影，并把文本输入回调到 DSH `Session.prompt()`，不会建立第二个 Agent Loop 或第二份模型历史。
 
+本 PoC 的产品前提是：SaaS 已经有业务 GUI，但原来没有聊天层。它只验证 assistant-ui 作为新增的唯一聊天层如何接入 DSH；它不替换、复制或验证 SaaS 原有业务页面，也不证明复杂业务表单、业务 action、授权、receipt 或跨轮次 Agentic UI 已经接通。若采用本路线，页面应由 assistant-ui 承担聊天呈现职责，不应再同时挂载 DSH 原生 Web UI；DSH 保留的是 Worker、Agent Loop、Session 和执行事实，而不是另一套可见聊天界面。
+
 ## Reading Path
 
 1. 先读 [`browser-native-dsh-poc/README.md`](../browser-native-dsh-poc/README.md)，了解 Worker、profile overlay、Session backend 和正式 DSH WebWorker Client 的 owner。

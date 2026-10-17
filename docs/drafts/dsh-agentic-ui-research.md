@@ -221,11 +221,13 @@ DSH Runtime（裁剪后的 profile 或独立服务）
 既有 SaaS API 和数据库
 ```
 
-该拓扑保留 SaaS 原有的导航、设计系统、权限上下文和组件树，Chat UI 由 SaaS 自己承载；DSH 的 Tool、Session 和 Agent Runtime 通过服务接口接入。它通常更适合最终产品化，但需要 SaaS 自己承担 Chat transcript、事件订阅、Tool view 生命周期和浏览器恢复的集成成本。
+该拓扑保留 SaaS 原有的导航、设计系统、权限上下文和组件树；这里的“产品外壳”不表示 SaaS 已经有聊天层。若采用该拓扑，SaaS 必须新增一个聊天层：可以直接嵌入 DSH 原生 Web UI，也可以采用 assistant-ui 等外部呈现层；DSH 的 Tool、Session 和 Agent Runtime 通过服务接口接入。它通常更适合最终产品化，但需要明确由哪一个聊天层承担 transcript、事件订阅、Tool view 生命周期和浏览器恢复，不能把“自有 Chat UI”当成无需建设的现成能力。
 
 ### 选型建议
 
-如果目标是尽快验证 DSH 的 Web UI 扩展机制，先做拓扑 A 的一个受限 profile 和 `crm-agent-ui`；如果目标是长期成为独立 SaaS 产品，应该从一开始保留拓扑 B 作为迁移方向，不要把 DSH 默认 Web profile 当作最终多租户外壳。
+如果目标是把既有 SaaS 的业务表单、状态和操作真正带入 Agentic UI，第一阶段应选择拓扑 A：把 DSH 原生 Web UI 作为新增的唯一聊天层，基于 Chat、Tool view、Conversation Node 和 Slot 扩展，做一个受限 profile 和 `crm-agent-ui`。这条路线不是替换 SaaS 原有业务 GUI，也不是为了做普通聊天，而是为了直接复用 DSH 已有的 Tool/Conversation/Session 语义。
+
+拓扑 B 可以作为 SaaS 长期产品化的运行边界，但不应把 assistant-ui 作为默认替代。assistant-ui PoC 只证明外部聊天层可以接入 DSH Loop；它没有证明复杂业务组件、跨轮次 Conversation、用户确认和可回放 action 的实现成本更低。若未来采用 assistant-ui，它应被视为一次明确的聊天层替换，并由 adapter 重新实现所需的 Agentic UI 语义，而不是与 DSH Web UI 同时保留。
 
 两种拓扑都必须遵守同一分工：DSH 负责编排和会话事实，SaaS 后端负责业务事实，Client 负责草稿与呈现，Agent 不拥有越权的租户或用户身份。
 
@@ -391,6 +393,8 @@ DSH 当前 checkout 已经提供实现这条路线的主要插槽：Tool 的纯�
 DSH 当前没有提供的部分同样重要：通用业务 UI descriptor、表单 action 到 Agent 的 continuation 协议、CRM 业务事件、租户级安全隔离和任意 SaaS GUI 的自动嵌入。它们需要在 `crm-agent-ui` 或 SaaS 自己的集成层中明确设计和测试。
 
 因此，最稳妥的第一步是：固定一个 DSH 版本和受限 profile，创建一个 `crm-agent-ui` 插件，只做 `customer.create` 的既有表单复用，接通真实 SaaS API、服务端授权、幂等、Session 关联和 Agent continuation；成功后再决定哪些能力升级为 Chat Node，哪些旧模块走 widget，哪些只读场景采用受限 catalog。
+
+在“既有 SaaS 没有聊天层”的前提下，这也回答了聊天层选型：第一条 Agentic UI 闭环优先使用 DSH 原生 Web UI；assistant-ui 的 PoC 作为外部聊天层可行性证据保留，但不改变第一阶段的技术路线。
 
 -----
 
