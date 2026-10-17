@@ -39,7 +39,8 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 3. 阅读 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)的[结论先行](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#结论先行)和[按产品场景选择集成位置](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#按产品场景选择集成位置)。
 4. 阅读 [Browser-native DSH PoC README](browser-native-dsh-poc/README.md) 的当前实现快照和验证章节。
 5. 如果要验证“assistant-ui 接管聊天、DSH 保留执行和 Session 事实”，运行 [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)。
-6. 需要亲自验收时，按 [Browser-Native DSH PoC 手动验收说明](browser-native-dsh-poc/manual-acceptance.md) 启动真实或 scripted backend，并分别验证两个 UI 入口。
+6. 阅读 [Browser-Native 工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)，理解为什么当前 PoC 会继承不适用的主机工具，以及 Browser-specific preset 的配置落点。
+7. 需要亲自验收时，按 [Browser-Native DSH PoC 手动验收说明](browser-native-dsh-poc/manual-acceptance.md) 启动真实或 scripted backend，并分别验证两个 UI 入口。
 
 ### 三十分钟形成技术判断
 
@@ -151,6 +152,8 @@ Agentic UI 事实核查
 4. [v2 backend](browser-native-dsh-poc/backend-v2.mjs)、[Worker](browser-native-dsh-poc/browser-native-worker.ts)和[providers](browser-native-dsh-poc/browser-native-providers.ts)：实现入口。
 5. [backend contract tests](browser-native-dsh-poc/tests/backend-v2.test.mjs)和[browser E2E](browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs)：行为证据。
 6. [手动验收说明](browser-native-dsh-poc/manual-acceptance.md)：真实浏览器、工具调用、多轮记忆、流式输出、刷新续接和故障排查。
+7. [工具连续尝试事实核查](browser-native-dsh-poc/agent-loop-tool-attempt-analysis.md)：用真实 Session 解释工具可见性、模型决策、默认 Agent Loop 和 Browser-Native 能力缺口之间的关系。
+8. [工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)：核查 profile、agent preset、`tool-web` 开关和 Browser-specific capability 的设计边界。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -176,6 +179,8 @@ Agentic UI 事实核查
 | [dsh-browser-native-agentic-ui-research.md](dsh-browser-native-agentic-ui-research.md) | 两类研究的综合报告 | UI capability 是连接既有 SaaS UI 和 Browser Worker Agent Loop 的关键缺口；PoC runtime substrate 已有，业务 capability seam 尚未完成。 |
 | [dsh-web-ui-quality-and-agentic-ui-framework-assessment.md](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md) | Web UI 质量与第三方框架选型 | DSH Web UI 的状态、事件、插件和恢复基础值得保留；已有问答和审批闭环，但通用业务 action seam 尚未完成。DSH 工作台优先扩展现有 UI，成熟 SaaS 则保留原有外壳并接入 DSH Runtime。 |
 | [assistant-ui-copilotkit-browser-native-dsh-assessment.md](assistant-ui-copilotkit-browser-native-dsh-assessment.md) | 第三方框架事实核查与长期演进 | Browser-Native 不要求永久保留 DSH 当前 UI；assistant-ui 与 CopilotKit 都有应用交互能力，长期采用取决于替换收益、状态/执行归属及生产接入条件。 |
+| [browser-native-dsh-poc/agent-loop-tool-attempt-analysis.md](browser-native-dsh-poc/agent-loop-tool-attempt-analysis.md) | Browser-Native 工具尝试事实核查 | 工具连续调用由 LLM 根据可见工具、系统提示和前一步结果生成；DSH Loop 负责执行、记录和推进，不内置本次天气问题的固定 bash 重试次数。 |
+| [browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md) | Browser-Native 工具清单与配置裁剪 | 可以通过 profile/preset 配置移除不适用工具；当前 PoC 仍缺少 Browser-specific preset，Browser 工具应按 UI、业务 API、授权和 durable job 重新设计。 |
 
 -----
 

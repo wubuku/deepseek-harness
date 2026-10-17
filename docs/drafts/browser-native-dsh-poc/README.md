@@ -79,7 +79,7 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.
 
 该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件、`todo_write` 工具和 `ctx.agentLoop` 的三轮真实交互；旧版测试不能替代它。real E2E 是一次真实 provider 闭环，不是可用性、吞吐量、SLA、灾备或生产安全性证明。
 
-人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)。
+人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)；工具失败后为何继续尝试，以及哪些行为来自 LLM、DSH Loop 和 Worker 能力缺口，见[工具连续尝试事实核查](agent-loop-tool-attempt-analysis.md)。如果要理解为什么当前 overlay 仍会把主机工具带进 Browser Agent，以及如何用 profile/preset 配置裁剪，见[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)。
 
 ## 历史协议实验：运行
 

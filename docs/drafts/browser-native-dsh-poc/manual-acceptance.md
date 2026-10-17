@@ -154,7 +154,7 @@ Reply with exactly this marker: MANUAL_DSH_REFRESH_CONTINUATION_OK
 
 ### 工具失败后模型没有立即停止
 
-DSH 默认 Agent Loop 会把工具错误写入 Session 并交给模型进行下一步判断；它不是“工具失败一次后固定立即结束”的 loop。模型可能改用其他工具、调整参数、说明无法完成，或在新的模型请求失败后结束。验收时要区分“模型正在恢复”与“无限挂起”，并以最终 `turn/end`、错误信息和 timeout 为准。
+DSH 默认 Agent Loop 会把工具错误写入 Session 并交给模型进行下一步判断；它不是“工具失败一次后固定立即结束”的 loop。模型可能改用其他工具、调整参数、说明无法完成，或在新的模型请求失败后结束。验收时要区分“模型正在恢复”与“无限挂起”，并以最终 `turn/end`、错误信息和 timeout 为准；一次真实天气问题的逐事件分析见[工具连续尝试事实核查](agent-loop-tool-attempt-analysis.md)。
 
 ### 页面出现 `/open-in-app/apps` 或 `/plugins/events` 的 404
 
@@ -173,6 +173,7 @@ DSH 默认 Agent Loop 会把工具错误写入 Session 并交给模型进行下�
 
 - [Browser-native DSH PoC README](README.md)：v2 当前实现、运行方式、验证范围和历史文件边界。
 - [Browser-native DSH v2 规划](browser-native-dsh-plan-v2.md)：完成定义、架构决策、协议要求和未宣称能力。
+- [Browser-Native 工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)：工具可见性、agent preset 和 Browser-specific capability 的配置边界。
 - [Browser-native DSH v2 进度](browser-native-dsh-progress-v2.md)：实施过程、失败记录、修复原因和已运行验证。
 - [assistant-ui 增量 PoC README](../assistant-ui-browser-native-dsh-poc/README.md)：第三方聊天层的职责分界和专属测试。
 - [PoC 变更账本](change-ledger.md)：目录外接线、删除条件和 upstream 重放要求。
