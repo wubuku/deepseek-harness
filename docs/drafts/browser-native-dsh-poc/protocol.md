@@ -1,12 +1,14 @@
 ---
-description: "Browser-native DSH PoC 的版本化协议 owner：SessionPersistence 远程操作、LLM NDJSON stream、Worker/Main Thread Tool bridge 和错误语义。"
+description: "Browser-native DSH 旧版独立协议实验的 wire DTO、LLM NDJSON stream、Tool bridge、lease 和请求重放规则；不适用于当前 v2 实现。"
 ---
 
-# Browser-native DSH PoC 协议
+# Browser-native DSH PoC 历史实验协议
 
 ## Summary
 
-本文是 `docs/drafts/browser-native-dsh-poc/` 中 PoC wire DTO 和错误语义的 owner。实施规划只说明为什么需要这些协议；实现代码、fixture 和测试必须以本文的字段、版本、错误和幂等规则为准。
+本文只定义旧版 `run.mjs`、`backend.mjs` 和 `public/worker.js` 独立实验的 wire DTO 和错误语义，不是当前 v2 的协议说明。文中的 lease、renew、generation 和 request-id replay 只适用于该历史实验，不能据此认定 v2 已实现这些能力。
+
+当前 v2 使用正式 DSH Session DTO；运行入口和限制见 [README](README.md)，目标规格见 [v2 规划](browser-native-dsh-plan-v2.md)，实际字段与行为以 [backend-v2.mjs](backend-v2.mjs)、[browser-native-providers.ts](browser-native-providers.ts) 和 [v2 tests](tests/backend-v2.test.mjs) 为准。旧协议与 v2 即使都使用 `protocolVersion: 1`，也不代表二者字段和恢复语义兼容。
 
 本文定义的是 PoC 协议，不是 DSH 稳定公共 API。Session log format version、Session transport protocol、LLM wire protocol 和 browser-tool bridge protocol 相互独立；任何一个版本变化都不能通过修改另一个版本字段来掩盖。
 
@@ -390,4 +392,4 @@ Backend 在同一个 Session 内按 `requestId` 保存最小 replay record，至
 
 ## Dev Note
 
-本文是实施前的协议草案。实现每完成一个 Phase，都应把“草案”改成当前事实，把不再使用的字段删除或标记为明确的 future extension，并同步更新测试和实施规划。
+本文保留旧版独立协议实验的规则和限制，不随 v2 实现推进而更新为 v2 协议。涉及当前行为时应引用 v2 的实现、测试和限制说明；未满足的目标仍保留在 v2 规划中。

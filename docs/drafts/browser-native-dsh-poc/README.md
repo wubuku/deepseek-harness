@@ -8,6 +8,8 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 本目录包含两个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，可恢复进度和验证记录见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
+需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
+
 旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。
 
 ## v2 运行入口
@@ -31,18 +33,24 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
   --port 4185 \
   --data-dir /tmp/browser-native-dsh-v2-real \
   --llm real \
-  --env-file /path/to/deepseek-harness/docs/drafts/.env
+  --env-file docs/drafts/.env
 ```
 
-API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
+本机真实 provider 配置文件是仓库根目录下的 `docs/drafts/.env`。API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
 
 ## 当前实现快照
 
-v2 当前不是独立的 HTML demo。浏览器加载现有 `preview.html`，页面仍由 `AppWebEntry` 和 DSH Web UI 渲染；只有 URL 带 `browser-native=1` 时，`apps/web/src/preview.ts` 才追加本目录的 profile overlay，并把 Worker entry 切换到 [`browser-native-worker.ts`](browser-native-worker.ts)。Worker 使用现有 `appBoot.boot()`、Cordis composition、Session Controller 和 `ctx.agentLoop`；[`browser-native-providers.ts`](browser-native-providers.ts) 只提供正式 `SessionPersistence` 和 `LlmAdapter` 的远程实现。
+v2 当前不是独立的 HTML demo。浏览器加载现有 `preview.html`，页面仍由 `AppWebEntry` 和 DSH Web UI 渲染。`apps/web/src/preview.ts` 静态导入并始终实例化本目录的 [`browser-native-worker.ts`](browser-native-worker.ts)；`browser-native=1` 只控制是否追加本目录的 profile overlay，不控制 Worker entry 的选择。Worker 使用现有 `appBoot.boot()`、Cordis composition、Session Controller 和 `ctx.agentLoop`；[`browser-native-providers.ts`](browser-native-providers.ts) 只提供正式 `SessionPersistence` 和 `LlmAdapter` 的远程实现。
+
+若需要验证第三方聊天层，可以阅读同级的[assistant-ui + Browser-Native DSH 增量 PoC](../assistant-ui-browser-native-dsh-poc/README.md)。该 PoC 复用本目录的 Worker、profile overlay、backend 和 Session protocol，但自行启动 DSH Client 并只挂载 assistant-ui 聊天层；它不改变本目录的现有页面或实现文件。
 
 同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
 
-当前实现的目录边界是：backend、Worker、profile overlay、launcher 和 v2 tests 全部在 `docs/drafts/browser-native-dsh-poc/`；唯一的运行时代码接线是已登记的 [`apps/web/src/preview.ts`](../../../apps/web/src/preview.ts)，它只为 opt-in preview 选择 docs-owned Worker 和 overlay。没有修改 `packages/core/agent-loop`、Session format、普通 Web profile、Desktop profile 或 Headless profile。完整的目录外改动、删除条件和 upstream 重放步骤见 [change-ledger.md](change-ledger.md)。
+`session/list` 同时返回 Session Persistence 使用的 `snapshots` 和 Client Session Controller 使用的 `items`；新增 `items` 不替换原有持久化字段。`items` 是 PoC 用于恢复的最小目录投影：`updatedAt` 暂用 header 的 `createdAt`，`agentAvailable` 和 `running` 固定为 `false`，`blank` 由事件数计算，不代表真实活动状态。Session Controller 用该列表判断已保存的 Session 是否可 retain；assistant-ui 增量 PoC 还用独立控制通道在页面正常卸载时发送 `session/close`，并在新 Worker 打开时短暂重试 owner 冲突，因此自动化刷新后能恢复同一 Session 并继续发送消息。
+
+v2 要求非空 `requestId`，但没有基于它的请求去重或结果重放账本。写 owner 是当前 backend 进程内的随机 token，通过 claim、定时 `renew` 和 `close` 维护；默认 lease 为 30 秒，Worker 每 10 秒续租。正常页面卸载会发送 owner 凭据并请求 `close`/flush；浏览器崩溃、强制结束 Worker 或进程被终止时，写权会在 lease 到期后释放，backend 重启也会清空内存中的 owner 并恢复已落盘数据。assistant-ui 在无法取得写权时禁用发送、保留草稿并提供重新连接入口；这不等于实现了跨进程 owner epoch、请求重放或生产级 HA。刷新 E2E 覆盖正常卸载和刷新后继续对话；backend 重启、lease 到期和 stale owner reclaim 由独立契约测试覆盖，但不恢复未落盘操作。这些限制不同于[旧版协议实验](protocol.md)的 replay 规则，也不满足 [v2 规划](browser-native-dsh-plan-v2.md)中的完整恢复目标。
+
+当前实现的目录边界是：backend、Worker、profile overlay、launcher 和 v2 tests 全部在 `docs/drafts/browser-native-dsh-poc/`；唯一的运行时代码接线是已登记的 [`apps/web/src/preview.ts`](../../../apps/web/src/preview.ts)，所有 preview 都使用 docs-owned Worker，只有 opt-in preview 追加 browser-native overlay。没有修改 `packages/core/agent-loop`、Session format、普通 Web profile、Desktop profile 或 Headless profile。完整的目录外改动、删除条件和 upstream 重放步骤见 [change-ledger.md](change-ledger.md)。
 
 ## v2 验证
 
@@ -52,7 +60,7 @@ v2 当前不是独立的 HTML demo。浏览器加载现有 `preview.html`，页�
 node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 ```
 
-浏览器 E2E 会自行启动 v2 backend，使用真实 Chromium 打开现有 DSH `preview.html`，选择 workspace，通过真实 Web UI 提交一轮消息，再从 backend 读取并核对正式 Session 事件。独立 worktree 不复制 `node_modules` 时，使用拥有 Playwright 依赖的 checkout 提供模块路径：
+浏览器 E2E 会自行启动 v2 backend，使用真实 Chromium 打开现有 DSH `preview.html`，选择 workspace，通过真实 Web UI 在同一个 Session 内提交三轮真实模型消息；首轮要求 `todo_write` 写入一个待办并记住随机 token，后两轮验证 token 与待办标题仍在上下文内。测试从 backend 读取每轮 `user/message`、`assistant/message`、`turn/end` 和 `todo/write` 事件，并汇总浏览器错误、LLM 状态码及 Session 中的流式 chunk 计时。独立 worktree 不复制 `node_modules` 时，使用拥有 Playwright 依赖的 checkout 提供模块路径：
 
 ```sh
 DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modules/playwright/index.mjs \
@@ -65,11 +73,13 @@ node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
 ```sh
 DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modules/playwright/index.mjs \
 DSH_POC_LLM=real \
-DSH_POC_ENV_FILE=/path/to/deepseek-harness/docs/drafts/.env \
+DSH_POC_ENV_FILE=docs/drafts/.env \
 node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
 ```
 
-该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件和 `ctx.agentLoop` 的一轮真实交互；旧版测试不能替代它。real E2E 是一次真实 provider 闭环，不是可用性、吞吐量、SLA、灾备或生产安全性证明。
+该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件、`todo_write` 工具和 `ctx.agentLoop` 的三轮真实交互；旧版测试不能替代它。real E2E 是一次真实 provider 闭环，不是可用性、吞吐量、SLA、灾备或生产安全性证明。
+
+人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)。
 
 ## 历史协议实验：运行
 
@@ -88,7 +98,7 @@ node docs/drafts/browser-native-dsh-poc/run.mjs \
   --port 4175 \
   --data-dir /tmp/dsh-browser-native-poc-real \
   --llm real \
-  --env-file /path/to/deepseek-harness/docs/drafts/.env
+  --env-file docs/drafts/.env
 ```
 
 `--env-file` 只由 Node backend 读取。API key 不会发送给浏览器、Dedicated Worker、Session event、页面状态或日志；页面只看到 `real` mode、provider 和 model 名称。real mode 的 GPT 默认使用配置文件中的 `OPENAI_NEXT_GPT_MODEL`，并把 `reasoning_effort` 默认设为 `low`；Grok 可以通过对应的环境变量和 model 选择使用。
@@ -103,7 +113,7 @@ opening-session
 → completed
 ```
 
-点击 `Close Worker` 验证 graceful close；它会先 flush 并释放 owner。点击 `Terminate Worker` 则模拟没有执行 `close` 的 Worker crash；等待约 15 秒让 owner lease 过期后，再点击 `Resume Session`。页面应从 backend 读取已 flush 的 Session events，并显示 `resumed-from-flushed-session`。强制 terminate 不能当作 graceful shutdown。
+点击 `Close Worker` 验证 graceful close；它会先 flush 并释放 owner。点击 `Terminate Worker` 则模拟没有执行 `close` 的 Worker crash；等待约 15 秒让 owner lease 过期后，再点击 `Resume Session`。页面应从 backend 读取已 flush 的 Session events，并显示 `resumed-from-flushed-session`。强制 terminate 不能当作 graceful shutdown；这个自动 lease 过期流程只适用于旧版，不适用于 v2。
 
 ## 历史协议实验：测试
 
@@ -123,7 +133,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/node_modu
 真实 provider 的浏览器端到端测试必须显式提供本机 `.env` 和 Playwright：
 
 ```sh
-DSH_POC_ENV_FILE=/path/to/deepseek-harness/docs/drafts/.env \
+DSH_POC_ENV_FILE=docs/drafts/.env \
 DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwright@<version>/node_modules/playwright/index.mjs \
   node --test --test-timeout=360000 docs/drafts/browser-native-dsh-poc/tests/browser.real.e2e.mjs
 ```
@@ -140,4 +150,4 @@ backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后
 
 ## Dev Note
 
-这是可运行的 PoC，不是正式产品入口。实现事实、已运行命令和限制必须同步写入 [progress.md](progress.md)；不要把目录内 loop adapter 的通过结果写成 DSH 核心 Agent Loop 已完成浏览器化。
+这是可运行的 PoC，不是正式产品入口。v2 的实现事实、已运行命令和限制必须同步写入 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)；[progress.md](progress.md) 只保留旧版独立 loop 的历史记录。不要把目录内历史 loop adapter 的通过结果写成 DSH 核心 Agent Loop 已完成浏览器化。

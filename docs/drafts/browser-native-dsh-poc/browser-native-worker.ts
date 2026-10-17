@@ -25,6 +25,7 @@ import { isShellStartFrame } from '../../../packages/experimental/webworker-runt
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
+import { setBrowserNativeControlPort, setBrowserNativeResumeOwner } from './browser-native-control.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -38,6 +39,19 @@ const pending: unknown[] = []
 
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as Record<string, unknown> | null
+  if (data?.type === 'browser-native-control-init') {
+    const port = event.ports[0]
+    if (port === undefined) throw new Error('browser-native worker: control init frame needs a MessagePort')
+    setBrowserNativeControlPort(port)
+    return
+  }
+  if (data?.type === 'browser-native-control-resume-owner') {
+    if (typeof data.sessionId !== 'string' || typeof data.ownerToken !== 'string') {
+      throw new Error('browser-native worker: resume owner frame needs sessionId and ownerToken')
+    }
+    setBrowserNativeResumeOwner(data.sessionId, data.ownerToken)
+    return
+  }
   if (host === undefined && isShellStartFrame(data)) {
     shellRole = true
     installProcessGlobal({ cwd: data.cwd, env: data.env })

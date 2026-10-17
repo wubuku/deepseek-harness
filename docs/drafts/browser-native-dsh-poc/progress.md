@@ -1,12 +1,14 @@
 ---
-description: "Browser-native DSH PoC 的实施进度、验证记录和恢复入口。"
+description: "Browser-native DSH 旧版独立 loop 协议实验的实施进度和验证记录；不作为当前 v2 状态依据。"
 ---
 
-# Browser-native DSH PoC 实施进度
+# Browser-native DSH PoC 实施进度（历史协议实验）
+
+> **文档状态：历史记录。** 本文记录旧版 `run.mjs`、`public/worker.js` 和 PoC-local Agent Loop 的实施过程；它不描述当前 v2 的真实 DSH `ctx.agentLoop` 状态。当前实现、测试和人工验收请阅读 [README.md](README.md)、[v2 进度](browser-native-dsh-progress-v2.md) 和[手动验收说明](manual-acceptance.md)。
 
 ## 当前状态
 
-状态：协议级 PoC 已完成；真实后端 provider proxy 和真实 Chromium E2E 已完成；真实 DSH `ctx.agentLoop` 接入未完成，作为后续独立评估项保留。
+历史记录状态：协议级 PoC、真实后端 provider proxy 和真实 Chromium E2E 已完成；在该历史阶段，真实 DSH `ctx.agentLoop` 尚未接入，后续由 v2 独立完成。
 
 实施 worktree：`research-browser-native-poc`。
 

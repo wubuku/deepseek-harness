@@ -37,6 +37,7 @@ async function post(origin, path, body) {
     const error = new Error(value.error?.message ?? `HTTP ${response.status}`)
     error.code = value.error?.code
     error.status = response.status
+    error.retryAfterMs = value.error?.retryAfterMs
     throw error
   }
   return value
@@ -52,7 +53,7 @@ async function failure(origin, path, body) {
 }
 
 function header(id) {
-  return { id, version: 1, cwd: '/workspace' }
+  return { id, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
 }
 
 async function readNdjson(response) {
@@ -109,6 +110,14 @@ describe('browser-native DSH v2 backend', () => {
     const listed = await post(origin, '/api/browser-native/session/list', envelope('list'))
     assert.deepEqual(listed.snapshots.map(snapshot => snapshot.header.id), [id])
     assert.equal(listed.snapshots[0].eventCount, 0)
+    assert.deepEqual(listed.items, [{
+      agentAvailable: false,
+      sessionId: id,
+      updatedAt: 1_700_000_000_000,
+      running: false,
+      blank: true,
+      cwd: '/workspace',
+    }])
 
     const event = { seq: 0, type: 'user/message', payload: { content: 'hello' }, at: '2026-10-03T00:00:00.000Z' }
     const appended = await post(origin, '/api/browser-native/session/append', envelope('append', {
@@ -146,6 +155,13 @@ describe('browser-native DSH v2 backend', () => {
       header: header(id),
     }))
 
+    const resumed = await post(origin, '/api/browser-native/session/open', envelope('owner-resume', {
+      sessionId: id,
+      access: 'write',
+      ownerToken: created.owner.ownerToken,
+    }))
+    assert.equal(resumed.owner.ownerToken, created.owner.ownerToken)
+
     const alreadyOwned = await failure(origin, '/api/browser-native/session/open', envelope('owner-open-conflict', {
       sessionId: id,
       access: 'write',
@@ -172,6 +188,62 @@ describe('browser-native DSH v2 backend', () => {
     }))
     assert.equal(typeof reopened.owner.ownerToken, 'string')
     assert.notEqual(reopened.owner.ownerToken, created.owner.ownerToken)
+  })
+
+  it('reclaims an abandoned write owner after its lease expires', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = 1_000
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      ownerLeaseMs: 300,
+      testHooks: { now: () => now },
+    })
+    const id = 'expired-owner-session'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('expired-create', {
+      sessionId: id,
+      header: header(id),
+    }))
+    const beforeExpiry = await failure(origin, '/api/browser-native/session/open', envelope('expired-open-before', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.equal(beforeExpiry.code, 'SESSION_ALREADY_OWNED')
+    assert.equal(beforeExpiry.retryAfterMs, 300)
+
+    now += 301
+    const reclaimed = await post(origin, '/api/browser-native/session/open', envelope('expired-open-after', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.notEqual(reclaimed.owner.ownerToken, created.owner.ownerToken)
+    assert.equal(reclaimed.owner.leaseDurationMs, 300)
+    assert.equal(reclaimed.owner.renewAfterMs, 100)
+
+    const staleAppend = await failure(origin, '/api/browser-native/session/append', envelope('expired-stale-append', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      expectedNextSeq: 0,
+      events: [],
+    }))
+    assert.equal(staleAppend.code, 'SESSION_OWNERSHIP_LOST')
+    const renewed = await post(origin, '/api/browser-native/session/renew', envelope('expired-renew', {
+      sessionId: id,
+      ownerToken: reclaimed.owner.ownerToken,
+    }))
+    assert.equal(renewed.owner.ownerToken, reclaimed.owner.ownerToken)
+
+    now += 301
+    const expiredClose = await post(origin, '/api/browser-native/session/close', envelope('expired-close', {
+      sessionId: id,
+      ownerToken: reclaimed.owner.ownerToken,
+    }))
+    assert.equal(expiredClose.closed, true)
+    const afterExpiredClose = await post(origin, '/api/browser-native/session/open', envelope('expired-reopen', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.notEqual(afterExpiredClose.owner.ownerToken, reclaimed.owner.ownerToken)
   })
 
   it('flushes on close and recovers only durable events after an abrupt restart', async () => {

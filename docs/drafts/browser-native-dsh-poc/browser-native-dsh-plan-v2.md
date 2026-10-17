@@ -65,7 +65,7 @@ Browser page
           └── provider API proxy
 ```
 
-浏览器验收必须观察到：用户从现有 UI 创建或恢复 Session，发送 prompt 后出现真实 DSH assistant output；backend 收到 LLM 请求但浏览器网络和页面日志不包含 provider secret；backend 的 Session 文件包含 DSH 正式事件类型和连续 `seq`；终止 Worker 后重新启动可以恢复已 flush 的 Session 前缀；第二个写者被正式的 ownership refusal 拒绝。
+浏览器验收必须观察到：用户从现有 UI 创建或恢复 Session，发送 prompt 后出现真实 DSH assistant output；backend 收到 LLM 请求但浏览器网络和页面日志不包含 provider secret；backend 的 Session 文件包含 DSH 正式事件类型和连续 `seq`；终止 Worker 后重新启动可以恢复已 flush 的 Session 前缀；第二个写者被正式的 ownership refusal 拒绝。真实浏览器的人工验收步骤见[手动验收说明](manual-acceptance.md)。
 
 ### 1.3 明确不在本 PoC 中解决的问题
 

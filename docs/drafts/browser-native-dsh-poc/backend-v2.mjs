@@ -16,13 +16,16 @@ const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_EVENTS = 100_000
+const DEFAULT_OWNER_LEASE_MS = 30_000
+const DEFAULT_LLM_TIMEOUT_MS = 60_000
 
 class BackendError extends Error {
-  constructor(code, message, status = 400) {
+  constructor(code, message, status = 400, retryAfterMs) {
     super(message)
     this.name = 'BackendError'
     this.code = code
     this.status = status
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -45,6 +48,11 @@ function assertRecord(value, name) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new BackendError('INVALID_REQUEST', `${name} must be an object`)
   }
+  return value
+}
+
+function timeoutMs(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`)
   return value
 }
 
@@ -83,7 +91,13 @@ function sendError(response, error) {
   const detail = error instanceof BackendError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
-  sendJson(response, detail.status, { error: { code: detail.code, message: detail.message } })
+  sendJson(response, detail.status, {
+    error: {
+      code: detail.code,
+      message: detail.message,
+      ...(detail.retryAfterMs === undefined ? {} : { retryAfterMs: detail.retryAfterMs }),
+    },
+  })
 }
 
 function revisionOf(session) {
@@ -91,11 +105,14 @@ function revisionOf(session) {
 }
 
 class FormalSessionStore {
-  constructor(dataDir) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now } = {}) {
+    if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
     this.sessions = new Map()
     this.locks = new Map()
+    this.ownerLeaseMs = ownerLeaseMs
+    this.now = now
   }
 
   async load() {
@@ -112,6 +129,7 @@ class FormalSessionStore {
         events: clone(raw.events),
         durableThroughSeq: raw.durableThroughSeq ?? raw.events.length - 1,
         ownerToken: undefined,
+        ownerExpiresAt: 0,
       })
     }
   }
@@ -146,18 +164,44 @@ class FormalSessionStore {
       events: [],
       durableThroughSeq: -1,
       ownerToken: undefined,
+      ownerExpiresAt: 0,
     }
     this.sessions.set(id, session)
     return session
   }
 
-  claim(session) {
-    if (session.ownerToken !== undefined) throw new BackendError('SESSION_ALREADY_OWNED', 'session is already owned', 409)
-    session.ownerToken = randomUUID()
-    return { ownerToken: session.ownerToken }
+  claim(session, requestedOwnerToken) {
+    if (session.ownerToken !== undefined && session.ownerExpiresAt > this.now()) {
+      if (requestedOwnerToken === session.ownerToken) return this.renew(session, session.ownerToken, true)
+      throw new BackendError(
+        'SESSION_ALREADY_OWNED',
+        'session is already owned by another browser; close that tab or retry after its write lease expires',
+        409,
+        session.ownerExpiresAt - this.now(),
+      )
+    }
+    session.ownerToken = typeof requestedOwnerToken === 'string' ? requestedOwnerToken : randomUUID()
+    return this.renew(session, session.ownerToken, true)
+  }
+
+  renew(session, ownerToken, initial = false) {
+    if (!initial) this.assertOwner(session, ownerToken)
+    session.ownerExpiresAt = this.now() + this.ownerLeaseMs
+    return {
+      ownerToken: session.ownerToken,
+      leaseDurationMs: this.ownerLeaseMs,
+      renewAfterMs: Math.floor(this.ownerLeaseMs / 3),
+    }
   }
 
   assertOwner(session, ownerToken) {
+    this.assertOwnerToken(session, ownerToken)
+    if (session.ownerExpiresAt <= this.now()) {
+      throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
+    }
+  }
+
+  assertOwnerToken(session, ownerToken) {
     if (typeof ownerToken !== 'string' || session.ownerToken !== ownerToken) {
       throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
     }
@@ -197,18 +241,13 @@ class FormalSessionStore {
   }
 }
 
-function ownerResponse(session) {
-  return session.ownerToken === undefined ? {} : { owner: { ownerToken: session.ownerToken } }
-}
-
-function sessionResponse(session, extra = {}, includeOwner = false) {
+function sessionResponse(session, extra = {}) {
   return {
     sessionId: session.id,
     header: clone(session.header),
     inheritedEventCount: session.inheritedEventCount,
     nextSeq: session.events.length,
     revision: revisionOf(session),
-    ...(includeOwner ? ownerResponse(session) : {}),
     ...extra,
   }
 }
@@ -216,20 +255,31 @@ function sessionResponse(session, extra = {}, includeOwner = false) {
 async function sessionOperation(store, operation, body) {
   assertProtocol(body)
   if (operation === 'list') {
-    return store.exclusive('__list__', async () => ({ snapshots: [...store.sessions.values()].map(session => store.snapshot(session)) }))
+    return store.exclusive('__list__', async () => {
+      const snapshots = [...store.sessions.values()].map(session => store.snapshot(session))
+      const items = snapshots.map(snapshot => ({
+        agentAvailable: false,
+        sessionId: snapshot.header.id,
+        updatedAt: snapshot.header.createdAt,
+        running: false,
+        blank: snapshot.eventCount === 0,
+        cwd: snapshot.header.cwd,
+      }))
+      return { snapshots, items }
+    })
   }
   const id = assertSessionId(body.sessionId)
   return store.exclusive(id, async () => {
     if (operation === 'create') {
       const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0)
       const owner = store.claim(session)
-      return sessionResponse(session, { owner }, true)
+      return sessionResponse(session, { owner })
     }
     const session = store.get(id)
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
-      if (body.access === 'write') store.claim(session)
-      return sessionResponse(session, {}, body.access === 'write')
+      const owner = body.access === 'write' ? store.claim(session, body.ownerToken) : undefined
+      return sessionResponse(session, owner === undefined ? {} : { owner })
     }
     if (operation === 'stat') return sessionResponse(session)
     if (operation === 'read') {
@@ -240,7 +290,17 @@ async function sessionOperation(store, operation, body) {
         eventState: 'shared-frozen',
       })
     }
+    if (operation === 'close') {
+      store.assertOwnerToken(session, body.ownerToken)
+      const durabilityReceipt = session.durableThroughSeq < session.events.length - 1
+        ? await store.flush(session)
+        : undefined
+      session.ownerToken = undefined
+      session.ownerExpiresAt = 0
+      return sessionResponse(session, { closed: true, ...(durabilityReceipt === undefined ? {} : { durabilityReceipt }) })
+    }
     store.assertOwner(session, body.ownerToken)
+    if (operation === 'renew') return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
     if (operation === 'append') {
       if (body.expectedNextSeq !== session.events.length || !Array.isArray(body.events)) {
         throw new BackendError('SEQ_CONFLICT', 'append does not continue the visible log', 409)
@@ -257,13 +317,6 @@ async function sessionOperation(store, operation, body) {
     if (operation === 'flush') {
       const durabilityReceipt = await store.flush(session)
       return sessionResponse(session, { durable: true, durabilityReceipt, durableThroughSeq: session.durableThroughSeq })
-    }
-    if (operation === 'close') {
-      const durabilityReceipt = session.durableThroughSeq < session.events.length - 1
-        ? await store.flush(session)
-        : undefined
-      session.ownerToken = undefined
-      return sessionResponse(session, { closed: true, ...(durabilityReceipt === undefined ? {} : { durabilityReceipt }) })
     }
     throw new BackendError('INVALID_REQUEST', `unknown Session operation: ${operation}`)
   })
@@ -304,6 +357,10 @@ async function createLlmConfig(options) {
   if (!baseUrl || !path || !apiKey) throw new Error('real LLM mode needs the configured OpenAI Next base URL, completions path, model, and API key')
   const proxy = env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy
   if (proxy?.startsWith('socks')) throw new Error('real LLM mode needs an HTTP(S) proxy; SOCKS proxy support is not implemented in this PoC')
+  const configuredTimeout = options.llmTimeoutMs ?? (env.DSH_POC_LLM_TIMEOUT_MS === undefined
+    ? DEFAULT_LLM_TIMEOUT_MS
+    : Number(env.DSH_POC_LLM_TIMEOUT_MS))
+  const timeout = timeoutMs(configuredTimeout, 'llmTimeoutMs')
   return {
     mode,
     model,
@@ -311,6 +368,7 @@ async function createLlmConfig(options) {
     url: new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString(),
     apiKey,
     proxyConfigured: proxy !== undefined,
+    timeoutMs: timeout,
   }
 }
 
@@ -327,11 +385,18 @@ function writeStream(response, item) {
   if (!response.destroyed) response.write(`${JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...item })}\n`)
 }
 
+function writeStreamError(response, code, message) {
+  if (response.writableEnded || response.destroyed) return
+  writeStream(response, { kind: 'error', error: { code, message } })
+  response.end()
+}
+
 async function scriptedLlm(response, messages) {
   const text = `Browser-native DSH completed this turn: ${textContent(messages).slice(0, 240)}`
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
   for (const part of text.match(/.{1,32}/g) ?? []) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: part } })
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 40))
   }
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
   writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
@@ -340,84 +405,105 @@ async function scriptedLlm(response, messages) {
 
 async function realLlm(response, request, config, body) {
   const controller = new AbortController()
-  const abort = () => controller.abort()
-  request.on('aborted', abort)
-  response.on('close', abort)
-  const upstream = await fetch(config.url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'text/event-stream',
-      authorization: `Bearer ${config.apiKey}`,
-      'user-agent': 'deepseek-harness/0.2.0-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)',
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: body.messages,
-      tools: body.tools,
-      temperature: body.temperature,
-      max_tokens: body.maxTokens,
-      reasoning_effort: body.reasoningEffort,
-      stream: true,
-    }),
-    signal: controller.signal,
-  })
-  if (!upstream.ok || upstream.body === null) {
-    throw new BackendError('UPSTREAM_LLM_FAILED', `upstream LLM returned HTTP ${upstream.status}`, 502)
+  let clientClosed = false
+  let timedOut = false
+  const abortForClient = () => {
+    clientClosed = true
+    controller.abort()
   }
-  response.writeHead(200, {
-    'content-type': 'application/x-ndjson; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-browser-native-protocol': String(PROTOCOL_VERSION),
-  })
-  const reader = upstream.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let text = ''
-  let toolCall
-  let started = false
-  const consume = data => {
-    if (data === '[DONE]') return true
-    const item = JSON.parse(data)
-    const delta = item.choices?.[0]?.delta
-    if (typeof delta?.content === 'string' && delta.content.length > 0) {
-      if (!started) {
-        started = true
-        writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
-      }
-      text += delta.content
-      writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: delta.content } })
+  const abortForResponseClose = () => {
+    if (!response.writableEnded) abortForClient()
+  }
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, config.timeoutMs)
+  request.on('aborted', abortForClient)
+  response.on('close', abortForResponseClose)
+  try {
+    let upstream
+    try {
+      upstream = await fetch(config.url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          authorization: `Bearer ${config.apiKey}`,
+          'user-agent': 'deepseek-harness/0.2.0-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)',
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: body.messages,
+          tools: body.tools,
+          temperature: body.temperature,
+          max_tokens: body.maxTokens,
+          reasoning_effort: body.reasoningEffort,
+          stream: true,
+        }),
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (timedOut) throw new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM did not respond within ${config.timeoutMs}ms`, 504)
+      if (clientClosed) return
+      throw new BackendError('UPSTREAM_LLM_UNAVAILABLE', 'upstream LLM could not be reached', 502)
     }
-    const providerCall = delta?.tool_calls?.[0]
-    if (providerCall !== undefined) {
-      if (!started) {
-        started = true
-        toolCall = { id: providerCall.id ?? randomUUID(), name: providerCall.function?.name ?? '', arguments: '' }
-        writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
-      }
-      if (providerCall.function?.arguments) {
-        toolCall.arguments += providerCall.function.arguments
-        writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: 0, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
-      }
+    if (!upstream.ok || upstream.body === null) {
+      throw new BackendError('UPSTREAM_LLM_FAILED', `upstream LLM returned HTTP ${upstream.status}`, 502)
     }
-    const finish = item.choices?.[0]?.finish_reason
-    if (finish !== undefined && finish !== null) {
-      if (toolCall !== undefined) {
-        writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'tool-call', ...toolCall } } })
-        writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
-      } else {
+    response.writeHead(200, {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-browser-native-protocol': String(PROTOCOL_VERSION),
+    })
+    const reader = upstream.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let text = ''
+    let toolCall
+    let finished = false
+    let started = false
+    const consume = data => {
+      if (data === '[DONE]') return true
+      const item = JSON.parse(data)
+      const delta = item.choices?.[0]?.delta
+      if (typeof delta?.content === 'string' && delta.content.length > 0) {
         if (!started) {
           started = true
           writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
         }
-        writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
-        writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finish === 'length' ? { kind: 'max-tokens' } : { kind: 'stop' } } })
+        text += delta.content
+        writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: delta.content } })
       }
-      return true
+      const providerCall = delta?.tool_calls?.[0]
+      if (providerCall !== undefined) {
+        if (!started) {
+          started = true
+          toolCall = { id: providerCall.id ?? randomUUID(), name: providerCall.function?.name ?? '', arguments: '' }
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
+        }
+        if (providerCall.function?.arguments) {
+          toolCall.arguments += providerCall.function.arguments
+          writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: 0, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
+        }
+      }
+      const finish = item.choices?.[0]?.finish_reason
+      if (finish !== undefined && finish !== null) {
+        if (toolCall !== undefined) {
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'tool-call', ...toolCall } } })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
+        } else {
+          if (!started) {
+            started = true
+            writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+          }
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finish === 'length' ? { kind: 'max-tokens' } : { kind: 'stop' } } })
+        }
+        finished = true
+        return true
+      }
+      return false
     }
-    return false
-  }
-  try {
     while (true) {
       const part = await reader.read()
       buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
@@ -433,10 +519,27 @@ async function realLlm(response, request, config, body) {
       }
       if (part.done) break
     }
-    if (!response.writableEnded) response.end()
+    if (!finished && !clientClosed) {
+      if (timedOut) writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
+      else writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
+    } else if (!response.writableEnded) {
+      response.end()
+    }
+  } catch (error) {
+    if (clientClosed) return
+    if (timedOut && response.headersSent) {
+      writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
+      return
+    }
+    if (response.headersSent) {
+      writeStreamError(response, 'UPSTREAM_LLM_STREAM_FAILED', 'upstream LLM stream failed before completion')
+      return
+    }
+    throw error
   } finally {
-    request.off('aborted', abort)
-    response.off('close', abort)
+    clearTimeout(timeout)
+    request.off('aborted', abortForClient)
+    response.off('close', abortForResponseClose)
   }
 }
 
@@ -467,7 +570,10 @@ async function serveStatic(response, root, pathname) {
 }
 
 export async function createBrowserNativeV2Server(options) {
-  const store = new FormalSessionStore(options.dataDir)
+  const store = new FormalSessionStore(options.dataDir, {
+    ownerLeaseMs: options.ownerLeaseMs,
+    now: options.testHooks?.now,
+  })
   await store.load()
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
@@ -475,7 +581,7 @@ export async function createBrowserNativeV2Server(options) {
     try {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       if (request.method === 'GET' && url.pathname === '/api/browser-native/health') {
-        sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model })
+        sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model, ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }) })
         return
       }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
@@ -491,6 +597,9 @@ export async function createBrowserNativeV2Server(options) {
         if (body.sessionId !== undefined) {
           const session = store.get(body.sessionId)
           store.assertOwner(session, body.ownerToken)
+        }
+        if (options.testHooks?.failLlmRequest?.(body) === true) {
+          throw new BackendError('E2E_INJECTED_LLM_FAILURE', 'E2E injected model request failure', 400)
         }
         if (llm.mode === 'scripted') {
           response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })

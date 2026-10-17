@@ -1,0 +1,28 @@
+{
+  "name": "dsh-assistant-ui-browser-native-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "node tests/browser-native-assistant-ui.e2e.mjs",
+    "test:e2e:real": "node tests/browser-native-assistant-ui.e2e.mjs --llm real",
+    "test:e2e:chrome:real": "node tests/browser-native-assistant-ui.e2e.mjs --browser chrome --llm real",
+    "test:e2e:ownership": "node tests/browser-native-ownership.e2e.mjs",
+    "test:e2e:safari:real": "node tests/browser-native-assistant-ui.safari.e2e.mjs",
+    "test:e2e:webkit": "node tests/browser-native-assistant-ui.e2e.mjs --browser webkit",
+    "test:e2e:webkit:real": "node tests/browser-native-assistant-ui.e2e.mjs --browser webkit --llm real"
+  },
+  "dependencies": {
+    "@assistant-ui/react": "0.15.29",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "typescript": "6.0.3",
+    "vite": "6.4.3"
+  }
+}

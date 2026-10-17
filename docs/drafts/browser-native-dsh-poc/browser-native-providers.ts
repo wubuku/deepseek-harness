@@ -39,14 +39,17 @@ import type {
   SessionPersistenceSnapshot,
   SessionPersistenceStatOptions,
 } from '@deepseek-ai/dsh-session-persistence'
+import { publishBrowserNativeOwner, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
 const LLM_ROUTE = '/api/browser-native/llm'
+const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
+const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const activeSessionOwners = new Map<string, string>()
 
 interface ErrorPayload {
-  readonly error?: { readonly code?: string; readonly message?: string }
+  readonly error?: { readonly code?: string; readonly message?: string; readonly retryAfterMs?: number }
 }
 
 interface SessionResponse {
@@ -83,6 +86,8 @@ interface RuntimeLlmModule {
 
 interface BrowserNativeOwner {
   readonly ownerToken: string
+  readonly leaseDurationMs: number
+  readonly renewAfterMs: number
 }
 
 interface BrowserNativeSessionHandle extends SessionHandle {
@@ -109,10 +114,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function responseError(value: ErrorPayload, fallback: string): { code: string; message: string } {
+function responseError(value: ErrorPayload, fallback: string): { code: string; message: string; retryAfterMs?: number } {
   return {
     code: value.error?.code ?? 'REMOTE_ERROR',
     message: value.error?.message ?? fallback,
+    ...(value.error?.retryAfterMs === undefined ? {} : { retryAfterMs: value.error.retryAfterMs }),
   }
 }
 
@@ -142,7 +148,7 @@ async function sessionRequest(
   const payload = await readJson(response)
   if (!response.ok) {
     const error = responseError(payload, `browser-native Session ${operation} failed`)
-    throw Object.assign(new Error(error.message), { code: error.code })
+    throw Object.assign(new Error(error.message), { code: error.code, retryAfterMs: error.retryAfterMs })
   }
   return payload
 }
@@ -165,7 +171,9 @@ function mapSessionError(error: unknown, id: SessionId, operation: string): neve
 
 class RemoteSessionHandle implements BrowserNativeSessionHandle {
   private closed = false
+  private ownershipLost = false
   private closeOperation: Promise<void> | undefined
+  private renewTimer: ReturnType<typeof setTimeout> | undefined
   private nextSeq: number
   private readonly pendingLive: SessionEvent[] = []
   private writeChain: Promise<void> = Promise.resolve()
@@ -180,6 +188,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     private readonly onClose: () => void,
   ) {
     this.nextSeq = initialNextSeq
+    this.scheduleRenewal()
   }
 
   get ownerToken(): string | undefined {
@@ -187,7 +196,36 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   }
 
   private assertOpen(operation: string): void {
+    if (this.ownershipLost) throw new (runtimePersistence().SessionOwnershipLostError)(this.id)
     if (this.closed) throw new (runtimePersistence().SessionHandleClosedError)(this.id, operation)
+  }
+
+  private scheduleRenewal(): void {
+    if (this.owner === undefined || this.closed || this.closeOperation !== undefined || this.ownershipLost) return
+    const owner = this.owner
+    this.renewTimer = setTimeout(() => {
+      this.renewTimer = undefined
+      void this.enqueueWrite(async () => {
+        if (this.closed || this.closeOperation !== undefined) return
+        await sessionRequest('renew', { sessionId: this.id, ...this.ownerBody() }, AbortSignal.timeout(owner.renewAfterMs))
+      }).then(() => {
+        if (this.closed || this.closeOperation !== undefined) return
+        activeSessionOwners.set(this.id, owner.ownerToken)
+        publishBrowserNativeOwner({ type: 'owner', sessionId: String(this.id), ownerToken: owner.ownerToken })
+        this.scheduleRenewal()
+      }, error => {
+        if (this.closed || this.closeOperation !== undefined) return
+        const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
+        this.ownershipLost = code === 'SESSION_OWNERSHIP_LOST'
+        activeSessionOwners.delete(this.id)
+        publishBrowserNativeOwner({
+          type: 'unavailable',
+          sessionId: String(this.id),
+          message: error instanceof Error ? error.message : String(error),
+        })
+        this.scheduleRenewal()
+      })
+    }, this.owner.renewAfterMs)
   }
 
   private ownerBody(): Record<string, unknown> {
@@ -227,7 +265,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   }
 
   enqueueLive(event: SessionEvent, report: (error: unknown) => void): void {
-    if (this.closed || this.access !== 'write') return
+    if (this.closed || this.ownershipLost || this.access !== 'write') return
     this.pendingLive.push(event)
     void this.enqueueWrite(() => this.drainLiveNow()).catch(report)
   }
@@ -277,8 +315,10 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   async close(): Promise<void> {
     if (this.closeOperation !== undefined) return this.closeOperation
     if (this.closed) return
+    clearTimeout(this.renewTimer)
+    this.renewTimer = undefined
     this.closeOperation = (async () => {
-      if (this.access === 'write' && this.owner !== undefined) {
+      if (this.access === 'write' && this.owner !== undefined && !this.ownershipLost) {
         try {
           await this.enqueueWrite(async () => {
             await this.drainLiveNow()
@@ -343,7 +383,12 @@ function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-
     }
 
     private track(response: SessionResponse, id: SessionId, access: SessionAccess): SessionHandle {
-      const owner = response.owner === undefined ? undefined : response.owner as BrowserNativeOwner
+      const owner = response.owner
+      if (access === 'write' && (owner === undefined || typeof owner.ownerToken !== 'string'
+        || !Number.isSafeInteger(owner.leaseDurationMs) || owner.leaseDurationMs < 300
+        || !Number.isSafeInteger(owner.renewAfterMs) || owner.renewAfterMs < 1 || owner.renewAfterMs >= owner.leaseDurationMs)) {
+        throw new Error('browser-native Session response is missing a valid write lease')
+      }
       let handle: RemoteSessionHandle
       handle = new RemoteSessionHandle(
         id,
@@ -353,14 +398,20 @@ function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-
         owner,
         required(response.nextSeq, 'nextSeq'),
         () => {
-          if (owner !== undefined) activeSessionOwners.delete(id)
+          if (owner !== undefined && activeSessionOwners.get(id) === owner.ownerToken) {
+            activeSessionOwners.delete(id)
+            publishBrowserNativeOwner({ type: 'released', sessionId: String(id) })
+          }
           this.untrack(handle)
         },
       )
       this.handles.add(handle)
       if (access === 'write') {
         this.writers.set(id, handle)
-        if (owner !== undefined) activeSessionOwners.set(id, owner.ownerToken)
+        if (owner !== undefined) {
+          activeSessionOwners.set(id, owner.ownerToken)
+          publishBrowserNativeOwner({ type: 'owner', sessionId: String(id), ownerToken: owner.ownerToken })
+        }
       }
       return handle
     }
@@ -380,9 +431,25 @@ function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-
 
     async open(id: SessionId, access: SessionAccess, options?: SessionPersistenceOpenOptions): Promise<SessionHandle> {
       try {
-        const response = await sessionRequest('open', { sessionId: id, access }, options?.signal)
-        return this.track(response, id, access)
+        const deadline = Date.now() + SESSION_OPEN_OWNER_RETRY_WINDOW_MS
+        const resumeOwnerToken = access === 'write' ? takeBrowserNativeResumeOwner(String(id)) : undefined
+        while (true) {
+          try {
+            const response = await sessionRequest('open', {
+              sessionId: id,
+              access,
+              ...(resumeOwnerToken === undefined ? {} : { ownerToken: resumeOwnerToken }),
+            }, options?.signal)
+            return this.track(response, id, access)
+          } catch (error) {
+            const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
+            if (code !== 'SESSION_ALREADY_OWNED' || Date.now() >= deadline) throw error
+            options?.signal?.throwIfAborted()
+            await new Promise(resolveDelay => setTimeout(resolveDelay, SESSION_OPEN_OWNER_RETRY_DELAY_MS))
+          }
+        }
       } catch (error) {
+        publishBrowserNativeOwner({ type: 'unavailable', sessionId: String(id), message: error instanceof Error ? error.message : String(error) })
         mapSessionError(error, id, 'open')
       }
     }

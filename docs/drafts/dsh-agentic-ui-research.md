@@ -172,7 +172,7 @@ DSH 的相关代码不是一次性为 Agentic UI 设计的，但 Git 历史呈�
 
 ### 已具备的基础
 
-DSH 已具备足够开始 PoC 的连续链路：模型可以调用 Tool；Tool 可以返回结构化结果和持久化呈现元数据；Session 可以记录和回放 `tool/call`/`tool/result`；Conversation assembler 可以把事件折叠为 Chat Node；`ui-tool` 可以按 Tool 名挂载自定义视图；`ui-chat` 可以按 Node kind 挂载业务 renderer。
+DSH 已具备足够开始 PoC 的连续链路：模型可以调用 Tool；Tool 可以返回结构化结果和持久化呈现元数据；Session 可以记录和回放 `tool/call`/`tool/result`；Conversation assembler 可以把事件折叠为 Chat Node；`ui-tool` 可以按 Tool 名挂载自定义视图；`ui-chat` 可以按 Node kind 挂载业务 renderer。`ui-user-questions` 和 `ui-approval` 还已经提供了问答、审批、超时、取消和后续回答的具体人机交互闭环。
 
 DSH 的插件体系也允许在不修改 agent-loop 的前提下共同注册 Host Tool、Session event projection、Conversation Definition 和 Client slot。该方向符合仓库“Plugins, not loop changes”和“Model-visible ⟺ logged”的架构规则。
 
@@ -181,12 +181,12 @@ DSH 的插件体系也允许在不修改 agent-loop 的前提下共同注册 Hos
 | 缺口 | 现状 | 必须补的设计 |
 |---|---|---|
 | 统一能力 descriptor | Tool schema、Tool presenter、Tool view、业务 API 和工作流彼此可关联但没有统一声明 | 定义能力 id、版本、主 UI、输入映射、权限、风险、生命周期、结果引用和恢复规则。 |
-| UI action 到 Agent 的通道 | Tool view 当前没有通用业务提交或 continuation API | 定义带 session、surface、action、request id 和权限上下文的 Client→Host command seam，或明确采用 user-question/follow-up 模式。 |
+| 通用 UI action 到 Agent 的通道 | 问答和审批已有领域级 continuation；Tool view 尚无适用于任意业务表单的通用提交或 continuation API | 定义带 session、surface、action、request id 和权限上下文的 Client→Host command seam，或复用并扩展 user-question/follow-up 模式。 |
 | 业务事件 | DSH 有通用 Session/Conversation 机制，但没有 CRM 事件 | 声明 merge-extensible `customer/*` 事件，定义哪些 action 进入 Session、哪些只留在 Client 草稿。 |
 | 权威业务状态 | Web Client 能呈现 Session，但 CRM 数据仍属于 SaaS 后端 | 让 Tool 和 UI 通过同一业务 API 读取和写入，避免把 DSH Session 当 CRM 数据库。 |
 | 复杂跨轮次 UI | Chat Node 扩展点存在，但没有业务 Node | 仅为需要跨轮次、跨刷新或独立生命周期的流程增加 Definition 和 renderer。 |
 | 旧前端复用 | DSH 不知道 SaaS 的路由、Context、状态管理和组件依赖 | 抽取共享 browser-safe package，或通过 Web Component/microfrontend/widget 适配。 |
-| 多租户安全 | DSH 安全文件明确不承诺生产隔离 | 创建受限 profile、可信身份绑定、服务端授权和独立资源隔离，不暴露默认完整工具集。 |
+| 多租户安全 | 当前 Web Connection 认证和 Browser-Native 本地 PoC 都不等于生产业务租户隔离 | 创建受限 profile、可信身份绑定、服务端授权和独立资源隔离，不暴露默认完整工具集。 |
 | 浏览器/云端交接 | 当前 Web Client/Worker 运行能力不等于可恢复的业务工作流 | 定义 owner、checkpoint、取消、未知副作用和重新接管规则。 |
 
 -----

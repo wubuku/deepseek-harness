@@ -1,0 +1,7 @@
+allowBuilds:
+  esbuild: set this to true or false
+minimumReleaseAgeExclude:
+  - '@assistant-ui/core@0.3.29'
+  - '@assistant-ui/react@0.15.29'
+  - '@assistant-ui/store@0.3.21'
+  - assistant-stream@0.3.52

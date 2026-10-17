@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 ## 当前状态
 
-- **阶段**：已完成 v2 PoC；preview build、默认 preview acceptance、scripted/real 浏览器 E2E、文档门禁和 typecheck 已通过。当前保留一个可供人工验收的 real-mode server 实例。
+- **阶段**：已完成 v2 PoC；preview build、默认 preview acceptance、scripted/real 浏览器 E2E、文档门禁和 typecheck 已通过。通用人工验收步骤见[手动验收说明](manual-acceptance.md)。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
 - **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
 - **当前分支**：`research-browser-native-poc`。
@@ -14,7 +14,7 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
 - **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
 
-## 当前人工验收实例
+## 2026-10-03 人工验收 checkpoint
 
 - **启动日期**：2026-10-03。
 - **模式**：`real`，backend 选择 `gpt-5.6-sol`；API key 只从主 worktree 的本机 `.env` 读取，不写入本目录、进程输出或浏览器。
@@ -34,6 +34,8 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 - **停止方式**：在启动该实例的终端发送 `Ctrl-C`；`/tmp/browser-native-dsh-v2-acceptance` 是可删除的本地测试数据目录，不属于仓库。
 
 该实例只用于人工验收；它不改变 v2 的验证结论，也不把一次 real provider 请求提升为生产可用性或 SLA 证明。
+
+后续人工验收不要依赖这个历史端口或数据目录；使用[手动验收说明](manual-acceptance.md)中的当前启动命令、两个 UI 入口和同一套多轮对话脚本。
 
 ## 已核实的基线
 

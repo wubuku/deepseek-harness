@@ -1,9 +1,10 @@
 import { runInNewContext } from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   assertObjectJsonSchema,
   assertSupportedJsonSchema,
   JsonSchemaError,
+  parameterSchemaSpecToJsonSchema,
   validateJsonSchemaValue,
   type JsonSchemaNode,
   type ObjectJsonSchema,
@@ -240,6 +241,48 @@ describe('the enforced raw JSON Schema subset', () => {
     })`)
 
     expect(() => { assertSupportedJsonSchema(schema) }).not.toThrow()
+  })
+
+  it('accepts tool parameter schemas with WebKit native constructor formatting', () => {
+    const foreign = runInNewContext('({ Object, Array })') as {
+      Object: ObjectConstructor
+      Array: ArrayConstructor
+    }
+    const originalToString = Function.prototype.toString
+    const toString = vi.spyOn(Function.prototype, 'toString').mockImplementation(function (this: unknown) {
+      if (this === Object || this === foreign.Object) return 'function Object() {\n    [native code]\n}'
+      if (this === Array || this === foreign.Array) return 'function Array() {\n    [native code]\n}'
+      return originalToString.call(this)
+    })
+    try {
+      expect(parameterSchemaSpecToJsonSchema({
+        query: { type: 'string', required: true },
+        filters: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { enabled: { type: 'boolean' } },
+            additionalProperties: false,
+          },
+        },
+      })).toMatchObject({
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string' },
+          filters: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { enabled: { type: 'boolean' } },
+              additionalProperties: false,
+            },
+          },
+        },
+      })
+    } finally {
+      toString.mockRestore()
+    }
   })
 
   it('rejects cyclic/exotic schema structure but permits sibling reuse', () => {

@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的自包含实施规划：用目录内 loo
 
 ## Summary
 
-本文是 `docs/drafts/browser-native-dsh-poc/` 的实施规划，不是实现报告；当前实现事实和完成状态以同目录的 [progress.md](progress.md) 为准。
+本文是旧版 `docs/drafts/browser-native-dsh-poc/` 独立 loop 协议实验的实施规划，不是当前 v2 的实现报告；当前实现事实和完成状态以 [README.md](README.md)、[browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md) 和 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md) 为准。
 
 本规划的最终目标是验证：DSH 的 Agent Loop 可以驻留在浏览器 Dedicated Web Worker 中，由 Worker 通过同源后端调用受控的 LLM 服务，由页面 Main Thread 执行一个明确授权的低风险浏览器 Tool，Session 事件同时写入同源后端并支持 Worker 终止后的重新打开和恢复。当前实现已经验证 scripted 和真实 OpenAI-compatible provider 的同一协议与生命周期，但使用目录内 PoC-local loop adapter，因为当前 WebWorker preview 没有公开的 live Agent bootstrap。
 

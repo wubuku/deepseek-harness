@@ -8,7 +8,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 `docs/drafts/` 保存 DSH 当前阶段的跨包研究、架构判断、实施方案、PoC 和工程备忘。本文是这个目录的入口，不替代各专题文档，也不是 DSH 已发布运行时行为的权威说明。
 
-如果只想理解最近关于 Agentic UI 和 Browser-Native DSH 的大图景，先读本文的[研究总览](#研究总览)，再读[综合报告](dsh-browser-native-agentic-ui-research.md)，最后查看[browser-native-dsh-poc](browser-native-dsh-poc/README.md)。
+如果只想理解最近关于 Agentic UI 和 Browser-Native DSH 的大图景，先读本文的[研究总览](#研究总览)，再读[综合报告](dsh-browser-native-agentic-ui-research.md)和[Web UI 与框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)，然后查看[browser-native-dsh-poc](browser-native-dsh-poc/README.md)及其[assistant-ui 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)。
 
 当前最重要的事实边界是：v2 PoC 已经证明真实 DSH Agent Loop 可以在 Dedicated Worker 中运行，并通过同源 LLM proxy 和远程 Session persistence 工作；它还没有证明业务 UI capability、业务 action 授权或完整 Agentic UI 已经实现。
 
@@ -18,9 +18,11 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 - [研究总览](#研究总览)
 - [推荐阅读路径](#推荐阅读路径)
 - [Agentic UI 与 Browser-Native](#agentic-ui-与-browser-native)
+- [Web UI 质量与框架选型](#web-ui-质量与框架选型)
 - [Cloud Agent、Durability 与隔离](#cloud-agentdurability-与隔离)
 - [工程实现与运营](#工程实现与运营)
 - [Browser-Native PoC 目录地图](#browser-native-poc-目录地图)
+- [PoC 手动验收与经验](#poc-手动验收与经验)
 - [证据层级与状态标记](#证据层级与状态标记)
 - [当前统一结论](#当前统一结论)
 - [维护规则](#维护规则)
@@ -34,21 +36,26 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 1. 阅读本文的[研究总览](#研究总览)和[当前统一结论](#当前统一结论)。
 2. 阅读[Browser-Native 环境下实现 Agentic UI：DSH 综合深度调研报告](dsh-browser-native-agentic-ui-research.md)的 Summary、[PoC 事实核查](dsh-browser-native-agentic-ui-research.md#dsh-与-poc-的事实核查)和[最终判断](dsh-browser-native-agentic-ui-research.md#最终判断)。
-3. 阅读 [Browser-native DSH PoC README](browser-native-dsh-poc/README.md) 的当前实现快照和验证章节。
+3. 阅读 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)的[结论先行](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#结论先行)和[按产品场景选择集成位置](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#按产品场景选择集成位置)。
+4. 阅读 [Browser-native DSH PoC README](browser-native-dsh-poc/README.md) 的当前实现快照和验证章节。
+5. 如果要验证“assistant-ui 接管聊天、DSH 保留执行和 Session 事实”，运行 [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)。
+6. 需要亲自验收时，按 [Browser-Native DSH PoC 手动验收说明](browser-native-dsh-poc/manual-acceptance.md) 启动真实或 scripted backend，并分别验证两个 UI 入口。
 
 ### 三十分钟形成技术判断
 
 按下面顺序阅读：
 
 1. [DSH Agentic UI 事实核查](dsh-agentic-ui-research.md)：理解既有 SaaS GUI、DSH Tool view、Conversation Node 和业务 API 的关系。
-2. [Browser-Native Agent Loop 研究](dsh-browser-native-agent-loop-research.md)：理解 Agent Loop 驻留位置、浏览器 Tool、同源 LLM proxy 和相关生态。
-3. [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)：理解 Worker、Cloud Workspace、本机桥接、持久化和 owner handoff 的运行时限制。
-4. [Browser-Native 实施方案](dsh-browser-native-agent-implementation-plan.md)：查看协议、包归属、测试矩阵、迁移和上线限制。
-5. [Browser-Native PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和[进度记录](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)：区分设计提案与实际验证。
+2. [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)：理解当前 UI 的工程质量、具体交互闭环、通用能力缺口和第三方方案的职责边界。
+3. [Browser-Native Agent Loop 研究](dsh-browser-native-agent-loop-research.md)：理解 Agent Loop 驻留位置、浏览器 Tool、同源 LLM proxy 和相关生态。
+4. [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)：理解 Worker、Cloud Workspace、本机桥接、持久化和 owner handoff 的运行时限制。
+5. [Browser-Native 实施方案](dsh-browser-native-agent-implementation-plan.md)：查看协议、包归属、测试矩阵、迁移和上线限制。
+6. [Browser-Native PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和[进度记录](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)：区分设计提案与实际验证。
+7. [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)：验证第三方聊天层不另建 Agent Loop，如何通过 DSH Session Controller 接入真实 Worker Host。
 
 ### 需要实现或审查代码时
 
-优先阅读[实施方案](dsh-browser-native-agent-implementation-plan.md)，再读 [PoC 协议](browser-native-dsh-poc/protocol.md)、[PoC v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和对应的实现、测试文件。研究报告解释为什么这样设计；协议、代码和测试才分别拥有字段、行为和验证事实。
+优先阅读[实施方案](dsh-browser-native-agent-implementation-plan.md)，再读 [PoC 当前实现与限制](browser-native-dsh-poc/README.md)、[PoC v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和对应的实现、测试文件。研究报告解释为什么这样设计；v2 规划定义目标，代码和测试确定实际字段、行为和验证范围。[旧版实验协议](browser-native-dsh-poc/protocol.md)只用于追溯独立实验，不能作为 v2 的当前协议说明。
 
 ### 研究 Cloud Agent 或 Durable Workspace 时
 
@@ -64,7 +71,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 | 研究轴 | 回答的问题 | 主要成果 |
 |---|---|---|
-| Interaction plane：Agentic UI | 用户在 Chat UI 中看到什么、操作什么，怎样复用已有 SaaS GUI | `dsh-agentic-ui-research.md`、`dsh-browser-native-agentic-ui-research.md` |
+| Interaction plane：Agentic UI | 用户在 Chat UI 中看到什么、操作什么，怎样复用已有 SaaS GUI，以及当前 Web UI 是否适合作为实现基础 | `dsh-agentic-ui-research.md`、`dsh-browser-native-agentic-ui-research.md`、`dsh-web-ui-quality-and-agentic-ui-framework-assessment.md` |
 | Execution plane：Browser-Native | Agent Loop 在哪里运行，怎样访问浏览器状态和前端 Tool | `dsh-browser-native-agent-loop-research.md`、`dsh-browser-native-runtime-research.md`、PoC v2 |
 | Durability plane：Cloud/Durable Agent | 页面退出、机器故障或长任务发生后，谁继续执行以及状态如何恢复 | Cloud Agent 系列、Remote Durable Workspace、实施方案中的 handoff 章节 |
 
@@ -92,6 +99,7 @@ Browser-Native Agentic UI 不是“模型生成任意 HTML”，而是“浏览�
 
 ```text
 Agentic UI 事实核查
+  → Web UI 质量与框架选型评估
   → Browser-Native Agent Loop 研究
   → Browser-Native Runtime 研究
   → Browser-Native 实施方案
@@ -99,7 +107,7 @@ Agentic UI 事实核查
   → 综合 Agentic UI 方案
 ```
 
-这不是严格的提交或实现顺序，而是读者理解问题的推荐顺序。综合报告把前四层的产品命题、运行时边界和 PoC 事实合并；PoC 仍然是“已实现/已验证”最重要的证据入口。
+这不是严格的提交或实现顺序，而是读者理解问题的推荐顺序。综合报告把产品命题、运行时边界和 PoC 事实合并；PoC 仍然是“已实现/已验证”最重要的证据入口。
 
 -----
 
@@ -114,6 +122,15 @@ Agentic UI 事实核查
 3. [综合报告中的 Typed UI Capability 设计](dsh-browser-native-agentic-ui-research.md#typed-ui-capability-设计)
 4. [综合报告中的客户创建时序](dsh-browser-native-agentic-ui-research.md#完整业务时序客户创建)
 
+### 路径 A.1：Web UI 和框架选型
+
+适合回答“当前 DSH Web UI 的实现质量如何、应该改造还是引入第三方框架”。
+
+1. [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)
+2. [assistant-ui 与 CopilotKit：Browser-Native DSH 的长期 UI 选型](assistant-ui-copilotkit-browser-native-dsh-assessment.md)：核查框架能力，并判断未来是否值得替换聊天或应用交互职责。
+3. [Web Client architecture](../subsystems/web-client.md)
+4. [Web Client Slots](../subsystems/slots.md)
+
 ### 路径 B：运行时和协议实现
 
 适合回答“怎样把 Agent Loop 放进 Worker、怎样调用模型、怎样持久化和恢复”。
@@ -121,7 +138,7 @@ Agentic UI 事实核查
 1. [Browser-Native Agent Loop 研究](dsh-browser-native-agent-loop-research.md)
 2. [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)
 3. [Browser-Native 实施方案](dsh-browser-native-agent-implementation-plan.md)
-4. [PoC v2 协议](browser-native-dsh-poc/protocol.md)
+4. [PoC v2 当前实现与限制](browser-native-dsh-poc/README.md#当前实现快照)
 5. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 
 ### 路径 C：直接复现 PoC
@@ -130,9 +147,10 @@ Agentic UI 事实核查
 
 1. [PoC README](browser-native-dsh-poc/README.md)：入口、运行命令和当前边界。
 2. [v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)：为什么选择现有 preview、Worker profile 和 provider injection。
-3. [v2 协议](browser-native-dsh-poc/protocol.md)：wire DTO、错误码、幂等、owner 和持久化语义。
+3. [v2 当前实现快照](browser-native-dsh-poc/README.md#当前实现快照)：正式 Session DTO、owner token、30 秒 lease/续租和持久化语义，以及尚未实现的请求幂等账本、跨进程 owner epoch 和完整恢复目标。
 4. [v2 backend](browser-native-dsh-poc/backend-v2.mjs)、[Worker](browser-native-dsh-poc/browser-native-worker.ts)和[providers](browser-native-dsh-poc/browser-native-providers.ts)：实现入口。
 5. [backend contract tests](browser-native-dsh-poc/tests/backend-v2.test.mjs)和[browser E2E](browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs)：行为证据。
+6. [手动验收说明](browser-native-dsh-poc/manual-acceptance.md)：真实浏览器、工具调用、多轮记忆、流式输出、刷新续接和故障排查。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -156,6 +174,16 @@ Agentic UI 事实核查
 | [dsh-browser-native-runtime-research.md](dsh-browser-native-runtime-research.md) | Worker、Cloud Workspace、本机桥接、持久化和恢复 | Worker 不是 durable daemon，浏览器隔离不是业务授权；执行世界、存储、owner 和 handoff 必须分别建模。 |
 | [dsh-browser-native-agent-implementation-plan.md](dsh-browser-native-agent-implementation-plan.md) | 工程实施方案 | 复用 DSH Loop 和 Session；用独立 `/api/llm`、Main/Worker typed bridge、profile 分类、owner fencing 和 durable handoff 逐阶段落地。 |
 | [dsh-browser-native-agentic-ui-research.md](dsh-browser-native-agentic-ui-research.md) | 两类研究的综合报告 | UI capability 是连接既有 SaaS UI 和 Browser Worker Agent Loop 的关键缺口；PoC runtime substrate 已有，业务 capability seam 尚未完成。 |
+| [dsh-web-ui-quality-and-agentic-ui-framework-assessment.md](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md) | Web UI 质量与第三方框架选型 | DSH Web UI 的状态、事件、插件和恢复基础值得保留；已有问答和审批闭环，但通用业务 action seam 尚未完成。DSH 工作台优先扩展现有 UI，成熟 SaaS 则保留原有外壳并接入 DSH Runtime。 |
+| [assistant-ui-copilotkit-browser-native-dsh-assessment.md](assistant-ui-copilotkit-browser-native-dsh-assessment.md) | 第三方框架事实核查与长期演进 | Browser-Native 不要求永久保留 DSH 当前 UI；assistant-ui 与 CopilotKit 都有应用交互能力，长期采用取决于替换收益、状态/执行归属及生产接入条件。 |
+
+-----
+
+## Web UI 质量与框架选型
+
+专题结论是：DSH Web UI 的工程基础适合承载 Agentic UI，但内部 extension model 具有较高学习成本。DSH Web 作为产品工作台时，应先复用现有 Session、Conversation、Tool view、Slots 和具体交互插件；已有 SaaS 作为产品外壳时，应保留原有 UI，再按需采用 external-store UI、前端 Tool API 或互操作协议。完整的代码证据、第三方官方资料和改造路线见 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)。
+
+这不是永久自有全部 UI 的决定。长期可以用 assistant-ui 接管专业聊天体验，或在确有跨业务模块的交互标准化收益时采用 CopilotKit；二者的能力范围存在重叠，不能按“只能聊天”与“才能操作应用”划分。生产 Worker 接入、许可/支持条件、协议版本和兼容性验收见[长期选型专题](assistant-ui-copilotkit-browser-native-dsh-assessment.md)。
 
 -----
 
@@ -195,9 +223,9 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | 文件 | 事实所有权 |
 |---|---|
 | [README.md](browser-native-dsh-poc/README.md) | 运行入口、v2 当前快照、验证命令、目录边界和历史版本说明。 |
-| [browser-native-dsh-plan-v2.md](browser-native-dsh-poc/browser-native-dsh-plan-v2.md) | v2 实施规格、接入决策、profile、backend 协议和完成定义。 |
+| [browser-native-dsh-plan-v2.md](browser-native-dsh-poc/browser-native-dsh-plan-v2.md) | v2 设计目标、接入决策、profile、backend 协议要求和验收定义；不代表条目均已实现。 |
 | [browser-native-dsh-progress-v2.md](browser-native-dsh-poc/browser-native-dsh-progress-v2.md) | 当前人工验收、测试结果、已修复缺口和未完成范围。 |
-| [protocol.md](browser-native-dsh-poc/protocol.md) | PoC wire DTO、错误码、禁止字段、幂等、owner 和持久性语义的协议 owner。 |
+| [manual-acceptance.md](browser-native-dsh-poc/manual-acceptance.md) | 两个 PoC 共用的启动命令、手动验收脚本、Session 证据和故障排查。 |
 | [change-ledger.md](browser-native-dsh-poc/change-ledger.md) | PoC 目录外接线、upstream 重放和删除条件。 |
 
 ### v2 实现和测试入口
@@ -206,14 +234,32 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 |---|---|
 | [browser-native-worker.ts](browser-native-dsh-poc/browser-native-worker.ts) | 在 Dedicated Worker 中启动真实 DSH Host。 |
 | [browser-native-providers.ts](browser-native-dsh-poc/browser-native-providers.ts) | Worker 侧远程 `SessionPersistence` 和 `LlmAdapter` provider。 |
-| [backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) | Session backend、durability、owner fencing 和 LLM proxy。 |
+| [backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) | 当前 v2 的实际 Session/LLM 字段、durability、进程内 owner token 校验和 30 秒 lease 过期；没有请求去重账本或跨进程 owner epoch。 |
 | [run-v2.mjs](browser-native-dsh-poc/run-v2.mjs) | 构建产物上的 v2 launcher。 |
 | [tests/backend-v2.test.mjs](browser-native-dsh-poc/tests/backend-v2.test.mjs) | backend contract tests。 |
 | [tests/browser-native-v2.e2e.mjs](browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs) | 真实 DSH Web UI + Chromium + backend 的组合 E2E。 |
 
+### assistant-ui 增量 PoC 入口
+
+| 文件 | 用途 |
+|---|---|
+| [assistant-ui-browser-native-dsh-poc/README.md](assistant-ui-browser-native-dsh-poc/README.md) | 运行方式、职责分界、事实归属、验证范围和明确限制。 |
+| [assistant-ui-browser-native-dsh-poc/src/dsh-client.ts](assistant-ui-browser-native-dsh-poc/src/dsh-client.ts) | 在不挂载原生 DSH UI 的情况下启动 Worker、正式 Client composition 和 Session retain。 |
+| [assistant-ui-browser-native-dsh-poc/src/dsh-session-adapter.ts](assistant-ui-browser-native-dsh-poc/src/dsh-session-adapter.ts) | 将 DSH Session event source 适配为 assistant-ui External Store，并将输入回调到 `Session.prompt()`。 |
+| [assistant-ui-browser-native-dsh-poc/tests/browser-native-assistant-ui.e2e.mjs](assistant-ui-browser-native-dsh-poc/tests/browser-native-assistant-ui.e2e.mjs) | assistant-ui 页面、真实 DSH Worker、backend Session durability 和刷新恢复的组合验证。 |
+| [assistant-ui-browser-native-dsh-poc/tests/browser-native-assistant-ui.safari.e2e.mjs](assistant-ui-browser-native-dsh-poc/tests/browser-native-assistant-ui.safari.e2e.mjs) | Safari.app WebDriver、真实 LLM、工具调用、失败恢复、流式 DOM 轨迹和刷新续接验证。 |
+
 ### 历史实验和阅读注意事项
 
-旧版 [implementation-plan.md](browser-native-dsh-poc/implementation-plan.md)、[progress.md](browser-native-dsh-poc/progress.md)、[protocol.mjs](browser-native-dsh-poc/protocol.mjs)、`public/` 和对应测试用于追溯独立协议实验。它们不能证明 v2 已经运行真实 DSH `ctx.agentLoop`；判断当前实现时以 `README.md`、`*-v2.md`、`protocol.md`、v2 实现和 v2 测试为准。
+旧版 [implementation-plan.md](browser-native-dsh-poc/implementation-plan.md)、[progress.md](browser-native-dsh-poc/progress.md)、[protocol.md](browser-native-dsh-poc/protocol.md)、[protocol.mjs](browser-native-dsh-poc/protocol.mjs)、`public/` 和对应测试用于追溯独立协议实验。旧协议中的 renew、15 秒 lease 和 request-id replay 不适用于 v2；判断当前实现时以 v2 源码和测试为准，以 README 与进度记录辅助定位；v2 规划仍包含未实现的目标。
+
+-----
+
+## PoC 手动验收与经验
+
+两个 PoC 的共同验收入口是 [Browser-Native DSH PoC 手动验收说明](browser-native-dsh-poc/manual-acceptance.md)。该说明书同时记录启动方式、真实 Chrome/Safari 验收步骤、工具调用和多轮窗口记忆的观察点、Session 后端证据、owner 冲突和 timeout 排查，以及从旧版 PoC 迁移到真实 DSH Agent Loop 的经验教训。
+
+验收时应先区分三种事实：页面是否显示了 live read model，Session 是否记录了正式事件，turn 是否以完成或明确错误结束。assistant-ui 与原生 Web UI 的可见组件可以不同，但在相同 v2 profile 和 backend 下应共享 DSH Agent Loop、工具生命周期和 Session 事实。
 
 -----
 
@@ -224,7 +270,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 阅读任一研究文档时，按下面顺序判断“这件事是否已经实现”：
 
 1. 当前 checkout 的源代码和实际测试结果。
-2. PoC README、progress、protocol 和 change ledger 中的已验证记录。
+2. PoC README、progress 和 change ledger 中注明版本的验证记录；旧协议文档只说明旧实验。
 3. DSH package README、subsystem 文档和架构文档。
 4. 实施方案中的明确规格和验收标准。
 5. 研究报告中的设计判断、外部项目文档和生态比较。
@@ -249,7 +295,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 - Browser-Native 的严格含义是 Agent Loop 驻留 Dedicated Worker，并通过同源、受限的 LLM proxy 请求模型；Backend callback 不能被误写成 Browser-Native Loop。
 - Main Thread 负责真实 UI、结构化 state adapter、用户手势和受控 action；Worker 负责 DSH Loop、Tool orchestration 和 Session projection；Backend 负责身份、租户、业务授权、权威副作用和 durable job。
 - DSH 当前已有 Agent Loop、Tool lifecycle、Session persistence、Tool view、Conversation Node 和 Worker runtime 基座；它们需要通过新的 typed UI capability seam 组合，而不是复制一个 Browser Agent Loop。
-- v2 PoC 已验证真实 DSH Worker Host、`ctx.agentLoop`、远程 Session persistence、同源 LLM proxy、flush durability 和 owner fencing；它尚未验证业务 UI state、业务 action、业务 API 授权或完整 UI continuation。
+- v2 PoC 已验证真实 DSH Worker Host、`ctx.agentLoop`、远程 Session persistence、同源 LLM proxy、flush durability 和当前 backend instance 内的 owner fencing；它尚未验证业务 UI state、通用业务 action、业务 API 授权或 Browser-Native handoff。DSH 已有问答和审批等具体 UI continuation，但不属于 v2 PoC 的业务验证范围。
+- assistant-ui 增量 PoC 已验证聊天层可以通过 `ExternalStoreRuntime` 消费 DSH Session 投影并把文本 prompt 送入同一个 DSH Agent Loop；它没有把 assistant-ui history、AG-UI state 或 frontend tool callback 提升为 DSH 的权威事实。
 - 模型可见的 UI state 必须能从 Session event/projection 重建；业务提交必须以 SaaS backend 的 receipt 为准；连接丢失时必须区分 rejected、committed 和 unknown。
 - 浏览器适合主持当前交互，不适合成为 provider secret、业务授权、长期运行或多租户隔离的最终权威；长期任务需要显式 handoff，且 handoff 后只能有一个 active owner。
 - 最小下一步应是一个真实垂直闭环，例如 `customer.create` 或 release approval：既有 surface + typed state + user approval + SaaS API + idempotency/receipt + Session replay。
@@ -266,7 +313,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 
 - 新增研究草稿时，先判断它属于哪条研究轴，再在本文对应表格和阅读路径中加入入口。
 - 新增 `docs/drafts/*.md` 时，把文件登记到 `scripts/translation-pairing.manifest.json` 的 `excluded` 清单；本目录是中文研究草稿集合，不自动要求英文 counterpart。
-- 新增 PoC 文件时，先更新 [PoC README](browser-native-dsh-poc/README.md) 的目录边界和验证入口；协议字段以 [protocol.md](browser-native-dsh-poc/protocol.md) 为 owner。
+- 新增 PoC 文件时，先更新 [PoC README](browser-native-dsh-poc/README.md) 的目录边界和验证入口；当前 v2 字段与行为引用 backend/providers 和对应测试，未来要求放在 v2 规划中；[protocol.md](browser-native-dsh-poc/protocol.md)只保留旧版独立实验协议。
 - 研究文档中的“已验证”和“建议”必须显式区分；运行时行为以源码和测试为准，设计目标以实施方案为准。
 - `docs/drafts/` 当前不在 VitePress 网站的公开页面清单中；不要把这里的研究草稿误当作已发布用户文档。需要正式发布时，应先迁移到合适的 `docs/` owner，并按双语和网站 manifest 规则处理。
 - 不在本文复制专题文档的完整协议、代码或历史；本文只维护目录关系、阅读顺序、证据边界和跨主题综述。

@@ -213,7 +213,7 @@ MCP Apps 的隔离和宿主能力模型值得借鉴，尤其是“不把第三�
 
 ### PoC v2 已经证明的内容
 
-v2 的 `browser-native-worker.ts` 通过 `createWorkerHost()`、静态模块表和 profile overlay 启动现有 DSH Host；`apps/web/src/preview.ts` 只有在 URL 带 `browser-native=1` 时才选择 docs-owned Worker 和 overlay。这个 opt-in 设计保持普通 preview 行为不变。
+v2 的 `browser-native-worker.ts` 通过 `createWorkerHost()`、静态模块表和 profile overlay 启动现有 DSH Host。`apps/web/src/preview.ts` 静态导入并始终实例化 docs-owned Worker，只有 profile overlay 受 `browser-native=1` 控制；不带该参数时保留原有 overlay 列表，但不能据此认定 Worker entry 没有改变。
 
 `browser-native-providers.ts` 在 Worker 内提供正式 `SessionPersistence` 和 `LlmAdapter` 的远程实现。它使用同源 `/api/browser-native/session/*` 和 `/api/browser-native/llm`，把正式 DSH `StreamChunk` 映射为 NDJSON wire item，再将远程错误映射为 DSH persistence/LLM 错误。Session live events 通过单独的写队列串行 append；`flush()` 和 `close()` 触发远程持久化。
 
@@ -222,6 +222,7 @@ v2 的 `browser-native-worker.ts` 通过 `createWorkerHost()`、静态模块表�
 - Session create/open/read/append/flush/close/list/stat 路由使用 `protocolVersion`、`requestId`、session id、owner token 和 contiguous `expectedNextSeq`。
 - `append` 只更新内存可见日志；`flush` 使用临时文件、文件 `fsync`、原子 rename 和目录 `fsync` 建立 durability receipt。
 - Session 写 owner 由 claim 得到；失去 owner 或序列不连续时拒绝写入。
+- `requestId` 是必填的协议关联字段；v2 backend 没有基于它的请求去重或结果重放账本。owner token 只存在于当前 backend 进程内，没有 `renew`、expiry 或 owner epoch；Worker 强制终止后，等待不会自动释放写权。完整恢复要求属于 v2 规划的未来验收条件，不能把旧版实验协议中的 lease/replay 写成 v2 已完成能力。
 - LLM route 只接受同源 backend 提供的逻辑入口；真实 provider URL、model 和 API key 由 Node backend 从环境文件读取，不进入 Worker、页面、Session event、响应 body 或日志。
 - OpenAI-compatible streaming 被转换为 DSH `StreamChunk` 风格的 NDJSON；请求断开会 abort upstream fetch。
 
@@ -242,6 +243,8 @@ PoC 的 E2E 主要断言用户消息、assistant message、LLM route、flush 和
 - 浏览器用户、租户、角色、资源范围和业务授权已经在 PoC backend 中得到验证；当前 v2 backend 是本地研究服务，不是多租户生产 BFF。
 
 因此，把 PoC 写成“Agentic UI 已实现”是事实错误。准确表述是：**Browser-Native DSH runtime substrate 已实现；Agentic UI capability seam 尚未实现。**
+
+这里的“capability seam 尚未实现”指通用业务能力层，不是否定现有的领域级人机交互。DSH 已有 `ui-user-questions` 和 `ui-approval` 的等待、回答、审批、超时、取消和后续消息路径；PoC v2 尚未把这些具体交互推广成带业务 state、授权、幂等 receipt 和 unknown recovery 的通用 UI action 协议。关于 Web UI 质量与第三方框架的独立评估见 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)。
 
 -----
 
@@ -608,7 +611,7 @@ DSH 可以把 Browser-Native 作为一个显式 opt-in execution profile，复�
 
 ### 不能从当前成果推导什么
 
-- 当前 PoC 不能证明 Agentic UI 已经实现；它证明的是 Browser-Native DSH runtime substrate。
+- 当前 PoC 证明的是 Browser-Native DSH runtime substrate，不是通用业务 Agentic UI；这不否定 DSH 已有的问答、审批和后续回答等具体人机交互闭环。
 - DSH 的 Tool view、Conversation Node、Worker tunnel 和 Session persistence 不能单独替代 UI capability registry、业务授权或 durable handoff。
 - WebMCP、MCP Apps、A2UI、AG-UI 和前端 Tool 框架不是互相可替换的统一协议；应按职责借鉴。
 - Browser Worker、IndexedDB、OPFS、Origin 校验或 owner token 任何一个单独都不能成为多租户业务安全边界。
@@ -635,7 +638,7 @@ DSH 可以把 Browser-Native 作为一个显式 opt-in execution profile，复�
 - [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)
 - [Browser-Native 可执行实施方案](dsh-browser-native-agent-implementation-plan.md)
 - [Browser-Native DSH PoC README](browser-native-dsh-poc/README.md)
-- [PoC v2 协议](browser-native-dsh-poc/protocol.md)
+- [PoC 旧版独立实验协议](browser-native-dsh-poc/protocol.md) — 仅作为历史参考，不描述当前 v2 行为。
 - [PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)、[browser-native-dsh-progress-v2.md](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 
 ### 外部参考入口

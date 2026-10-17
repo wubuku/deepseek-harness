@@ -40,6 +40,8 @@ Options:
   --llm <mode>          scripted or real (default: scripted)
   --env-file <path>     Backend-only dotenv file for real mode
   --model <name>        Override the configured real-provider model
+  --llm-timeout-ms <n>  Upstream model request deadline (default: 60000)
+  --owner-lease-ms <n>  Write lease duration in milliseconds (default: 30000)
   --help                Show this message
 
 Open:
@@ -62,6 +64,8 @@ function parseArgs(argv) {
     llmMode: 'scripted',
     envFile: undefined,
     model: undefined,
+    llmTimeoutMs: undefined,
+    ownerLeaseMs: undefined,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const option = argv[index]
@@ -89,6 +93,14 @@ function parseArgs(argv) {
       index += 1
     } else if (option === '--model') {
       values.model = requiredValue(argv, index, option)
+      index += 1
+    } else if (option === '--llm-timeout-ms') {
+      values.llmTimeoutMs = Number(requiredValue(argv, index, option))
+      if (!Number.isSafeInteger(values.llmTimeoutMs) || values.llmTimeoutMs < 1) throw new Error('--llm-timeout-ms must be a positive safe integer')
+      index += 1
+    } else if (option === '--owner-lease-ms') {
+      values.ownerLeaseMs = Number(requiredValue(argv, index, option))
+      if (!Number.isSafeInteger(values.ownerLeaseMs) || values.ownerLeaseMs < 300) throw new Error('--owner-lease-ms must be an integer of at least 300')
       index += 1
     } else {
       throw new Error(`unknown option: ${option}`)
