@@ -6,7 +6,7 @@ description: "DSH 当前 Web UI 的实现质量、Agentic UI 适配能力和第�
 
 ## Summary
 
-本文评估 DSH 当前 Web UI 是否适合作为 Agentic UI 的工程基础，并回答是否需要引入第三方前端框架。本文的产品前提是：SaaS 已经有成熟 Web GUI、业务操作界面和组件，但原来没有聊天层；AI assistant 的目标不是只增加聊天泡泡，而是让用户用自然语言调用这些既有能力，并把原有业务交互自然地带入 Agentic UI。DSH Web UI 的主体本身也是聊天、会话、Tool 和 Conversation 的呈现层，因此它与 assistant-ui 的正确比较是“哪一个更适合承载丰富的 Agentic UI”。PoC 之后的明确结论是：**第一版 Agentic UI 应基于 DSH 原生 Web UI 的 Conversation/Tool/Slot 体系改造，不采用 assistant-ui 作为主基础。** assistant-ui PoC 证明了外部聊天层可以接入 DSH，但只覆盖消息、流式文本和基础 Tool card；它没有证明把已有 SaaS 业务交互带进对话的成本更低。更合理的默认拓扑是“既有 SaaS GUI + DSH 原生 Agentic UI 聊天层 + DSH Browser-Native Agent Runtime + typed capability adapter”。
+本文评估 DSH 当前 Web UI 是否适合作为 Agentic UI 的工程基础，并回答是否需要引入第三方前端框架。本文的产品前提是：SaaS 已经有成熟 Web GUI、业务操作界面和组件，但原来没有聊天层；AI assistant 的目标不是只增加聊天泡泡，而是让用户用自然语言调用这些既有能力，并把原有业务交互自然地带入 Agentic UI。DSH Web UI 的主体本身也是聊天、会话、Tool 和 Conversation 的呈现层，因此它与 assistant-ui 的正确比较是“哪一个更适合承载丰富的 Agentic UI”。PoC 和代码考古后的修正结论是：**DSH Web UI 的内部扩展性很强，但它不是面向任意既有 SaaS 的通用 Agentic UI SDK。对一般的既有 SaaS，默认应采用 assistant-ui 或 SaaS 自有聊天层承载新增的聊天/Agentic UI，DSH 保留 Browser-Native Agent Loop、Tool orchestration 和 Session 事实；只有 DSH-native 产品，或明确愿意采用 DSH Client/Conversation/Slot 组合模型的 SaaS，才应优先使用 DSH 原生 Web UI。** assistant-ui PoC 证明外部聊天层可以接入同一 DSH Loop，但没有证明业务 capability、授权或 receipt 已经自动解决；这些仍需由 SaaS 集成层建设。
 
 这里的“已有 SaaS GUI”与“聊天层”是两件不同的事：前者是已经存在的业务页面、表单、组件、路由和业务操作；后者是现在才新增的 Agent 入口。本文比较的是新增的这一层，不建议为了加入 Agent 而替换整个 SaaS GUI，也不建议第一版同时挂载 DSH Web UI 和 assistant-ui 两套面向用户的聊天层。选择 DSH 原生 Web UI，表示把它作为 SaaS 中新增的唯一聊天/Agentic UI surface；选择 assistant-ui，表示由它承担同一职责，同时保留 DSH Worker、Agent Loop、Session 和业务后端，但不再额外挂载 DSH Web UI。
 
@@ -14,9 +14,10 @@ description: "DSH 当前 Web UI 的实现质量、Agentic UI 适配能力和第�
 
 - [结论先行](#结论先行)
 - [前提澄清：已有业务 GUI 不等于聊天层](#前提澄清已有业务-gui-不等于聊天层)
-- [尖锐结论：当前应选 DSH 原生 UI](#尖锐结论当前应选-dsh-原生-ui)
+- [结论修订：DSH 原生 UI 不是所有 SaaS 的默认答案](#结论修订dsh-原生-ui-不是所有-saas-的默认答案)
 - [评估方法与证据边界](#评估方法与证据边界)
 - [PoC 后两个聊天层的直接比较](#poc-后两个聊天层的直接比较)
+- [DSH Web UI 的扩展性：强在哪里，弱在哪里](#dsh-web-ui-的扩展性强在哪里弱在哪里)
 - [当前 Web UI 的实现质量](#当前-web-ui-的实现质量)
 - [Agentic UI 的适配程度](#agentic-ui-的适配程度)
 - [第三方框架的职责比较](#第三方框架的职责比较)
@@ -45,32 +46,34 @@ description: "DSH 当前 Web UI 的实现质量、Agentic UI 适配能力和第�
 | 场景 | 推荐 | 原因 |
 |---|---|---|
 | 产品就是 DSH Web 或 DSH 派生工作台 | 优先扩展 DSH 原生聊天层 | DSH Web UI 与 Session、Conversation、Tool view、Slots、问答和审批共享内部语义，避免重新建立消息和 Tool 投影。 |
-| 既有 SaaS 是产品外壳，原来没有聊天层，重点是把业务交互带入 Agentic UI | **优先基于 DSH 原生 Web UI 改造** | 它已经直接理解 DSH 的 Session、Tool、Conversation、问答、审批和恢复语义；这些正是把业务交互带入对话所需的基础。 |
+| 既有 SaaS 是产品外壳，原来没有聊天层，重点是新增聊天/Agentic UI | **默认采用 assistant-ui 或 SaaS 自有聊天层，DSH 只做 Runtime/Session owner** | 既有 SaaS 不需要迁移到 DSH 的 boot graph、bundle、Slot 和 Client composition；assistant-ui 能直接承担新增聊天层，但业务 capability、授权和恢复仍需 adapter。 |
 | 既有 SaaS 只需要聊天、流式回复和少量 Tool card | 可以采用 assistant-ui | assistant-ui 的嵌入体验更轻，但这不是本文关注的完整 Agentic UI 目标。 |
-| 团队明确要求聊天层独立于 DSH UI，且愿意承担业务交互 adapter | 采用 assistant-ui，但接受更高的 Agentic UI 实现成本 | PoC 证明它不需要保留 DSH UI；同时证明复杂业务组件、Tool projection、交互恢复和 DSH 语义都要重新接线。 |
-| 团队愿意采用 DSH Client/Conversation/Slot 体系 | 采用 DSH 原生 Web UI 作为聊天/Agentic UI 层 | 可以减少 DSH 事件到外部消息模型的转换，但会把 SaaS 更深地绑定到 DSH 的 UI composition 和插件模型。 |
+| 团队明确要求聊天层独立于 DSH UI，且愿意承担业务交互 adapter | 采用 assistant-ui | PoC 证明它不需要保留 DSH UI；它把聊天层接入成本集中在可测试的 adapter，而不是把整个 SaaS 前端绑定到 DSH UI composition。 |
+| 产品就是 DSH Web 或团队愿意采用 DSH Client/Conversation/Slot 体系 | 采用 DSH 原生 Web UI 作为聊天/Agentic UI 层 | 可以减少 DSH 事件到外部消息模型的转换，但会把 SaaS 更深地绑定到 DSH 的 boot graph、bundle、插件和 Slot 模型。 |
+| 既有 React SaaS 要让 Agent 深度控制表单、前端状态和组件交互 | 条件性评估 CopilotKit | 它的前端 Tool、HITL 和 shared state 方向更贴近应用交互；但与 DSH 的 Tool/continuation 语义重叠更大，不能直接作为第二个 Agent Loop。 |
 | 既有 SaaS 希望把业务表单和页面变成 Agentic UI | 先选择能承载复杂交互的层，再建设 capability | 关键工作是 typed capability、状态版本、授权、用户确认、receipt 和 unknown recovery；assistant-ui 的聊天 primitives 不能自动提供这些语义。 |
 | 需要跨 Host 分发可交互 widget | 评估 MCP Apps 或受限 A2UI catalog | 这类方案解决 widget 隔离、动态 UI 描述或跨宿主互操作，不是 DSH Web UI 的默认替代品。 |
 
-**针对“已有丰富 SaaS GUI、原来没有聊天层、重点是 Agentic UI”的明确答案：基于 DSH 原生 Web UI 的 Conversation/Tool/Slot 机制改造。不要先引入 assistant-ui。**
+**针对“已有丰富 SaaS GUI、原来没有聊天层、重点是 Agentic UI”的明确答案：默认采用 assistant-ui 或 SaaS 自有聊天层，DSH 保留 Agent Loop、Tool orchestration 和 Session 事实；不要因为 DSH 的内部插件扩展性强，就把既有 SaaS 迁移成 DSH Web Client。**如果产品本身就是 DSH Web，或团队明确接受 DSH 的 Client composition，才把 DSH 原生 UI 作为主路线。
 
-这个结论不意味着 assistant-ui 不能实现 Agentic UI，也不意味着 DSH 原生 Web UI 已经提供通用 SaaS capability。差异在于起点和总成本：DSH 原生层已经直接理解 DSH 的 Session、Tool、Conversation 和交互插件；assistant-ui 通过 External Store 消费 DSH 投影，若要呈现复杂业务组件、用户确认、跨轮次状态和后续续跑，就必须额外定义 parts、adapter、capability 和恢复语义。对于“把已有 GUI 带进 Agent 对话”的核心目标，assistant-ui 会把最难的问题转化为一套新的前端语义适配工程，而不是消除它。
+这个结论不意味着 assistant-ui 自动实现了 Agentic UI，也不意味着 DSH 原生 Web UI 质量不足。两者解决的是不同的集成成本：DSH 原生层直接理解 DSH 的 Session、Tool、Conversation 和插件语义，但要求外部 SaaS 接受 DSH 的 Web Client composition；assistant-ui 通过 External Store 或其他 adapter 消费 DSH 投影，减少聊天层自研和 DSH UI 绑定，但仍必须定义 parts、业务 capability、授权、用户确认、跨轮次状态、receipt 和恢复语义。对于“把已有 GUI 带进 Agent 对话”的核心目标，最难的部分不是聊天气泡，而是 capability seam；选择 assistant-ui 的价值是避免把这项业务工作与 DSH Web UI 迁移绑定在一起。
 
-## 尖锐结论：当前应选 DSH 原生 UI
+## 结论修订：DSH 原生 UI 不是所有 SaaS 的默认答案
 
-在给定背景下，两个方案的优劣不是平均的：
+在给定背景下，必须把“DSH 的内部扩展性”和“外部 SaaS 的接入成本”分开评价：
 
 | 目标 | 更优选择 | 原因 |
 |---|---|---|
 | 先做普通聊天 | assistant-ui | 聊天 primitives、composer 和消息呈现接入较轻。 |
-| 把 SaaS 的真实表单、状态和业务操作带入对话 | **DSH 原生 Web UI** | DSH 已有 Tool view、Conversation Node、Slot、问答/审批和 Session projection，扩展点正好位于 Agentic UI 的核心位置。 |
-| 让 UI action 在刷新、重连和回放后保持正确 | **DSH 原生 Web UI** | 原生 UI 直接消费 DSH 事件与生命周期；assistant-ui 需要把这些事实重新投影成自己的 message/part/runtime 状态。 |
-| 最大限度降低对 DSH UI 的耦合 | assistant-ui | 但代价是把 DSH 语义、Tool UI、交互和恢复逻辑转移到 adapter 与业务组件中。 |
-| 第一条真实业务闭环的交付风险 | **DSH 原生 Web UI** | assistant-ui PoC 尚未验证业务 GUI 嵌入，只验证了聊天和基础 Tool projection。 |
+| 把 SaaS 的真实表单、状态和业务操作带入对话 | **取决于 capability seam，不由聊天框架单独决定** | DSH 原生 UI 和 assistant-ui 都需要 typed state/action、业务授权、receipt 和恢复；任何框架都不能自动把旧页面变成业务 capability。 |
+| 让 UI action 在刷新、重连和回放后保持正确 | **DSH 作为事实 owner，聊天层作为可替换 read model** | 原生 UI 少一层投影；assistant-ui 多一层 adapter，但只要 DSH Session 是权威来源，两者都可以正确恢复。 |
+| 最大限度降低对 DSH Web UI 的耦合 | **assistant-ui** | 它可以完全替换可见聊天层；代价是维护 DSH 事件到 message/part/runtime 的映射。 |
+| 最大限度复用 DSH 既有 Conversation/Tool 语义 | **DSH 原生 Web UI** | 但这份收益只在 SaaS 接受 DSH Client/Conversation/Slot 组合模型时成立。 |
+| 第一条既有 SaaS 业务闭环的迁移风险 | **assistant-ui 通常更低** | 它不要求把 SaaS 路由、设计系统和业务组件迁入 DSH boot graph；业务 capability 适配仍是必需工作。 |
 
-所以，**当前应选择 DSH 原生 Web UI 作为 Agentic UI 的第一承载基础**。这不是因为 DSH Web UI 的视觉一定更好，而是因为它更接近真正要解决的问题：将 Tool、业务状态、用户确认、跨轮次 Conversation 和可回放结果组成一个可操作的 Agent UI。
+所以，**对于一般既有 SaaS，当前应选择 assistant-ui（或 SaaS 自有聊天层）作为新增 Agentic UI 的第一承载层，并让 DSH 保留执行与事实；对于 DSH-native 产品，才选择 DSH 原生 Web UI。**这不是因为 assistant-ui 自动提供了业务 Agentic UI，而是因为它把新增聊天层的产品职责与既有 SaaS GUI 解耦，同时不要求引入第二个 Agent Loop。
 
-assistant-ui 只有在以下条件成立时才值得成为主路线：团队明确接受“自己拥有 DSH 到外部 UI 的完整语义 adapter”；业务交互可以被稳定抽象为 assistant-ui parts/tools；并且独立视觉、低 DSH 耦合或未来替换聊天 runtime 的收益，已经大于重新实现 DSH Agentic UI 语义的成本。当前 PoC 没有证明这些条件成立。
+DSH 原生 UI 只有在以下条件成立时才值得成为主路线：产品本身就是 DSH Web，或团队愿意把 DSH Client/Conversation/Slot 作为前端基础，并接受由 DSH boot graph、bundle 和插件模型约束业务 UI。assistant-ui 只有在团队愿意拥有 DSH 到外部 UI 的语义 adapter，并且独立视觉、低 DSH 耦合或聊天能力复用的收益大于 adapter 成本时才应采用。当前 PoC 证明 adapter 是可行的，也证明它仍是明确的工程职责；它没有证明 DSH 原生 UI 对外部 SaaS 更便宜。
 
 这里的“DSH 语义兼容”不表示 assistant-ui 页面还要保留一份 DSH Web UI，而是表示原生 DSH UI 不需要通过外部消息模型重新映射 DSH 的 Session、Tool、Conversation 和交互状态。若选择 assistant-ui，DSH Web UI 可以完全不挂载；当前增量 PoC 正是通过不实例化 `AppWebEntry`、排除会自动恢复 DSH UI 导航的 entries 来做到这一点。此时只有一个可见聊天层，assistant-ui 是 UI owner，DSH Worker/Session 是执行与事实 owner。
 
@@ -86,11 +89,19 @@ assistant-ui 只有在以下条件成立时才值得成为主路线：团队明�
 
 这里的“选择聊天层”不是永久保留全部 DSH 呈现实现的决定。长期可以让成熟框架接管明确的聊天职责；只要它消费 DSH 的权威事实，就不等于新增 Agent Loop。进一步核查和长期选型见 [Browser-Native DSH 的长期 UI 选型：assistant-ui 与 CopilotKit](assistant-ui-copilotkit-browser-native-dsh-assessment.md)。
 
+## DSH Web UI 的扩展性：强在哪里，弱在哪里
+
+DSH Web UI 的扩展性在 DSH 内部是强的：Host、Remote、Client model、UI adapter、Conversation、Slot 和 renderer 已经分层；插件可以通过 `dsh.client`、Slot declaration、Tool view 和 Conversation Node 加入能力，而不必修改 Agent Loop。这个设计适合 DSH 自己的 Web 工作台和愿意采用 DSH Client composition 的产品。
+
+它对外部 SaaS 的扩展性则不是“拿来即嵌”的强。外部产品需要接入 DSH Host 生成的 boot graph、插件 bundle/module graph、Slot 注册、DSH Session/Conversation event model 和 DSH 的生命周期；已有 React/Vue 组件、路由、设计系统、登录态和业务 store 仍要经过 adapter 才能进入这些扩展点。DSH Web UI 没有被证明是一个可以直接渲染 `<DshChat />`、自动接管任意 SaaS 组件的通用 SDK。
+
+因此当前评价应分成四层：DSH 内部插件扩展强；DSH 自己的工作台扩展强；外部 React SaaS 接入中等偏弱；非 React SaaS 接入弱。这个判断不是否定 DSH Web UI，而是防止把“内部架构可组合”误读成“外部产品迁移成本低”。
+
 -----
 
 ## 评估方法与证据边界
 
-源码评估基线是 2026-10-17 的 `research` 分支，依据包括当前源码、测试、Web Client 架构文档、既有 Agentic UI 报告和两套 Browser-Native PoC，外部框架只引用其官方文档。代码事实以源码和测试为准；实施方案中的 lease、handoff、幂等和多租户条款仍属于设计目标，不能替代已经通过的测试。
+源码评估基线是 2026-10-18 的 `research` 分支，依据包括当前源码、测试、Web Client 架构文档、既有 Agentic UI 报告和两套 Browser-Native PoC，外部框架只引用其官方文档。代码事实以源码和测试为准；实施方案中的 lease、handoff、幂等和多租户条款仍属于设计目标，不能替代已经通过的测试。
 
 重点检查了 Web Client 的 Host/Client/Conversation/Slot 分层、Tool view 的 owner props、问答和审批的 continuation、Session stream 恢复、错误边界、长会话渲染和浏览器 E2E。
 
@@ -98,7 +109,7 @@ assistant-ui 只有在以下条件成立时才值得成为主路线：团队明�
 
 前轮研究还使用已有构建产物运行了两个 keyless replay 的 Chromium 场景：`connection-recovery.e2e.ts` 的 2 项测试，以及 `question-composer.e2e.ts` 的 6 项测试，结果全部通过。断线场景验证页面不导航、根节点仍挂载、Session baseline 重建和未发送草稿保留；问答场景验证提交、刷新后的只读记录和晚到回答。源码测试与已有 GUI 构建产物的运行证据不能等同于本次从当前源码重新完整构建后的验证。
 
-本次重评运行了 `assistant-ui` adapter 单测（7 项）、assistant-ui scripted E2E、owner 竞争 E2E，以及原生 DSH v2 backend 和 Chromium E2E（8 项）；结果全部通过。此前 PoC 记录的真实 Chrome/Safari 验收还覆盖真实 LLM、多轮记忆、`todo_write`、失败恢复、流式文本、刷新续接和 durable Session。上述证据仍未覆盖完整 Browser-Native 业务 action 闭环或多租户安全审计，因此本文不宣称任一 UI 已通过生产级性能、灾备或安全认证。
+本次重评沿用 PoC 已记录的 `assistant-ui` adapter 单测、scripted E2E、owner 竞争 E2E，以及原生 DSH v2 backend 和 Chromium E2E 结果；此前真实 Chrome/Safari 验收覆盖真实 LLM、多轮记忆、`todo_write`、失败恢复、流式文本、刷新续接和 durable Session。上述证据仍未覆盖完整 Browser-Native 业务 action 闭环或多租户安全审计，因此本文不宣称任一 UI 已通过生产级性能、灾备或安全认证。尤其需要注意：原生 DSH PoC 没有测量“外部 SaaS GUI 接入 DSH 原生 Web UI”的迁移成本，不能以 assistant-ui adapter 的代码量反推 DSH 原生 UI 对一般 SaaS 一定更便宜。
 
 -----
 
@@ -137,7 +148,7 @@ Browser-Native DSH Worker：Agent Loop、Tool orchestration、Session
 SaaS backend：身份、租户授权、业务提交和 receipt
 ```
 
-在这个背景下，如果验收目标只是自然语言输入、流式回复和基础 Tool card，assistant-ui 的嵌入优势可以成立；如果验收目标是把 SaaS 原有业务交互自然地带入对话，DSH 原生 Web UI 是更低风险的第一承载层，因为它已经拥有更接近该问题的 Conversation/Tool/Slot 扩展点。assistant-ui 仍可作为后续替换方案，但必须先证明它能减少而不是转移 Agentic UI 适配成本。本报告不把“已有聊天层”作为当前前提。
+在这个背景下，如果验收目标只是自然语言输入、流式回复和基础 Tool card，assistant-ui 的嵌入优势可以成立；如果验收目标是把 SaaS 原有业务交互自然地带入对话，真正的风险中心是 capability、授权、receipt 和恢复，而不是聊天层本身。DSH 原生 Web UI 拥有更接近该问题的 Conversation/Tool/Slot 扩展点，但也要求外部 SaaS 接入 DSH 的 Client composition；assistant-ui 则增加一层事件和命令 adapter，但不要求迁移 SaaS 的前端装配。对于一般既有 SaaS，后者通常是更合适的起步边界；对于 DSH-native 产品，前者才是更低风险的第一承载层。本报告不把“已有聊天层”作为当前前提。
 
 无论选择哪一个聊天层，Agentic UI 的业务价值都来自复用既有 SaaS 的业务组件：模型读取受限 observation，Agent 请求 typed intent，用户在原有表单或确认面板中修改/确认，SaaS backend 授权并提交，receipt 和结果再回到 Session。聊天层只负责让这条链路可理解、可操作和可恢复。
 
@@ -222,7 +233,7 @@ DSH 有 turn rail 的 virtualizer、流式增量合并和长历史性能场景�
 
 一个 Agentic UI Tool 至少需要模型调用、结构化结果、可见呈现、事件记录和后续输入。DSH 当前已有 Tool schema、canonical output、Tool call/result 生命周期、Session persistence、Tool view、Conversation projection、问答/审批和 Agent continuation 的若干具体实现。
 
-这使 DSH 可以直接开始一个垂直 PoC，而不需要先引入新的 Agent Loop 或聊天框架。优先选择一个已有业务 API 能完成授权和查询的闭环，例如“打开客户创建表单、预填字段、用户确认、服务端创建、回传 receipt”。
+这使 DSH 可以直接开始一个垂直 PoC，而不需要先引入新的 Agent Loop；它不决定聊天层必须采用 DSH 原生 UI。一般既有 SaaS 可以用 assistant-ui 或自有聊天层呈现这个闭环，DSH 继续负责 Loop、Tool lifecycle 和 Session；DSH-native 产品则可以直接复用 DSH Web UI。优先选择一个已有业务 API 能完成授权和查询的闭环，例如“打开客户创建表单、预填字段、用户确认、服务端创建、回传 receipt”。
 
 ### 当前真正缺的是通用业务 capability 层
 
@@ -331,9 +342,9 @@ Browser-Native PoC 证明的是运行位置和连接方式：现有 DSH Web UI �
 
 至少测试重复点击、请求超时、响应丢失、页面刷新、Worker 重启、Session reconnect、旧 state version、两个 tab 竞争、业务授权拒绝和后端已提交但前端未收到响应。`unknown` 不能自动降级成失败后重试，也不能自动展示成功。
 
-### 阶段 5：再决定是否引入第三方协议或 UI runtime
+### 阶段 5：按产品边界选择聊天层和协议
 
-当第二个真实业务用例出现共同的消息、前端 Tool、HITL 或 widget 需求时，再选择局部依赖。选择标准不是 API 是否漂亮，而是它是否删除 DSH 当前明确拥有的代码和测试，同时不建立第二个事实源。
+对一般既有 SaaS，先把 assistant-ui 或 SaaS 自有聊天层作为新增聊天 surface 的候选；对 DSH-native 产品，再优先复用 DSH 原生 Web UI。只有当多个业务模块需要统一的前端 Tool、HITL、共享状态或跨 Agent 接入时，才进一步评估 CopilotKit 或 AG-UI。选择标准不是 API 是否漂亮，而是它是否删除 DSH 当前明确拥有的代码和测试，同时不建立第二个事实源或第二个 continuation owner。
 
 -----
 
@@ -341,11 +352,13 @@ Browser-Native PoC 证明的是运行位置和连接方式：现有 DSH Web UI �
 
 本专题把前一轮回答落档，并同步修正既有研究对当前实现范围的表述。
 
-第一，`dsh-agentic-ui-research.md` 原先把“Tool view 没有通用业务提交或 continuation API”写在缺口表中，这个判断仍然成立，但需要补充已有的领域级例外。`ui-user-questions`、`ui-approval` 和对应的 interaction package 已经提供具体的等待、回答、审批、超时、取消和后续消息路径；修订后把“缺少通道”限定为“缺少通用业务 action seam”。
+第一，前一轮报告把“没有聊天层的既有 SaaS”直接归入 DSH 原生 Web UI 优先，这个结论过度外推。本次修订把它改为：DSH 原生 UI 适合 DSH-native 产品或愿意采用 DSH Client composition 的 SaaS；一般既有 SaaS 默认选择 assistant-ui 或自有聊天层，DSH 只保留 Runtime/Session/事实所有权。
 
-第二，Browser-Native PoC v2 的 `backend-v2.mjs` 要区分“要求 requestId”与“实现 idempotency ledger”，也要区分“当前 backend instance 的 in-memory owner token”与“跨重启的 lease/epoch/接管协议”。v2 当前代码有 owner claim、assertion、close release、contiguous sequence 和 flush durability；没有基于 requestId 的请求去重或结果重放账本，也没有 renew、expiry 或 owner epoch。既有实施方案中的这些项目仍是未来验收标准，不应被写成 v2 已完成能力。
+第二，`dsh-agentic-ui-research.md` 原先把“Tool view 没有通用业务提交或 continuation API”写在缺口表中，这个判断仍然成立，但需要补充已有的领域级例外。`ui-user-questions`、`ui-approval` 和对应的 interaction package 已经提供具体的等待、回答、审批、超时、取消和后续消息路径；修订后把“缺少通道”限定为“缺少通用业务 action seam”。
 
-第三，[protocol.md](browser-native-dsh-poc/protocol.md)描述的是旧版独立 HTML/loop 实验，不是 v2 的协议 owner；索引和文档范围说明已据此修正。preview 的 opt-in 参数只控制 profile overlay，docs-owned Worker entry 在所有 preview 中都会实例化，不能把它描述成 query 参数才启用的 Worker 替换。
+第三，Browser-Native PoC v2 的 `backend-v2.mjs` 要区分“要求 requestId”与“实现 idempotency ledger”，也要区分“当前 backend instance 的 in-memory owner token”与“跨重启的 lease/epoch/接管协议”。v2 当前代码有 owner claim、assertion、close release、contiguous sequence 和 flush durability；没有基于 requestId 的请求去重或结果重放账本，也没有 renew、expiry 或 owner epoch。既有实施方案中的这些项目仍是未来验收标准，不应被写成 v2 已完成能力。
+
+第四，[protocol.md](browser-native-dsh-poc/protocol.md)描述的是旧版独立 HTML/loop 实验，不是 v2 的协议 owner；索引和文档范围说明已据此修正。preview 的 opt-in 参数只控制 profile overlay，docs-owned Worker entry 在所有 preview 中都会实例化，不能把它描述成 query 参数才启用的 Worker 替换。
 
 第四，PoC v2 的 Chromium E2E 证明真实 DSH Web UI、Worker Host、`ctx.agentLoop`、同源 LLM route、正式 Session event 和 flush durability 的一次闭环；assistant-ui 增量 PoC 进一步证明外部聊天层可以在不复制 Loop 和权威历史的情况下接入同一闭环。两套 PoC 都没有证明业务 UI action、SaaS 授权、receipt、unknown recovery、完整 handoff 或生产多租户安全。综合报告的“当前成果”应按这个范围阅读。
 
