@@ -27,7 +27,8 @@
 
 - Chrome 真实模型十轮：`/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-saas-real-chrome-xk9gTS/artifacts`。
 - WebKit 真实模型十轮：`/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-saas-real-webkit-FkJu4J/artifacts`。
-- Chrome scripted 最终代码回归：`/tmp/dsh-saas-scripted-release.log` 记录对应目录。
+- Chrome scripted 最终十轮回归：`/tmp/dsh-saas-scripted-chrome-gated.log` 记录对应目录。
+- WebKit scripted 最终十轮回归：`/tmp/dsh-saas-scripted-webkit-gated.log` 记录对应目录。
 - 双标签/重启/等待中刷新：`/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-saas-lifecycle-n68l3C/artifacts`。
 - 以上临时路径供本机复核；[持久化证据](evidence/README.md)保存两种引擎的真实模型摘要、六张业务表单截图、scripted 与生命周期摘要，详细 Session 不作为产品 fixture 提交。
 
@@ -57,3 +58,7 @@
 ## 启动检查的注意事项
 
 原生 UI 首次有预览版确认。一次额外启动冒烟遗漏点击“继续”，虽然能定位输入框，但 Session 没有产生 `user/input`，因此等待回复超时；按正式 E2E 和手动说明先完成预览确认后，`4217` 三入口均完成 GUI 操作与真实模型回复。定位这类问题应检查 Session 是否收到输入，而不是把页面上输入框存在当作 Agent 已启动的证据。
+
+最终复核发现旧 scripted WebKit 留存只有九条消息，没有新增流式断言；十轮版本补跑时，15ms 间隔的模拟短回复被原生 UI 合并成一次 DOM 更新，长度采样只有 `70`，断言失败。真实模型的较慢流已在两种引擎通过，但不能据此把旧 scripted 记录宣称为十轮通过。测试现改为在模拟流首个文本 chunk 后暂停上游，确认浏览器实际呈现该片段后才放行其余输出；没有放宽流式断言、增加重试或用固定长 sleep 掩盖问题。该钩子仅用于 scripted 测试，不改变真实模型代理或 DSH Loop。
+
+修正测试后，Chrome/WebKit 各三条路线的十轮回归均通过并更新持久摘要；原生流式样本分别为 `[16,48,70]` 与 `[16,70]`，assistant-ui/CopilotKit 均有多个递增中间长度。9 项单测也再次通过。真实模型证据对应的真实执行代码未改变，没有将此次 scripted 测试重跑冒充为新的真实模型验收。

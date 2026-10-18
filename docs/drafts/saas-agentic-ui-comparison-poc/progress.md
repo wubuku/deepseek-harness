@@ -24,3 +24,4 @@
 - Chrome/WebKit 真实模型最新运行都返回退出码 0；每路线十条用户消息，无浏览器错误，业务 receipt 各 4。脱敏汇总与六张表单截图保存在 [evidence](evidence/README.md)。
 - `4217` 供手动验收的真实服务另经安装版 Chrome 三入口冒烟，均完成 GUI 保存和模型回复；日志 `/tmp/dsh-saas-manual-service-verified.log`。首次原生预览确认的说明见[测试记录](test-results.md#启动检查的注意事项)。
 - 已通过 `pnpm run test:docs`（21 项）和 `pnpm run doc-sync`（43 项）；聚焦源码 lint、共享核心严格类型检查及 lockfile 固定依赖核对通过。最终补充文档仅再执行对应链接、排版和引用检查；这些检查不表示全前端适配器均已通过严格类型检查。
+- 已补齐最后一轮 Chrome/WebKit scripted 十轮证据，修正快速模拟流与 DOM 批处理的时序假设；三路线均通过，9 项单测再次通过。故障、首片段可观察门控与实际证据见[测试记录](test-results.md#启动检查的注意事项)。

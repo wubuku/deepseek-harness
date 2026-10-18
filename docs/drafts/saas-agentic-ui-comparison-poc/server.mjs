@@ -20,7 +20,7 @@ export async function createComparisonServer(options) {
     if (url.pathname === '/api/browser-native/llm') metrics.modelRequests += 1
     if (!url.pathname.startsWith('/api/saas/')) {
       if (options.llmMode === 'scripted' && url.pathname === '/api/browser-native/llm') {
-        void scripted(request, response, app).catch(error => send(response, 400, { error: String(error) }))
+        void scripted(request, response, app, options.testHooks).catch(error => send(response, 400, { error: String(error) }))
       } else original(request, response)
       return
     }
@@ -75,7 +75,7 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-async function scripted(request, response, app) {
+async function scripted(request, response, app, testHooks) {
   const input = await body(request)
   if (input.sessionId !== undefined) app.store.assertOwner(app.store.get(input.sessionId), input.ownerToken)
   const messages = input.messages
@@ -102,6 +102,7 @@ async function scripted(request, response, app) {
     chunk({ type: 'block-start', index: 0, blockType: 'text' })
     for (const part of output.match(/.{1,16}/gs) ?? []) {
       chunk({ type: 'text-delta', index: 0, text: part })
+      await testHooks?.afterScriptedTextChunk?.({ prompt: text, prefix: part })
       await new Promise(resolveDelay => setTimeout(resolveDelay, 15))
     }
     chunk({ type: 'block-end', index: 0, block: { type: 'text', text: output } })

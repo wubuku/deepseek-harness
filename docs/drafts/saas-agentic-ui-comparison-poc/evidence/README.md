@@ -12,7 +12,7 @@
 
 ## 无密钥回归
 
-- [Chrome scripted](scripted-chrome.json)、[WebKit scripted](scripted-webkit.json)：固定工具行为的 UI/协议回归；不作为真实模型理解和记忆的证据。
+- [Chrome scripted](scripted-chrome.json)、[WebKit scripted](scripted-webkit.json)：最终十轮 UI/协议回归；模拟流先等待页面呈现首片段，再放行剩余内容，避免短流被 UI 批处理导致不稳定的长度采样。不作为真实模型理解和记忆的证据。
 - [生命周期](lifecycle.json)：三路线的双标签写权冲突、显式 flush 后 backend 重启、等待表单时刷新后继续对话。`pendingRefreshContinues` 不表示旧表单或旧 waiter 可恢复。
 
 本实验不按真实模型的读取工具次数或 DOM 更新次数给框架排名；模型有选择自由，UI 的批处理也会影响长度采样。没有测量生产包大小或对接真实 SaaS 的总工程成本。

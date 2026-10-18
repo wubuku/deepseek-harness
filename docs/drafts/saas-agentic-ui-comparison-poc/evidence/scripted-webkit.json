@@ -3,36 +3,57 @@
     "ui": "native",
     "real": false,
     "browser": "webkit",
-    "sessionId": "session-0c247cdc-8b51-4e8c-96b5-f0fd27a6fae1",
-    "users": 9,
+    "sessionId": "session-88468ac9-9cca-4b20-9383-2320d0d520db",
+    "users": 10,
     "toolCalls": 6,
     "toolResults": 6,
     "receipts": 4,
-    "modelRequests": 15,
+    "modelRequests": 16,
+    "streamSamples": [
+      16,
+      70
+    ],
+    "viewerMode": "api-denial",
     "errors": []
   },
   {
     "ui": "assistant",
     "real": false,
     "browser": "webkit",
-    "sessionId": "session-6ab26ed9-c04a-48da-be69-e654a0950218",
-    "users": 9,
+    "sessionId": "session-70860ffb-0c80-492e-bd6e-64ccf664b801",
+    "users": 10,
     "toolCalls": 6,
     "toolResults": 6,
     "receipts": 4,
-    "modelRequests": 15,
+    "modelRequests": 16,
+    "streamSamples": [
+      16,
+      32,
+      48,
+      63,
+      70
+    ],
+    "viewerMode": "api-denial",
     "errors": []
   },
   {
     "ui": "copilot",
     "real": false,
     "browser": "webkit",
-    "sessionId": "session-8faeb052-a06a-4de1-90a5-281fff945aaa",
-    "users": 9,
+    "sessionId": "session-9034eb2a-5247-4edd-b89a-2565cb601bca",
+    "users": 10,
     "toolCalls": 6,
     "toolResults": 6,
     "receipts": 4,
-    "modelRequests": 15,
+    "modelRequests": 16,
+    "streamSamples": [
+      16,
+      32,
+      48,
+      63,
+      70
+    ],
+    "viewerMode": "api-denial",
     "errors": []
   }
 ]

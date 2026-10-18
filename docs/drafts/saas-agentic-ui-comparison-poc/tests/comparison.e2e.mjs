@@ -14,10 +14,20 @@ const only = process.argv.find(argument => argument.startsWith('--ui='))?.slice(
 const dataDir = await mkdtemp(join(tmpdir(), `dsh-saas-${real ? 'real' : 'scripted'}-${webkit ? 'webkit' : 'chrome'}-`))
 const artifacts = resolve(dataDir, 'artifacts')
 await mkdir(artifacts)
+const streamPrompt = '请用三条项目列表简述如何读取工作台、填写表单、等待人工确认。每条约三十字，不调用工具。'
+let heldChunk
+let holdNextChunk = false
 const app = await createComparisonServer({
   llmMode: real ? 'real' : 'scripted', dataDir,
   distRoot: resolve(import.meta.dirname, '../../../../apps/web/dist'),
   envFile: process.env.DSH_POC_ENV_FILE ?? '/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/docs/drafts/.env',
+  testHooks: {
+    async afterScriptedTextChunk({ prompt, prefix }) {
+      if (!holdNextChunk || prompt !== streamPrompt) return
+      holdNextChunk = false
+      await new Promise(release => { heldChunk = { prefix, release } })
+    },
+  },
 })
 const results = []
 let browser
@@ -81,7 +91,13 @@ try {
         observer.observe(document.querySelector('.chat-body'), { subtree: true, childList: true, characterData: true })
         window.__streamObservation = { samples, observer }
       }, assistantSelector)
-      await send('请用三条项目列表简述如何读取工作台、填写表单、等待人工确认。每条约三十字，不调用工具。')
+      holdNextChunk = !real
+      await send(streamPrompt)
+      if (!real) {
+        await wait('scripted prefix reaches DOM before stream completion', async () => heldChunk !== undefined && await page.evaluate(({ selector, prefix }) => [...document.querySelectorAll(selector)].at(-1)?.textContent?.includes(prefix) === true, { selector: assistantSelector, prefix: heldChunk.prefix }))
+        heldChunk.release()
+        heldChunk = undefined
+      }
       await finishAfter(before)
       const streamSamples = await page.evaluate(() => { window.__streamObservation.observer.disconnect(); return window.__streamObservation.samples })
       assert.ok(new Set(streamSamples).size >= 2 && Math.min(...streamSamples) < Math.max(...streamSamples), `UI must render incremental text, observed lengths: ${streamSamples}`)
@@ -202,6 +218,7 @@ try {
     } finally { await context.close() }
   }
 } finally {
+  heldChunk?.release()
   await browser?.close()
   await app.close()
   await writeFile(join(artifacts, 'summary.json'), JSON.stringify(results, null, 2))
