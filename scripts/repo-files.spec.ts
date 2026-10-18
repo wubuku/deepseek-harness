@@ -73,6 +73,22 @@ describe('uniqueRepoFiles', () => {
     }
   })
 
+  it('skips node_modules during recursive scans but preserves literal paths', () => {
+    const tree = makeTree()
+    try {
+      mkdirSync(join(tree.root, 'docs', 'drafts', 'poc', 'node_modules', 'dependency'), { recursive: true })
+      writeFileSync(join(tree.root, 'docs', 'drafts', 'poc', 'README.md'), 'authored\n')
+      writeFileSync(join(tree.root, 'docs', 'drafts', 'poc', 'node_modules', 'dependency', 'README.md'), 'generated\n')
+      expect(uniqueRepoFiles(tree.root, ['docs/**/*.md']).map(file => relative(tree.root, file.abs)))
+        .toEqual([join('docs', 'drafts', 'poc', 'README.md')])
+      expect(uniqueRepoFiles(tree.root, ['docs/drafts/poc/node_modules/dependency/README.md'])
+        .map(file => relative(tree.root, file.abs)))
+        .toEqual([join('docs', 'drafts', 'poc', 'node_modules', 'dependency', 'README.md')])
+    } finally {
+      tree.clean()
+    }
+  })
+
   it('follows repeated literal symlinked directories like node glob and terminates', () => {
     const parent = mkdtempSync(join(tmpdir(), 'repo-files-cycle-'))
     try {

@@ -138,7 +138,7 @@ function expandGlob(root: string, pattern: string): string[] {
     // `**` consumes zero directories here and one directory per recursion.
     visitSegment(dirAbs, dirRel, index + 1)
     for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
-      if (entry.name.startsWith('.') || !entry.isDirectory()) continue
+      if (entry.name.startsWith('.') || entry.name === 'node_modules' || !entry.isDirectory()) continue
       visit(join(dirAbs, entry.name), dirRel === '.' ? entry.name : `${dirRel}/${entry.name}`, index)
     }
   }
