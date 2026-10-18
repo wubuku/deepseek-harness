@@ -8,6 +8,8 @@ description: "基于更新后的 CopilotKit main 源码，核查 Browser-Native 
 
 Browser-Native DSH 可以作为 CopilotKit 背后的 Agent，Agent 不必在服务器上执行，AG-UI 也不限定为 HTTP/SSE。核查版本允许 React Provider 直接接受 `AbstractAgent`，不要求同时配置 Copilot Runtime 或 CopilotKit 云，但官方将生产选项 `selfManagedAgents` 归入 Enterprise Intelligence，当前代码对缺少 key 的行为只是告警，不能把产品定位、代码限制和软件许可证混为一谈。真正需要先验证的是工具调用的执行时序、DSH Session 的权威性，以及取消和恢复如何穿过页面与 Worker。本文记录源码事实和接入建议，不是已经完成 CopilotKit 集成或浏览器 E2E 的证明。
 
+2026-10-19 实施证据补充：[增量 PoC](copilotkit-browser-native-dsh-poc/README.md)已使用 `@copilotkit/react-core@1.79.1` 的 `/v2` API、`AbstractAgent` 和自有 MessagePort 工具桥，验证一个 mock SaaS 业务闭环及真实模型 Chrome/WebKit E2E。它走的是 `useRenderTool` 加 DSH waiter 结算，而不是本文提出的原生前端工具 handler 分段续跑实验；后者仍未验收。Provider 的 `agents__unsafe_dev_only` 也不等于受支持的生产接入。本文保留源码核查与实验建议的范围；当前路线结论见[三份 PoC 重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)，实际执行与限制见[测试记录](copilotkit-browser-native-dsh-poc/test-record.md)。
+
 ## Table of Contents
 
 - [核查基线与证据范围](#verification-baseline-and-evidence)

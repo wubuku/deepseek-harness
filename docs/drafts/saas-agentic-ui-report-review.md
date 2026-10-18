@@ -10,7 +10,7 @@ description: "对外部《SaaS 引入 Agentic UI 深度调研报告》的事实�
 
 外部报告不应原样纳入仓库。它把维护方的产品叙事、生态观察、官方能力和设计推断放在同一证据层级，并把 CopilotKit/AG-UI 推成一般既有 SaaS 的默认主框架。核查后应改为：Controlled、Declarative、Open-ended 是有用的工程选择光谱，但不是已经完成的行业标准分层；assistant-ui、CopilotKit、AG-UI、A2UI、MCP Apps 和 LangChain json-render 解决的是不同层次的问题；没有任何一个框架自动提供 DSH Session 事实、业务授权、幂等提交、receipt 或唯一 continuation owner。
 
-结合当前 DSH 代码和两个 Browser-Native PoC，当前结论保持尖锐而明确：对于“已有丰富业务 GUI、原来没有聊天层”的一般 SaaS，必须直接比较三个新增聊天层候选：DSH 原生 Web UI、assistant-ui 和 CopilotKit。当前推荐不是把 CopilotKit 排除，而是区分三种优势：DSH 原生 Web UI 的 DSH 语义完整度最高，CopilotKit 对 Agent 控制 React SaaS 应用的能力匹配度最高，assistant-ui 对既有 SaaS 的运行时耦合最低且已有真实 DSH 接入证据。针对当前 Browser-Native DSH，第一版默认先用 assistant-ui；若核心 KPI 是跨多个 React 业务模块的前端 Tool、HITL 和共享状态，则先做 CopilotKit + DSH adapter PoC；DSH 原生 Web UI 只在 DSH-native 产品或明确接受 DSH Client/Conversation/Slot 组合模型时优先。
+结合当前 DSH 代码和三份 Browser-Native PoC，当前结论区分“普遍生产默认”与“下一轮验证优先级”：外部报告把 CopilotKit 直接推荐成一般 SaaS 的默认框架仍属过度外推；但对于本研究限定的“已有丰富 React GUI、原来没有聊天层、重点是 Agentic UI”的 SaaS，CopilotKit 是下一轮真实业务试点的首位候选，因为只有其 PoC 实际完成了 mock 业务 UI 的读取、聊天内编辑/确认和原 DSH tool result 闭环。assistant-ui 当前官方文档同样包含 Interactables、工具 UI 和生成式 UI，不应被归类为纯聊天皮肤；这些能力尚未在 DSH PoC 中接入业务流程。CopilotKit PoC 已使用 `1.79.1` 的 `/v2` API，业务工具依赖自写页面桥；尚未验证生产 Agent 注入和原生前端工具调度的额外收益。DSH 原生 Web UI 适合 DSH-native 产品或愿意采用 DSH Client/Conversation/Slot 组合模型的产品。
 
 本文是外部材料的审阅与整合记录，不是对任一框架的生产兼容性承诺。版本、API、许可和托管支持条件应在实施前按目标版本重新核查。
 
@@ -162,16 +162,16 @@ LangChain 当前官方文档把 json-render 作为其 declarative generative UI 
 | 路线 | 最强项 | 最大短板 | 当前判断 |
 |---|---|---|---|
 | DSH 原生 Web UI | DSH Session、Tool、Conversation、Slot、HITL 和回放语义最完整 | 对既有 SaaS 的 Web Client composition、bundle、插件生命周期和 UI 迁移耦合最深 | DSH-native 产品首选；一般 SaaS 只有在愿意采用 DSH 前端体系时选择。 |
-| assistant-ui + DSH | 新增聊天层接入成本较低，能隔离 DSH UI，并已有 Browser-Native DSH 真实 PoC | 业务组件 catalog、App 状态桥、复杂 action 和 HITL 语义需要 adapter | 当前一般既有 SaaS 的默认起步方案；先用 Controlled Tool UI 闭环。 |
-| CopilotKit + DSH | 对 React SaaS 的 Components as Tools、frontend tools、Tool rendering、HITL 和 shared state 能力匹配度最高 | 与 DSH Loop、Tool lifecycle、Session、continuation 和恢复语义重叠最大；当前仓库没有完成组合 PoC | 深度 React 应用交互的高潜路线；先做专项 adapter PoC，不能直接宣布为默认生产方案。 |
+| assistant-ui + DSH | 独立聊天层、External Store/Tool UI/Interactables 等官方能力；已有 DSH 聊天投影 PoC | DSH PoC 未验证这些新交互能力如何串接 SaaS 状态、原始 tool call 与 DSH Session | 作为同一真实业务流程的强挑战者；不能只凭嵌入成本预判 Agentic UI 总成本。 |
+| CopilotKit + DSH | 唯一已验证一个 mock React SaaS 状态/表单/确认/原 DSH result 闭环的路线 | PoC 仅一个 mock action；已采用 `1.79.1` 的 `/v2` API，但生产 Agent 注入、原生工具调度和严格桥接身份尚未验收 | 本题范围内下一轮真实业务试点首位候选；不等于一般 SaaS 的生产默认框架。 |
 
 ### 既有 SaaS、没有聊天层
 
-推荐新增一个唯一聊天层：对一般既有 SaaS 默认采用 assistant-ui；另一条明确路线是扩展 DSH 原生 Web UI。DSH 继续拥有 Browser-Native Agent Loop、Tool orchestration、Session event log 和续跑事实。assistant-ui 的价值是降低聊天呈现和 Tool UI 的自研成本；它不是业务 capability、授权或 Agent Loop 的替代品。
+推荐新增一个唯一聊天层。对已有丰富 React GUI 且以 Agentic UI 为核心目标的 SaaS，下一轮优先用 CopilotKit 对接一个真实业务流程，并用 assistant-ui 的 Interactables/Tool UI 复做同一验收故事；CopilotKit 的生产 Agent 注入、原始 tool call 精确匹配和业务提交安全是技术准入条件。DSH 继续拥有 Browser-Native Agent Loop、Tool orchestration、Session event log 和续跑事实，SaaS backend 继续拥有授权与业务提交。若产品是 DSH-native，则直接扩展 DSH 原生 Web UI。
 
-CopilotKit 不能只作为“以后再说”的附属项：如果 SaaS 是 React，并且目标是让 Agent 跨多个业务模块控制前端状态、组件和用户确认，CopilotKit 在能力匹配度上可能高于 assistant-ui。但这条路线必须先验证 DSH Worker、Session、pending interaction、刷新恢复和唯一 continuation owner；在这些问题验证前，不能把 CopilotKit 说成当前 DSH 的默认生产方案。
+CopilotKit 不能只作为“以后再说”的附属项：如果 SaaS 是 React，并且目标是让 Agent 跨业务界面提供可编辑、可确认的交互，现有 PoC 已在 mock 上验证 DSH Worker、Session、pending tool、刷新恢复、停止和唯一 continuation owner。尚未验证的是生产 API、授权、幂等/receipt、未知副作用对账，以及生产 Agent 注入、原生工具调度的收益和并发/晚到结果下的精确 DSH waiter 结算。故它从“未来专项 PoC”提升为“本题范围的下一轮试点首选”，但不是直接投产的默认框架。
 
-这条结论比“CopilotKit 是默认主框架”更适合 DSH 当前证据，因为 assistant-ui PoC 已经实际验证了外部聊天层接入 DSH Worker/Session 的最小路径，而 CopilotKit + DSH 的 Worker adapter、生产 self-managed 路径和业务 action 闭环尚未在本仓库验证。这里不是偏爱某个项目，而是把已验证路径和未验证路径分开。
+这一限定仍然成立：外部报告提出的“CopilotKit 默认主框架”是普遍化结论，单个 mock PoC 不能支撑；但在用户明确的 React SaaS Agentic UI 场景中，CopilotKit 是当前已有最直接业务交互证据的候选。assistant-ui 的 DSH 接入 PoC 与 CopilotKit 的业务界面 PoC 验证的是不同问题，必须由下一轮同一业务故事的对照测试补齐，不能假装现有三份 PoC 已经完成公平竞赛。
 
 ### DSH-native 产品
 
@@ -219,7 +219,7 @@ A2UI 或 json-render 适合低副作用、长尾、跨端或多样布局的受�
 
 - [DSH Agentic UI 事实核查](dsh-agentic-ui-research.md)保留共享对话和外部协议的逐项核验；本文件补充外部 SaaS Agentic UI 报告的二次审阅，不替代它。
 - [Browser-Native Agentic UI 综合报告](dsh-browser-native-agentic-ui-research.md)负责 Browser-Native 拓扑、Loop、Session、业务 capability 和安全边界；本文件的框架事实核查应与它的边界一致。
-- [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)负责 DSH 原生聊天层与 assistant-ui 的 PoC 后比较；本文件解释为什么没有采纳外部报告“CopilotKit 默认主框架”的强结论。
+- [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)负责三份 PoC 的同口径范围分析和当前路线建议；本文件区分外部报告的过度概括与本题场景下的试点优先级。
 - [Browser-Native DSH 的长期 UI 选型](assistant-ui-copilotkit-browser-native-dsh-assessment.md)负责 assistant-ui/CopilotKit 的长期候选、兼容性、生产接入条件和验收矩阵。
 - [研究草稿导读](README.md)是目录入口；本文件是阅读外部 SaaS Agentic UI 材料时的事实核查入口。
 
@@ -239,4 +239,4 @@ A2UI 或 json-render 适合低副作用、长尾、跨端或多样布局的受�
 
 ## Dev Note
 
-本文完成于 2026-10-18，基于外部报告、官方公开文档、当前 DSH checkout 和已有 Browser-Native PoC 资料。外部项目文档和 package API 会继续变化；进入实施前应固定依赖版本，重新检查导出路径、许可/支持条件、Worker 兼容性和真实业务验收结果。本文没有将未验证的 CopilotKit + DSH 组合写成已完成能力，也没有把 assistant-ui PoC 的聊天层验证夸大为完整 Agentic UI 验证。
+本文初稿完成于 2026-10-18，并于 2026-10-19 根据第三份 CopilotKit PoC 和官方框架文档更新。外部项目文档和 package API 会继续变化；CopilotKit PoC 固定于 `1.79.1` 并已使用 `/v2` API，不能混淆包版本与 API 代际；实施前仍须验证生产 Agent 注入和自写工具桥的严格调用身份。文中也没有把 assistant-ui 新 Interactables/生成式 UI 能力误写成已在 DSH 上完成验证，或把 CopilotKit mock 业务操作夸大为生产集成。

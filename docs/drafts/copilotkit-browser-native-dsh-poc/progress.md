@@ -4,7 +4,7 @@
 
 - **分支**：`poc/copilotkit-browser-native-dsh`
 - **基线**：当前已提交的 `research` 分支 HEAD
-- **状态**：核心集成、SaaS 工作台/Agentic UI、真实模型 Chrome/WebKit E2E、生命周期与 backend 重启恢复均已通过；真实服务仍运行供用户手动验收。
+- **状态**：自有页面桥支持的 SaaS 工作台/Agentic UI、真实模型 Chrome/WebKit E2E、生命周期与 scripted backend 重启恢复已有通过记录；原生前端工具调度、生产 Agent 注入与 adapter/bridge 单测未完成。本轮仅做文档重评，没有重跑 E2E。
 - **固定版本**：`@copilotkit/react-core@1.79.1`、`@copilotkit/react-ui@1.79.1`、`@ag-ui/client@1.0.2`、`@ag-ui/core@1.0.2`；版本由本目录 `package-lock.json` 固定。
 - **真实验收模型**：`gpt-5.6-sol`；凭据由外部 Node backend 从主工作区 `docs/drafts/.env` 读取。
 
@@ -16,6 +16,8 @@
 | 聊天投影 | 完成 | 真实 DSH Session hydration、流式事件、CopilotKit 官方 Chat；未启用第二个 Agent Loop |
 | DSH 工具呈现 | 完成 | 保留 DSH `tool/call`/`tool/result` 身份，Session 事件可回放 |
 | Browser-Native 前端工具 | 完成 | `saas_get_workspace` 与 `saas_create_work_item` 经页面 MessagePort 回到原 DSH waiter |
+| CopilotKit 原生前端工具调度 | 未验收 | 业务闭环采用自有页面桥；`useFrontendTool` probe 注册不等于原生 handler/续跑闭环通过 |
+| adapter/bridge 单测 | 未补齐 | 当前两项单测只覆盖领域状态行为；去重、晚到结果和卸载等仍待覆盖 |
 | SaaS GUI 与 Agentic UI | 完成 | 左侧工作台 + 右侧聊天；聊天操作卡片可改项目/标题/优先级/负责人，确认后更新业务列表和 DSH tool result |
 | 聊天消息排版 | Chrome 与 WebKit 验收通过 | Markdown 列表行距、用户气泡和固定输入框遮挡均以真实浏览器检查；操作卡片确认按钮完整可见 |
 | HITL/取消/Stop | Chrome 与 WebKit 验收通过 | 真实模型多轮、真实 `todo_write`、操作卡片确认、问答批准/拒绝/取消、Stop 后原 DSH turn aborted 且同 Session 可继续 |
@@ -46,6 +48,8 @@ WebKit Session 为 `session-6133121b-b342-4559-9423-a165c1188499`。flush/restar
 
 ## 未完成与限制
 
+- CopilotKit 原生 `useFrontendTool` handler/`useHumanInTheLoop` 续接未完成验收；业务闭环是 `useRenderTool` 加 DSH 自有页面桥。已使用 `/v2` API，不存在因包版本 `1.79.1` 就需要迁移 v2 的结论。
+- Provider 的开发期 Agent 注入、同名 waiter fallback、旧卡片晚到结果、并发结算和副作用安全需在产品采用前验证；当前两项单测不覆盖 adapter/bridge。
 - Safari.app 本体尚未由自动化或人工启动验收；Playwright WebKit 是 WebKit 引擎路径，不等同 Safari.app 本体。
 - 业务 GUI 和业务操作仍为浏览器内 mock，不代表生产 SaaS API 接入完成。
 - 浏览器 Worker 仍受页面生命周期约束；不代表页面关闭后 Agent 持续运行。
@@ -53,6 +57,10 @@ WebKit Session 为 `session-6133121b-b342-4559-9423-a165c1188499`。flush/restar
 - 浏览器 Console 的两个静态 preview 404 与基础 DSH Web bootstrap 相同；本轮未修改仓库外 bootstrap。
 
 ## 过程记录
+
+- 2026-10-19 路线重评：复核三份 PoC 的不等价验收目标、实际包导入、工具桥和两份留存 Session。修正此前 CopilotKit 末位/assistant-ui 普遍默认的建议，也纠正“`1.79.1` 未使用 v2”的误判。统一结论与代码风险由[选型评估](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)维护，验收事实与未执行项由[测试记录](test-record.md)维护。
+- 本轮文档检查：`pnpm run test:docs` 21 项通过，`pnpm run doc-sync` 43 项通过；日志为 `/tmp/dsh-route-reassessment-test-docs.log`、`/tmp/dsh-route-reassessment-doc-sync.log`。出站范围以已 fetch 的 `origin/poc/copilotkit-browser-native-dsh` 为基准核对，仅有研究文档改动；主 worktree 未触碰。
+- 后续开发需明确生产 Worker Agent 注入方式、移除模糊 waiter 匹配、补齐 adapter/bridge 单测，并用相同真实 SaaS 组件/API 对照 assistant-ui，不能以本轮文档提交宣称这些实现已完成。
 
 - 初次浏览器启动发现新 JSX 文件缺少 React import，修正后重建。
 - 首次 SaaS 工具 E2E 暴露工具 handler 没有注册，随后将桥接组件挂载至 CopilotKit Provider 并复测。

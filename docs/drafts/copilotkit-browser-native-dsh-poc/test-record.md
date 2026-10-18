@@ -57,3 +57,12 @@ Playwright WebKit 使用真实 LLM 完成相同 E2E；Session `session-6133121b-
 
 - Safari.app 本体手动验收：未执行；Playwright WebKit 的真实 LLM E2E 已通过，不能当作 Safari.app 本体验收。
 - 生产 SaaS API、真实授权/审计/服务端幂等、receipt、跨用户隔离和页面关闭后后台运行：未实现、未验证；当前业务工作台及操作为本地 mock。
+- CopilotKit 原生 `useFrontendTool` handler 与 `useHumanInTheLoop` 的 DSH 续接：未完成闭环验收。业务工具及问答采用 `useRenderTool` 和自有 DSH 页面桥，不能以其成功替代原生路径的证据。
+- adapter/bridge 的去重、重复结算、旧卡片晚到答案、并发同名工具和卸载单测：未补齐；当前 `npm test` 的两项测试仅覆盖业务状态模型。
+- 受支持的生产 Worker Agent 注入与相应支持条件：未验收；Provider 仍使用 `agents__unsafe_dev_only`。
+
+## 2026-10-19 文档重评的证据复核
+
+本轮没有重跑浏览器或真实模型，只复核 lockfile、源码、E2E 脚本和前述 Chrome/WebKit 两份持久化 Session。两者各为 145 个事件、12 个 turn、19 个 step、1 次标题请求；8 个工具调用均恰好匹配一个结果。工具序列含工作区读取、两次工作项操作、一次 `todo_write` 和四次问答，没有 `browser_native_ui_probe`。浏览器网络和页面错误观察值沿用原验收记录，不从 Session 计数推导。
+
+脚本在工具验收时显式指定 `saas_create_work_item` 或 `ask_user_question`；它证明指定工具的执行/UI/结果闭环，不证明无工具名提示时的路由成功率。mock 工作台和操作卡都是本 PoC 新写的示例，不能替代真实 SaaS 已有组件迁移测试。三条路线未以同一业务任务做成本、性能或可维护性对照，当前推荐和生产准入条件见[路线重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)。

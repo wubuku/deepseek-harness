@@ -60,4 +60,6 @@ PoC 放在 `docs/drafts/` 可避免改动正式 app 和 package，但 `npm ci` �
 
 ## 结论边界
 
+框架版本、API 入口和实际执行者应分别核查。`1.79.1` 包已导出且本 PoC 已使用 `/v2`，不能由 npm 主版本推断 API 代际。聊天内表单跑通也不等于原生 `useFrontendTool` handler 已跑通：本实现是 `useRenderTool` 配合自有页面桥和 DSH waiter。下一阶段应衡量框架真正省下的代码，而不是把自写 bridge 的能力归给框架；详见[三份 PoC 后的重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#copilotkit-实际省了什么仍需自写什么)。
+
 本 PoC 证明 CopilotKit 可以作为新增聊天/Agentic UI 层，通过显式 adapter 将一个 React 业务流程接回 Browser-Native DSH 的同一 Agent Loop 和 Session。它支持将 CopilotKit 优先用于“既有 React GUI，且重点是把业务交互带入聊天”的下一轮真实业务验证；它不证明 CopilotKit 适合所有 SaaS，也没有实现生产 API 授权、幂等、审计、receipt、unknown recovery 或多租户安全。

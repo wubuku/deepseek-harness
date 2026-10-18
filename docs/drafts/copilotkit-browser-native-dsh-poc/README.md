@@ -149,6 +149,8 @@ npm run test:e2e
 
 ## 安全和限制
 
+- 已使用固定 `1.79.1` 包的 `/v2` API。业务工具和问答由 `useRenderTool` 呈现，自写页面桥结算 DSH waiter；未验收 CopilotKit 原生 `useFrontendTool` handler 或 `useHumanInTheLoop` 的完整续接。不要把业务闭环通过写成所有原生功能都已验证。
+- Agent 注入仍为 `agents__unsafe_dev_only`。按工具名/Session 查找等待者的 fallback、旧卡片晚到提交、并发同名工具和 adapter/bridge 单测仍需处理；当前单会话 E2E 不是这些场景的安全证明，详见[代码重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#copilotkit-实际省了什么仍需自写什么)。
 - 业务界面和 `saas_create_work_item` 是浏览器内 mock，不代表生产可直接写入 SaaS。真实集成应替换领域状态函数为受认证、授权、审计和服务端幂等保护的业务 API，保留用户确认与错误语义。
 - 浏览器关闭后 Dedicated Worker 不会继续运行；服务端持久化 Session 不代表后台 Agent 仍在执行。
 - 取消工具调用会产生 DSH tool error；它不是已完成业务操作。重试确认会产生新的 DSH 工具调用，生产副作用必须由 SaaS 后端按稳定 operation id 去重。
@@ -162,4 +164,5 @@ npm run test:e2e
 - [DSH Browser-Native v2 PoC](../browser-native-dsh-poc/README.md)：Worker、Cordis、Agent Loop、Session backend 和真实 LLM 代理的基础实现。
 - [assistant-ui + Browser-Native DSH PoC](../assistant-ui-browser-native-dsh-poc/README.md)：另一种聊天呈现层的增量验证。
 - [CopilotKit 源码核查研究](../copilotkit-browser-native-dsh-source-verification.md)：版本、公开扩展点和实验前风险。
+- [三份 PoC 后的路线重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)：面向成熟 SaaS 的推荐、实际框架收益和未完成的生产采用条件。
 - [实施计划](implementation-plan.md)、[设计说明](design.md)、[实施经验与陷阱](lessons-learned.md)、[进度](progress.md)、[变更清单](change-ledger.md)和[验收记录](test-record.md)。

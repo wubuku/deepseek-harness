@@ -27,6 +27,10 @@ SaaS 已有业务 GUI、业务组件和领域逻辑，但此前没有 AI 聊天�
 
 ## 结论边界
 
+本实现从固定 `1.79.1` 包导入 `@copilotkit/react-core/v2`，不是 v1 API。CopilotKit 提供聊天和 `useRenderTool`，业务执行与等待结算由 DSH Worker 和本地 `BrowserNativeFrontendToolBridge` 完成；`useFrontendTool` 只注册了一个 probe，真实模型验收没有覆盖它。当前没有使用原生 `useHumanInTheLoop` 或分段 AG-UI run，因此不能把可运行的业务 UI 闭环等同于 CopilotKit 原生工具调度也已验收。
+
+Provider 的 `agents__unsafe_dev_only` 是实验接入方式；业务结果结算还有按同名工具查找 waiter 的 fallback。生产采用前需要受支持的 Agent 注入方式、精确调用身份和晚到结果测试，而不是简单加 public key 消除告警。路线收益与风险的统一评价见[三份 PoC 重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)。
+
 实验支持“CopilotKit 可以承载聊天和注册 Agentic UI renderer，同时由 Browser-Native DSH 保留单一 Agent Loop 和 Session”的判断。它也暴露了不可省略的工作：SaaS 需要为页面数据读取、业务动作、表单控件、确认、取消、持久化和权限错误提供明确桥接，单靠聊天组件不会自动带入 SaaS 既有资产。自动化 E2E 覆盖同一 DSH waiter 的 HITL 结算、CopilotKit Stop、失败/取消后继续、单写 owner、flush 和 backend 重启恢复；这些结果说明 adapter 必须显式承担生命周期协调，而非只映射消息与工具卡片。
 
 本 PoC 使用小型模拟工作台，验证的是 UI/工具/执行闭环，不是对复杂真实 SaaS 页面复用成本的广泛评估。生产验证仍需接入真实业务 API、身份与权限、事务边界、重复请求账本、审计日志、用户会话隔离，以及真实浏览器部署环境中的 Safari.app 和服务端恢复故障模式。Playwright WebKit 自动化不等同 Safari.app 手动验收。浏览器 Worker 只在页面生命周期内运行，不是后台 Agent。
