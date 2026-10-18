@@ -1,0 +1,49 @@
+# CopilotKit + Browser-Native DSH overlay. DSH remains the only Agent Loop.
+
+- id: session-persistence-jsonl
+  disabled: true
+
+- id: agent-default-model
+  config:
+    provider: browser-native
+    model: browser-native
+
+- id: preset-standard
+  config:
+    id: standard
+    name: SaaS business assistant
+    order: 1
+    plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: >-
+            You are the assistant for an existing SaaS application. Use only the
+            provided SaaS tools and existing forms. Read current workspace data
+            before proposing an operation. A human may edit the proposed fields;
+            the returned business receipt is authoritative. Never claim a write
+            before ok=true. Report cancellation, permission denial and version
+            conflict without automatically retrying. Do not use code, shell,
+            filesystem or network tools; these capabilities are not provided.
+          suffix: Respond in the user's language. Keep summaries concise.
+
+- insert:
+    - id: session-persistence-browser-native
+      name: './browser-native-session-persistence.js'
+
+    - id: llm-browser-native
+      name: './browser-native-llm.js'
+      inject: [llm]
+
+    - id: copilotkit-frontend-tools
+      name: './copilotkit-frontend-tools.js'
+      inject: [tools]
+
+    - id: copilotkit-user-questions
+      name: './copilotkit-user-questions.js'
+
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+      config:
+        mode: timed
+        timeout: -1

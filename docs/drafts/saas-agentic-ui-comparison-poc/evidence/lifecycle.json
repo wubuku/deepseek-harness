@@ -1,0 +1,26 @@
+[
+  {
+    "ui": "native",
+    "writerConflict": true,
+    "flushedBackendRestart": true,
+    "pendingRefreshContinues": true,
+    "receipts": 0,
+    "errors": []
+  },
+  {
+    "ui": "assistant",
+    "writerConflict": true,
+    "flushedBackendRestart": true,
+    "pendingRefreshContinues": true,
+    "receipts": 0,
+    "errors": []
+  },
+  {
+    "ui": "copilot",
+    "writerConflict": true,
+    "flushedBackendRestart": true,
+    "pendingRefreshContinues": true,
+    "receipts": 0,
+    "errors": []
+  }
+]

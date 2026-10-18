@@ -459,46 +459,46 @@ async function realLlm(response, request, config, body) {
     const decoder = new TextDecoder()
     let buffer = ''
     let text = ''
-    let toolCall
+    const toolCalls = new Map()
+    let nextIndex = 0
+    let textIndex
     let finished = false
-    let started = false
     const consume = data => {
       if (data === '[DONE]') return true
       const item = JSON.parse(data)
       const delta = item.choices?.[0]?.delta
       if (typeof delta?.content === 'string' && delta.content.length > 0) {
-        if (!started) {
-          started = true
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+        if (textIndex === undefined) {
+          textIndex = nextIndex++
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: textIndex, blockType: 'text' } })
         }
         text += delta.content
-        writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: delta.content } })
+        writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: textIndex, text: delta.content } })
       }
-      const providerCall = delta?.tool_calls?.[0]
-      if (providerCall !== undefined) {
-        if (!started) {
-          started = true
-          toolCall = { id: providerCall.id ?? randomUUID(), name: providerCall.function?.name ?? '', arguments: '' }
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
+      for (const providerCall of delta?.tool_calls ?? []) {
+        const providerIndex = providerCall.index ?? 0
+        let toolCall = toolCalls.get(providerIndex)
+        if (toolCall === undefined) {
+          toolCall = { index: nextIndex++, id: providerCall.id ?? randomUUID(), name: '', arguments: '' }
+          toolCalls.set(providerIndex, toolCall)
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: toolCall.index, blockType: 'tool-call' } })
         }
+        if (providerCall.id !== undefined) toolCall.id = providerCall.id
+        toolCall.name += providerCall.function?.name ?? ''
         if (providerCall.function?.arguments) {
           toolCall.arguments += providerCall.function.arguments
-          writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: 0, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: toolCall.index, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
         }
       }
       const finish = item.choices?.[0]?.finish_reason
       if (finish !== undefined && finish !== null) {
-        if (toolCall !== undefined) {
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'tool-call', ...toolCall } } })
-          writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
-        } else {
-          if (!started) {
-            started = true
-            writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
-          }
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
-          writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finish === 'length' ? { kind: 'max-tokens' } : { kind: 'stop' } } })
+        if (toolCalls.size === 0 && textIndex === undefined) {
+          textIndex = nextIndex++
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: textIndex, blockType: 'text' } })
         }
+        if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
+        for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
+        writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finish === 'length' ? { kind: 'max-tokens' } : toolCalls.size > 0 ? { kind: 'tool-calls' } : { kind: 'stop' } } })
         finished = true
         return true
       }

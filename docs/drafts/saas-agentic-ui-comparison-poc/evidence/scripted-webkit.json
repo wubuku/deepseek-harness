@@ -1,0 +1,38 @@
+[
+  {
+    "ui": "native",
+    "real": false,
+    "browser": "webkit",
+    "sessionId": "session-0c247cdc-8b51-4e8c-96b5-f0fd27a6fae1",
+    "users": 9,
+    "toolCalls": 6,
+    "toolResults": 6,
+    "receipts": 4,
+    "modelRequests": 15,
+    "errors": []
+  },
+  {
+    "ui": "assistant",
+    "real": false,
+    "browser": "webkit",
+    "sessionId": "session-6ab26ed9-c04a-48da-be69-e654a0950218",
+    "users": 9,
+    "toolCalls": 6,
+    "toolResults": 6,
+    "receipts": 4,
+    "modelRequests": 15,
+    "errors": []
+  },
+  {
+    "ui": "copilot",
+    "real": false,
+    "browser": "webkit",
+    "sessionId": "session-8faeb052-a06a-4de1-90a5-281fff945aaa",
+    "users": 9,
+    "toolCalls": 6,
+    "toolResults": 6,
+    "receipts": 4,
+    "modelRequests": 15,
+    "errors": []
+  }
+]

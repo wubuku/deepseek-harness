@@ -1,0 +1,33 @@
+{
+  "name": "dsh-saas-agentic-ui-comparison-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node profile-overlay/build-overlay.mjs && vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check:core": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2023,DOM --allowImportingTsExtensions --skipLibCheck src/schemas.ts src/domain.ts src/frontend-bridge.ts",
+    "test:e2e": "node --import tsx tests/comparison.e2e.mjs",
+    "test:e2e:real": "node --import tsx tests/comparison.e2e.mjs --real",
+    "test:e2e:lifecycle": "node --import tsx tests/lifecycle.e2e.mjs",
+    "start": "node --import tsx run.mjs"
+  },
+  "dependencies": {
+    "@ag-ui/client": "1.0.2",
+    "@ag-ui/core": "1.0.2",
+    "@assistant-ui/react": "0.15.29",
+    "@copilotkit/react-core": "1.79.1",
+    "@copilotkit/react-ui": "1.79.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-markdown": "8.0.7",
+    "rxjs": "7.8.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.0",
+    "@types/react-dom": "19.1.0",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3",
+    "vite": "6.4.3"
+  }
+}

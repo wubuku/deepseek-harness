@@ -1,0 +1,4 @@
+node_modules/
+profile-overlay/.build/
+profile-overlay/*.tar.gz
+artifacts/
