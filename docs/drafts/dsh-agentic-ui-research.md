@@ -10,7 +10,7 @@ description: "对共享 ChatGPT 对话中的 Agentic UI 方案逐项做事实核
 
 核心判断是：既有 SaaS 可以把 Agent 作为新的任务编排入口，把经过批准的业务 UI 带入 Chat UI，但 DSH 当前提供的是 Tool 执行、事件回放、Tool view 和 Conversation Node 扩展点，不是一套现成的 CRM Agentic UI 协议。
 
-第一阶段应验证一条强绑定闭环：`自然语言 → 业务 Tool → 既有表单 → 原有 SaaS API → 权威结果 → Agent 继续处理`，而不是先建设任意 UI 生成器、DOM 自动点击器或未隔离的多租户 DSH 公网服务。聊天层的选择应与 Agent Loop 的选择分开：三份 Browser-Native DSH PoC 对比了 DSH 原生 Web UI、assistant-ui 和 CopilotKit。对已有丰富 React GUI 且 Agentic UI 是核心目标的 SaaS，CopilotKit 是目前最值得继续做真实业务闭环验证的候选，因为只有它的 PoC 实际走通了 mock 业务状态、聊天内表单确认和同一 DSH tool result。该证据不足以定案生产选型：assistant-ui 当前官方文档也提供 Interactables、生成式 UI 和工具交互，但本地 PoC 未验证这些路径；CopilotKit PoC 使用 `1.79.1` 的 `/v2` API，但生产 Agent 注入、原生前端工具调度和严格业务调用身份尚未验收。DSH 继续拥有 Agent Loop 和 Session 事实；DSH 原生 Web UI 适合 DSH-native 或愿意采用 DSH Client composition 的产品。
+第一阶段应验证一条强绑定闭环：`自然语言 → 业务 Tool → 既有表单 → 原有 SaaS API → 权威结果 → Agent 继续处理`，而不是先建设任意 UI 生成器、DOM 自动点击器或未隔离的多租户 DSH 公网服务。聊天层的选择应与 Agent Loop 的选择分开：基础同口径实验已经让 DSH 原生 Web UI、assistant-ui 和 CopilotKit 在相同 mock SaaS 任务上完成业务闭环；复杂续约实验又以 CopilotKit 为主验证了跨页面上下文、共享业务组件、frontend tool、HITL 和同一 DSH turn 的续接。对已有丰富 React GUI 且 Agentic UI 是核心目标的 SaaS，CopilotKit 因此是复杂应用交互的下一轮产品化验证首位候选，但不能据此宣称总工程量或生产成本最低。assistant-ui 当前官方文档也提供 Interactables、生成式 UI 和工具交互能力，本地复杂实验未对它做等量真实模型验证；CopilotKit PoC 使用 `1.79.1` 的 `/v2` API，生产 Agent 注入、真实业务授权、跨进程幂等和 unknown recovery 尚未验收。DSH 继续拥有 Agent Loop 和 Session 事实；DSH 原生 Web UI 适合 DSH-native 或愿意采用 DSH Client composition 的产品。
 
 ## Table of Contents
 
@@ -227,7 +227,7 @@ DSH Runtime（裁剪后的 profile 或独立服务）
 
 如果产品本身就是 DSH Web，或团队明确愿意采用 DSH Client/Conversation/Slot 作为前端基础，第一阶段应选择拓扑 A：把 DSH 原生 Web UI 作为新增的唯一聊天层，基于 Chat、Tool view、Conversation Node 和 Slot 扩展，做一个受限 profile 和 `crm-agent-ui`。这条路线不是替换 SaaS 原有业务 GUI，也不是为了做普通聊天，而是为了直接复用 DSH 已有的 Tool/Conversation/Session 语义。
 
-对于已有丰富 React GUI 且目标是让业务交互进入 Agentic UI 的一般 SaaS，当前应先以 CopilotKit + DSH adapter 深化真实业务 PoC，因为它是唯一已经在本仓库实际验证聊天内业务表单与确认闭环的路线；但必须先补测当前 CopilotKit v2 与 DSH 自定义 Agent 的兼容。assistant-ui 不是仅有聊天外壳：其当前 Interactables、Tool UI 和生成式 UI 值得用同一个业务流程做挑战测试，但尚无 DSH 业务集成实证。DSH 原生 Web UI 仍适合愿意采用 DSH Web boot graph 和插件组合模型的产品；三条路线都新增唯一聊天层，不应把“自有 Chat UI”写成 SaaS 原来已经拥有的能力。
+对于已有丰富 React GUI 且目标是让业务交互进入 Agentic UI 的一般 SaaS，基础同口径实验已经证明三条路线都能在同一 Browser-Native DSH Loop 上完成 mock 业务组件、工具和 API 的聊天闭环；不能再把 CopilotKit 写成唯一完成业务闭环的路线。复杂续约实验以 CopilotKit 为主验证了跨页面上下文、共享业务组件、frontend tool、HITL、取消和恢复，因此它是下一轮真实业务产品化验证的首位候选，但复杂真实模型证据尚未对三条路线等量覆盖。assistant-ui 不是仅有聊天外壳：其当前 Interactables、Tool UI 和生成式 UI 值得继续做同口径挑战测试；本仓库已有基础业务集成实证，但尚未完成等量复杂真实模型矩阵。DSH 原生 Web UI 仍适合愿意采用 DSH Web boot graph 和插件组合模型的产品；三条路线都新增唯一聊天层，不应把“自有 Chat UI”写成 SaaS 原来已经拥有的能力。
 
 两种拓扑都必须遵守同一分工：DSH 负责编排和会话事实，SaaS 后端负责业务事实，Client 负责草稿与呈现，Agent 不拥有越权的租户或用户身份。
 
@@ -394,11 +394,17 @@ DSH 当前没有提供的部分同样重要：通用业务 UI descriptor、表�
 
 因此，最稳妥的第一步是：固定一个 DSH 版本和受限 profile，创建一个 `crm-agent-ui` 插件，只做 `customer.create` 的既有表单复用，接通真实 SaaS API、服务端授权、幂等、Session 关联和 Agent continuation；成功后再决定哪些能力升级为 Chat Node，哪些旧模块走 widget，哪些只读场景采用受限 catalog。
 
-在“既有 SaaS 没有聊天层”的前提下，三份 PoC 现支持更明确的结论：**对已有丰富 React GUI、且核心目标是把业务交互带入聊天的 SaaS，CopilotKit 是下一轮真实业务验证的首位候选；不是因为 assistant-ui 做不到，而是 CopilotKit 是目前唯一实际验证过这一业务 UI 闭环的路线。**assistant-ui 的当前 Interactables/生成式 UI 能力尚未在 DSH PoC 中验证，CopilotKit 本地 PoC 已使用 `1.79.1` 的 `/v2` API，但业务执行依赖自有页面桥，生产 Agent 注入及其并发、晚到结果语义仍需验证。若只需聊天和基础 Tool UI，可选 assistant-ui；DSH-native 产品优先 DSH 原生 Web UI。三条路线都应让 DSH 保留 Agent Loop、Tool orchestration 和 Session 事实，SaaS 后端保留业务授权与提交权。
+在“既有 SaaS 没有聊天层”的前提下，三轮 PoC 现支持更准确的结论：**基础业务闭环三条路线都能实现；若目标是轻量聊天、工具卡片和低耦合嵌入，assistant-ui 是合理基线；若目标是跨页面协作、共享业务组件、多阶段 HITL 和更强应用交互，CopilotKit 是下一轮产品化验证的首位候选。**复杂真实模型证据主要覆盖 CopilotKit，不能写成三路线公平的复杂成本对照。assistant-ui 的当前 Interactables/生成式 UI 能力尚未在 DSH PoC 中完成同等复杂度验证，CopilotKit 本地 PoC 已使用 `1.79.1` 的 `/v2` API，但生产 Agent 注入、真实业务授权、跨进程幂等和 unknown recovery 仍需验证。DSH-native 产品优先 DSH 原生 Web UI。三条路线都应让 DSH 保留 Agent Loop、Tool orchestration 和 Session 事实，SaaS 后端保留业务授权与提交权。
 
 -----
 
 ## Further Exploration
+
+### 成熟 SaaS PoC
+
+- [三路线同口径业务对照](saas-agentic-ui-comparison-poc/README.md) — DSH 原生 UI、assistant-ui 和 CopilotKit 使用相同 mock SaaS 组件/API 的基础验收。
+- [CopilotKit 复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md) — 原生前端工具、HITL、跨页面协作和真实模型验收范围。
+- [路线统一评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评) — 三种路径当前推荐与未验证边界。
 
 ### 共享对话
 

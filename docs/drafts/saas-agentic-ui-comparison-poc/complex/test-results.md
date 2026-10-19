@@ -2,7 +2,7 @@
 
 ## 范围与结论
 
-记录日期为 2026-10-19。主验收对象是 CopilotKit 原生前端工具、HITL 与页面协作，执行者始终为 Dedicated Worker 内的真实 DSH。安装版 Chrome 和 Playwright WebKit 均通过 scripted 故障矩阵、真实模型完整业务故事、真实模型生命周期测试。WebKit 结果不是 Safari.app 的验收结论。
+记录日期为 2026-10-19。主验收对象是 CopilotKit 原生前端工具、HITL 与页面协作，执行者始终为 Dedicated Worker 内的真实 DSH。CopilotKit 在安装版 Chrome 和 Playwright WebKit 上通过 scripted 故障矩阵、真实模型完整业务故事和真实模型生命周期测试；另外两条路线保留早期真实 WebKit/Chrome 对照、最终 scripted 回归和明确的未重跑边界，未完成等量最终复杂真实模型矩阵。WebKit 结果不是 Safari.app 的验收结论。
 
 真实模式由 backend 读取主工作区 `docs/drafts/.env`，浏览器只请求同源代理。没有复制密钥、给前端设置模型凭据或启用 CopilotKit 云。版本固定在父 lockfile：CopilotKit 1.79.1、AG-UI 1.0.2、assistant-ui 0.15.29、React 19.1.0。
 

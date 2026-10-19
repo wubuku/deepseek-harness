@@ -10,9 +10,9 @@ description: "综合 DSH Agentic UI 与 Browser-Native DSH 研究、PoC、源码
 
 结论是：Browser-Native Agentic UI 应被定义为 **浏览器中的 Agent Loop + 类型化 UI capability + 既有业务 API 的受控编排**。Dedicated Worker 只承载 Agent Loop、Tool registry、模型适配和 Session 投影；Main Thread 只承载真实 UI、用户手势、受控状态适配器和 action 执行；服务端继续拥有模型凭据、租户授权、业务副作用、Session 权威持久化以及长期任务的 owner。三者通过版本化、可重连、可审计的 typed protocol 协作。
 
-DSH 当前的 Browser-Native v2 PoC 已证明现有 DSH Web UI、Cordis composition、`ctx.agentLoop`、远程 `SessionPersistence` 和同源 LLM proxy 可以在浏览器 Worker 中组成真实运行链路；它没有证明 Agent 已经能够读取业务组件状态、调用既有业务 action、完成业务授权，或把 UI action 的结果可靠地投影回模型上下文。因此，下一步不是继续扩展通用 Worker，而是新增一个受限的 UI capability seam，并用一个真实 SaaS 写入闭环验证它。
+DSH 当前的 Browser-Native v2 PoC 首先证明了现有 DSH Web UI、Cordis composition、`ctx.agentLoop`、远程 `SessionPersistence` 和同源 LLM proxy 可以在浏览器 Worker 中组成真实运行链路；原始 v2 本身没有证明 Agent 能够读取业务组件状态、调用既有业务 action、完成业务授权，或把 UI action 的结果可靠地投影回模型上下文。后续三路线 mock SaaS 实验已经在受控业务协议上补充验证了这些能力的一个最小闭环，但还没有把它提升为通用生产协议。因此，下一步不是继续扩展通用 Worker，而是把已验证的受限 UI capability seam 在真实 SaaS 写入闭环中固化。
 
-本文推荐的第一条生产路径是：`自然语言 → Browser Worker 中的 DSH Agent Loop → 业务 Tool → Main Thread 注册的既有 surface → 用户确认或受控 action → SaaS 服务端授权的业务 API → receipt/unknown 结果 → Session event → Agent 继续或结束`。这条路径保留既有 SaaS 的业务规则和 UI 投资，也保留 DSH 的 Tool 生命周期、Session 回放、Conversation projection 和 profile 组合能力。既有 SaaS 没有聊天层并不改变运行时原则，但聊天层选择应单独判断：三份 PoC 之后，对已有丰富 React GUI 且 Agentic UI 为核心目标的 SaaS，CopilotKit 是下一轮真实业务试点的首位候选，因为只有它在本仓库实际跑通了 mock 业务界面闭环；这不是生产选型定案。assistant-ui 当前也公开了 Interactables、工具和生成式 UI 能力，但未在 DSH PoC 中验证；CopilotKit PoC 已使用 `1.79.1` 的 `/v2` API，业务工具靠自写页面桥执行，生产 Agent 注入和原生工具调度的额外收益仍待验证。若只需要聊天与基础工具呈现，assistant-ui 仍可作为挑战者或轻量候选；DSH 原生 Web UI 适合 DSH-native 或愿意采用 DSH Client composition 的产品。assistant-ui PoC 证明的是外部聊天层能接入 DSH，不是两套聊天层应当并存。
+本文推荐的第一条生产路径是：`自然语言 → Browser Worker 中的 DSH Agent Loop → 业务 Tool → Main Thread 注册的既有 surface → 用户确认或受控 action → SaaS 服务端授权的业务 API → receipt/unknown 结果 → Session event → Agent 继续或结束`。这条路径保留既有 SaaS 的业务规则和 UI 投资，也保留 DSH 的 Tool 生命周期、Session 回放、Conversation projection 和 profile 组合能力。既有 SaaS 没有聊天层并不改变运行时原则，但聊天层选择应单独判断：基础同口径实验已证明三条路线都能接入相同 mock 业务闭环；复杂续约实验再以 CopilotKit 为主验证了跨页面上下文、共享业务组件、frontend tool、HITL 和同一 DSH turn 的续接。对已有丰富 React GUI 且 Agentic UI 为核心目标的 SaaS，CopilotKit 是复杂应用交互的下一轮产品化验证首位候选，但不是生产选型定案，也不是总工程量最低的证明。assistant-ui 当前也公开了 Interactables、工具和生成式 UI 能力，但未在 DSH PoC 中完成同等复杂度验证；CopilotKit PoC 已使用 `1.79.1` 的 `/v2` API，生产 Agent 注入、真实业务授权、跨进程幂等和 unknown recovery 仍待验证。若只需要聊天与基础工具呈现，assistant-ui 仍可作为轻量候选；DSH 原生 Web UI 适合 DSH-native 或愿意采用 DSH Client composition 的产品。assistant-ui PoC 证明的是外部聊天层能接入 DSH，不是两套聊天层应当并存。
 
 ## Table of Contents
 
@@ -242,9 +242,9 @@ PoC 的 E2E 主要断言用户消息、assistant message、LLM route、flush 和
 - Browser Agent 能通过原子 handoff 把长期工作交给 durable backend job。
 - 浏览器用户、租户、角色、资源范围和业务授权已经在 PoC backend 中得到验证；当前 v2 backend 是本地研究服务，不是多租户生产 BFF。
 
-因此，把 PoC 写成“Agentic UI 已实现”是事实错误。准确表述是：**Browser-Native DSH runtime substrate 已实现；Agentic UI capability seam 尚未实现。**
+因此，把**原始 v2 PoC**直接写成“通用 Agentic UI 已实现”是事实错误。准确表述是：**Browser-Native DSH runtime substrate 已实现；mock SaaS 实验已经验证受限的 Agentic UI capability seam，但通用生产协议尚未实现。**
 
-这里的“capability seam 尚未实现”指通用业务能力层，不是否定现有的领域级人机交互。DSH 已有 `ui-user-questions` 和 `ui-approval` 的等待、回答、审批、超时、取消和后续消息路径；PoC v2 尚未把这些具体交互推广成带业务 state、授权、幂等 receipt 和 unknown recovery 的通用 UI action 协议。关于 Web UI 质量与第三方框架的独立评估见 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)。
+这里的“通用生产协议尚未实现”指跨业务模块复用所需的业务能力层，不是否定现有的领域级人机交互或 mock 实验。DSH 已有 `ui-user-questions` 和 `ui-approval` 的等待、回答、审批、超时、取消和后续消息路径；mock 实验又把页面 state、受控 action、业务 receipt 和部分 unknown/retry 语义接入了三条路线或 CopilotKit 主验收，但真实 SaaS 授权、跨进程幂等、生产 unknown recovery 和多租户隔离仍未验收。关于 Web UI 质量与第三方框架的独立评估见 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)。
 
 -----
 
@@ -627,7 +627,7 @@ DSH 可以把 Browser-Native 作为一个显式 opt-in execution profile，复�
 6. **一个 Session 一个 active owner。** Handoff 是 ownership transfer，不是继续运行的通知。
 7. **先做一个真实闭环。** 先验证客户创建或发布审批，再决定是否引入 Conversation Node、MCP Apps、A2UI 或复杂 microfrontend。
 
-8. **没有聊天层、已有丰富 React GUI 且目标是 Agentic UI 时，选择新增的唯一聊天/应用交互层，而不是再造业务界面。** 2026-10-19 的 CopilotKit + Browser-Native DSH PoC 已验证一个 mock 工作项流程：业务状态可进入 Agent 上下文，聊天内卡片可编辑并确认，副作用更新 mock 工作台，结果结算到发起它的 DSH tool call 和 Session。因此 CopilotKit 是下一轮真实业务验证的首位候选，但不是生产定案：PoC 固定 `1.79.1` 并已使用 `/v2` API，生产 Agent 注入、原生前端工具调度及自写桥接的严格调用身份仍待验证，真实业务 API、授权、幂等、receipt、未知结果恢复和多租户隔离也未验证。assistant-ui 当前文档同样呈现 Interactables、Tool UI 与生成式 UI 能力，但本仓库 PoC 未连接这些能力到 DSH 业务闭环；应以同一任务做对照，而不把它缩减为普通聊天。DSH 原生 Web UI 更适合 DSH-native 产品。三条路线都是新增一个聊天/Agentic UI 层，均不取代 SaaS 原有业务页面；DSH 继续拥有 Agent Loop、工具编排和 Session 事实。
+8. **没有聊天层、已有丰富 React GUI 且目标是 Agentic UI 时，选择新增的唯一聊天/应用交互层，而不是再造业务界面。** 基础三路线实验已验证相同 mock SaaS 任务、业务组件和 API 可以在三种聊天层下完成闭环；复杂续约实验又在 CopilotKit 路线验证了跨页面状态、共享业务组件、`useFrontendTool`、`useHumanInTheLoop`、取消、刷新和写权恢复。因而 CopilotKit 是复杂应用交互的下一轮产品化验证首位候选，assistant-ui 是轻量呈现和低耦合接入的候选，DSH 原生 Web UI 更适合 DSH-native 产品。这个判断不是生产定案，也不是三路线复杂真实成本排名：复杂真实模型证据主要覆盖 CopilotKit，早期真实 WebKit 和真实 Chrome 对照结果见复杂实验记录，新增的最终复杂全故事没有对三路线等量重跑。生产 Agent 注入、真实业务 API、授权、跨进程幂等、receipt、未知结果恢复和多租户隔离仍未验证。三条路线都是新增一个聊天/Agentic UI 层，均不取代 SaaS 原有业务页面；DSH 继续拥有 Agent Loop、工具编排和 Session 事实。
 
 因此，Browser-Native 环境下实现 Agentic UI 的最短正确答案是：**把 DSH Agent Loop 放入 Dedicated Worker，把已有 SaaS GUI 暴露为类型化、版本化、受授权的 UI capabilities，把所有模型可见状态和业务结果接入 Session，把高风险副作用和长期任务留给服务端，并用 owner fencing 和 durable handoff 保证不会出现双重执行。**
 
@@ -640,7 +640,9 @@ DSH 可以把 Browser-Native 作为一个显式 opt-in execution profile，复�
 - [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)
 - [Browser-Native 可执行实施方案](dsh-browser-native-agent-implementation-plan.md)
 - [Browser-Native DSH PoC README](browser-native-dsh-poc/README.md)
-- [CopilotKit + Browser-Native DSH PoC README](copilotkit-browser-native-dsh-poc/README.md) — 一个真实模型驱动的 mock SaaS 操作闭环及其已知限制。
+- [CopilotKit + Browser-Native DSH PoC README](copilotkit-browser-native-dsh-poc/README.md) — 初版 renderer/桥接路线的真实模型 mock SaaS 闭环及限制。
+- [成熟 SaaS 三路线对照实验](saas-agentic-ui-comparison-poc/README.md) — 三种聊天层在同一业务故事中的基础闭环与对照。
+- [复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md) — CopilotKit 原生 frontend tool/HITL、页面协作和生命周期的主验收；真实浏览器矩阵边界见[测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)。
 - [PoC 旧版独立实验协议](browser-native-dsh-poc/protocol.md) — 仅作为历史参考，不描述当前 v2 行为。
 - [PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)、[browser-native-dsh-progress-v2.md](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 

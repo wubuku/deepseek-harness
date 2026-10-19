@@ -8,7 +8,7 @@ description: "基于更新后的 CopilotKit main 源码，核查 Browser-Native 
 
 Browser-Native DSH 可以作为 CopilotKit 背后的 Agent，Agent 不必在服务器上执行，AG-UI 也不限定为 HTTP/SSE。核查版本允许 React Provider 直接接受 `AbstractAgent`，不要求同时配置 Copilot Runtime 或 CopilotKit 云，但官方将生产选项 `selfManagedAgents` 归入 Enterprise Intelligence，当前代码对缺少 key 的行为只是告警，不能把产品定位、代码限制和软件许可证混为一谈。真正需要先验证的是工具调用的执行时序、DSH Session 的权威性，以及取消和恢复如何穿过页面与 Worker。本文记录源码事实和接入建议，不是已经完成 CopilotKit 集成或浏览器 E2E 的证明。
 
-2026-10-19 实施证据补充：[增量 PoC](copilotkit-browser-native-dsh-poc/README.md)已使用 `@copilotkit/react-core@1.79.1` 的 `/v2` API、`AbstractAgent` 和自有 MessagePort 工具桥，验证一个 mock SaaS 业务闭环及真实模型 Chrome/WebKit E2E。它走的是 `useRenderTool` 加 DSH waiter 结算，而不是本文提出的原生前端工具 handler 分段续跑实验；后者仍未验收。Provider 的 `agents__unsafe_dev_only` 也不等于受支持的生产接入。本文保留源码核查与实验建议的范围；当前路线结论见[三份 PoC 重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)，实际执行与限制见[测试记录](copilotkit-browser-native-dsh-poc/test-record.md)。
+2026-10-19 实施证据补充：[基础增量 PoC](copilotkit-browser-native-dsh-poc/README.md)已使用 `@copilotkit/react-core@1.79.1` 的 `/v2` API、`AbstractAgent` 和自有 MessagePort 工具桥，验证一个 mock SaaS 业务闭环及真实模型 Chrome/WebKit E2E；随后[复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)又验证了 `useFrontendTool`、`useHumanInTheLoop`、`useAgentContext` 与分段 DSH turn 的协作。基础 PoC 走的是 `useRenderTool` 加 DSH waiter 结算，复杂实验才验证原生前端工具 handler/HITL 的主路径。Provider 的 `agents__unsafe_dev_only` 也不等于受支持的生产接入。本文保留源码核查与时序风险分析的范围；当前路线结论见[三份 PoC 重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)，实际复杂验收与限制见[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)。
 
 ## Table of Contents
 
@@ -155,7 +155,7 @@ The adapter waits for DSH turn completion before returning the Agent run
 | 路线 | 执行方式 | 获得什么 | 仍需解决什么 |
 |---|---|---|---|
 | A：DSH 执行，CopilotKit 先只呈现 | DSH 插件通过独立页面桥接调用业务能力；CopilotKit 只投影调用与真实结果，使用 `useRenderTool` | 最少改变现有 Loop 和工具语义，适合第一阶段 | 不等于原生 `useFrontendTool`/`useHumanInTheLoop` 已接通；执行中状态、表单和取消还要桥接 |
-| B：适配 CopilotKit 的工具续跑 | 工具请求出现后结束当前 AG-UI 调用段；CopilotKit 执行 hook；后续适配器调用把结果交回同一个 DSH 等待者 | 更接近完整复用前端工具、`useComponent` 与 HITL | run/turn 对应、工具结果回送、取消、UI running 状态和刷新后未知结果；尚未验证可只靠现有公开扩展点完成 |
+| B：适配 CopilotKit 的工具续跑 | 工具请求出现后结束当前 AG-UI 调用段；CopilotKit 执行 hook；后续适配器调用把结果交回同一个 DSH 等待者 | 更接近完整复用前端工具、`useComponent` 与 HITL | 静态源码核查阶段尚未验证 run/turn 对应、工具结果回送、取消、UI running 状态和刷新后未知结果；后续复杂实验已在固定版本和受控 adapter 中验证主路径，生产恢复和授权仍未验收 |
 
 路线 B 不应结束 DSH turn、伪造成功工具结果或发起独立模型循环。AG-UI run 段结束不等于 DSH `turn/end`；事件和 pending call 必须满足固定 SDK 版本的验证规则。适配器被再次调用时，应区分用户新输入与已有 tool result，不能把每次调用都变成 `followup()`。
 
@@ -287,7 +287,7 @@ CopilotKit 链接固定到本次提交，避免 `main` 后续变化改变证据�
 
 本轮执行了 `npm pack @ag-ui/client@1.0.2 --pack-destination /tmp --silent`，只下载到 `/tmp/ag-ui-client-1.0.2.tgz`；没有向 CopilotKit 或 DSH 安装依赖、写入 lockfile。包内声明确认 `abstract run(input: RunAgentInput): Observable<BaseEvent>`，source map 确认默认 connect 的未实现处理和输入 messages 构造。主仓库 API 文档也给出[自定义 Observable Agent 示例][C13]，但示例不替代我们的 Worker 集成测试。
 
-本次没有编写 CopilotKit 接入代码，没有修改 DSH 核心或既有 PoC。本文只维护中文单篇；文档检查通过不表示集成测试通过。
+本文本身没有修改 DSH 核心或既有两个独立 PoC；增量实验代码位于 `docs/drafts/copilotkit-browser-native-dsh-poc/` 和 `docs/drafts/saas-agentic-ui-comparison-poc/complex/`。本文只维护中文单篇；源码核查和受控实验通过都不表示生产集成已经完成，实际验收范围以对应测试记录为准。
 
 -----
 
@@ -298,11 +298,12 @@ CopilotKit 链接固定到本次提交，避免 `main` 后续变化改变证据�
 - [assistant-ui 与 CopilotKit 长期 UI 选型](assistant-ui-copilotkit-browser-native-dsh-assessment.md)：为什么应用交互框架与普通聊天层是不同的采用决策。
 - [Browser-Native DSH PoC](browser-native-dsh-poc/README.md)：真实 Worker Loop、Session/LLM backend、当前 owner 与持久化限制。
 - [assistant-ui 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)：现成的第三方聊天层适配参考，不是 CopilotKit 完成证明。
+- [复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)：CopilotKit 原生 frontend tool/HITL 与 DSH 分段 turn 的实际验收入口。
 - [Browser-Native 工具清单与配置裁剪](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)：按执行环境暴露业务 capability，而不是把 Node 工具原样搬进页面。
 
 ## Dev Note
 
-本轮没有决定生产许可方案，也没有承诺路线 B 不修改核心即可完成。下一次实施应先读取本文的固定版本、工具时序和恢复要求，再建立隔离 worktree；新增适配器与验证材料优先放在 `docs/drafts`，必要的目录外修改按既有 [change ledger](browser-native-dsh-poc/change-ledger.md)记录原因、测试和 upstream 重放方式。
+本轮没有决定生产许可方案。复杂实验在不修改正式 DSH 核心的前提下，证明公开 frontend tool/HITL 能在受控 adapter 中工作，但没有消除生产 Agent 注入、业务授权、跨进程幂等和 unknown recovery 的要求，也不是所有业务均可零改动接入的承诺。下一次实施应先读取本文的固定版本、工具时序和恢复要求，再建立隔离 worktree；新增适配器与验证材料优先放在 `docs/drafts`，必要的目录外修改按既有 [change ledger](browser-native-dsh-poc/change-ledger.md)记录原因、测试和 upstream 重放方式。
 
 [C1]: https://github.com/CopilotKit/CopilotKit/blob/7b446f86e823e8af4695e78f7a61e800844a9373/packages/react-core/src/v2/providers/CopilotKitProvider.tsx
 [C2a]: https://github.com/CopilotKit/CopilotKit/blob/7b446f86e823e8af4695e78f7a61e800844a9373/showcase/shell-docs/src/content/docs/backend/self-managed-agents.mdx
