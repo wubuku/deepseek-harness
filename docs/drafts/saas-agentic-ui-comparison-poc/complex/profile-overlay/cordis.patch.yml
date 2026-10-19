@@ -1,0 +1,46 @@
+- id: session-persistence-jsonl
+  disabled: true
+- id: agent-default-model
+  config:
+    provider: browser-native
+    model: browser-native
+- id: preset-standard
+  config:
+    id: standard
+    name: SaaS renewal assistant
+    order: 1
+    plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: >-
+            You assist an existing SaaS. Use only the provided tools. Always call
+            page_read before EACH business action to get current page, customer,
+            selected ids and record version. Never invent ids or versions. Only
+            capabilities of the current page are available. To bulk assign use
+            bulk_assign with exactly the selected ids. To change a quote use
+            quote_patch with expectedVersion and only the field requested; do not
+            overwrite manual edits to other fields. Sending requires a successful
+            ask_user_question human approval for the current quote version, then
+            quote_send. Use ask_user_question with one question and approve/reject
+            options when asked to review or send a quote; the UI includes the real
+            quote editor. On rejection, cancellation, permission error or version
+            conflict explain and stop, never retry automatically. Do not use shell,
+            web, code or filesystem tools. Respond concisely in Chinese. No write
+            is successful without an ok=true business receipt.
+- insert:
+    - id: session-persistence-browser-native
+      name: './browser-native-session-persistence.js'
+    - id: llm-browser-native
+      name: './browser-native-llm.js'
+      inject: [llm]
+    - id: copilotkit-frontend-tools
+      name: './copilotkit-frontend-tools.js'
+      inject: [tools]
+    - id: copilotkit-user-questions
+      name: './copilotkit-user-questions.js'
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+      config:
+        mode: timed
+        timeout: -1

@@ -1,0 +1,2362 @@
+{
+  "sent": 11,
+  "steps": [
+    {
+      "name": "流式消息与第一轮输入",
+      "writes": 0,
+      "events": 17
+    },
+    {
+      "name": "根据当前选择批量操作，无重复写入",
+      "writes": 1,
+      "events": 36
+    },
+    {
+      "name": "切换客户后使用新上下文",
+      "writes": 2,
+      "events": 54
+    },
+    {
+      "name": "人工和 Agent 协同编辑不同字段",
+      "writes": 4,
+      "events": 74
+    },
+    {
+      "name": "并发修改拒绝旧版本，随后仍能继续",
+      "writes": 5,
+      "events": 92
+    },
+    {
+      "name": "拒绝审批后停止，不偷偷发送",
+      "writes": 6,
+      "events": 110
+    },
+    {
+      "name": "等待人工输入时停止，释放原工具",
+      "writes": 6,
+      "events": 125
+    },
+    {
+      "name": "模型错误不永久锁死界面",
+      "writes": 6,
+      "events": 133
+    },
+    {
+      "name": "停止和错误后继续，多轮记忆保留",
+      "writes": 6,
+      "events": 141
+    },
+    {
+      "name": "聊天内编辑 → DSH 人工答案 → 同 turn 发送一次",
+      "writes": 9,
+      "events": 169
+    },
+    {
+      "name": "刷新 hydration 不重放副作用",
+      "writes": 9,
+      "events": 170
+    },
+    {
+      "name": "撤销页面能力和服务端只读检查",
+      "writes": 9,
+      "events": 190
+    },
+    {
+      "name": "重复提交与丢响应重试只写一次",
+      "writes": 10,
+      "events": 190
+    }
+  ],
+  "modelRequests": 29,
+  "modelRequestProof": {
+    "dshSteps": 28,
+    "sessionRequests": 28,
+    "titleRequests": 1,
+    "requests": [
+      {
+        "requestId": "f4d49b71-b311-4058-abbe-87c7543051b8",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "dbdf7b70-bd13-4282-84e0-356fe825a3e8",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-title"
+      },
+      {
+        "requestId": "1cf47a0b-ede3-4023-b7d5-fa0781458afc",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "4c4a54d5-6212-4726-a14c-f80b1dc5ce11",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "66c6fdef-0202-4cbd-a47f-2ac86ebe75a5",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "bc4932c0-614c-4a0b-a685-f6e3940e3643",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "c898ec36-fe37-4e5c-b750-5b523ee09217",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "9ab3e988-4059-4ca8-b475-773b0a3b00f6",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "09ca7b33-113a-464a-8fa6-5a1f981f0253",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "0e607816-3f65-4a40-a104-31f13f9da2d7",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "d215ac7f-614e-4fac-b7bf-4d7f22d3a8e1",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "1c7588d9-437e-47bc-bf64-696f68db02d7",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "b055f7b9-ddfd-4717-9737-ff98c4c46edf",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "93bdee78-8427-4a15-83a4-f47381a111df",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "95856df3-cb15-4d9d-a38a-1447de3647ee",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "484c1f14-c953-4afb-8bbd-d84ba6e51699",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "52deba3f-a03e-4d8c-8ecf-11babc85acdb",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "32c3b1e0-cd52-407d-a4ff-9020af9e221f",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "a286fd91-d415-485c-8f46-d11fe8e5e6c3",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "4b66fa9f-cadf-4dd2-b5a6-9ef3b028a520",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "552487c2-d4a9-4cc0-bafa-112b81b0219b",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "0e8c21d0-70e3-4243-ac0c-a129270f145a",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "c84f67bf-b329-4abf-a088-b42db599995a",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "f0c66275-5a5b-4ab3-a9e2-9937b78ac0f2",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "7c14ad17-fa4c-4867-92ad-758f64570e60",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "f0a62715-4d3b-4622-8af6-0ef2cf935b66",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "8dbf7a20-8485-488d-a1e4-084f3bd665ca",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "3d3758a7-210f-4b79-a076-bbea08adfc63",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      },
+      {
+        "requestId": "a2d36925-26bb-4f77-8415-69260cd82bdb",
+        "sessionId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+        "purpose": "session-turn"
+      }
+    ]
+  },
+  "failedOrEmptyAttempts": 1,
+  "loggedPageReads": [
+    {
+      "page": "tickets",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [
+          "TK-41",
+          "TK-42"
+        ],
+        "quote": {
+          "budget": 120000,
+          "discount": 5,
+          "version": 1,
+          "status": "draft"
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "tickets",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [
+              "TK-41",
+              "TK-42"
+            ],
+            "quote": {
+              "budget": 120000,
+              "discount": 5,
+              "version": 1,
+              "status": "draft"
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "tickets",
+      "context": {
+        "customerId": "birch",
+        "customer": "白桦设计",
+        "selected": [
+          "TK-81"
+        ],
+        "quote": {
+          "budget": 60000,
+          "discount": 0,
+          "version": 1,
+          "status": "draft"
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "tickets",
+            "customerId": "birch",
+            "customer": "白桦设计",
+            "selected": [
+              "TK-81"
+            ],
+            "quote": {
+              "budget": 60000,
+              "discount": 0,
+              "version": 1,
+              "status": "draft"
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 150000,
+          "discount": 5,
+          "version": 2,
+          "status": "draft"
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 150000,
+              "discount": 5,
+              "version": 2,
+              "status": "draft"
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 150000,
+          "discount": 8,
+          "version": 3,
+          "status": "draft"
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 150000,
+              "discount": 8,
+              "version": 3,
+              "status": "draft"
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 151000,
+          "discount": 8,
+          "version": 4,
+          "status": "draft"
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 151000,
+              "discount": 8,
+              "version": 4,
+              "status": "draft"
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 151000,
+          "discount": 8,
+          "version": 4,
+          "status": "draft",
+          "approval": {
+            "version": 4,
+            "approved": false
+          }
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 151000,
+              "discount": 8,
+              "version": 4,
+              "status": "draft",
+              "approval": {
+                "version": 4,
+                "approved": false
+              }
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 151000,
+          "discount": 8,
+          "version": 4,
+          "status": "draft",
+          "approval": {
+            "version": 4,
+            "approved": false
+          }
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 151000,
+              "discount": 8,
+              "version": 4,
+              "status": "draft",
+              "approval": {
+                "version": 4,
+                "approved": false
+              }
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "quote",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [],
+        "quote": {
+          "budget": 160000,
+          "discount": 8,
+          "version": 5,
+          "status": "draft",
+          "approval": {
+            "version": 5,
+            "approved": true
+          }
+        },
+        "role": "editor"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "quote",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [],
+            "quote": {
+              "budget": 160000,
+              "discount": 8,
+              "version": 5,
+              "status": "draft",
+              "approval": {
+                "version": 5,
+                "approved": true
+              }
+            },
+            "role": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "page": "tickets",
+      "context": {
+        "customerId": "acme",
+        "customer": "青禾科技",
+        "selected": [
+          "TK-41",
+          "TK-42"
+        ],
+        "quote": {
+          "budget": 160000,
+          "discount": 8,
+          "version": 6,
+          "status": "sent",
+          "approval": {
+            "version": 5,
+            "approved": true
+          }
+        },
+        "role": "viewer"
+      },
+      "frameworkContext": [
+        {
+          "description": "当前 SaaS 页面",
+          "value": {
+            "page": "tickets",
+            "customerId": "acme",
+            "customer": "青禾科技",
+            "selected": [
+              "TK-41",
+              "TK-42"
+            ],
+            "quote": {
+              "budget": 160000,
+              "discount": 8,
+              "version": 6,
+              "status": "sent",
+              "approval": {
+                "version": 5,
+                "approved": true
+              }
+            },
+            "role": "viewer"
+          }
+        }
+      ]
+    }
+  ],
+  "calls": [
+    {
+      "seq": 24,
+      "turn": 2,
+      "callId": "call-1fcf6b0c-62c0-4fc4-ad75-a48cdfb6a7bc",
+      "name": "page_read"
+    },
+    {
+      "seq": 29,
+      "turn": 2,
+      "callId": "call-ccf81da2-a46d-4e3c-a3f4-d3a9cc4ceb28",
+      "name": "bulk_assign"
+    },
+    {
+      "seq": 42,
+      "turn": 3,
+      "callId": "call-2e1f0d79-887e-493b-866d-8846f74d9067",
+      "name": "page_read"
+    },
+    {
+      "seq": 47,
+      "turn": 3,
+      "callId": "call-438ac473-f01d-4a3e-9ece-26f13c0708ed",
+      "name": "bulk_assign"
+    },
+    {
+      "seq": 62,
+      "turn": 4,
+      "callId": "call-fbc9ac71-e2cd-4a0e-8108-5a4748a673ea",
+      "name": "page_read"
+    },
+    {
+      "seq": 67,
+      "turn": 4,
+      "callId": "call-f30ef023-fd49-442f-9471-4f7a1a06af70",
+      "name": "quote_patch"
+    },
+    {
+      "seq": 80,
+      "turn": 5,
+      "callId": "call-9978484e-7228-4cf8-9985-827e94eaa206",
+      "name": "page_read"
+    },
+    {
+      "seq": 85,
+      "turn": 5,
+      "callId": "call-e51f6c6a-edc0-4277-a05f-93228bc19b9b",
+      "name": "quote_patch"
+    },
+    {
+      "seq": 98,
+      "turn": 6,
+      "callId": "call-ed85b533-d343-4363-b543-11c5513564f9",
+      "name": "page_read"
+    },
+    {
+      "seq": 103,
+      "turn": 6,
+      "callId": "call-d0a785e3-73d5-46b7-91f0-a5fb61602d8a",
+      "name": "ask_user_question"
+    },
+    {
+      "seq": 116,
+      "turn": 7,
+      "callId": "call-d320e326-a423-4974-8c0b-e72b22466a44",
+      "name": "page_read"
+    },
+    {
+      "seq": 121,
+      "turn": 7,
+      "callId": "call-06d6300d-b520-48ab-a1e3-dd68bcbb6b20",
+      "name": "ask_user_question"
+    },
+    {
+      "seq": 147,
+      "turn": 10,
+      "callId": "call-88e985f7-cb34-42e1-a731-4ac7ce3bb918",
+      "name": "page_read"
+    },
+    {
+      "seq": 152,
+      "turn": 10,
+      "callId": "call-14e2f2cb-9974-4405-8e44-300e02feac45",
+      "name": "ask_user_question"
+    },
+    {
+      "seq": 157,
+      "turn": 10,
+      "callId": "call-3063486f-00fc-4f23-a5ee-dde2288ac8bd",
+      "name": "page_read"
+    },
+    {
+      "seq": 162,
+      "turn": 10,
+      "callId": "call-6a348ed8-443d-4de3-b12c-32b55d047456",
+      "name": "quote_send"
+    }
+  ],
+  "resultIds": [
+    "call-1fcf6b0c-62c0-4fc4-ad75-a48cdfb6a7bc",
+    "call-ccf81da2-a46d-4e3c-a3f4-d3a9cc4ceb28",
+    "call-2e1f0d79-887e-493b-866d-8846f74d9067",
+    "call-438ac473-f01d-4a3e-9ece-26f13c0708ed",
+    "call-fbc9ac71-e2cd-4a0e-8108-5a4748a673ea",
+    "call-f30ef023-fd49-442f-9471-4f7a1a06af70",
+    "call-9978484e-7228-4cf8-9985-827e94eaa206",
+    "call-e51f6c6a-edc0-4277-a05f-93228bc19b9b",
+    "call-ed85b533-d343-4363-b543-11c5513564f9",
+    "call-d0a785e3-73d5-46b7-91f0-a5fb61602d8a",
+    "call-d320e326-a423-4974-8c0b-e72b22466a44",
+    "call-06d6300d-b520-48ab-a1e3-dd68bcbb6b20",
+    "call-88e985f7-cb34-42e1-a731-4ac7ce3bb918",
+    "call-14e2f2cb-9974-4405-8e44-300e02feac45",
+    "call-3063486f-00fc-4f23-a5ee-dde2288ac8bd",
+    "call-6a348ed8-443d-4de3-b12c-32b55d047456"
+  ],
+  "evidence": {
+    "bridge": {
+      "executions": [
+        {
+          "callId": "call-1fcf6b0c-62c0-4fc4-ad75-a48cdfb6a7bc",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-ccf81da2-a46d-4e3c-a3f4-d3a9cc4ceb28",
+          "name": "bulk_assign",
+          "channel": "native"
+        },
+        {
+          "callId": "call-2e1f0d79-887e-493b-866d-8846f74d9067",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-438ac473-f01d-4a3e-9ece-26f13c0708ed",
+          "name": "bulk_assign",
+          "channel": "native"
+        },
+        {
+          "callId": "call-fbc9ac71-e2cd-4a0e-8108-5a4748a673ea",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-f30ef023-fd49-442f-9471-4f7a1a06af70",
+          "name": "quote_patch",
+          "channel": "native"
+        },
+        {
+          "callId": "call-9978484e-7228-4cf8-9985-827e94eaa206",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-e51f6c6a-edc0-4277-a05f-93228bc19b9b",
+          "name": "quote_patch",
+          "channel": "native"
+        },
+        {
+          "callId": "call-ed85b533-d343-4363-b543-11c5513564f9",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-d320e326-a423-4974-8c0b-e72b22466a44",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-88e985f7-cb34-42e1-a731-4ac7ce3bb918",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-3063486f-00fc-4f23-a5ee-dde2288ac8bd",
+          "name": "page_read",
+          "channel": "native"
+        },
+        {
+          "callId": "call-6a348ed8-443d-4de3-b12c-32b55d047456",
+          "name": "quote_send",
+          "channel": "native"
+        }
+      ],
+      "pending": [],
+      "page": "quote",
+      "customerId": "acme"
+    },
+    "segments": []
+  },
+  "streamingSamples": [
+    48,
+    87,
+    97
+  ],
+  "pageErrors": [],
+  "network": [
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/index.html?ui=native&workspace=experiment-native",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/index-DAhF1Pub.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-DXNd4Uwq.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BKcSulQ2.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/index-B0R40MkO.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/browser-native-worker-DLkQGDEX.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/preview/vfs-image.tar.gz",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/b8463da8-265c-4421-93c4-fcc6755039fd",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/638d496f-80be-4c6d-b9d1-8eada547de27",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/open-in-app/apps",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/plugins/events",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/2b06f1ba-1b56-47ba-8d02-1bde5f553cfa",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/create",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/create",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/index.html?ui=native&workspace=experiment-native&sessionId=session-823f0684-3152-48ea-9db5-a3f3d35928f6",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/close",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/close",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/index-DAhF1Pub.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-DXNd4Uwq.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BKcSulQ2.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/index-B0R40MkO.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/assets/browser-native-worker-DLkQGDEX.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/preview/vfs-image.tar.gz",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/b2f9709a-18ef-49da-9cd0-83be9814d19f",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/ef720052-17af-4b9e-897d-bfce27378b99",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/open-in-app/apps",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/saas-agentic-ui-comparison-poc/complex/plugins/events",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:59251/302fa750-879f-45f8-8d2e-a3eb62384f73",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/stat",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/open",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/read",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/open",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/read",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/complex/experiment-native/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:59251/api/browser-native/session/flush",
+      "method": "POST"
+    }
+  ],
+  "receipts": {
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-ccf81da2-a46d-4e3c-a3f4-d3a9cc4ceb28": {
+      "fingerprint": "[[\"assignee\",\"周宁\"],[\"customerId\",\"acme\"],[\"kind\",\"assign\"],[\"ticketIds\",[\"TK-41\",\"TK-42\"]]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-ccf81da2-a46d-4e3c-a3f4-d3a9cc4ceb28",
+        "kind": "assign",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 120000,
+            "discount": 5,
+            "version": 1,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-438ac473-f01d-4a3e-9ece-26f13c0708ed": {
+      "fingerprint": "[[\"assignee\",\"周宁\"],[\"customerId\",\"birch\"],[\"kind\",\"assign\"],[\"ticketIds\",[\"TK-81\"]]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-438ac473-f01d-4a3e-9ece-26f13c0708ed",
+        "kind": "assign",
+        "customerId": "birch",
+        "record": {
+          "name": "白桦设计",
+          "quote": {
+            "budget": 60000,
+            "discount": 0,
+            "version": 1,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-81",
+              "title": "成员邀请失败",
+              "assignee": "周宁"
+            }
+          ]
+        }
+      }
+    },
+    "gui:68014094-7110-4c88-bfad-cd4578777851": {
+      "fingerprint": "[[\"budget\",150000],[\"customerId\",\"acme\"],[\"discount\",5],[\"expectedVersion\",1],[\"kind\",\"patch\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "gui:68014094-7110-4c88-bfad-cd4578777851",
+        "kind": "patch",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 150000,
+            "discount": 5,
+            "version": 2,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-f30ef023-fd49-442f-9471-4f7a1a06af70": {
+      "fingerprint": "[[\"customerId\",\"acme\"],[\"discount\",8],[\"expectedVersion\",2],[\"kind\",\"patch\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-f30ef023-fd49-442f-9471-4f7a1a06af70",
+        "kind": "patch",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 150000,
+            "discount": 8,
+            "version": 3,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "concurrent-native": {
+      "fingerprint": "[[\"budget\",151000],[\"customerId\",\"acme\"],[\"expectedVersion\",3],[\"kind\",\"patch\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "concurrent-native",
+        "kind": "patch",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 151000,
+            "discount": 8,
+            "version": 4,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-d0a785e3-73d5-46b7-91f0-a5fb61602d8a:decision": {
+      "fingerprint": "[[\"approved\",false],[\"customerId\",\"acme\"],[\"expectedVersion\",4],[\"kind\",\"approve\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-d0a785e3-73d5-46b7-91f0-a5fb61602d8a:decision",
+        "kind": "approve",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 151000,
+            "discount": 8,
+            "version": 4,
+            "status": "draft",
+            "approval": {
+              "approved": false,
+              "version": 4
+            }
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "gui:79c63e0d-1ac5-4e4c-abf7-e314a87164d7": {
+      "fingerprint": "[[\"budget\",160000],[\"customerId\",\"acme\"],[\"discount\",8],[\"expectedVersion\",4],[\"kind\",\"patch\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "gui:79c63e0d-1ac5-4e4c-abf7-e314a87164d7",
+        "kind": "patch",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 160000,
+            "discount": 8,
+            "version": 5,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-14e2f2cb-9974-4405-8e44-300e02feac45:decision": {
+      "fingerprint": "[[\"approved\",true],[\"customerId\",\"acme\"],[\"expectedVersion\",5],[\"kind\",\"approve\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-14e2f2cb-9974-4405-8e44-300e02feac45:decision",
+        "kind": "approve",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 160000,
+            "discount": 8,
+            "version": 5,
+            "status": "draft",
+            "approval": {
+              "approved": true,
+              "version": 5
+            }
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-6a348ed8-443d-4de3-b12c-32b55d047456": {
+      "fingerprint": "[[\"customerId\",\"acme\"],[\"expectedVersion\",5],[\"kind\",\"send\"]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "session-823f0684-3152-48ea-9db5-a3f3d35928f6:call-6a348ed8-443d-4de3-b12c-32b55d047456",
+        "kind": "send",
+        "customerId": "acme",
+        "record": {
+          "name": "青禾科技",
+          "quote": {
+            "budget": 160000,
+            "discount": 8,
+            "version": 6,
+            "status": "sent",
+            "approval": {
+              "approved": true,
+              "version": 5
+            }
+          },
+          "tickets": [
+            {
+              "id": "TK-41",
+              "title": "导出报表超时",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-42",
+              "title": "续约账号迁移",
+              "assignee": "周宁"
+            },
+            {
+              "id": "TK-43",
+              "title": "账单邮箱变更",
+              "assignee": "陈晨"
+            }
+          ]
+        }
+      }
+    },
+    "lost-native": {
+      "fingerprint": "[[\"assignee\",\"周宁\"],[\"customerId\",\"birch\"],[\"kind\",\"assign\"],[\"ticketIds\",[\"TK-81\"]]]",
+      "receipt": {
+        "ok": true,
+        "operationId": "lost-native",
+        "kind": "assign",
+        "customerId": "birch",
+        "record": {
+          "name": "白桦设计",
+          "quote": {
+            "budget": 60000,
+            "discount": 0,
+            "version": 1,
+            "status": "draft"
+          },
+          "tickets": [
+            {
+              "id": "TK-81",
+              "title": "成员邀请失败",
+              "assignee": "周宁"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

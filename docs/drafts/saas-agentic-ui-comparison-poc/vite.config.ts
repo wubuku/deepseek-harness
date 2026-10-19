@@ -37,6 +37,9 @@ export default defineConfig({
     },
   },
   build: {
+    rollupOptions: {
+      input: [resolve(import.meta.dirname, 'index.html'), resolve(import.meta.dirname, 'complex/index.html')],
+    },
     outDir: resolve(repositoryRoot, 'apps/web/dist/saas-agentic-ui-comparison-poc'),
     emptyOutDir: false,
   },

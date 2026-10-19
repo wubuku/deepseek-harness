@@ -1,0 +1,8 @@
+
+> test:e2e
+> node --import tsx tests/comparison.e2e.mjs
+
+PASS {"ui":"native","real":false,"browser":"chrome","sessionId":"session-4df3c725-7011-4c6c-9a8d-ea2e7c43b03e","users":10,"toolCalls":6,"toolResults":6,"receipts":4,"modelRequests":16,"streamSamples":[16,48,70],"viewerMode":"api-denial","errors":[]}
+PASS {"ui":"assistant","real":false,"browser":"chrome","sessionId":"session-661b1a57-92f2-45b9-bcd2-8ae88fb45b94","users":10,"toolCalls":6,"toolResults":6,"receipts":4,"modelRequests":16,"streamSamples":[16,32,48,63,70],"viewerMode":"api-denial","errors":[]}
+PASS {"ui":"copilot","real":false,"browser":"chrome","sessionId":"session-cdefb715-8f94-44e8-9c21-ded8864c052f","users":10,"toolCalls":6,"toolResults":6,"receipts":4,"modelRequests":16,"streamSamples":[16,32,48,63,70],"viewerMode":"api-denial","errors":[]}
+Evidence: /var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-saas-scripted-chrome-TnFKge/artifacts

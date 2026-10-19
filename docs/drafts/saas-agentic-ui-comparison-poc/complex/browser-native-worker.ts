@@ -1,0 +1,82 @@
+/** Dedicated Worker entry for the real DSH Host and data-only SaaS page capabilities. */
+import './symbol-dispose.ts'
+import { createWorkerHost } from '../../../../packages/experimental/webworker-runtime/src/worker-host.ts'
+import '../../../../packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/buffer.ts'
+import { alsCausality, runAtAsyncContextRoot } from '../../../../packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/async_hooks.ts'
+import { installAsyncContextHooks } from '../../../../packages/experimental/webworker-runtime/src/polyfill/async-context/async-context-hooks.ts'
+import { createNodeBuiltins, REPLACED_PREFIXES } from '../../../../packages/experimental/webworker-runtime/src/node/builtins.ts'
+import { whenRequestListener } from '../../../../packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/http.ts'
+import { installTimerGlobals } from '../../../../packages/experimental/webworker-runtime/src/node/globals/timers.ts'
+import { installCryptoGlobals } from '../../../../packages/experimental/webworker-runtime/src/node/globals/crypto.ts'
+import { isShellStartFrame } from '../../../../packages/experimental/webworker-runtime/src/shell/process/protocol.ts'
+import { runShellProcess } from '../../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
+import { installProcessGlobal } from '../../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
+import { createBrowserNativeStaticModules } from '../../browser-native-dsh-poc/browser-native-providers.ts'
+import { setBrowserNativeControlPort, setBrowserNativeResumeOwner } from '../../browser-native-dsh-poc/browser-native-control.ts'
+import { createCopilotKitStaticModules, updateCapabilities } from './worker-tools.ts'
+import { setCopilotKitControlPort } from '../../copilotkit-browser-native-dsh-poc/src/browser-native-control.ts'
+
+installAsyncContextHooks()
+installTimerGlobals()
+installCryptoGlobals()
+
+console.info('copilotkit browser-native dsh: worker entry active')
+
+let host: { handleMessage(data: unknown): void } | undefined
+let shellRole = false
+const pending: unknown[] = []
+
+self.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as Record<string, unknown> | null
+  if (data?.type === 'saas-capabilities') { updateCapabilities(data); return }
+  if (data?.type === 'browser-native-control-init') {
+    const port = event.ports[0]
+    if (port === undefined) throw new Error('copilotkit browser-native worker: control init frame needs a MessagePort')
+    setBrowserNativeControlPort(port)
+    setCopilotKitControlPort(port)
+    return
+  }
+  if (data?.type === 'browser-native-control-resume-owner') {
+    if (typeof data.sessionId !== 'string' || typeof data.ownerToken !== 'string') {
+      throw new Error('copilotkit browser-native worker: resume owner frame needs sessionId and ownerToken')
+    }
+    setBrowserNativeResumeOwner(data.sessionId, data.ownerToken)
+    return
+  }
+  if (host === undefined && isShellStartFrame(data)) {
+    shellRole = true
+    installProcessGlobal({ cwd: data.cwd, env: data.env })
+    runShellProcess(data, self)
+    return
+  }
+  if (host === undefined && data !== null && typeof data === 'object' && data.t === 'init') {
+    if (typeof data.image !== 'string') throw new Error('copilotkit browser-native worker: init frame needs a string image url')
+    if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
+      throw new Error('copilotkit browser-native worker: init frame needs an array of string overlay urls')
+    }
+    const created = createWorkerHost({
+      staticModules: {
+        ...createNodeBuiltins(),
+        ...createBrowserNativeStaticModules(),
+        ...createCopilotKitStaticModules(),
+      },
+      staticModulePrefixes: REPLACED_PREFIXES,
+      requestListener: whenRequestListener,
+      alsCausality,
+      image: data.image,
+      overlays: data.overlays as string[],
+    })
+    host = created
+    for (const queued of pending) runAtAsyncContextRoot(() => { created.handleMessage(queued) })
+    pending.length = 0
+    created.start().catch(() => {})
+    return
+  }
+  if (host === undefined) {
+    if (shellRole) return
+    pending.push(event.data)
+    return
+  }
+  const ready = host
+  runAtAsyncContextRoot(() => { ready.handleMessage(event.data) })
+})

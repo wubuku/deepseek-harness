@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node profile-overlay/build-overlay.mjs && vite build",
+    "build": "node profile-overlay/build-overlay.mjs && node complex/build-overlay.mjs && vite build",
+    "start:complex": "node --import tsx complex/run.mjs",
+    "test:complex": "node --import tsx --test complex/tests/*.test.ts",
+    "test:complex:e2e": "node --import tsx complex/tests/experiment.e2e.mjs",
+    "test:complex:lifecycle": "node --import tsx complex/tests/lifecycle.e2e.mjs",
+    "check:complex": "node complex/check-adapter.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
     "check:core": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2023,DOM --allowImportingTsExtensions --skipLibCheck src/schemas.ts src/domain.ts src/frontend-bridge.ts",
     "test:e2e": "node --import tsx tests/comparison.e2e.mjs",

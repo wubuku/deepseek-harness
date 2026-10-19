@@ -1,0 +1,211 @@
+{
+  "real": true,
+  "browser": "Playwright WebKit (not Safari.app)",
+  "outcomes": [
+    {
+      "ui": "copilot",
+      "passed": true,
+      "sent": 10,
+      "steps": [
+        {
+          "name": "流式消息与第一轮输入",
+          "writes": 0,
+          "events": 18
+        },
+        {
+          "name": "根据当前选择批量操作，无重复写入",
+          "writes": 1,
+          "events": 36
+        },
+        {
+          "name": "切换客户后使用新上下文",
+          "writes": 2,
+          "events": 54
+        },
+        {
+          "name": "人工和 Agent 协同编辑不同字段",
+          "writes": 4,
+          "events": 74
+        },
+        {
+          "name": "并发修改拒绝旧版本，随后仍能继续",
+          "writes": 5,
+          "events": 92
+        },
+        {
+          "name": "拒绝审批后停止，不偷偷发送",
+          "writes": 6,
+          "events": 110
+        },
+        {
+          "name": "等待人工输入时停止，释放原工具",
+          "writes": 6,
+          "events": 125
+        },
+        {
+          "name": "停止和错误后继续，多轮记忆保留",
+          "writes": 6,
+          "events": 133
+        },
+        {
+          "name": "聊天内编辑 → DSH 人工答案 → 同 turn 发送一次",
+          "writes": 9,
+          "events": 161
+        },
+        {
+          "name": "刷新 hydration 不重放副作用",
+          "writes": 9,
+          "events": 162
+        },
+        {
+          "name": "撤销页面能力和服务端只读检查",
+          "writes": 9,
+          "events": 177
+        },
+        {
+          "name": "重复提交与丢响应重试只写一次",
+          "writes": 10,
+          "events": 177
+        }
+      ],
+      "evidence": "copilot-evidence.json"
+    },
+    {
+      "ui": "assistant",
+      "passed": true,
+      "sent": 10,
+      "steps": [
+        {
+          "name": "流式消息与第一轮输入",
+          "writes": 0,
+          "events": 17
+        },
+        {
+          "name": "根据当前选择批量操作，无重复写入",
+          "writes": 1,
+          "events": 36
+        },
+        {
+          "name": "切换客户后使用新上下文",
+          "writes": 2,
+          "events": 54
+        },
+        {
+          "name": "人工和 Agent 协同编辑不同字段",
+          "writes": 4,
+          "events": 74
+        },
+        {
+          "name": "并发修改拒绝旧版本，随后仍能继续",
+          "writes": 5,
+          "events": 92
+        },
+        {
+          "name": "拒绝审批后停止，不偷偷发送",
+          "writes": 6,
+          "events": 110
+        },
+        {
+          "name": "等待人工输入时停止，释放原工具",
+          "writes": 6,
+          "events": 125
+        },
+        {
+          "name": "停止和错误后继续，多轮记忆保留",
+          "writes": 6,
+          "events": 133
+        },
+        {
+          "name": "聊天内编辑 → DSH 人工答案 → 同 turn 发送一次",
+          "writes": 9,
+          "events": 161
+        },
+        {
+          "name": "刷新 hydration 不重放副作用",
+          "writes": 9,
+          "events": 162
+        },
+        {
+          "name": "撤销页面能力和服务端只读检查",
+          "writes": 9,
+          "events": 177
+        },
+        {
+          "name": "重复提交与丢响应重试只写一次",
+          "writes": 10,
+          "events": 177
+        }
+      ],
+      "evidence": "assistant-evidence.json"
+    },
+    {
+      "ui": "native",
+      "passed": true,
+      "sent": 10,
+      "steps": [
+        {
+          "name": "流式消息与第一轮输入",
+          "writes": 0,
+          "events": 18
+        },
+        {
+          "name": "根据当前选择批量操作，无重复写入",
+          "writes": 1,
+          "events": 36
+        },
+        {
+          "name": "切换客户后使用新上下文",
+          "writes": 2,
+          "events": 54
+        },
+        {
+          "name": "人工和 Agent 协同编辑不同字段",
+          "writes": 4,
+          "events": 74
+        },
+        {
+          "name": "并发修改拒绝旧版本，随后仍能继续",
+          "writes": 5,
+          "events": 92
+        },
+        {
+          "name": "拒绝审批后停止，不偷偷发送",
+          "writes": 6,
+          "events": 110
+        },
+        {
+          "name": "等待人工输入时停止，释放原工具",
+          "writes": 6,
+          "events": 125
+        },
+        {
+          "name": "停止和错误后继续，多轮记忆保留",
+          "writes": 6,
+          "events": 133
+        },
+        {
+          "name": "聊天内编辑 → DSH 人工答案 → 同 turn 发送一次",
+          "writes": 9,
+          "events": 161
+        },
+        {
+          "name": "刷新 hydration 不重放副作用",
+          "writes": 9,
+          "events": 162
+        },
+        {
+          "name": "撤销页面能力和服务端只读检查",
+          "writes": 9,
+          "events": 177
+        },
+        {
+          "name": "重复提交与丢响应重试只写一次",
+          "writes": 10,
+          "events": 177
+        }
+      ],
+      "evidence": "native-evidence.json"
+    }
+  ],
+  "dataDir": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-complex-real-webkit-GVlZpt"
+}

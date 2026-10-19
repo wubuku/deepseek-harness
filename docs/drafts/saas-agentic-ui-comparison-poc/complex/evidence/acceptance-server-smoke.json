@@ -1,0 +1,31 @@
+{
+  "origin": "http://127.0.0.1:56935",
+  "sessionId": "session-2fefa99a-2fa5-4002-83de-aa7839defb8e",
+  "workspace": "server-smoke",
+  "recordedDate": "2026-10-19",
+  "restoredAfterBackendRestart": true,
+  "userMessages": 3,
+  "endedTurns": 3,
+  "lastReply": [
+    {
+      "type": "text",
+      "text": " 银杏海鸥"
+    }
+  ],
+  "businessWrites": 1,
+  "receipts": 1,
+  "assignments": [
+    {
+      "id": "TK-41",
+      "assignee": "周宁"
+    },
+    {
+      "id": "TK-42",
+      "assignee": "周宁"
+    },
+    {
+      "id": "TK-43",
+      "assignee": "陈晨"
+    }
+  ]
+}

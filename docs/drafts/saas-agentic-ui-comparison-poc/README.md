@@ -8,6 +8,10 @@
 
 ## 导读
 
+- [复杂客户续约实验](complex/README.md)：跨页面上下文、协同编辑、多阶段审批，以及 CopilotKit 原生 frontend tool/HITL 的分段续接；与本轮 renderer-only 结果分开记录。
+
+- 当前初步结论：CopilotKit 在高协作复杂度场景最值得优先做产品化验证；assistant-ui 仍适合作为较轻聊天层基线；DSH 原生 UI 在已有 React 应用中有最明显的独立 renderer root 与 Context 装配风险。该判断不是三路线真实模型工时对照，证据范围见[复杂实验评估](complex/design-and-assessment.md)。
+
 - [实施计划](implementation-plan.md)：题设、相同业务故事与控制变量。
 - [设计与评估](design-and-assessment.md)：共用部分、三路接线、实际成本与限制。
 - [手动验收](manual-acceptance.md)：可直接操作的输入、预期变化和失败判断。

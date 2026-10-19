@@ -1,0 +1,14 @@
+{
+  "real": false,
+  "browser": "installed Chrome",
+  "results": [
+    {
+      "ui": "copilot",
+      "duplicateWriterRejected": true,
+      "backendRestartHydrated": true,
+      "businessRestartHydrated": true,
+      "continuedAfterRestart": true,
+      "pendingApprovalRefreshDidNotReplay": true
+    }
+  ]
+}

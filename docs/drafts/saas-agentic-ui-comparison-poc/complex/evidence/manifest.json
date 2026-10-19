@@ -1,0 +1,107 @@
+{
+  "recordedDate": "2026-10-19",
+  "versions": {
+    "CopilotKit": "1.79.1",
+    "agUi": "1.0.2",
+    "assistantUi": "0.15.29",
+    "React": "19.1.0"
+  },
+  "files": [
+    {
+      "file": "README.md",
+      "sha256": "7e199c082f77f7128d2bd4e332dc466af40bddcb2e4cd8fbce84df567a065920"
+    },
+    {
+      "file": "acceptance-server-smoke.json",
+      "sha256": "38324225d526321614c1d8cf5570f02e13461cd1bf5f2cf8fce77412446aa794"
+    },
+    {
+      "file": "assistant-complex-scripted-chrome.png",
+      "sha256": "36524a6f0bcbb7643cc480acc5e0b5de652d65b0536688671b837f9b78d4b7d1"
+    },
+    {
+      "file": "assistant-scripted-chrome.json",
+      "sha256": "7516459e7e52e8f61911e5a61cd26e8623860a7d798def522cb8a663062f2ad1"
+    },
+    {
+      "file": "controls-real-chrome-partial-summary.json",
+      "sha256": "b3bb9ddc8aef290f8a016a8012343bbcab25408478651664841771beb142b48e"
+    },
+    {
+      "file": "controls-real-webkit-summary.json",
+      "sha256": "908d2a87c37e666d7f153a020d9453239763067137dd19a2483e085867f0c7f3"
+    },
+    {
+      "file": "controls-scripted-chrome-summary.json",
+      "sha256": "668d82255e12510cd10ef7924a9fa31d99b97c1e4f0d2941ae82c5a9a2fffd79"
+    },
+    {
+      "file": "copilot-complex-real-chrome.png",
+      "sha256": "f48f23aec775dd2efcbdfac7bc9fe00c3cccdda4fe7bc854bd4da350e1dac8e1"
+    },
+    {
+      "file": "copilot-complex-real-webkit.png",
+      "sha256": "ccf1c2827eb978bd186053d191c678fd7b8c084f11b6e3fa50e78f36c8016f5b"
+    },
+    {
+      "file": "copilot-complex-scripted-chrome.png",
+      "sha256": "ac18550578609327c87b024e454042b702367435adb561eba8a2c83df14d4cc4"
+    },
+    {
+      "file": "copilot-real-chrome.json",
+      "sha256": "fa82d398660c37fcb92d9be2410893c32155286bb896ee044090a8dc3fc03d2a"
+    },
+    {
+      "file": "copilot-real-lifecycle-chrome.json",
+      "sha256": "29c2bc8512afa282b6690dc0000d132b769248632b202c2f89f9e9a932932a52"
+    },
+    {
+      "file": "copilot-real-lifecycle-webkit.json",
+      "sha256": "910d6b90b0532f9aaa966ce46360254a8e94f323ac12496de509a5615a756589"
+    },
+    {
+      "file": "copilot-real-webkit.json",
+      "sha256": "2e00b5123682c31d2892958e1bb7a355e03cfeb06827091fca97429c1979c9a5"
+    },
+    {
+      "file": "copilot-scripted-chrome.json",
+      "sha256": "6dc22c1dd2036110a108f009962bb06e0916e6a68396c1369d211b50f7f779c1"
+    },
+    {
+      "file": "copilot-scripted-lifecycle-chrome.json",
+      "sha256": "1d7d08fc4e39ed5e5a4050b2956705aa5bd6a2e8efce772b554a01792efdfed9"
+    },
+    {
+      "file": "copilot-scripted-lifecycle-webkit.json",
+      "sha256": "6348fbf13a949daa4cbca92755165c38932af4197a53634541128b261fcfdf9a"
+    },
+    {
+      "file": "copilot-scripted-webkit.json",
+      "sha256": "a3aced67799f57bbe465bcd5aaf5812dee304c2c9c060c90fe9b1044baea56a1"
+    },
+    {
+      "file": "native-complex-scripted-chrome.png",
+      "sha256": "bd8a58d613026f6def9afce404665f4cffaa83daf1329ef23fe7e407d82b1927"
+    },
+    {
+      "file": "native-layout-recheck-chrome.json",
+      "sha256": "e688e6e9b48728c3a833dbaaab40be0abc8e293fd0d98fbc30fbfdf3145650b0"
+    },
+    {
+      "file": "native-scripted-chrome.json",
+      "sha256": "12837cc70128e1c0ae503688d0a9077fd1a1bcf81c886e481d805de6dcb84128"
+    },
+    {
+      "file": "parent-regression-chrome.txt",
+      "sha256": "e4f4a252013e6a1b6222186a322366e623baa031be0f1b444e71660bb0d0ee09"
+    },
+    {
+      "file": "shared-form-real-chrome.png",
+      "sha256": "a77e5f62079bc9557068d3ce2e26925dc489319086f8651b45099ad91ca4d730"
+    },
+    {
+      "file": "shared-form-real-webkit.png",
+      "sha256": "028ead667063a71f2e3567a2804d8c93c5ac9a1fb47f14f9ca8e9679aab1512d"
+    }
+  ]
+}
