@@ -1,6 +1,6 @@
 # 实验验收证据索引
 
-记录日期为 2026-10-19，固定版本和文件 SHA-256 见 [manifest.json](manifest.json)。JSON 保留测试捕获的调用身份、业务凭据、网络地址和计数，不包含模型密钥、Cookie 或完整环境文件。临时服务地址和 Session id 仅用于定位当次本机实验，不是可公开复用的服务。
+记录日期为 2026-10-20，固定版本和原始证据 manifest 见 [manifest.json](manifest.json)。JSON 保留测试捕获的调用身份、业务凭据、网络地址和计数，不包含模型密钥、Cookie 或完整环境文件。临时服务地址和 Session id 仅用于定位当次本机实验，不是可公开复用的服务。
 
 | 文件 | 实际含义 |
 |---|---|
@@ -8,6 +8,10 @@
 | [copilot-real-chrome.json](copilot-real-chrome.json) / [WebKit](copilot-real-webkit.json) | 两种浏览器分别访问真实后端模型的完整故事，含模型请求与 DSH step 对照 |
 | [copilot-real-complex-chrome-20261019.json](copilot-real-complex-chrome-20261019.json) / [WebKit](copilot-real-complex-webkit-20261019.json) | 本轮修正脚本后的 CopilotKit 真实模型复杂故事；包含可见流式文本、Session chunk、工具/HITL、业务 receipt 和模型请求归属 |
 | [assistant-real-complex-chrome-20261019.json](assistant-real-complex-chrome-20261019.json) / [WebKit](assistant-real-complex-webkit-20261019.json) | 本轮修正脚本后的 assistant-ui 真实模型复杂故事；WebKit 记录了一次安全停止后重新读取并发送的续接 |
+| [assistant-multi-object-real-chrome-20261020.json](assistant-multi-object-real-chrome-20261020.json) / [截图](assistant-multi-object-real-chrome-20261020.png) | assistant-ui 跨客户批量续约真实模型 Chrome 验收；2 turns、5 个配对工具结果、4 次业务写入 |
+| [copilot-multi-object-real-chrome-20261020.json](copilot-multi-object-real-chrome-20261020.json) / [截图](copilot-multi-object-real-chrome-20261020.png) | CopilotKit 相同故事的真实模型 Chrome 验收；包含原生 frontend tool 与 HITL 路径 |
+| [assistant-multi-object-real-webkit-20261020.json](assistant-multi-object-real-webkit-20261020.json) / [截图](assistant-multi-object-real-webkit-20261020.png) | assistant-ui 相同故事的 Playwright WebKit 验收；不代表 Safari.app |
+| [copilot-multi-object-real-webkit-20261020.json](copilot-multi-object-real-webkit-20261020.json) / [截图](copilot-multi-object-real-webkit-20261020.png) | CopilotKit 相同故事的 Playwright WebKit 验收；不代表 Safari.app |
 | [real-complex-retries-20261019.json](real-complex-retries-20261019.json) | 没有计为通过的真实模型重试：空回复和审批版本不一致后的安全停止；用于说明测试没有吞掉失败 |
 | [copilot-real-lifecycle-chrome.json](copilot-real-lifecycle-chrome.json) / [WebKit](copilot-real-lifecycle-webkit.json) | 真实模型、非空业务数据及 Session 重启、双标签写权、审批中刷新后继续 |
 | [assistant-scripted-chrome.json](assistant-scripted-chrome.json) / [native-scripted-chrome.json](native-scripted-chrome.json) | 最近一次复杂故事 scripted 对照证据；三路线各 11 条用户消息和 13 个检查点 |

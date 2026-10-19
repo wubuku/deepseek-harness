@@ -1,5 +1,13 @@
 # 实验进度
 
+## 2026-10-20 成本对照扩展
+
+执行位置为主工作区 `research`，唯一 worktree。已实现跨客户批量续约、共享报价编辑器、内容绑定审批、旧版本拒绝与重新审核。assistant-ui 和 CopilotKit 在真实 Chrome 及 Playwright WebKit 上均通过同一真实模型故事；每次运行均为 2 个用户 turn、5 个工具调用/结果、4 次业务写入、1 份批量提交 receipt。证据与限制见[测试记录](test-results.md)。
+
+真实模型验收先暴露两处测试/接入缺陷：验收器在成功提交后误判并追加 prompt；`portfolio_apply` 还要求了业务上无意义的 `customerId`。已修正控制流和工具参数，并重跑四项真实浏览器矩阵。旧的失败尝试留在本机临时目录，不列为通过证据；正式证据只收录修正后的运行。
+
+本轮初步成本结论：在“DSH 是唯一 Agent Loop、SaaS 已有 React 业务组件、只增加一个聊天层”的限定下，assistant-ui 的接入总成本更低；复杂 UI 业务本体两路线共用，CopilotKit 的原生工具/HITL 有实际价值，但仍需维护 AG-UI 分段适配，当前实验未证明其节省的自编排成本足以抵消该适配。结论和适用条件见[设计与评估](design-and-assessment.md#相同复杂故事的实测与成本判断)。
+
 ## 环境
 
 - 日期：2026-10-19。
@@ -8,7 +16,7 @@
 
 ## 当前阶段
 
-实验已实现并完成主路线验收：真实 Worker/Host/默认 Loop、动态页面工具、共享报价编辑器、原生 frontend handler/HITL/Agent context、精确调用结果续接、取消、错误后继续、多轮、刷新和持久化恢复。CopilotKit 只有聊天/交互职责，DSH 与业务 API 继续分别保存执行事实和业务事实。初步路线评估见[设计与评估](design-and-assessment.md#初步路线判断)。
+实验已实现并完成主路线验收：真实 Worker/Host/默认 Loop、动态页面工具、共享报价编辑器、原生 frontend handler/HITL/Agent context、精确调用结果续接、取消、错误后继续、多轮、刷新和持久化恢复。CopilotKit 只有聊天/交互职责，DSH 与业务 API 继续分别保存执行事实和业务事实。初步路线评估见[设计与评估](design-and-assessment.md#相同复杂故事的实测与成本判断)。
 
 原生与 assistant-ui 对照保留可运行功能，不为等量优化扩大范围。父入口三路线回归通过；原两个 PoC 源码未修改。复杂实验代码和证据已进入 `research`，本进度记录保留隔离执行阶段的历史事实。
 

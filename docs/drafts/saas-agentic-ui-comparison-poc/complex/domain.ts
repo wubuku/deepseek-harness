@@ -5,28 +5,34 @@ import { z } from 'zod'
 export const operationSchema = z.object({
   operationId: z.string().min(1).max(250),
   customerId: z.enum(['acme', 'birch']),
-  kind: z.enum(['assign', 'patch', 'approve', 'send']),
+  kind: z.enum(['assign', 'patch', 'approve', 'portfolio_approve', 'send', 'portfolio_apply']),
   expectedVersion: z.number().int().positive().optional(),
   ticketIds: z.array(z.string()).optional(),
   assignee: z.enum(['林悦', '周宁', '陈晨']).optional(),
   budget: z.number().min(1000).max(1_000_000).optional(),
   discount: z.number().min(0).max(30).optional(),
   approved: z.boolean().optional(),
+  changes: z.array(z.object({
+    customerId: z.enum(['acme', 'birch']),
+    expectedVersion: z.number().int().positive(),
+    budget: z.number().min(1000).max(1_000_000).optional(),
+    discount: z.number().min(0).max(30).optional(),
+  }).strict()).min(1).max(2).optional(),
 }).strict()
 /** Validated write input; replay requires the same operation id and parameters. */
 export type Operation = z.infer<typeof operationSchema>
 /** A revisioned quote whose approval applies only to its recorded version. */
-export interface Quote { budget: number; discount: number; version: number; status: 'draft' | 'sent'; approval?: { version: number; approved: boolean } }
+export interface Quote { budget: number; discount: number; version: number; status: 'draft' | 'sent'; approval?: { version: number; approved: boolean; portfolioPlan?: string } }
 /** Customer-owned records used by both the existing GUI and chat tools. */
 export interface Account { name: string; quote: Quote; tickets: { id: string; title: string; assignee: string }[] }
 /** Immutable write evidence replayed when the original operation is retried. */
-export interface Receipt { ok: true; operationId: string; kind: Operation['kind']; customerId: string; record: Account }
+export interface Receipt { ok: true; operationId: string; kind: Operation['kind']; customerId: string; record: Account | { accounts: Record<string, Account> } }
 /** One mock workspace's durable business state, separate from DSH history. */
 export interface Database { accounts: Record<string, Account>; receipts: Record<string, { fingerprint: string; receipt: Receipt }>; writes: number }
 
-const quoteSchema = z.object({ budget: z.number().min(1000).max(1_000_000), discount: z.number().min(0).max(30), version: z.number().int().positive(), status: z.enum(['draft', 'sent']), approval: z.object({ version: z.number().int().positive(), approved: z.boolean() }).strict().optional() }).strict()
+const quoteSchema = z.object({ budget: z.number().min(1000).max(1_000_000), discount: z.number().min(0).max(30), version: z.number().int().positive(), status: z.enum(['draft', 'sent']), approval: z.object({ version: z.number().int().positive(), approved: z.boolean(), portfolioPlan: z.string().optional() }).strict().optional() }).strict()
 const accountSchema = z.object({ name: z.string().min(1), quote: quoteSchema, tickets: z.array(z.object({ id: z.string().min(1), title: z.string(), assignee: z.string() }).strict()) }).strict()
-const receiptSchema = z.object({ ok: z.literal(true), operationId: z.string().min(1), kind: operationSchema.shape.kind, customerId: z.string().min(1), record: accountSchema }).strict()
+const receiptSchema = z.object({ ok: z.literal(true), operationId: z.string().min(1), kind: operationSchema.shape.kind, customerId: z.string().min(1), record: z.union([accountSchema, z.object({ accounts: z.record(z.string(), accountSchema) }).strict()]) }).strict()
 
 /** Validate persisted and HTTP business snapshots before they enter application state. */
 export const databaseSchema = z.object({ accounts: z.object({ acme: accountSchema, birch: accountSchema }).strict(), receipts: z.record(z.string(), z.object({ fingerprint: z.string(), receipt: receiptSchema }).strict()), writes: z.number().int().nonnegative() }).strict()
@@ -66,6 +72,33 @@ export function applyOperation(database: Database, input: Operation, role: strin
   }
   const account = database.accounts[input.customerId]
   if (!account) throw new BusinessError('NOT_FOUND', '客户不存在', 404)
+  if (input.kind === 'portfolio_approve' || input.kind === 'portfolio_apply') {
+    if (!input.changes?.length || new Set(input.changes.map(change => change.customerId)).size !== input.changes.length) throw new BusinessError('INVALID_PLAN', '批量续约方案必须包含不同客户的报价变更', 400)
+    const portfolioPlan = JSON.stringify(input.changes.map(change => ({ customerId: change.customerId, expectedVersion: change.expectedVersion, budget: change.budget, discount: change.discount })).sort((left, right) => left.customerId.localeCompare(right.customerId)))
+    for (const change of input.changes) {
+      const target = database.accounts[change.customerId]
+      if (change.expectedVersion !== target.quote.version) throw new BusinessError('VERSION_CONFLICT', `客户 ${change.customerId} 的报价已被修改，请重新读取批量方案`)
+      if (target.quote.status === 'sent') throw new BusinessError('ALREADY_SENT', `客户 ${change.customerId} 的报价已经发送`)
+      if (change.budget === undefined && change.discount === undefined) throw new BusinessError('EMPTY_PATCH', '批量方案至少修改一个报价字段', 400)
+    }
+    if (input.kind === 'portfolio_approve') {
+      if (input.approved === undefined) throw new BusinessError('MISSING_DECISION', '需要明确批准或拒绝', 400)
+      for (const change of input.changes) database.accounts[change.customerId].quote.approval = { approved: input.approved, version: change.expectedVersion, portfolioPlan }
+      return commitReceipt(database, input, { accounts: Object.fromEntries(input.changes.map(change => [change.customerId, structuredClone(database.accounts[change.customerId])])) })
+    }
+    for (const change of input.changes) {
+      const target = database.accounts[change.customerId]
+      if (!target.quote.approval?.approved || target.quote.approval.version !== target.quote.version || target.quote.approval.portfolioPlan !== portfolioPlan) throw new BusinessError('APPROVAL_REQUIRED', `客户 ${change.customerId} 的当前报价没有匹配的人工批准`)
+    }
+    for (const change of input.changes) {
+      const target = database.accounts[change.customerId]
+      if (change.budget !== undefined) target.quote.budget = change.budget
+      if (change.discount !== undefined) target.quote.discount = change.discount
+      target.quote.version += 1
+      delete target.quote.approval
+    }
+    return commitReceipt(database, input, { accounts: Object.fromEntries(input.changes.map(change => [change.customerId, structuredClone(database.accounts[change.customerId])])) })
+  }
   const quote = account.quote
   if (input.kind === 'assign') {
     if (!input.ticketIds?.length || !input.assignee || new Set(input.ticketIds).size !== input.ticketIds.length || input.ticketIds.some(id => !account.tickets.some(ticket => ticket.id === id))) throw new BusinessError('INVALID_SELECTION', '工单必须属于当前客户且不能重复', 400)
@@ -88,7 +121,13 @@ export function applyOperation(database: Database, input: Operation, role: strin
       quote.version += 1
     }
   }
-  const receipt: Receipt = { ok: true, operationId, kind: input.kind, customerId: input.customerId, record: structuredClone(account) }
+  return commitReceipt(database, input, structuredClone(account))
+}
+
+function commitReceipt(database: Database, input: Operation, record: Receipt['record']): Receipt {
+  const { operationId, ...fields } = input
+  const fingerprint = JSON.stringify(Object.entries(fields).sort(([left], [right]) => left.localeCompare(right)))
+  const receipt: Receipt = { ok: true, operationId, kind: input.kind, customerId: input.customerId, record }
   database.receipts[operationId] = { fingerprint, receipt }
   database.writes += 1
   return receipt

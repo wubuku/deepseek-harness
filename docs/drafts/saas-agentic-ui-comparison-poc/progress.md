@@ -14,7 +14,7 @@
 - 已实现精确 DSH `toolCallId` 页面桥、取消/卸载保护、历史只读重放，以及 Browser-specific preset；没有 bash、文件和 web 工具。
 - 已通过 9 项单测、Chrome/WebKit scripted、Chrome/WebKit 真实 LLM、三路线生命周期测试；证据、限制和具体命令见 `test-results.md`。
 - 真实模型首轮发现并修复共用 LLM proxy 对“先文本后工具”和多工具碎片的处理缺陷；修复和回归已记录在 `change-ledger.md`。
-- 已更新 `docs/drafts/README.md` 与选型报告：同口径结果不再支持仅因旧 CopilotKit PoC 先做过业务 demo 就把 CopilotKit 自动排首位；当前 assistant-ui 是轻量接入基线，CopilotKit 是强候选，DSH 原生适合接受其装配体系的产品。
+- 已更新 `docs/drafts/README.md` 与选型报告：复杂真实模型故事已由 assistant-ui 与 CopilotKit 在 Chrome/WebKit 双路线通过；在 DSH 唯一 Agent Loop 约束下，当前 assistant-ui 的集成责任更窄、总接入成本暂时更低，CopilotKit 保留为需要高复用应用交互设施时的条件性候选。
 
 ## 2026-10-19：验收服务与交付检查
 

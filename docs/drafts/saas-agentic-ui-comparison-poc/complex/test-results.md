@@ -2,7 +2,7 @@
 
 ## 范围与结论
 
-记录日期为 2026-10-19。执行者始终为 Dedicated Worker 内的真实 DSH；CopilotKit 仍是主验收对象，assistant-ui 是轻量接入对照。CopilotKit 与 assistant-ui 已在安装版 Chrome 和 Playwright WebKit 上通过同一个真实模型复杂业务故事；CopilotKit 另有真实生命周期测试。DSH 原生 UI 只保留 scripted 复杂故事证据，未完成三路线等量真实模型矩阵。WebKit 结果不是 Safari.app 的验收结论。
+记录更新日期为 2026-10-20。执行者始终为 Dedicated Worker 内的真实 DSH。assistant-ui 与 CopilotKit 已在安装版 Chrome 和 Playwright WebKit 上通过同一个跨客户批量续约真实模型故事；CopilotKit 另有真实生命周期测试。DSH 原生 UI 只保留 scripted 复杂故事证据，未完成三路线等量真实模型矩阵。WebKit 结果不是 Safari.app 的验收结论。
 
 真实模式由 backend 读取主工作区 `docs/drafts/.env`，浏览器只请求同源代理。没有复制密钥、给前端设置模型凭据或启用 CopilotKit 云。版本固定在父 lockfile：CopilotKit 1.79.1、AG-UI 1.0.2、assistant-ui 0.15.29、React 19.1.0。
 
@@ -17,6 +17,8 @@ npm run test:complex
 npm run check:complex
 npm run test:e2e
 npm run test:complex:e2e
+npm run test:complex:multi -- --ui=assistant,copilot
+npm run test:complex:multi -- --webkit --ui=assistant,copilot
 node --import tsx complex/tests/experiment.e2e.mjs --ui=copilot
 node --import tsx complex/tests/experiment.e2e.mjs --ui=copilot --webkit
 node --import tsx complex/tests/lifecycle.e2e.mjs --ui=copilot
@@ -39,7 +41,7 @@ https_proxy=http://127.0.0.1:9981 http_proxy=http://127.0.0.1:9981 all_proxy=soc
 
 三条真实模型命令都再追加 `--webkit` 执行；生命周期命令本轮仍只针对 CopilotKit。测试进程需要 `--use-env-proxy`；仅设置代理环境变量时 Node 不会自动把模型 fetch 路由到 HTTP 代理。`NO_PROXY` 保证本机 E2E 请求直连本机服务。
 
-`npm test` 的父实验 9 个单测通过，新实验 `test:complex` 的 11 个单测通过。后者覆盖字段补丁、版本/审批、角色、跨客户选择、幂等、数据库/HTTP 快照校验、精确调用结算、取消与晚到结果、detach、历史 hydration、输入去重，以及错误 call id 的续接不能遗失原 waiter。`check:complex` 的 strict 检查通过，但范围仅为业务域、桥和分段适配器，依赖已构建的 DSH 声明，不是全 GUI 或全仓 typecheck。
+`npm test` 的父实验曾有 9 个单测通过，新实验本轮 `test:complex` 的 14 个单测通过。后者还覆盖批量计划批准必须绑定客户集合、报价版本和完整折扣/预算；`check:complex` 的 strict 检查通过，但范围仅为业务域、桥和分段适配器，依赖已构建的 DSH 声明，不是全 GUI 或全仓 typecheck。
 
 局部多入口构建通过，保留 Vite 大 chunk 告警。首次环境的 `npm ci` 没有重新执行；此次复用相同实验 checkpoint 的忽略构建产物与固定局部依赖，不能据此宣称已验证干净机器安装。没有单独执行全仓构建；当前主工作区的 `doc-sync` 已重新通过，详见文末。
 
@@ -57,6 +59,23 @@ https_proxy=http://127.0.0.1:9981 http_proxy=http://127.0.0.1:9981 all_proxy=soc
 四份脱敏原始证据见 [CopilotKit Chrome](evidence/copilot-real-complex-chrome-20261019.json)、[CopilotKit WebKit](evidence/copilot-real-complex-webkit-20261019.json)、[assistant-ui Chrome](evidence/assistant-real-complex-chrome-20261019.json) 和 [assistant-ui WebKit](evidence/assistant-real-complex-webkit-20261019.json)。每份均记录模型请求归属、DSH step、工具调用身份、receipt、流式采样和同源网络地址，不包含模型密钥。
 
 本轮曾出现两类真实模型非确定性失败：一次首轮返回空的 `assistant/message`，一次审批后模型识别到版本不一致并安全停止。两者均被测试拒绝为通过；随后重跑得到上表的完整结果。具体重试目录见[失败索引](evidence/real-complex-retries-20261019.json)。该事实说明 PoC 能安全停止和继续，不说明真实上游在生产环境具有统计意义上的稳定成功率。
+
+## 同一批量续约故事的真实模型矩阵
+
+本轮新增两个客户的续约组合页面。每条路线都先展示两个客户的可编辑报价，完成一次人工批准；随后另一业务写入提高青禾科技报价版本，旧批准方案必须被后端拒绝且不能增加写入；Agent 再读取当前版本、重新展示方案、等待批准并提交。两条路线分别在真实 Chrome 和 Playwright WebKit 跑过完全相同的验收脚本。
+
+| 路线 / 浏览器 | 用户 turn | DSH 工具调用 / 结果 | 对话模型请求 / step | 业务写入 | 结果 |
+|---|---:|---:|---:|---:|---|
+| assistant-ui / Chrome | 2 | 5 / 5 | 7 / 7（另有 1 个标题请求） | 4 | 通过 |
+| CopilotKit / Chrome | 2 | 5 / 5 | 7 / 7（另有 1 个标题请求） | 4 | 通过 |
+| assistant-ui / Playwright WebKit | 2 | 5 / 5 | 7 / 7（另有 1 个标题请求） | 4 | 通过 |
+| CopilotKit / Playwright WebKit | 2 | 5 / 5 | 7 / 7（另有 1 个标题请求） | 4 | 通过 |
+
+每条路线的调用序列均为 `page_read`、`portfolio_review`、`page_read`、`portfolio_review`、`portfolio_apply`；5 个工具结果都对应原 call id。4 次业务写入为初次批准、外部并发修改、重新批准和唯一一次批量提交；最终青禾科技折扣 8%/版本 3，白桦设计折扣 8%/版本 2。旧方案返回 `VERSION_CONFLICT`，没有额外写入。两条路线的浏览器网络记录均未发现跨源请求，页面只请求同源 PoC API。
+
+归档证据包括 [assistant-ui Chrome JSON](evidence/assistant-multi-object-real-chrome-20261020.json) / [截图](evidence/assistant-multi-object-real-chrome-20261020.png)、[CopilotKit Chrome JSON](evidence/copilot-multi-object-real-chrome-20261020.json) / [截图](evidence/copilot-multi-object-real-chrome-20261020.png)、[assistant-ui WebKit JSON](evidence/assistant-multi-object-real-webkit-20261020.json) / [截图](evidence/assistant-multi-object-real-webkit-20261020.png) 和 [CopilotKit WebKit JSON](evidence/copilot-multi-object-real-webkit-20261020.json) / [截图](evidence/copilot-multi-object-real-webkit-20261020.png)。证据保留调用序列、结果身份、模型请求数量、同源网络和最终业务状态，不包含密钥、Cookie 或环境文件。
+
+**成本判断：** 两条路线复用了同一 SaaS 页面、批量编辑器、审批/版本/幂等规则和 backend，且获得相同的业务与模型计数。assistant-ui 的定制聊天适配没有阻止这个复杂工作流；CopilotKit 原生 frontend tool/HITL 确实参与了工作流，但没有减少本次业务实现、模型请求、写入或验收步骤，还需要 DSH 专属 AG-UI 分段 adapter。因此在“DSH Loop 是唯一执行者”的当前约束下，assistant-ui 的总接入成本暂时更低。此结论是基于拥有的集成部件与维护面，不是人时或生产维护费用测量；CopilotKit 对大规模、反复复用其应用交互设施的收益尚未达到可证盈亏平衡的证据。
 
 ## CopilotKit 完整业务证据
 

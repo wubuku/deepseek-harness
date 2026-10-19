@@ -1,5 +1,5 @@
 {
-  "recordedDate": "2026-10-19",
+  "recordedDate": "2026-10-20",
   "versions": {
     "CopilotKit": "1.79.1",
     "agUi": "1.0.2",
@@ -9,7 +9,7 @@
   "files": [
     {
       "file": "README.md",
-      "sha256": "172c7ef867ab8b0fc795107beff8da940fc5db7d099541057f26aad394c79bb8"
+      "sha256": "a069c1a013c79fb56c0612859e27acfc2f74a0bc762a37263ff11e4e895cb881"
     },
     {
       "file": "acceptance-server-smoke.json",
@@ -18,6 +18,22 @@
     {
       "file": "assistant-complex-scripted-chrome.png",
       "sha256": "36524a6f0bcbb7643cc480acc5e0b5de652d65b0536688671b837f9b78d4b7d1"
+    },
+    {
+      "file": "assistant-multi-object-real-chrome-20261020.json",
+      "sha256": "cee007228765bcb745c530ebe3329e5a612725fd3828a9814e316078ac0bd9b9"
+    },
+    {
+      "file": "assistant-multi-object-real-chrome-20261020.png",
+      "sha256": "ec3493da8da3b4b6fa75a28d005a68449b13d73880862b95929ea60a657bd26a"
+    },
+    {
+      "file": "assistant-multi-object-real-webkit-20261020.json",
+      "sha256": "adf51096d76339a498cd65a3a9f09963b9576658cf6a36223241a987270cc464"
+    },
+    {
+      "file": "assistant-multi-object-real-webkit-20261020.png",
+      "sha256": "a3b11f8524df9be159f0fc835c61392cb173ad8b5bb393c059b45ec5ee54aa64"
     },
     {
       "file": "assistant-real-complex-chrome-20261019.json",
@@ -54,6 +70,22 @@
     {
       "file": "copilot-complex-scripted-chrome.png",
       "sha256": "ac18550578609327c87b024e454042b702367435adb561eba8a2c83df14d4cc4"
+    },
+    {
+      "file": "copilot-multi-object-real-chrome-20261020.json",
+      "sha256": "8db196a1992558780df08f5ae3d370a477cfd643ef4f3bba02696a93b8e9fba2"
+    },
+    {
+      "file": "copilot-multi-object-real-chrome-20261020.png",
+      "sha256": "35f34eef0691fd3d23816b8f06b79378aa2a5440f68a9e57b21fede00f2269c0"
+    },
+    {
+      "file": "copilot-multi-object-real-webkit-20261020.json",
+      "sha256": "577d0d31e5c9237b25ea6b4e31dfe960a8341c4ac1e08733b9cd413cf755139d"
+    },
+    {
+      "file": "copilot-multi-object-real-webkit-20261020.png",
+      "sha256": "610e6613e25aead71be8aeab5e41f709ea35ce9d6a7dc9a8f45ed91bd55179fc"
     },
     {
       "file": "copilot-real-chrome.json",

@@ -55,26 +55,30 @@ GUI 与聊天中的 `QuoteEditor` 是同一组件，`submit` 是同一提交函�
 
 不能再说“CopilotKit 原生工具和 HITL 只有理论价值”：本实验已有真实闭环。但也不能说它自动解决权限、协同合并、持久化、取消回滚或 exactly-once；这些仍由 DSH 与 SaaS 实现。与第一轮 renderer-only 接入相比，本轮增加了框架原生路径，同时也暴露了更复杂的协议时序与恢复维护成本。
 
-## 初步路线判断
+这三项能力对成熟 SaaS 是适用的，尤其适用于“页面本身已经有业务组件，Agent 需要在当前页面读取、修改、展示和等待用户决定”的产品。`useFrontendTool` 可以把页面级 action 暴露给 Agent，`useHumanInTheLoop` 可以把既有表单或确认面板作为暂停点，页面协作能力可以让当前页面、选择项、角色和未提交编辑进入 Agent 可见上下文；它们解决的是 Agent 与既有 React GUI 的连接方式，而不是聊天气泡的样式。它们不能替代 DSH 的执行事实、Session 持久化、授权、版本校验、幂等和业务事务。
+
+本实验没有证明这些能力“没有用”，只没有证明它们在“DSH 唯一 Agent Loop、同一批业务组件、单个复杂流程”的条件下已经降低总接入成本。assistant-ui 也能通过自定义工具卡、外部状态和 DSH waiter 完成同一流程，因此 CopilotKit 的收益必须在多个业务模块重复使用前端 action、HITL 和页面上下文后再衡量；如果产品只需要少量接入，CopilotKit 专属的 AG-UI 分段适配可能先成为成本。如果产品有大量页面协作和统一人工介入模式，CopilotKit 的声明式注册与交互生命周期可能摊薄这项固定成本。
+
+## 相同复杂故事的实测与成本判断
 
 | 评估面 | DSH 原生 UI | assistant-ui | CopilotKit |
 |---|---|---|---|
 | 已有 React 资产复用 | 聊天 renderer 与 SaaS 是不同 React root；需显式订阅和同步业务 Context。 | 业务组件留在 SaaS React 树中，ToolCall component 可直接复用；Session 投影和命令续接由适配器负责。 | 业务组件也留在 SaaS React 树中；frontend tool、HITL 与 Agent context 提供声明式应用交互入口。 |
-| 复杂页面协作 | 可由 DSH tool slot 呈现，但需自行处理跨 root 状态同步、工作区装配和 SaaS 视觉裁剪。 | 能呈现复杂组件，但跨页面上下文、原工具等待者和人工回答主要由 SaaS/DSH 桥编排。 | 本实验实际跑通页面工具、共享报价组件、版本冲突、拒绝/批准、停止和同一 DSH turn 续接。 |
+| 复杂页面协作 | 可由 DSH tool slot 呈现，但需自行处理跨 root 状态同步、工作区装配和 SaaS 视觉裁剪。 | 能呈现复杂组件；本轮真实模型完成批量审核、版本冲突后的重新读取和提交。 | 本轮真实模型完成同一业务故事，并实际使用 CopilotKit 原生 frontend tool 与 HITL。 |
 | DSH 执行一致性 | 最直接使用 DSH Client 与 Session 投影，不需 AG-UI 接线。 | 通过 ExternalStoreRuntime 投影 DSH Session；自定义执行桥仍需守住 call id、取消和恢复。 | DSH 仍是唯一 Loop 和事实来源；AG-UI 分段适配承担额外时序与身份维护。 |
-| 当前证据强度 | 新复杂故事在 Chrome scripted 全流程通过；本轮没有为原生 UI 补做等量真实模型复杂故事。 | 新复杂故事在 Chrome 与 Playwright WebKit 的真实模型全流程通过；WebKit 不等于 Safari.app。 | 新复杂故事在 Chrome 与 Playwright WebKit 的真实模型全流程通过；另有 CopilotKit 真实生命周期证据；WebKit 不等于 Safari.app。 |
+| 当前证据强度 | 新复杂故事在 Chrome scripted 全流程通过；本轮没有为原生 UI 补做等量真实模型复杂故事。 | 与 CopilotKit 相同的新故事在真实 Chrome 与 Playwright WebKit 通过；WebKit 不等于 Safari.app。 | 与 assistant-ui 相同的新故事在真实 Chrome 与 Playwright WebKit 通过；另有真实生命周期证据。 |
 
-因此，针对**多页面、已有业务组件深度参与、需要人工与 Agent 交替决策**的成熟 SaaS，当前优先建议继续产品化验证 CopilotKit：其附加价值已从 API 列表变成同一 DSH turn 内的可运行闭环。它不是免集成捷径，DSH 分段桥是实质成本与主要故障面。对于主要需求是新增聊天、复杂互动较少且团队愿意自己编排页面命令的产品，assistant-ui 仍是职责较窄的基线。若 SaaS 必须保持现有 React 应用外壳，DSH 原生 UI 应先解决 renderer root、Context 同步和 workspace chrome 的整合问题，不能仅凭 Session 语义完整就视作嵌入成本最低。
+两条第三方路线在新的批量续约故事中产生相同结果：每条路线、每种浏览器都记录 2 个用户 turn、5 个有配对结果的 DSH 工具调用、4 次业务写入和 1 次批量提交；模型代理 8 个请求中有 7 个对话模型请求与 DSH step 一一对应，另 1 个是标题请求。批准的方案遇到外部版本变更后，旧 `expectedVersion` 被拒绝，没有产生额外业务写入；重新读取、审核和批准后只提交一次。最终两家客户折扣、版本和 receipt 数一致，网络请求仅到同源 PoC 服务。
 
-这只是按架构责任和当前 PoC 证据给出的**初步排序**，不是经团队工时、生产包体和维护周期测量的总成本排名。本轮已经让 assistant-ui 与 CopilotKit 运行同一个真实模型复杂故事；DSH 原生 UI 仍只有 scripted 复杂故事证据，因此不能把三者的真实模型结果写成等量比较。真实模型还可能出现空回复或在版本变化后安全停止，测试保留失败证据并要求重试或显式续接，不能把偶然一次通过当作稳定性指标。
+在题设的架构约束下——成熟 React SaaS 已有业务 GUI、DSH 默认 Loop 是唯一执行者、只新增一个聊天/Agentic UI 层——**assistant-ui 是目前总接入成本更低的选择**。它提供聊天 primitives 与可定制 ToolCall component，业务组件留在 SaaS React 树中；业务团队仍需实现 typed command、审批、版本、权限、receipt 和 DSH 工具桥，但不需要再维护 CopilotKit 到 DSH 的 AG-UI 分段运行适配。
 
-## 推荐的适用范围
+这不是说 CopilotKit 没有附加价值。本轮证明它的 frontend tool、HITL 和 Agent context 可真正参与业务闭环；但 assistant-ui 在同一场景也完整完成了交互，且共用同一批业务组件与后端规则。**因此本次没有观测到 CopilotKit 原生设施减少业务代码、模型请求、业务写入或验收步骤；它带来的应用交互设施尚未抵消 DSH 专属分段 adapter 的额外维护面。** CopilotKit 可以作为复杂应用交互能力更齐全的候选，但在这个约束下不应因“功能更多”就默认成本更低或被优先选中。
 
-对有多个页面、就近声明业务能力、多阶段人工介入需求的成熟 SaaS，CopilotKit 值得进入优先产品化验证，而不是被列为最不推荐。它的优势是已有应用交互设施可以在 DSH 执行权不变的情况下真正被使用；不是别人做不出相同表单。轻量聊天接入仍可先以 assistant-ui 作为窄职责基线，不应把高协作场景的结论无条件推广到所有 SaaS。
+这个成本结论是本轮相同故事、固定依赖和 DSH 唯一 Loop 下的架构判断，不是计时工时或生产维护期的普遍定律。若产品会大量采用 CopilotKit 的应用状态同步、前端 action、可复用 HITL 和其自有 Agent 运行模型，且不再要求把每次工具等待映射回 DSH 原始 waiter，它可能摊薄接入成本；本 PoC 没有验证该盈亏平衡点。若唯一 Loop 必须是 DSH，assistant-ui 是更小的默认集成；当多个真实模块显示其手写桥成本持续增长时，再用同一业务模块复测 CopilotKit。
 
-assistant-ui 仍是聚焦的聊天/工具呈现候选，尤其当产品愿意自己维护业务交互协调，或需要更小的框架职责面。DSH 原生 UI 的 Session 语义完整，但把既有 SaaS Context 带入独立 renderer root 不是零成本，工作区装配和原生产品界面的裁剪也不能忽略。
+DSH 原生 UI 不能据此宣称胜过或输给上述两条路线的真实复杂总成本：它只通过本轮 Chrome scripted 故事，没有跑同等真实模型矩阵。其 DSH Session/Tool 语义路径最直接，但嵌入既有 React SaaS 仍有独立 renderer root、Context 同步、工作区装配和产品界面裁剪成本。
 
-本轮没有工时对照、生产注入、真实企业认证与设计系统集成证据，因此不宣布总成本冠军。下一步应让真实业务团队接入一个新的模块，分别统计一次性 adapter 成本、每模块新增协调、测试维护和生产依赖；不能只比较 hook 行数。
+本轮没有记录实际人时，也未验证生产 Provider、企业认证、多租户授权、设计系统适配或长期维护。因此“assistant-ui 成本更低”指在已跑通的相同复杂故事里，其集成所有权更窄、没有 CopilotKit 专属 AG-UI 分段 adapter；不是一个已经用人时和生产运维数据测出的金额排名。四份真实模型证据见[测试记录](test-results.md#同一批量续约故事的真实模型矩阵)。
 
 ## 已验证的工程经验
 

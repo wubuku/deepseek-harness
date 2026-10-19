@@ -10,7 +10,7 @@
 
 - [复杂客户续约实验](complex/README.md)：跨页面上下文、协同编辑、多阶段审批，以及 CopilotKit 原生 frontend tool/HITL 的分段续接；与本轮 renderer-only 结果分开记录。
 
-- 当前初步结论：CopilotKit 在高协作复杂度场景最值得优先做产品化验证；assistant-ui 仍适合作为较轻聊天层基线；DSH 原生 UI 在已有 React 应用中有最明显的独立 renderer root 与 Context 装配风险。该判断不是三路线真实模型工时对照，证据范围见[复杂实验评估](complex/design-and-assessment.md)。
+- 当前结论：在 DSH 默认 Agent Loop 必须是唯一执行者的前提下，assistant-ui 是复杂 SaaS 聊天/Agentic UI 的低成本默认候选；CopilotKit 的 frontend tool/HITL 有真实价值，但需要额外 DSH 分段适配，只有在多个模块反复复用其应用交互设施并证明收益超过 adapter 维护成本时再升级。DSH 原生 UI 在已有 React 应用中仍有独立 renderer root 与 Context 装配风险，且没有完成等量真实模型复杂矩阵。证据范围见[复杂实验评估](complex/design-and-assessment.md)。
 
 - [实施计划](implementation-plan.md)：题设、相同业务故事与控制变量。
 - [设计与评估](design-and-assessment.md)：共用部分、三路接线、实际成本与限制。

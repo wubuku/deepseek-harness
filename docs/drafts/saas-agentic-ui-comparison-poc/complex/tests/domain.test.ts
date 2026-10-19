@@ -40,6 +40,48 @@ test('跨客户工单及无效参数不能进入业务写入', () => {
   assert.equal(database.writes, 0)
 })
 
+test('批量提交必须绑定每个客户当前版本的人工批准', () => {
+  const database = fixture()
+  const changes = [
+    { customerId: 'acme' as const, expectedVersion: 1, budget: 120000, discount: 8 },
+    { customerId: 'birch' as const, expectedVersion: 1, budget: 60000, discount: 8 },
+  ]
+  assert.throws(() => applyOperation(database, { operationId: 'apply-before-approval', customerId: 'acme', kind: 'portfolio_apply', changes }, 'editor'), /人工批准/)
+  applyOperation(database, { operationId: 'portfolio-approval', customerId: 'acme', kind: 'portfolio_approve', approved: true, changes }, 'editor')
+  assert.equal(database.accounts.acme.quote.approval?.version, 1)
+  assert.equal(database.accounts.birch.quote.approval?.version, 1)
+  applyOperation(database, { operationId: 'portfolio-apply', customerId: 'acme', kind: 'portfolio_apply', changes }, 'editor')
+  assert.equal(database.accounts.acme.quote.version, 2)
+  assert.equal(database.accounts.birch.quote.version, 2)
+})
+
+test('批量批准后版本变化会拒绝旧方案', () => {
+  const database = fixture()
+  const changes = [
+    { customerId: 'acme' as const, expectedVersion: 1, budget: 120000, discount: 8 },
+    { customerId: 'birch' as const, expectedVersion: 1, budget: 60000, discount: 8 },
+  ]
+  applyOperation(database, { operationId: 'portfolio-approval', customerId: 'acme', kind: 'portfolio_approve', approved: true, changes }, 'editor')
+  applyOperation(database, { operationId: 'external-edit', customerId: 'acme', kind: 'patch', expectedVersion: 1, discount: 6 }, 'editor')
+  assert.throws(() => applyOperation(database, { operationId: 'stale-apply', customerId: 'acme', kind: 'portfolio_apply', changes }, 'editor'), /报价已被修改/)
+})
+
+test('批量批准绑定完整内容，改折扣、预算、客户集合或拒绝后不能提交', () => {
+  const database = fixture()
+  const changes = [
+    { customerId: 'acme' as const, expectedVersion: 1, budget: 120000, discount: 8 },
+    { customerId: 'birch' as const, expectedVersion: 1, budget: 60000, discount: 8 },
+  ]
+  applyOperation(database, { operationId: 'approve-plan', customerId: 'acme', kind: 'portfolio_approve', approved: true, changes }, 'editor')
+  for (const altered of [[{ ...changes[0], discount: 30 }, changes[1]], [{ ...changes[0], budget: 900000 }, changes[1]], [changes[0]]]) {
+    assert.throws(() => applyOperation(database, { operationId: 'altered', customerId: 'acme', kind: 'portfolio_apply', changes: altered }, 'editor'), /人工批准/)
+  }
+  assert.equal(database.writes, 1)
+  applyOperation(database, { operationId: 'reject-plan', customerId: 'acme', kind: 'portfolio_approve', approved: false, changes }, 'editor')
+  assert.throws(() => applyOperation(database, { operationId: 'after-rejection', customerId: 'acme', kind: 'portfolio_apply', changes }, 'editor'), /人工批准/)
+  assert.equal(database.writes, 2)
+})
+
 test('原生 handler 不提前结算 DSH waiter；取消后拒绝迟到副作用', async () => {
   const messages: unknown[] = []
   const bridge = new FrontendBridgeWithSegments({ postMessage: value => { messages.push(value) } })

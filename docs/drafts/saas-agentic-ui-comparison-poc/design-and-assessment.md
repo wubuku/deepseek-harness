@@ -38,8 +38,8 @@
 
 本轮同口径实验三条路线均通过，因而不能再用“只有 CopilotKit 能接 SaaS 业务”作为选型论据：同一业务表单和 API 可以接入原生工具 slot、assistant-ui ToolCall component 和 CopilotKit renderer。真正难的共性是执行身份、取消、API 权限/版本、幂等、Session 与业务凭据的一致性；不是增加气泡。
 
-对于题设成熟 React SaaS，**assistant-ui 应作为轻量新增聊天层的优先评估基线，CopilotKit 是需要更完整应用交互设施时的强候选，DSH 原生 UI 适合愿意接受其 Client/工作区装配体系的产品**。这不是宣称 assistant-ui 已在所有维度胜出：本轮只使用 CopilotKit renderer，没有同口径检验原生 frontend tool、shared state、A2UI 等额外能力，因此也不能由此判定这些能力无价值。产品已有复杂 UI 若能直接复用业务组件，两种第三方方案都不需要模型生成任意新组件。
+对于题设成熟 React SaaS，**在 DSH 默认 Agent Loop 必须是唯一执行者的前提下，assistant-ui 是优先评估的低成本聊天层，CopilotKit 是需要更完整应用交互设施时的条件性候选，DSH 原生 UI 适合愿意接受其 Client/工作区装配体系的产品**。两条第三方路线都不需要模型生成任意新组件；差别在于 CopilotKit 的额外原生交互设施是否足以抵消 DSH 分段适配成本。
 
-复杂续约实验进一步证明，CopilotKit 原生 frontend tool、HITL 与页面协作可以接入同一 DSH 执行回路；因此对跨页面、共享组件、多阶段审批这类高协作场景，**CopilotKit 已从“强候选”上升为优先产品化验证路线**。这修正的是复杂场景下的优先顺序，不推翻 assistant-ui 作为较轻聊天层基线，也没有证明 CopilotKit 总工程量更低。DSH 原生 UI 的主要风险仍是把已有 SaaS React 状态接入独立 renderer/workspace，而非其 Session 语义不足。
+复杂续约实验进一步证明，CopilotKit 原生 frontend tool、HITL 与页面协作可以接入同一 DSH 执行回路；但 assistant-ui 也在相同真实模型故事中通过 Chrome 与 Playwright WebKit，且两路线的工具序列、业务写入和最终版本一致。因此对跨页面、共享组件、多阶段审批这类高协作场景，当前证据不支持 CopilotKit 自动胜出；在 DSH 唯一 Loop 约束下，assistant-ui 的集成责任更窄。CopilotKit 仍是有条件的升级候选，需在更多真实模块中测出复用收益。DSH 原生 UI 的主要风险仍是把已有 SaaS React 状态接入独立 renderer/workspace，而非其 Session 语义不足。
 
 该判断必须与[测试记录](test-results.md)一起读：未通过或未执行项目不能被这段架构判断覆盖。生产定案仍需要接入一个真实高价值流程，验证实际认证、复杂组件上下文、设计系统隔离、生产 Agent 注入、并发恢复与性能。

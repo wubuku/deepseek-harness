@@ -1,0 +1,436 @@
+{
+  "ui": "copilot",
+  "workspace": "multi-copilot",
+  "writes": 4,
+  "turns": 2,
+  "calls": [
+    {
+      "name": "page_read",
+      "callId": "call_4e7b9f5d7fdb44769d5a7e0599a58a04"
+    },
+    {
+      "name": "portfolio_review",
+      "callId": "call_73e7a117e41843d288e68a357768e234"
+    },
+    {
+      "name": "page_read",
+      "callId": "call_9161d887ca3247b6b52f820c31091d77"
+    },
+    {
+      "name": "portfolio_review",
+      "callId": "call_445832b49fc14f44b60f4d2ff2c986c2"
+    },
+    {
+      "name": "portfolio_apply",
+      "callId": "call_d99bfb214735470b8c05e54e1c4883f9"
+    }
+  ],
+  "results": [
+    {
+      "callId": "call_4e7b9f5d7fdb44769d5a7e0599a58a04",
+      "text": "{\"ok\":true,\"page\":\"portfolio\",\"context\":{\"page\":\"portfolio\",\"selectedCustomers\":[\"acme\",\"birch\"],\"portfolio\":{\"acme\":{\"customer\":\"青禾科技\",\"quote\":{\"budget\":120000,\"discount\":5,\"version\":1,\"status\":\"draft\"}},\"birch\":{\"customer\":\"白桦设计\",\"quote\":{\"budget\":60000,\"discount\":0,\"version\":1,\"status\":\"draft\"}}},\"role\":\"editor\"},\"frameworkContext\":[{\"description\":\"当前 SaaS 页面；经 page_read 记录后供 DSH 模型使用\",\"value\":\"{\\\"page\\\":\\\"portfolio\\\",\\\"customerId\\\":\\\"acme\\\",\\\"selected\\\":[\\\"TK-41\\\",\\\"TK-42\\\"],\\\"role\\\":\\\"editor\\\",\\\"quote\\\":{\\\"budget\\\":120000,\\\"discount\\\":5,\\\"version\\\":1}}\"}]}"
+    },
+    {
+      "callId": "call_73e7a117e41843d288e68a357768e234",
+      "text": "{\"approved\":true,\"changes\":[{\"customerId\":\"acme\",\"expectedVersion\":1,\"budget\":120000,\"discount\":8},{\"customerId\":\"birch\",\"expectedVersion\":1,\"budget\":60000,\"discount\":8}]}"
+    },
+    {
+      "callId": "call_9161d887ca3247b6b52f820c31091d77",
+      "text": "{\"ok\":true,\"page\":\"portfolio\",\"context\":{\"page\":\"portfolio\",\"selectedCustomers\":[\"acme\",\"birch\"],\"portfolio\":{\"acme\":{\"customer\":\"青禾科技\",\"quote\":{\"budget\":120000,\"discount\":6,\"version\":2,\"status\":\"draft\"}},\"birch\":{\"customer\":\"白桦设计\",\"quote\":{\"budget\":60000,\"discount\":0,\"version\":1,\"status\":\"draft\",\"approval\":{\"version\":1,\"approved\":true,\"portfolioPlan\":\"[{\\\"customerId\\\":\\\"acme\\\",\\\"expectedVersion\\\":1,\\\"budget\\\":120000,\\\"discount\\\":8},{\\\"customerId\\\":\\\"birch\\\",\\\"expectedVersion\\\":1,\\\"budget\\\":60000,\\\"discount\\\":8}]\"}}}},\"role\":\"editor\"},\"frameworkContext\":[{\"description\":\"当前 SaaS 页面；经 page_read 记录后供 DSH 模型使用\",\"value\":\"{\\\"page\\\":\\\"portfolio\\\",\\\"customerId\\\":\\\"acme\\\",\\\"selected\\\":[\\\"TK-41\\\",\\\"TK-42\\\"],\\\"role\\\":\\\"editor\\\",\\\"quote\\\":{\\\"budget\\\":120000,\\\"discount\\\":5,\\\"version\\\":1}}\"}]}"
+    },
+    {
+      "callId": "call_445832b49fc14f44b60f4d2ff2c986c2",
+      "text": "{\"approved\":true,\"changes\":[{\"customerId\":\"acme\",\"expectedVersion\":2,\"budget\":120000,\"discount\":8},{\"customerId\":\"birch\",\"expectedVersion\":1,\"budget\":60000,\"discount\":8}]}"
+    },
+    {
+      "callId": "call_d99bfb214735470b8c05e54e1c4883f9",
+      "text": "{\"ok\":true,\"operationId\":\"session-1d3bd3a9-b45b-4a06-b41b-e8e9c391b03f:call_d99bfb214735470b8c05e54e1c4883f9\",\"kind\":\"portfolio_apply\",\"customerId\":\"acme\",\"record\":{\"accounts\":{\"acme\":{\"name\":\"青禾科技\",\"quote\":{\"budget\":120000,\"discount\":8,\"version\":3,\"status\":\"draft\"},\"tickets\":[{\"id\":\"TK-41\",\"title\":\"导出报表超时\",\"assignee\":\"陈晨\"},{\"id\":\"TK-42\",\"title\":\"续约账号迁移\",\"assignee\":\"林悦\"},{\"id\":\"TK-43\",\"title\":\"账单邮箱变更\",\"assignee\":\"陈晨\"}]},\"birch\":{\"name\":\"白桦设计\",\"quote\":{\"budget\":60000,\"discount\":8,\"version\":2,\"status\":\"draft\"},\"tickets\":[{\"id\":\"TK-81\",\"title\":\"成员邀请失败\",\"assignee\":\"林悦\"}]}}}}"
+    }
+  ],
+  "modelRequests": 8,
+  "sessionTurnRequests": 7,
+  "network": [
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/complex/index.html?ui=copilot&workspace=multi-copilot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/index-BhcwJD7Y.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BIVLrgiM.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BKcSulQ2.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/index-B0R40MkO.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/browser-native-worker-CF4PozYl.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/preview/vfs-image.tar.gz",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "blob:http://127.0.0.1:53011/88076a9e-73d8-4d98-963a-5d62131f76a5",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:53011/1c3cff27-6922-4f20-8af2-d2a98efc497d",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/complex/open-in-app/apps",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/complex/plugins/events",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:53011/9538f18c-8b7f-4429-ab69-d2f9f920239c",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/create",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/saas-agentic-ui-comparison-poc/assets/katex-DmtCFgtP.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/renew",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/complex/multi-copilot/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:53011/api/browser-native/session/flush",
+      "method": "POST"
+    }
+  ],
+  "business": {
+    "acme": {
+      "budget": 120000,
+      "discount": 8,
+      "version": 3,
+      "status": "draft"
+    },
+    "birch": {
+      "budget": 60000,
+      "discount": 8,
+      "version": 2,
+      "status": "draft"
+    }
+  }
+}

@@ -9,7 +9,7 @@ import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import ReactMarkdown from 'react-markdown'
 import { DshSessionAdapter } from '../../assistant-ui-browser-native-dsh-poc/src/dsh-session-adapter.ts'
 import { DshSegmentedAgent } from './dsh-segmented-agent.ts'
-import { Business, executeCommand, questionSchema, ReviewCard, ToolCard, useBusiness } from './business.tsx'
+import { Business, executeCommand, PortfolioReviewCard, questionSchema, ReviewCard, ToolCard, useBusiness } from './business.tsx'
 
 function FrontendTool({ name }: { name: string }): null {
   const business = useBusiness()
@@ -32,7 +32,10 @@ function CopilotRegistrations(): React.ReactElement {
   useHumanInTheLoop({ name: 'ask_user_question', agentId: 'dsh-browser-native', parameters: questionSchema,
     render: ({ toolCallId, respond }) => <ReviewCard callId={toolCallId} respond={respond} />,
   }, [])
-  const names = ['page_read', ...(business.role === 'viewer' ? [] : business.page === 'tickets' ? ['bulk_assign'] : ['quote_patch', 'quote_send'])]
+  useHumanInTheLoop({ name: 'portfolio_review', agentId: 'dsh-browser-native', parameters: z.object({ changes: z.array(z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number(), budget: z.number(), discount: z.number() }).strict()) }),
+    render: ({ toolCallId, respond }) => <PortfolioReviewCard callId={toolCallId} respond={respond} />,
+  }, [])
+  const names = ['page_read', ...(business.role === 'viewer' ? [] : business.page === 'tickets' ? ['bulk_assign'] : business.page === 'quote' ? ['quote_patch', 'quote_send'] : ['portfolio_apply'])]
   return <>{names.map(name => <FrontendTool key={name} name={name} />)}{pending.length ? <button className="stop-operation" type="button" onClick={() => { copilotkit.stopAgent({ agent }) }}>停止当前操作</button> : null}</>
 }
 
@@ -86,7 +89,7 @@ export function NativeLayer(): React.ReactElement {
         const value = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => current.current)
         return <Business.Provider value={value}><ToolCard callId={props.callId} name={props.toolName} /></Business.Provider>
       }
-      const disposers = ['page_read', 'bulk_assign', 'quote_patch', 'quote_send', 'ask_user_question'].map(name => ctx.slots.register({ name: 'tool.call.toolview', key: name, priority: -10 }, Card))
+      const disposers = ['page_read', 'bulk_assign', 'quote_patch', 'quote_send', 'portfolio_review', 'portfolio_apply', 'ask_user_question'].map(name => ctx.slots.register({ name: 'tool.call.toolview', key: name, priority: -10 }, Card))
       return () => { for (const dispose of disposers) dispose() }
     })
     const navigation = ctx.get('uiWorkspace')

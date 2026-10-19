@@ -2,7 +2,7 @@
 
 ## 目录外修改
 
-2026-10-19 本轮仅调整研究文档，不修改运行时代码：将成熟 React SaaS 的下一阶段实施主线调整为 CopilotKit，同时标明三份 PoC 非同口径、`/v2` 已在使用、业务工具靠自有桥执行和生产采用缺口。统一论据由[路线重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)维护；其他报告保留各自主题并链接它。
+2026-10-19 本轮仅调整研究文档，不修改运行时代码：当时曾将成熟 React SaaS 的下一阶段实施主线暂定为 CopilotKit，同时标明三份 PoC 非同口径、`/v2` 已在使用、业务工具靠自有桥执行和生产采用缺口。随后复杂批量续约对照让 assistant-ui 与 CopilotKit 在同一真实模型故事上通过，当前统一结论改为 assistant-ui 低耦合基线、CopilotKit 条件性升级。统一论据由[路线重评](../dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)维护；其他报告保留各自主题并链接它。
 
 本轮验证：`pnpm run test:docs` 21 项通过、`pnpm run doc-sync` 43 项通过。既有 Chrome/WebKit 两份 Session 重新计数与原记录一致，没有重新执行模型或浏览器验收。重放本次文档修订时应保留“框架提供的呈现”与“自有 bridge 执行”的区分，不把文档修订当作运行时缺口已修复。
 
@@ -11,7 +11,7 @@
 | `docs/drafts/README.md` | 为新 PoC 增加索引，并以实际 SaaS 工作台闭环更新三路线综述；链接和事实边界由 `pnpm run doc-sync` 核对 | 在 drafts 索引中保留 PoC 链接和“单个 mock 业务闭环”的证据限制 |
 | `docs/drafts/assistant-ui-copilotkit-browser-native-dsh-assessment.md` | 用真实 PoC 结果修正 CopilotKit/assistant-ui 的相对定位，仍区分业务 mock 与生产集成；`pnpm run doc-sync` 验证引用 | 将实现证据作为增补，避免外推为所有 SaaS 的普遍结论 |
 | `docs/drafts/dsh-web-ui-quality-and-agentic-ui-framework-assessment.md` | 更新 SaaS 已有 React GUI 场景下的路线排序，并链接 PoC 证据和限制；`pnpm run doc-sync` 验证引用 | 保留三路线比较，标明当前首选依赖本 PoC 的单业务闭环证据 |
-| `docs/drafts/dsh-browser-native-agentic-ui-research.md` | 更正旧版“业务 capability seam 尚未实现”的概括，并依据本 PoC 更新 Browser-Native Agentic UI 路线结论；将单个 mock capability 闭环与未验证的生产授权、幂等和 receipt 明确区分 | 保留“当前优先深化 CopilotKit”的范围限定；不将单个 mock 操作外推为通用生产能力 |
+| `docs/drafts/dsh-browser-native-agentic-ui-research.md` | 更正旧版“业务 capability seam 尚未实现”的概括，并依据本 PoC 更新 Browser-Native Agentic UI 路线结论；将单个 mock capability 闭环与未验证的生产授权、幂等和 receipt 明确区分 | 保留当时“优先深化 CopilotKit”的历史范围限定，同时以路线重评中的最新结论为准；不将单个 mock 操作外推为通用生产能力 |
 | `docs/drafts/dsh-agentic-ui-research.md`、`docs/drafts/saas-agentic-ui-report-review.md` | 与三份 PoC 后的统一推荐同步，纠正包版本/API 代际混淆，保留生产授权、幂等和恢复限制 | 更新选型摘要并指向路线重评；不得改写为 CopilotKit 已证明普遍优于其他候选 |
 | `docs/drafts/copilotkit-browser-native-dsh-source-verification.md` | 在实施前源码核查中补充实际 PoC 入口，避免将待验收的原生工具调度实验当成已完成 | 保留源码事实与原实验建议，另链实际 `useRenderTool`/自有 bridge 的验证范围 |
 | `docs/i18n/README.md`、`docs/i18n/README.zh.md`、`docs/i18n/README.i18n.yaml`、`scripts/translation-pairing.manifest.json` | 为本目录显式登记中文单语实验例外，并同步中英配对摘要；翻译配对检查和 `pnpm run doc-sync` 验证 | 仅保留 PoC 目录范围的豁免，不扩大为全仓库或 drafts 全目录例外 |
