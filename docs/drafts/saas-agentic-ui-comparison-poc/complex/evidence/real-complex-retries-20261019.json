@@ -1,0 +1,34 @@
+{
+  "recordedDate": "2026-10-19",
+  "purpose": "记录本轮真实模型复杂故事中没有被计为通过的重试与安全停止，不包含模型凭据。",
+  "attempts": [
+    {
+      "ui": "assistant",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "首轮 DSH assistant/message 的 content 和 stream 均为空，未观察到浏览器渐进文本或持久化文本 chunk。",
+      "artifactDirectory": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-complex-real-chrome-gyE3wO/artifacts"
+    },
+    {
+      "ui": "assistant",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "人工批准后真实模型识别到回答中的版本与当前报价不一致，安全停止而没有发送；测试随后改为要求显式重新读取和续接。",
+      "artifactDirectory": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-complex-real-chrome-k9vlIX/artifacts"
+    },
+    {
+      "ui": "copilot",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "人工批准后真实模型识别到回答中的版本与当前报价不一致，安全停止而没有发送；复跑后完整通过。",
+      "artifactDirectory": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-complex-real-chrome-lJagDp/artifacts"
+    },
+    {
+      "ui": "copilot",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "修正流式断言后首轮再次返回空 assistant/message；测试拒绝把它当作流式通过，复跑后完整通过。",
+      "artifactDirectory": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-complex-real-chrome-tH4tSN/artifacts"
+    }
+  ]
+}

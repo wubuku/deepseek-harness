@@ -9,7 +9,7 @@
   "files": [
     {
       "file": "README.md",
-      "sha256": "7e199c082f77f7128d2bd4e332dc466af40bddcb2e4cd8fbce84df567a065920"
+      "sha256": "172c7ef867ab8b0fc795107beff8da940fc5db7d099541057f26aad394c79bb8"
     },
     {
       "file": "acceptance-server-smoke.json",
@@ -18,6 +18,14 @@
     {
       "file": "assistant-complex-scripted-chrome.png",
       "sha256": "36524a6f0bcbb7643cc480acc5e0b5de652d65b0536688671b837f9b78d4b7d1"
+    },
+    {
+      "file": "assistant-real-complex-chrome-20261019.json",
+      "sha256": "afcc6f9acec46819ed556c4a0284ec51c8e484d5dce81f989acf1df032404d94"
+    },
+    {
+      "file": "assistant-real-complex-webkit-20261019.json",
+      "sha256": "083d1bf07c11f16999f749b0b58d049a127821337ad4050c7a78a305b9757362"
     },
     {
       "file": "assistant-scripted-chrome.json",
@@ -50,6 +58,14 @@
     {
       "file": "copilot-real-chrome.json",
       "sha256": "fa82d398660c37fcb92d9be2410893c32155286bb896ee044090a8dc3fc03d2a"
+    },
+    {
+      "file": "copilot-real-complex-chrome-20261019.json",
+      "sha256": "55253f744185df598f8258714ab7d508ad6c7cd275dfe3a3daff1650a2cc1e37"
+    },
+    {
+      "file": "copilot-real-complex-webkit-20261019.json",
+      "sha256": "9382b086c3c743d21e23f0dee9399a3f300bd2911b89548a2def7795d8262601"
     },
     {
       "file": "copilot-real-lifecycle-chrome.json",
@@ -94,6 +110,10 @@
     {
       "file": "parent-regression-chrome.txt",
       "sha256": "e4f4a252013e6a1b6222186a322366e623baa031be0f1b444e71660bb0d0ee09"
+    },
+    {
+      "file": "real-complex-retries-20261019.json",
+      "sha256": "41d9651238f44db42220db20daf1d90775331a7cdb8ee5afa8a43ea532b1b273"
     },
     {
       "file": "shared-form-real-chrome.png",

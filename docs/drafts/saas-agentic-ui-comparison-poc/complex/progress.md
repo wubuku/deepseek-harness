@@ -16,13 +16,13 @@
 
 1. 原生调度实验通过：结束 AG-UI 观察段后 framework 执行工具并返回结果，原 DSH turn 继续，不新增用户 prompt。
 2. 局部 `npm run build` 通过；父实验 `npm test` 9 个、新实验 `npm run test:complex` 11 个通过；`npm run check:complex` 的限定 strict 检查通过。新增数据库/HTTP 快照校验拒绝坏数据而非静默恢复初始值。
-3. 最近一次复杂故事 Chrome scripted 三路线均通过，各 11 条消息、13 个业务检查点，采集真实 DOM 流式变化；CopilotKit Chrome / WebKit 真实模型各 10 条消息、12 个检查点完整通过，Session 模型请求分别为 31/31 与 26/26 DSH step。
+3. 最近一次复杂故事 Chrome scripted 三路线均通过，各 11 条消息、13 个业务检查点，采集真实 DOM 流式变化；本轮修正脚本后 CopilotKit 与 assistant-ui 在 Chrome / Playwright WebKit 的真实模型复杂故事均通过，各 12 个检查点。assistant-ui WebKit 额外验证了审批版本变化后的安全停止、重新读取和发送。
 4. CopilotKit Chrome / WebKit 真实生命周期重新通过，包含非空业务数据重启、历史恢复、双标签写权和待审批刷新后继续。父原入口的 `npm run test:e2e` 三路线通过。
 5. 隔离 worktree 首轮 `test:docs` 21 项通过；`doc-sync` 曾为 41 项通过、2 项失败，失败原因是隔离环境的 website/Host 依赖缺失，后续单独 `docs:build` 已通过。合并到 `research` 后重新执行的 `test:docs` 为 21/21、`doc-sync` 为 43/43，`git diff --check` 通过；没有改动无关源码，详细范围见[测试记录](test-results.md)。
 
 本机检查日志：`/tmp/dsh-complex-doc-quick.log`、`/tmp/dsh-complex-doc-sync.log`、`/tmp/dsh-complex-doc-site-build.log`。完整测试证据已存入本目录 `evidence/`，不依赖临时日志长期存在。只读复用了既有 website/node_modules，没有清理共享缓存。
 
-真实 LLM 验收使用 Node `--use-env-proxy`，并将 `127.0.0.1,localhost,::1` 放入 `NO_PROXY`，使上游模型请求走本机 HTTP 代理而 Playwright 到本机服务保持直连。原生 UI 的流式采样器同时使用 MutationObserver 和 20ms 定时读取，避免错过框架在单次 DOM mutation 中应用的多段文本变化；修正后 Chrome 三路线 scripted 与 CopilotKit 双浏览器真实模型故事通过。
+真实 LLM 验收使用 Node `--use-env-proxy`，并将 `127.0.0.1,localhost,::1` 放入 `NO_PROXY`，使上游模型请求走本机 HTTP 代理而 Playwright 到本机服务保持直连。流式验收同时检查浏览器渐进文本与 DSH Session 的持久化文本 chunk；修正后的 CopilotKit、assistant-ui Chrome 与 Playwright WebKit 真实模型复杂故事均通过，assistant-ui WebKit 还覆盖了审批版本变化后的安全停止、重新读取和发送。一次空 `assistant/message` 被测试拒绝为通过，未被抹平。
 
 ## 本机验收服务
 

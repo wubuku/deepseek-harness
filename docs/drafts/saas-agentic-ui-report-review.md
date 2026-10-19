@@ -10,7 +10,7 @@ description: "对外部《SaaS 引入 Agentic UI 深度调研报告》的事实�
 
 外部报告不应原样纳入仓库。它把维护方的产品叙事、生态观察、官方能力和设计推断放在同一证据层级，并把 CopilotKit/AG-UI 推成一般既有 SaaS 的默认主框架。核查后应改为：Controlled、Declarative、Open-ended 是有用的工程选择光谱，但不是已经完成的行业标准分层；assistant-ui、CopilotKit、AG-UI、A2UI、MCP Apps 和 LangChain json-render 解决的是不同层次的问题；没有任何一个框架自动提供 DSH Session 事实、业务授权、幂等提交、receipt 或唯一 continuation owner。
 
-结合当前 DSH 代码和三份 Browser-Native PoC，当前结论区分“普遍生产默认”与“下一轮验证优先级”：外部报告把 CopilotKit 直接推荐成一般 SaaS 的默认框架仍属过度外推；但对于本研究限定的“已有丰富 React GUI、原来没有聊天层、重点是 Agentic UI”的 SaaS，CopilotKit 是下一轮真实业务试点的首位候选，因为复杂实验在基础三路线业务闭环之上，进一步验证了跨页面、frontend tool、HITL 和原 DSH turn 续接。assistant-ui 当前官方文档同样包含 Interactables、工具 UI 和生成式 UI，不应被归类为纯聊天皮肤；本仓库已有基础业务集成实证，但尚未完成等量复杂真实模型矩阵。CopilotKit PoC 已使用 `1.79.1` 的 `/v2` API，业务工具依赖自写页面桥；尚未验证生产 Agent 注入、真实业务授权和跨进程幂等。DSH 原生 Web UI 适合 DSH-native 产品或愿意采用 DSH Client/Conversation/Slot 组合模型的产品。
+结合当前 DSH 代码和三份 Browser-Native PoC，当前结论区分“普遍生产默认”与“下一轮验证优先级”：外部报告把 CopilotKit 直接推荐成一般 SaaS 的默认框架仍属过度外推；但对于本研究限定的“已有丰富 React GUI、原来没有聊天层、重点是 Agentic UI”的 SaaS，CopilotKit 是下一轮真实业务试点的首位候选，因为复杂实验在基础三路线业务闭环之上，进一步验证了跨页面、frontend tool、HITL 和原 DSH turn 续接。assistant-ui 当前官方文档同样包含 Interactables、工具 UI 和生成式 UI，不应被归类为纯聊天皮肤；本仓库已用同一复杂真实模型故事在 Chrome 与 Playwright WebKit 验证其接入可行性，但尚未覆盖其全部官方交互 API、生产注入和与 CopilotKit 等量的生命周期矩阵。CopilotKit PoC 已使用 `1.79.1` 的 `/v2` API，业务工具依赖自写页面桥；尚未验证生产 Agent 注入、真实业务授权和跨进程幂等。DSH 原生 Web UI 适合 DSH-native 产品或愿意采用 DSH Client/Conversation/Slot 组合模型的产品。
 
 本文是外部材料的审阅与整合记录，不是对任一框架的生产兼容性承诺。版本、API、许可和托管支持条件应在实施前按目标版本重新核查。
 

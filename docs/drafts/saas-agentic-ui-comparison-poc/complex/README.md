@@ -64,7 +64,7 @@ HTTPS_PROXY=http://127.0.0.1:9981 HTTP_PROXY=http://127.0.0.1:9981 NO_PROXY=127.
   node --use-env-proxy --import tsx complex/tests/experiment.e2e.mjs --real
 ```
 
-追加 `--ui=copilot` 或 `--ui=assistant,native` 可限定路线；追加 `--webkit` 使用 Playwright WebKit，不代表 Safari.app 已通过。测试分配临时数据目录和动态端口，保留截图、请求地址、工具身份、业务凭据与结果 JSON。自动化使用本机 Playwright，默认安装路径沿用父目录，也可设置 `DSH_POC_PLAYWRIGHT_MODULE`。
+追加 `--ui=copilot` 或 `--ui=assistant,native` 可限定路线；追加 `--webkit` 使用 Playwright WebKit，不代表 Safari.app 已通过。真实模型复杂故事的 CopilotKit 与 assistant-ui 结果见[测试记录](test-results.md)及[脱敏证据](evidence/README.md)。测试分配临时数据目录和动态端口，保留截图、请求地址、工具身份、业务凭据与结果 JSON。自动化使用本机 Playwright，默认安装路径沿用父目录，也可设置 `DSH_POC_PLAYWRIGHT_MODULE`。
 
 ## 限制
 

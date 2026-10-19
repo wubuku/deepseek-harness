@@ -62,11 +62,11 @@ GUI 与聊天中的 `QuoteEditor` 是同一组件，`submit` 是同一提交函�
 | 已有 React 资产复用 | 聊天 renderer 与 SaaS 是不同 React root；需显式订阅和同步业务 Context。 | 业务组件留在 SaaS React 树中，ToolCall component 可直接复用；Session 投影和命令续接由适配器负责。 | 业务组件也留在 SaaS React 树中；frontend tool、HITL 与 Agent context 提供声明式应用交互入口。 |
 | 复杂页面协作 | 可由 DSH tool slot 呈现，但需自行处理跨 root 状态同步、工作区装配和 SaaS 视觉裁剪。 | 能呈现复杂组件，但跨页面上下文、原工具等待者和人工回答主要由 SaaS/DSH 桥编排。 | 本实验实际跑通页面工具、共享报价组件、版本冲突、拒绝/批准、停止和同一 DSH turn 续接。 |
 | DSH 执行一致性 | 最直接使用 DSH Client 与 Session 投影，不需 AG-UI 接线。 | 通过 ExternalStoreRuntime 投影 DSH Session；自定义执行桥仍需守住 call id、取消和恢复。 | DSH 仍是唯一 Loop 和事实来源；AG-UI 分段适配承担额外时序与身份维护。 |
-| 当前证据强度 | 新复杂故事在 Chrome scripted 全流程通过；没有为此故事补做真实模型全量对照。 | 新复杂故事在 Chrome scripted 全流程通过；没有为此故事补做真实模型全量对照。 | 新复杂故事在 Chrome 与 Playwright WebKit 的真实模型全流程及生命周期均通过；WebKit 不等于 Safari.app。 |
+| 当前证据强度 | 新复杂故事在 Chrome scripted 全流程通过；本轮没有为原生 UI 补做等量真实模型复杂故事。 | 新复杂故事在 Chrome 与 Playwright WebKit 的真实模型全流程通过；WebKit 不等于 Safari.app。 | 新复杂故事在 Chrome 与 Playwright WebKit 的真实模型全流程通过；另有 CopilotKit 真实生命周期证据；WebKit 不等于 Safari.app。 |
 
 因此，针对**多页面、已有业务组件深度参与、需要人工与 Agent 交替决策**的成熟 SaaS，当前优先建议继续产品化验证 CopilotKit：其附加价值已从 API 列表变成同一 DSH turn 内的可运行闭环。它不是免集成捷径，DSH 分段桥是实质成本与主要故障面。对于主要需求是新增聊天、复杂互动较少且团队愿意自己编排页面命令的产品，assistant-ui 仍是职责较窄的基线。若 SaaS 必须保持现有 React 应用外壳，DSH 原生 UI 应先解决 renderer root、Context 同步和 workspace chrome 的整合问题，不能仅凭 Session 语义完整就视作嵌入成本最低。
 
-这只是按架构责任和当前 PoC 证据给出的**初步排序**，不是经相同真实模型覆盖、团队工时、生产包体和维护周期测量的总成本排名。复杂实验的真实模型验收集中在 CopilotKit；两条对照路线的完整复杂故事仅跑 scripted 浏览器，不将其功能通过记录包装成等量真实模型比较。
+这只是按架构责任和当前 PoC 证据给出的**初步排序**，不是经团队工时、生产包体和维护周期测量的总成本排名。本轮已经让 assistant-ui 与 CopilotKit 运行同一个真实模型复杂故事；DSH 原生 UI 仍只有 scripted 复杂故事证据，因此不能把三者的真实模型结果写成等量比较。真实模型还可能出现空回复或在版本变化后安全停止，测试保留失败证据并要求重试或显式续接，不能把偶然一次通过当作稳定性指标。
 
 ## 推荐的适用范围
 

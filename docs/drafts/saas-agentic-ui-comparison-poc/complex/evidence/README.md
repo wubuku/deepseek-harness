@@ -6,6 +6,9 @@
 |---|---|
 | [copilot-scripted-chrome.json](copilot-scripted-chrome.json) / [WebKit](copilot-scripted-webkit.json) | CopilotKit 原生完整故事与故障注入，非真实模型 |
 | [copilot-real-chrome.json](copilot-real-chrome.json) / [WebKit](copilot-real-webkit.json) | 两种浏览器分别访问真实后端模型的完整故事，含模型请求与 DSH step 对照 |
+| [copilot-real-complex-chrome-20261019.json](copilot-real-complex-chrome-20261019.json) / [WebKit](copilot-real-complex-webkit-20261019.json) | 本轮修正脚本后的 CopilotKit 真实模型复杂故事；包含可见流式文本、Session chunk、工具/HITL、业务 receipt 和模型请求归属 |
+| [assistant-real-complex-chrome-20261019.json](assistant-real-complex-chrome-20261019.json) / [WebKit](assistant-real-complex-webkit-20261019.json) | 本轮修正脚本后的 assistant-ui 真实模型复杂故事；WebKit 记录了一次安全停止后重新读取并发送的续接 |
+| [real-complex-retries-20261019.json](real-complex-retries-20261019.json) | 没有计为通过的真实模型重试：空回复和审批版本不一致后的安全停止；用于说明测试没有吞掉失败 |
 | [copilot-real-lifecycle-chrome.json](copilot-real-lifecycle-chrome.json) / [WebKit](copilot-real-lifecycle-webkit.json) | 真实模型、非空业务数据及 Session 重启、双标签写权、审批中刷新后继续 |
 | [assistant-scripted-chrome.json](assistant-scripted-chrome.json) / [native-scripted-chrome.json](native-scripted-chrome.json) | 最近一次复杂故事 scripted 对照证据；三路线各 11 条用户消息和 13 个检查点 |
 | [CopilotKit scripted Chrome 截图](copilot-complex-scripted-chrome.png)、[assistant-ui](assistant-complex-scripted-chrome.png)、[DSH 原生](native-complex-scripted-chrome.png) | 同次运行三条路线的完成界面；用于观察聊天布局和 SaaS 业务页面协作 |

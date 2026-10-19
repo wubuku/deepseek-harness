@@ -6,7 +6,7 @@ description: "核查 assistant-ui 与 CopilotKit 对比材料，评估 Browser-N
 
 ## Summary
 
-本文在已选择 Browser-Native DSH 的前提下，比较 assistant-ui 与 CopilotKit，并结合 DSH 原生 Web UI 作为第三条聊天层路线。产品背景是既有 SaaS 已经拥有丰富 Web GUI、业务操作页面和组件，但原来没有 AI assistant 的聊天层；现在需要新增一个聊天入口，让用户用自然语言调用或引导这些既有能力。基础同口径实验已证明三条路线都能把相同 mock SaaS 业务带入聊天；复杂续约实验再以 CopilotKit 为主验证了跨页面上下文、共享组件、frontend tool、HITL、取消和恢复。因此，**对于需要复杂应用交互的成熟 React SaaS，CopilotKit 是目前最值得继续做产品化验证的候选，而不是“最不推荐”；但这还不是生产框架定案，也不是总工程量最低的证明。**assistant-ui 也具备官方记录的 Interactables、生成式 UI 和工具交互能力，不能再被简化成纯聊天皮肤；本仓库尚未对它完成同等复杂度的真实模型验证。CopilotKit 已使用 `1.79.1` 的 `/v2` API；尚需验证生产 Agent 注入、真实业务授权、跨进程幂等和 unknown recovery。详细路线比较见[三份 PoC 后的重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)和[复杂实验评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)。
+本文在已选择 Browser-Native DSH 的前提下，比较 assistant-ui 与 CopilotKit，并结合 DSH 原生 Web UI 作为第三条聊天层路线。产品背景是既有 SaaS 已经拥有丰富 Web GUI、业务操作页面和组件，但原来没有 AI assistant 的聊天层；现在需要新增一个聊天入口，让用户用自然语言调用或引导这些既有能力。基础同口径实验已证明三条路线都能把相同 mock SaaS 业务带入聊天；复杂续约实验再以 CopilotKit 为主验证了跨页面上下文、共享组件、frontend tool、HITL、取消和恢复。因此，**对于需要复杂应用交互的成熟 React SaaS，CopilotKit 是目前最值得继续做产品化验证的候选，而不是“最不推荐”；但这还不是生产框架定案，也不是总工程量最低的证明。**assistant-ui 也具备官方记录的 Interactables、生成式 UI 和工具交互能力，不能再被简化成纯聊天皮肤；它已在同一复杂真实模型故事上通过 Chrome 与 Playwright WebKit，但全部官方交互 API、生产注入和等量生命周期仍未验证。CopilotKit 已使用 `1.79.1` 的 `/v2` API；尚需验证生产 Agent 注入、真实业务授权、跨进程幂等和 unknown recovery。详细路线比较见[三份 PoC 后的重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)和[复杂实验评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)。
 
 本文比较的是“新增的聊天层”，不是是否保留既有 SaaS GUI：无论采用 DSH 原生 Web UI、assistant-ui 还是 CopilotKit，SaaS 原有路由、业务页面、表单、组件和业务 API 都应继续存在。第一版不应同时挂载两套面向用户的聊天层；采用外部 UI 意味着它承担唯一的聊天/应用交互呈现职责，而不是在 DSH Web UI 之上再叠加一个聊天窗口。
 
@@ -60,7 +60,7 @@ description: "核查 assistant-ui 与 CopilotKit 对比材料，评估 Browser-N
 | 主要优势 | DSH 语义最完整，原生 Tool/HITL/Session 能力更容易保留 | 更容易嵌入既有 SaaS 路由、React 树和设计系统，隔离 DSH UI 细节 |
 | 主要限制 | 对外部 SaaS 的内部耦合较深，不是通用 SaaS 聊天 SDK | 当前只验证聊天层；附件、编辑、分支、复杂 HITL 和业务 action 仍需额外实现 |
 
-基础三路线对照已经证明三者都能把相同业务组件和 API 带入聊天，不能再用“只有 CopilotKit 做过业务闭环”排序。复杂续约实验进一步显示：在跨页面协作、共享业务组件、多阶段 HITL 和前端工具续接场景，**CopilotKit 是下一轮真实 React SaaS 产品化验证的首位候选；assistant-ui 是轻量呈现和低耦合接入的基线；DSH 原生聊天优先用于 DSH-native 产品。**复杂真实模型证据主要覆盖 CopilotKit，因此不能宣称三者的复杂工时、性能或生产成本已公平对照。三者都不能替代 typed business capability，也不能让模型直接拥有业务授权。
+基础三路线对照已经证明三者都能把相同业务组件和 API 带入聊天，不能再用“只有 CopilotKit 做过业务闭环”排序。复杂续约实验进一步显示：在跨页面协作、共享业务组件、多阶段 HITL 和前端工具续接场景，**CopilotKit 是下一轮真实 React SaaS 产品化验证的首位候选；assistant-ui 是轻量呈现和低耦合接入的基线；DSH 原生聊天优先用于 DSH-native 产品。**CopilotKit 与 assistant-ui 都已在同一复杂真实模型故事上通过 Chrome 与 Playwright WebKit，但 DSH 原生入口尚未完成等量真实模型复杂矩阵，因此不能宣称三者的复杂工时、性能或生产成本已公平对照。三者都不能替代 typed business capability，也不能让模型直接拥有业务授权。
 
 “DSH 语义完整性”不表示 assistant-ui 页面还要保留 DSH Web UI。若选择 assistant-ui，DSH Web UI 可以完全不挂载；当前增量 PoC 通过不实例化 `AppWebEntry`、排除 DSH UI entries 来实现单一可见聊天层。assistant-ui 负责渲染和 composer，DSH Worker/Session 负责执行和事实，这是 UI 与 Runtime 的分工，不是两个 UI 同时工作。
 
@@ -355,4 +355,4 @@ CopilotKit headless 与 assistant-ui 呈现层组合在职责上可以成立，�
 
 ## Dev Note
 
-本文初始发布包核查形成于 2026-10-18；2026-10-19 加入三份 PoC 的同口径范围评估和官方 API 演进核查。它不是生产框架兼容性承诺。基础三路线实验验证了相同 mock 业务闭环，复杂实验以 CopilotKit 为主验证原生 frontend tool/HITL 和恢复；assistant-ui 的 Interactables/复杂工具路径尚未完成等量复杂真实模型矩阵。所有路线都没有覆盖真实 SaaS 业务授权和生产提交。后续实施必须锁定目标版本，用同一业务验收矩阵确认当前适配路径，并记录未验证的版本差异。
+本文初始发布包核查形成于 2026-10-18；2026-10-19 加入三份 PoC 的同口径范围评估和官方 API 演进核查。它不是生产框架兼容性承诺。基础三路线实验验证了相同 mock 业务闭环，复杂实验以 CopilotKit 为主验证原生 frontend tool/HITL 和恢复；assistant-ui 也已通过同一复杂真实模型故事，但其 Interactables/复杂工具 API、生产注入和完整生命周期仍未完成等量验证。所有路线都没有覆盖真实 SaaS 业务授权和生产提交。后续实施必须锁定目标版本，用同一业务验收矩阵确认当前适配路径，并记录未验证的版本差异。

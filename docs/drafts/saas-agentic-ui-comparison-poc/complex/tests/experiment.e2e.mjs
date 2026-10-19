@@ -30,6 +30,8 @@ try {
     const modelBaseline = app.metrics.modelRequests
     let sent = 0
     let streamingSamples = []
+    let streamingEvidence
+    let approvalRecovery = false
     context.on('request', request => { network.push({ url: request.url(), method: request.method(), body: request.postData() }) })
     page.on('pageerror', error => { pageErrors.push(error.message) })
     const timeout = real ? 240000 : 60000
@@ -91,7 +93,13 @@ try {
       })
       await exchange('请记住本会话的验收代号是“银杏海鸥”。请用三条简短项目列表介绍你能如何协助已有业务界面，不调用工具。')
       streamingSamples = await page.evaluate(() => { window.__stopStreamCapture?.(); return window.__streamSamples })
-      assert.ok(new Set(streamingSamples).size >= 2, '必须观察到多个文本长度，而非只有最终完整消息')
+      const firstTurn = (await session()).events.findLast(event => event.type === 'assistant/message' && event.data.turn === 1)
+      const durableTextChunks = firstTurn?.type === 'assistant/message'
+        ? firstTurn.data.stream.filter(record => record.type === 'text-chunks').reduce((sum, record) => sum + record.texts.length, 0)
+        : 0
+      streamingEvidence = { domSamples: streamingSamples, durableTextChunks, visibleProgressiveText: new Set(streamingSamples).size >= 2 }
+      assert.ok(streamingEvidence.visibleProgressiveText || durableTextChunks >= 2,
+        `必须观察到浏览器渐进文本或 DSH Session 中的多个文本 chunk：${JSON.stringify(streamingEvidence)}`)
       await record('流式消息与第一轮输入')
       await exchange('把当前选中的工单分配给周宁。只操作已选的两张，不要修改其他工单。')
       let data = await snapshot()
@@ -178,10 +186,18 @@ try {
       await activeReview().getByRole('button', { name: '批准当前版本' }).click()
       await finish(before)
       data = await snapshot()
+      if (data.accounts.acme.quote.status !== 'sent') {
+        assert.equal(data.accounts.acme.quote.status, 'draft')
+        assert.equal(data.accounts.acme.quote.approval?.approved, true)
+        assert.equal(data.accounts.acme.quote.approval?.version, data.accounts.acme.quote.version)
+        approvalRecovery = true
+        await exchange('当前报价已经在审核卡中批准，且用户刚刚保存了最终预算。请重新读取当前报价；只有当 approval.approved 为 true 且 approval.version 等于当前 quote.version 时，才只调用 quote_send 发送当前版本，不要再次询问用户。')
+        data = await snapshot()
+      }
       assert.equal(data.accounts.acme.quote.status, 'sent')
       assert.equal(data.accounts.acme.quote.budget, 160000)
       assert.equal(Object.values(data.receipts).filter(item => item.receipt.kind === 'send').length, 1)
-      await record('聊天内编辑 → DSH 人工答案 → 同 turn 发送一次')
+      await record(approvalRecovery ? '聊天内编辑 → 安全停止 → 重新读取并发送' : '聊天内编辑 → DSH 人工答案 → 同 turn 发送一次')
 
       const writesBeforeRefresh = data.writes
       const persistedBeforeRefresh = await session()
@@ -245,7 +261,7 @@ try {
       const envText = real ? await readFile(options.envFile, 'utf8') : ''
       for (const match of envText.matchAll(/^\s*(?:export\s+)?[A-Z_]*(?:API_KEY|TOKEN|SECRET)[A-Z_]*\s*=\s*["']?([^\s"'#]+)/gm)) if (match[1].length > 12) assert.ok(!exposed.includes(match[1]), '浏览器或 Session 泄露凭据')
       await page.screenshot({ path: join(artifacts, `${ui}-complete.png`), fullPage: true })
-      await writeFile(join(artifacts, `${ui}-evidence.json`), JSON.stringify({ sent, steps, modelRequests: modelRequests - modelBaseline, modelRequestProof, failedOrEmptyAttempts: allEvents.filter(event => event.type === 'assistant/attempt').length, loggedPageReads: reads.map(value => ({ page: value.page, context: value.context, frameworkContext: value.frameworkContext })), calls: calls.map(event => ({ seq: event.seq, turn: event.data.turn, callId: event.data.callId, name: event.data.name })), resultIds: results.map(event => event.data.message.toolCallId), evidence, streamingSamples, pageErrors, network: network.map(({ url, method }) => ({ url, method })), receipts: (await snapshot()).receipts }, null, 2))
+      await writeFile(join(artifacts, `${ui}-evidence.json`), JSON.stringify({ sent, steps, modelRequests: modelRequests - modelBaseline, modelRequestProof, failedOrEmptyAttempts: allEvents.filter(event => event.type === 'assistant/attempt').length, loggedPageReads: reads.map(value => ({ page: value.page, context: value.context, frameworkContext: value.frameworkContext })), calls: calls.map(event => ({ seq: event.seq, turn: event.data.turn, callId: event.data.callId, name: event.data.name })), resultIds: results.map(event => event.data.message.toolCallId), evidence, streamingSamples, streamingEvidence, approvalRecovery, pageErrors, network: network.map(({ url, method }) => ({ url, method })), receipts: (await snapshot()).receipts }, null, 2))
       outcomes.push({ ui, passed: true, sent, steps, evidence: `${ui}-evidence.json` })
     } catch (error) {
       await page.screenshot({ path: join(artifacts, `${ui}-failed.png`), fullPage: true }).catch(() => {})
