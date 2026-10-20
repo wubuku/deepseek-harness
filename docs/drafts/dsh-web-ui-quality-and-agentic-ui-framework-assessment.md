@@ -81,6 +81,8 @@ assistant-ui 不能被描述成“只适合普通聊天”。新实验通过固�
 
 原独立 CopilotKit PoC 的 `useFrontendTool` 仅注册了 `browser_native_ui_probe`；该 PoC 留存的真实模型 E2E 没有调用它。业务工具用 `client.frontendTools.register()` 执行，`ask_user_question` 经 DSH 问答服务的事件 listener 回到页面，使用 `useRenderTool` 展示后直接结算 DSH waiter。该独立 PoC 没有采用分段 AG-UI run，不能用它证明原生 handler 续接；后续复杂实验才通过分段 adapter 验证了这条路径，且结果仍依赖自有 DSH 桥，而非框架自动理解 Session。
 
+按本实验固定版本的 npm 发布包解包体积，`@assistant-ui/react@0.15.29` 为 2.77 MiB、10 个直接依赖；CopilotKit 实际使用的 `@copilotkit/react-core@1.79.1` 为 7.46 MiB、28 个直接依赖，另一个 `@copilotkit/react-ui@1.79.1` 包为 1.50 MiB、10 个直接依赖，但本 PoC 没有直接导入该 UI 包。这个数据表示发布包文件与声明的直接依赖，不是浏览器下载体积；当前 PoC 把两条路线打在同一 Vite 入口，尚无公平的独立 gzip/Brotli bundle 对照。完整口径、局限与选型影响见[框架规模评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md#框架规模与浏览器增量包体)。
+
 因此，上调 CopilotKit 的依据是目标匹配和现成可深化的业务闭环，不是“已经证明它的工具编排更好”或“自动把 SaaS 页面变成 Agentic UI”。若产品最终仅使用聊天和被动工具 renderer，而所有应用交互、等待、状态注入都继续自写，则 CopilotKit 的额外复杂度未必值得；assistant-ui 的 custom Tool UI 加同一 DSH bridge 完全应当参加对照，而不是被预先排除。
 
 原独立 CopilotKit PoC 仍有这些生产风险：Provider 使用 `agents__unsafe_dev_only`，结果回送有 `resolveLatest`/`rejectLatest` fallback，业务提交先更新浏览器 mock。新对照实验没有沿用按工具名结算的 fallback，补入精确调用桥、服务端 mock API、幂等账本、receipt 与相关单测；它不回写替换原独立 PoC。Provider 注入方式和业务提交/Session 结果之间的自动对账仍未生产化，不能把局部改进描述成所有代码和并发路径均已解决。

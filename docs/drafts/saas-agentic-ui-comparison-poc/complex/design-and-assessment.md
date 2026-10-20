@@ -105,6 +105,14 @@ DSH 原生 UI 不能据此宣称胜过或输给上述两条路线的真实复杂
 
 本轮没有记录实际人时，也未验证生产 Provider、企业认证、多租户授权、设计系统适配或长期维护。因此“assistant-ui 成本更低”指在已跑通的相同复杂故事里，其集成所有权更窄、没有 CopilotKit 专属 AG-UI 分段 adapter；不是一个已经用人时和生产运维数据测出的金额排名。四份真实模型证据见[测试记录](test-results.md#同一批量续约故事的真实模型矩阵)。
 
+## 框架规模与浏览器增量包体
+
+“框架大小”至少要区分 npm 发布包的解包体积、依赖图规模和最终进入浏览器的增量 JS/CSS。按本实验固定版本查询 npm registry 的 `dist.unpackedSize` 与直接依赖数，`@assistant-ui/react@0.15.29` 为 2,904,521 字节（2.77 MiB，10 个直接依赖），`@copilotkit/react-core@1.79.1` 为 7,820,950 字节（7.46 MiB，28 个直接依赖）；CopilotKit 另有 `@copilotkit/react-ui@1.79.1`，为 1,574,836 字节（1.50 MiB，10 个直接依赖）。对应元数据见 [assistant-ui](https://www.npmjs.com/package/@assistant-ui/react/v/0.15.29)、[CopilotKit React Core](https://www.npmjs.com/package/@copilotkit/react-core/v/1.79.1) 和 [CopilotKit React UI](https://www.npmjs.com/package/@copilotkit/react-ui/v/1.79.1)；可用 `npm view <package>@<version> dist.unpackedSize dependencies --json` 重查。
+
+按发布包内容看，CopilotKit React Core 本身约是 assistant-ui React 包的 2.7 倍，且直接依赖更多；如果某个集成还需单独安装 React UI 包，磁盘依赖面会继续增加。这支持“CopilotKit 覆盖面更广、包与依赖更重”的判断，但不能推导浏览器 JS 一定大 2.7 倍：解包体积包含未被导入或 tree-shake 的文件，直接依赖数也不等于最终安装图或运行代码量。本 PoC 的 assistant-ui 和 CopilotKit 实现在同一 Vite 应用入口中静态导入，没有产出可归属到单一路线的独立浏览器包报告；并且本实验源码直接从 `@copilotkit/react-core/v2` 导入 `CopilotChat`，没有直接导入 `@copilotkit/react-ui`。因此本次没有测得两者的真实浏览器增量 KB，不能把包元数据冒充产品性能基准。
+
+结论上，assistant-ui 是较小、职责更集中的聊天运行时；CopilotKit 是更广的应用交互框架，增加的依赖面对应其工具、上下文、HITL 和其他渲染/运行时设施。对 DSH 唯一 Agent Loop 的当前 SaaS 接入，包体规模进一步支持先选 assistant-ui，但不足以单独决定选型；如果 CopilotKit 的额外交互设施能在更多业务模块中摊薄自有适配成本，应再用分开的生产构建量测 gzip/Brotli JS 与 CSS 增量。
+
 ## 已验证的工程经验
 
 - 原生工具调度必须先解除 AG-UI run 对 DSH turn 完成的等待，否则 DSH 与框架互等。分段解决调度顺序，不能伪造 DSH 工具成功或新增用户输入。
