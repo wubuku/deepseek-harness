@@ -90,7 +90,7 @@ async function scripted(request, response, app, hooks) {
   const context = results.find(result => result.page)?.context
   const approvedPlan = previousResults.findLast(result => result.approved === true && Array.isArray(result.changes))
   const failed = results.some(result => result.ok === false || JSON.stringify(result).includes('VERSION_CONFLICT'))
-  const intent = /批量|组合|多客户|续约方案|确认执行/.test(prompt) ? 'portfolio' : /分配/.test(prompt) ? 'bulk_assign' : /折扣|调整预算/.test(prompt) ? 'quote_patch' : /审核|发送|批准/.test(prompt) ? 'approval' : undefined
+  const intent = /批量|组合|多客户|续约方案|确认执行/.test(prompt) ? 'portfolio' : /账单|发票|减免|抵扣|费用/.test(prompt) ? 'billing' : /分配/.test(prompt) ? 'bulk_assign' : /折扣|调整预算/.test(prompt) ? 'quote_patch' : /审核|发送|批准/.test(prompt) ? 'approval' : undefined
   const explicitPortfolioConfirmation = /^(确认执行|确认提交|执行刚才|请直接执行)/.test(prompt.trim())
   const applyAfterApproval = /批准后(?:立即|必须)调用/.test(prompt) && !/等我|等待|不要自行/.test(prompt)
   let name
@@ -99,6 +99,8 @@ async function scripted(request, response, app, hooks) {
     if (!results.length) name = 'page_read'
     else if (intent === 'bulk_assign' && results.length === 1) { name = intent; args = { customerId: context.customerId, ticketIds: context.selected, assignee: '周宁' } }
     else if (intent === 'quote_patch' && results.length === 1) { name = intent; args = { customerId: context.customerId, expectedVersion: context.quote.version, discount: prompt.includes('9%') ? 9 : 8 } }
+    else if (intent === 'billing' && results.length === 1) { name = 'billing_review'; args = { customerId: context.customerId, expectedVersion: context.billing.version, creditAmount: /8000/.test(prompt) ? 8000 : 10000, reason: '服务中断补偿' } }
+    else if (intent === 'billing' && results.length === 2 && results[1].approved === true) { name = 'billing_apply'; args = { customerId: results[1].customerId, expectedVersion: results[1].expectedVersion, creditAmount: results[1].creditAmount, reason: results[1].reason } }
     else if (intent === 'portfolio' && results.length === 1 && explicitPortfolioConfirmation && approvedPlan?.changes) {
       name = 'portfolio_apply'
       args = { changes: approvedPlan.changes }
@@ -127,7 +129,7 @@ async function scripted(request, response, app, hooks) {
     chunk({ type: 'finish', reason: { kind: 'tool-calls' } })
   } else {
     const outcome = results.at(-1)
-    const summary = outcome?.ok === false ? `业务操作未完成：${outcome.error ?? outcome.code}。未自动重试。` : outcome?.answers ? `审核结果已记录：${outcome.answers.map(answer => answer.custom ?? answer.selected.join('、')).join('；')}` : outcome?.kind === 'portfolio_apply' ? '批量续约方案已提交，两个客户的业务凭据已记录。' : outcome?.kind === 'send' ? '已发送您批准的报价，发送凭据已记录。' : outcome?.kind === 'patch' ? '报价已更新，保留未指定修改的字段。业务凭据已记录。' : outcome?.kind === 'assign' ? '已将当前选中的工单分配给周宁，其他工单保持不变。' : '当前页面信息已记录。'
+    const summary = outcome?.ok === false ? `业务操作未完成：${outcome.error ?? outcome.code}。未自动重试。` : outcome?.answers ? `审核结果已记录：${outcome.answers.map(answer => answer.custom ?? answer.selected.join('、')).join('；')}` : outcome?.approved && outcome?.creditAmount !== undefined ? `账单减免审核已记录：¥${outcome.creditAmount}。` : outcome?.kind === 'billing_apply' ? '账单减免已提交，业务凭据已记录。' : outcome?.kind === 'portfolio_apply' ? '批量续约方案已提交，两个客户的业务凭据已记录。' : outcome?.kind === 'send' ? '已发送您批准的报价，发送凭据已记录。' : outcome?.kind === 'patch' ? '报价已更新，保留未指定修改的字段。业务凭据已记录。' : outcome?.kind === 'assign' ? '已将当前选中的工单分配给周宁，其他工单保持不变。' : '当前页面信息已记录。'
     const text = /记得.*代号/.test(prompt) ? '续约验收代号：银杏海鸥。' : results.length ? summary : `收到：${prompt}。\n\n- 读取当前页面和业务数据。\n- 保留人工编辑，只修改指定字段。\n- 等待确认后执行，并提供业务凭据。`
     chunk({ type: 'block-start', index: 0, blockType: 'text' })
     for (const part of text.match(/.{1,12}/gs) ?? []) {

@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { z } from 'zod'
 import type { BrowserNativeDshClient } from './dsh-client.ts'
-import { databaseSchema, type Database, type Operation, type Quote } from './domain.ts'
+import { databaseSchema, type BillingCase, type Database, type Operation, type Quote } from './domain.ts'
 import type { PendingCall } from './bridge.ts'
 
 /** Shared SaaS state consumed by the independent GUI and tool renderers. */
@@ -11,7 +11,7 @@ export interface BusinessState {
   workspace: string
   data: Database
   customerId: 'acme' | 'birch'
-  page: 'tickets' | 'quote' | 'portfolio'
+  page: 'tickets' | 'quote' | 'portfolio' | 'billing'
   role: 'editor' | 'viewer'
   selected: string[]
   portfolioSelected: Array<'acme' | 'birch'>
@@ -53,11 +53,13 @@ export async function submit(business: BusinessState, operation: Operation, sign
   }
 }
 
-const argsSchema = z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number().optional(), ticketIds: z.array(z.string()).optional(), assignee: z.enum(['林悦', '周宁', '陈晨']).optional(), budget: z.number().optional(), discount: z.number().optional(), changes: z.array(z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number(), budget: z.number().optional(), discount: z.number().optional() }).strict()).optional() }).strict()
+const argsSchema = z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number().optional(), ticketIds: z.array(z.string()).optional(), assignee: z.enum(['林悦', '周宁', '陈晨']).optional(), budget: z.number().optional(), discount: z.number().optional(), creditAmount: z.number().optional(), reason: z.string().optional(), changes: z.array(z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number(), budget: z.number().optional(), discount: z.number().optional() }).strict()).optional() }).strict()
 /** Data-only DSH questions accepted by the shared review card. */
 export const questionSchema = z.object({ questions: z.array(z.object({ id: z.string(), question: z.string(), options: z.array(z.object({ label: z.string() }).passthrough()).optional() }).passthrough()).min(1) })
 const portfolioChangeSchema = z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number().int().positive(), budget: z.number().min(1000).max(1_000_000), discount: z.number().min(0).max(30) }).strict()
 const portfolioPlanSchema = z.object({ changes: z.array(portfolioChangeSchema).min(1).max(2) }).strict()
+/** Editable billing plan accepted by the approval card. */
+export const billingReviewSchema = z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number().int().positive(), creditAmount: z.number().nonnegative(), reason: z.string().min(1) }).strict()
 
 /** Build the model-visible page read, including framework context only through a logged tool result.
  * @param business - Refreshed state for the selected customer.
@@ -68,6 +70,13 @@ export function pageContext(business: BusinessState): Record<string, unknown> {
     page: business.page,
     selectedCustomers: business.portfolioSelected,
     portfolio: Object.fromEntries(business.portfolioSelected.map(customerId => [customerId, { customer: business.data.accounts[customerId].name, quote: business.data.accounts[customerId].quote }])),
+    role: business.role,
+  }
+  if (business.page === 'billing') return {
+    page: business.page,
+    customerId: business.customerId,
+    customer: business.data.accounts[business.customerId].name,
+    billing: business.data.accounts[business.customerId].billing,
     role: business.role,
   }
   return { page: business.page, customerId: business.customerId, customer: business.data.accounts[business.customerId].name, selected: business.selected, quote: business.data.accounts[business.customerId].quote, role: business.role }
@@ -90,6 +99,12 @@ export async function executeCommand(business: BusinessState, name: string, args
     const plan = portfolioPlanSchema.parse(args)
     if (business.page !== 'portfolio' || business.role !== 'editor' || plan.changes.some(change => !business.portfolioSelected.includes(change.customerId))) return { ok: false, code: 'PAGE_CHANGED', error: '批量续约页面或客户选择已变化，请重新读取' }
     return submit(business, { operationId: `${call.sessionId}:${call.callId}`, customerId: plan.changes[0].customerId, kind: 'portfolio_apply', changes: plan.changes }, call.signal)
+  }
+  if (name === 'billing_apply') {
+    const input = argsSchema.parse(args)
+    if (business.page !== 'billing' || business.role !== 'editor' || input.customerId !== business.customerId) return { ok: false, code: 'PAGE_CHANGED', error: '账单页面或客户已变化，请重新读取' }
+    if (input.expectedVersion === undefined || input.creditAmount === undefined || input.reason === undefined) return { ok: false, code: 'INVALID_CREDIT', error: '账单减免缺少版本、金额或原因' }
+    return submit(business, { operationId: `${call.sessionId}:${call.callId}`, customerId: input.customerId, kind: 'billing_apply', expectedVersion: input.expectedVersion, creditAmount: input.creditAmount, reason: input.reason }, call.signal)
   }
   const input = argsSchema.parse(args)
   if (input.customerId !== business.customerId || (name === 'bulk_assign' ? business.page !== 'tickets' : business.page !== 'quote')) return { ok: false, code: 'PAGE_CHANGED', error: '页面或客户已变化，请重新读取' }
@@ -181,7 +196,50 @@ export function PortfolioReviewCard({ callId, respond }: { callId: string; respo
   return <article ref={card} className="action-card" data-testid="review-card" data-call-id={callId}><header><span>批量续约预览</span><small>{call ? '请检查并确认' : '已结束 / 历史记录'}</small></header>{call && parsed?.success ? <><p>这些报价将使用当前版本提交，您可以先修改预览中的字段。</p>{changes.map(change => { const account = business.data.accounts[change.customerId]; const quote = { ...account.quote, budget: change.budget, discount: change.discount }; return <section className="portfolio-review" key={change.customerId}><h3>{account.name}</h3><QuoteEditor labelPrefix={account.name} quote={quote} save={fields => update(change.customerId, { budget: fields.budget, discount: fields.discount })} disabled={busy} /></section> })}{error ? <p role="alert">{error}</p> : null}<div className="decision-row"><button className="secondary" disabled={busy} onClick={() => { void decide(false) }}>拒绝批量方案</button><button disabled={busy} onClick={() => { void decide(true) }}>批准批量方案</button></div></> : <p>决定以 DSH Session 和业务凭据为准。刷新不会重新执行批量提交。</p>}</article>
 }
 
-const names: Record<string, string> = { page_read: '读取当前页面', bulk_assign: '批量分配工单', quote_patch: '调整报价草稿', quote_send: '发送已审批报价', portfolio_apply: '提交批量续约方案' }
+/** The existing billing editor reused inside the business page and Agent approval card. */
+export function BillingEditor({ billing, save, disabled = false }: { billing: BillingCase; save: (fields: { creditAmount: number; reason: string; expectedVersion: number }) => Promise<Record<string, unknown>>; disabled?: boolean }): React.ReactElement {
+  const [creditAmount, setCreditAmount] = useState(billing.creditAmount)
+  const [reason, setReason] = useState(billing.reason)
+  const [version, setVersion] = useState(billing.version)
+  const [dirty, setDirty] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  useEffect(() => { if (!dirty) { setCreditAmount(billing.creditAmount); setReason(billing.reason); setVersion(billing.version) } }, [billing.creditAmount, billing.reason, billing.version, dirty])
+  return <form className="billing-editor" onSubmit={event => {
+    event.preventDefault(); if (busy) return; setBusy(true)
+    void save({ creditAmount, reason, expectedVersion: version }).then(result => { setNotice(result.ok ? '减免草稿已保存' : String(result.error ?? result.code)); if (result.ok) setDirty(false) }).finally(() => { setBusy(false) })
+  }}><div className="field-row"><label>减免金额<input aria-label="账单减免金额" type="number" min="0" max={billing.disputed} value={creditAmount} onChange={event => { setCreditAmount(Number(event.target.value)); setDirty(true) }} /></label><label>争议金额<span className="field-value">¥{billing.disputed.toLocaleString()}</span></label></div><label className="field-label">减免原因<textarea aria-label="账单减免原因" rows={3} value={reason} onChange={event => { setReason(event.target.value); setDirty(true) }} /></label><div className="editor-footer"><span>发票 {billing.invoiceId} · 基于 v{version}{dirty ? ' · 未保存' : ''}</span><button disabled={disabled || busy || !dirty}>保存减免草稿</button></div>{notice ? <p role="status">{notice}</p> : null}</form>
+}
+
+/** Reuse the billing editor as a CopilotKit or DSH human approval surface. */
+export function BillingReviewCard({ callId, respond }: { callId: string; respond?: (value: unknown) => Promise<void> }): React.ReactElement {
+  const business = useBusiness()
+  const calls = useSyncExternalStore(business.client.frontendTools.subscribe, business.client.frontendTools.getSnapshot)
+  const call = calls.find(item => item.callId === callId)
+  const card = useRef<HTMLElement>(null)
+  const parsed = call ? billingReviewSchema.safeParse(call.arguments) : undefined
+  const [plan, setPlan] = useState(parsed?.success ? parsed.data : undefined)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { if (call) card.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' }) }, [call])
+  useEffect(() => { if (parsed?.success) setPlan(parsed.data) }, [call?.callId])
+  const billing = business.data.accounts[business.customerId].billing
+  const decide = async (approved: boolean): Promise<void> => {
+    if (!call || !plan || busy || call.signal.aborted) return
+    setBusy(true)
+    const answer = { approved, ...plan }
+    try {
+      const receipt = await submit(business, { operationId: `gui:${call.sessionId}:${callId}:billing-decision`, customerId: plan.customerId, kind: 'billing_approve', expectedVersion: plan.expectedVersion, creditAmount: plan.creditAmount, reason: plan.reason, approved }, call.signal)
+      if (!receipt.ok) throw new Error(String(receipt.error ?? receipt.code))
+      if (respond) await respond(answer)
+      else business.client.frontendTools.resolve(callId, answer)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setBusy(false) }
+  }
+  const editedBilling = plan ? { ...billing, creditAmount: plan.creditAmount, reason: plan.reason, version: plan.expectedVersion } : billing
+  return <article ref={card} className="action-card" data-testid="billing-review-card" data-call-id={callId}><header><span>账单减免预览</span><small>{call ? '请检查并确认' : '已结束 / 历史记录'}</small></header>{call && plan ? <><p>减免金额不能超过当前争议金额；批准后 Agent 才能提交。</p><BillingEditor billing={editedBilling} save={fields => { setPlan(previous => previous ? { ...previous, creditAmount: fields.creditAmount, reason: fields.reason } : previous); return Promise.resolve({ ok: true }) }} disabled={busy} />{error ? <p role="alert">{error}</p> : null}<div className="decision-row"><button className="secondary" disabled={busy} onClick={() => { void decide(false) }}>拒绝账单减免</button><button disabled={busy} onClick={() => { void decide(true) }}>批准账单减免</button></div></> : <p>决定以 DSH Session 和业务凭据为准。刷新不会重新执行账单减免。</p>}</article>
+}
+
+const names: Record<string, string> = { page_read: '读取当前页面', bulk_assign: '批量分配工单', quote_patch: '调整报价草稿', quote_send: '发送已审批报价', portfolio_apply: '提交批量续约方案', billing_apply: '提交账单减免' }
 /** Render actual DSH results; historical cards never replay business operations.
  * @param props - Original call id and tool name.
  * @returns Shared tool status or an active human review card.
@@ -192,6 +250,7 @@ export function ToolCard({ callId, name }: { callId: string; name: string }): Re
   const state = useSyncExternalStore(listener => client.binding.eventSource.subscribe(listener), () => client.binding.eventSource.getSnapshot())
   if (name === 'ask_user_question') return <ReviewCard callId={callId} />
   if (name === 'portfolio_review') return <PortfolioReviewCard callId={callId} />
+  if (name === 'billing_review') return <BillingReviewCard callId={callId} />
   const result = state.entries.findLast(entry => entry.type === 'event' && entry.event.type === 'tool/result' && String(entry.event.data.message.toolCallId) === callId)
   const value = result?.type === 'event' && result.event.type === 'tool/result' ? result.event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : ''
   let summary = calls.some(call => call.callId === callId) ? '执行中…' : '已中断 / 等待记录'

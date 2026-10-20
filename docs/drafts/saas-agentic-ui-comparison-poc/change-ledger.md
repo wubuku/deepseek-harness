@@ -2,7 +2,7 @@
 
 ## 本目录
 
-新增共享 mock SaaS API、GUI/业务表单、精确调用身份的页面桥、Worker 工具插件和三种聊天层接线。复用原 PoC 的 DSH Session 投影、AG-UI 适配器和 Worker 运行时，不重新实现 Agent Loop。依赖固定在局部 package 与 lockfile。
+新增共享 mock SaaS API、GUI/业务表单、精确调用身份的页面桥、Worker 工具插件和三种聊天层接线；复杂实验后续增加第三个账单争议模块，用来验证 DSH adapter 的跨模块复用。复用原 PoC 的 DSH Session 投影、AG-UI 适配器和 Worker 运行时，不重新实现 Agent Loop。依赖固定在局部 package 与 lockfile。
 
 ## 目录外
 

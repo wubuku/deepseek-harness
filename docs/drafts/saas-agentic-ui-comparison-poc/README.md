@@ -8,9 +8,9 @@
 
 ## 导读
 
-- [复杂客户续约实验](complex/README.md)：跨页面上下文、协同编辑、多阶段审批，以及 CopilotKit 原生 frontend tool/HITL 的分段续接；与本轮 renderer-only 结果分开记录。
+- [复杂客户续约实验](complex/README.md)：跨页面上下文、协同编辑、多阶段审批、账单争议模块，以及 CopilotKit 原生 frontend tool/HITL 的分段续接；与第一轮 renderer-only 结果分开记录。
 
-- 当前结论：在 DSH 默认 Agent Loop 必须是唯一执行者的前提下，assistant-ui 是复杂 SaaS 聊天/Agentic UI 的低成本默认候选；CopilotKit 的 frontend tool/HITL 有真实价值，但需要额外 DSH 分段适配，只有在多个模块反复复用其应用交互设施并证明收益超过 adapter 维护成本时再升级。DSH 原生 UI 在已有 React 应用中仍有独立 renderer root 与 Context 装配风险，且没有完成等量真实模型复杂矩阵。证据范围见[复杂实验评估](complex/design-and-assessment.md)。
+- 当前结论：在 DSH 默认 Agent Loop 必须是唯一执行者的前提下，assistant-ui 仍是复杂 SaaS 聊天/Agentic UI 的低耦合默认候选；第三个账单模块证明 CopilotKit 的 frontend tool、HITL、Agent context 和 DSH 分段适配可以跨模块复用，但尚未证明新增模块总成本低于 assistant-ui。CopilotKit 不再是“无效”或“最不推荐”，而是需要更多业务模块验证其固定适配成本能否摊薄的条件性候选。DSH 原生 UI 在已有 React 应用中仍有独立 renderer root 与 Context 装配风险，且没有完成等量真实模型复杂矩阵。证据范围见[复杂实验评估](complex/design-and-assessment.md)。
 
 - [实施计划](implementation-plan.md)：题设、相同业务故事与控制变量。
 - [设计与评估](design-and-assessment.md)：共用部分、三路接线、实际成本与限制。
@@ -80,11 +80,11 @@ HTTPS_PROXY=http://127.0.0.1:9981 HTTP_PROXY=http://127.0.0.1:9981 NO_PROXY=127.
   node --use-env-proxy --import tsx tests/comparison.e2e.mjs --real
 ```
 
-追加 `--webkit` 使用 Playwright WebKit，追加 `--ui=assistant` 等只测一条路线。WebKit 不等于 Safari.app；未经 Safari.app 实测不能宣称 Safari 已通过。Scripted 只验证协议、投影与业务闭环，不能替代真实 LLM 的自然语言理解和记忆验收。
+追加 `--webkit` 使用 Playwright WebKit，追加 `--ui=assistant` 等只测一条路线。WebKit 不等于 Safari.app；未经 Safari.app 实测不能宣称 Safari 已通过。Scripted 只验证协议、投影与业务闭环，不能替代真实 LLM 的自然语言理解和记忆验收。复杂实验的多模块矩阵命令见[复杂实验 README](complex/README.md#启动与测试)。
 
 ## 已知限制
 
-- CopilotKit 仍使用 `agents__unsafe_dev_only` 和 `useRenderTool` 加自有 Worker 桥；没有把本实验当成原生 `useFrontendTool`/`useHumanInTheLoop` 调度已验收。
+- CopilotKit 仍使用开发期 `agents__unsafe_dev_only` 连接自定义 DSH Agent；本实验已在复杂续约和账单模块中验收 `useFrontendTool`、`useHumanInTheLoop` 与 `useAgentContext`，但生产注入方式和长期升级成本仍未验证。
 - 账单确认是共同的业务工具等待和人工提交，不等于已验证全部 DSH 审批/晚到问答语义。默认工具列表包含 `ask_user_question`，本轮主要业务故事不依赖它。
 - 只读角色来自明确标注的 mock 请求头，不是生产认证；业务 JSON 的原子替换和 receipt 不是生产事务数据库、跨进程幂等或多租户授权。
 - 刷新恢复已落盘对话、工具结果及业务列表，不自动恢复正在等待的表单。页面关闭会终止 Dedicated Worker；未知提交可查询 receipt，但尚未实现自动对账并补写 DSH 工具结果。

@@ -45,6 +45,16 @@ GUI 与聊天中的 `QuoteEditor` 是同一组件，`submit` 是同一提交函�
 
 刷新不会保留旧页面函数。DSH 的中断恢复事实优先；没有结果的历史调用转成明确的中断展示，不能作为新的待审批动作自动执行。此策略不宣称任意组件卸载再挂载都能恢复执行中的业务交互。
 
+## assistant-ui 如何实现同一业务闭环
+
+assistant-ui PoC 没有仿造 CopilotKit 的三个 hooks，也没有第二套模型工具调度。DSH 注册表仍定义模型可见工具，DSH Worker 与页面桥执行工具；assistant-ui 的 ExternalStoreRuntime 投影 DSH Session，自定义 ToolCall renderer 将 DSH 工具调用显示成状态卡或可交互业务卡。普通页面动作由页面桥注册并调用共享 `executeCommand`，最终结果仍写回原 DSH 工具调用。
+
+`useFrontendTool` 的业务等价路径是“DSH 工具 + 页面桥 handler + ToolCall 卡片”，而非 assistant-ui 内置 frontend-tool API。`billing_review`、`portfolio_review` 和 `ask_user_question` 仍是 DSH 中等待结果的工具；助手卡展示可编辑业务表单，批准或拒绝先调用 SaaS API 生成业务凭据，再用原始 `callId` 调用 `frontendTools.resolve`。DSH waiter 收到答案后，原 DSH turn 才继续。账单卡同时支持 CopilotKit 的 `respond` 与 DSH 的原 call-id 结算，业务表单和审批写入逻辑共用。
+
+`useAgentContext` 没有 assistant-ui 的一对一 hook。页面桥更新当前页面上下文，`page_read` 读取新鲜业务数据并把上下文作为 DSH 工具结果记录；模型可见事实因此仍由 DSH Session 重建，而不是依赖 React 内存状态。此路径提供相同的页面协作结果，但需要应用维护上下文桥接与 DSH 事件投影。
+
+因此，“assistant-ui 可实现等价功能”不代表它提供了等价框架设施：CopilotKit 为工具注册、人工介入和 Agent 上下文提供声明式 hooks；assistant-ui 提供聊天运行时和可定制消息/工具渲染，DSH 与 SaaS 应用承担调度和业务连接。两条路线共用业务 API、组件、权限、版本校验、receipt 和 DSH Session；接入差异主要在框架集成责任，而不是业务闭环能力。对应代码见[共享业务实现](business.tsx)、[聊天层注册与投影](chat.tsx)和[页面工具目录](worker-tools.ts)。
+
 ## 三路线的实际区别
 
 | 路线 | 本实验使用机制 | 实际承担的协调 |
@@ -70,11 +80,26 @@ GUI 与聊天中的 `QuoteEditor` 是同一组件，`submit` 是同一提交函�
 
 两条第三方路线在新的批量续约故事中产生相同结果：每条路线、每种浏览器都记录 2 个用户 turn、5 个有配对结果的 DSH 工具调用、4 次业务写入和 1 次批量提交；模型代理 8 个请求中有 7 个对话模型请求与 DSH step 一一对应，另 1 个是标题请求。批准的方案遇到外部版本变更后，旧 `expectedVersion` 被拒绝，没有产生额外业务写入；重新读取、审核和批准后只提交一次。最终两家客户折扣、版本和 receipt 数一致，网络请求仅到同源 PoC 服务。
 
+## 第三个业务模块：账单争议减免
+
+为验证“固定适配成本是否能被多个业务模块摊薄”，本轮在同一个 DSH Worker、Session、`DshSessionAdapter`、`DshSegmentedAgent` 和 `FrontendBridge` 上新增账单模块，不复制 Agent Loop 或聊天层。流程是 `page_read` → `billing_review` → 用户在聊天中的共享账单编辑器修改金额和原因并批准 → `billing_apply`；三次工具调用属于一个 DSH turn，批准写入和账单提交各产生一份业务 receipt。
+
+assistant-ui 与 CopilotKit 都在真实模型、安装版 Chrome 和 Playwright WebKit 中完成该流程，四份证据均记录 `page_read`、`billing_review`、`billing_apply`，2 次业务写入、1 个 DSH turn、同源网络和最终 `credited` 状态。WebKit 证据不等于 Safari.app 验收；原生 DSH UI 没有扩展到本模块的等量真实模型矩阵。
+
+| 增量责任 | assistant-ui | CopilotKit | 是否复用既有 DSH 适配器 |
+|---|---|---|---|
+| 页面、业务 API、版本与 receipt | 增加账单领域字段、命令、共享编辑器和页面入口 | 相同 | 是，属于业务接入而非聊天框架专属逻辑 |
+| DSH Worker 工具目录 | 增加 `billing_review` / `billing_apply` 及账单页面能力 | 相同 | 是，Worker 工具注册逻辑未复制 |
+| 聊天层注册 | 复用已有 ExternalStoreRuntime、ToolCard 和 DSH Session 投影 | 增加一个 `useHumanInTheLoop`、一个 `useFrontendTool` 页面注册和 Agent context 字段 | 是；`DshSessionAdapter`、`DshSegmentedAgent`、`FrontendBridge` 未因账单模块新增 |
+| 人工结果续接 | 通过已有 DSH waiter/ToolCard 结果路径 | 通过已有 AG-UI 分段与原 call id 结果路径 | 是，但 CopilotKit 仍承担额外协议时序 |
+
+这轮结果改变了“CopilotKit 没有独立价值”的表述，但没有改变默认选型：CopilotKit 的固定 DSH 分段适配确实可以跨模块复用，且其 frontend tool、HITL 和页面上下文能完成真实业务交互；然而在第三个模块上，它尚未表现出比 assistant-ui 更低的新增业务代码、模型请求、业务写入或测试成本。当前更准确的判断是：assistant-ui 仍是 DSH 约束下的低耦合默认路线，CopilotKit 是已有统一应用交互模式、预计会持续接入许多页面且愿意维护一次分段适配的条件性候选，而不是“最不推荐”的无效方案。
+
 在题设的架构约束下——成熟 React SaaS 已有业务 GUI、DSH 默认 Loop 是唯一执行者、只新增一个聊天/Agentic UI 层——**assistant-ui 是目前总接入成本更低的选择**。它提供聊天 primitives 与可定制 ToolCall component，业务组件留在 SaaS React 树中；业务团队仍需实现 typed command、审批、版本、权限、receipt 和 DSH 工具桥，但不需要再维护 CopilotKit 到 DSH 的 AG-UI 分段运行适配。
 
 这不是说 CopilotKit 没有附加价值。本轮证明它的 frontend tool、HITL 和 Agent context 可真正参与业务闭环；但 assistant-ui 在同一场景也完整完成了交互，且共用同一批业务组件与后端规则。**因此本次没有观测到 CopilotKit 原生设施减少业务代码、模型请求、业务写入或验收步骤；它带来的应用交互设施尚未抵消 DSH 专属分段 adapter 的额外维护面。** CopilotKit 可以作为复杂应用交互能力更齐全的候选，但在这个约束下不应因“功能更多”就默认成本更低或被优先选中。
 
-这个成本结论是本轮相同故事、固定依赖和 DSH 唯一 Loop 下的架构判断，不是计时工时或生产维护期的普遍定律。若产品会大量采用 CopilotKit 的应用状态同步、前端 action、可复用 HITL 和其自有 Agent 运行模型，且不再要求把每次工具等待映射回 DSH 原始 waiter，它可能摊薄接入成本；本 PoC 没有验证该盈亏平衡点。若唯一 Loop 必须是 DSH，assistant-ui 是更小的默认集成；当多个真实模块显示其手写桥成本持续增长时，再用同一业务模块复测 CopilotKit。
+这个成本结论是本轮三个业务模块、固定依赖和 DSH 唯一 Loop 下的架构判断，不是计时工时或生产维护期的普遍定律。第三个模块证明 CopilotKit 的适配器没有按模块复制，但没有证明其模块级声明式注册足以抵消初始 AG-UI 分段适配、版本升级和恢复维护成本。只有继续接入更多模块，并且相同的 frontend tool、HITL、页面上下文和错误恢复模式能够稳定复用，才可能观测到 CopilotKit 的边际成本优势。若产品只需要少量模块，assistant-ui 仍是更小的默认集成；若产品把统一的应用交互设施作为核心产品能力，则应把 CopilotKit 列为需要规模化验证的候选。
 
 DSH 原生 UI 不能据此宣称胜过或输给上述两条路线的真实复杂总成本：它只通过本轮 Chrome scripted 故事，没有跑同等真实模型矩阵。其 DSH Session/Tool 语义路径最直接，但嵌入既有 React SaaS 仍有独立 renderer root、Context 同步、工作区装配和产品界面裁剪成本。
 

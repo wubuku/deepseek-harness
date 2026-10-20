@@ -12,6 +12,12 @@
 | [copilot-multi-object-real-chrome-20261020.json](copilot-multi-object-real-chrome-20261020.json) / [截图](copilot-multi-object-real-chrome-20261020.png) | CopilotKit 相同故事的真实模型 Chrome 验收；包含原生 frontend tool 与 HITL 路径 |
 | [assistant-multi-object-real-webkit-20261020.json](assistant-multi-object-real-webkit-20261020.json) / [截图](assistant-multi-object-real-webkit-20261020.png) | assistant-ui 相同故事的 Playwright WebKit 验收；不代表 Safari.app |
 | [copilot-multi-object-real-webkit-20261020.json](copilot-multi-object-real-webkit-20261020.json) / [截图](copilot-multi-object-real-webkit-20261020.png) | CopilotKit 相同故事的 Playwright WebKit 验收；不代表 Safari.app |
+| [assistant-billing-module-real-chrome-20261020.json](assistant-billing-module-real-chrome-20261020.json) / [截图](assistant-billing-module-real-chrome-20261020.png) | assistant-ui 新增账单争议模块的真实 Chrome 验收；1 个 DSH turn、3 个工具调用、2 次业务写入 |
+| [copilot-billing-module-real-chrome-20261020.json](copilot-billing-module-real-chrome-20261020.json) / [截图](copilot-billing-module-real-chrome-20261020.png) | CopilotKit 新增账单争议模块的真实 Chrome 验收；包含原生 frontend tool/HITL 续接 |
+| [assistant-billing-module-real-webkit-20261020.json](assistant-billing-module-real-webkit-20261020.json) / [截图](assistant-billing-module-real-webkit-20261020.png) | assistant-ui 新增账单争议模块的 Playwright WebKit 验收；不代表 Safari.app |
+| [copilot-billing-module-real-webkit-20261020.json](copilot-billing-module-real-webkit-20261020.json) / [截图](copilot-billing-module-real-webkit-20261020.png) | CopilotKit 新增账单争议模块的 Playwright WebKit 验收；不代表 Safari.app |
+| [module-matrix-real-chrome-20261020.json](module-matrix-real-chrome-20261020.json) / [WebKit](module-matrix-real-webkit-20261020.json) | 新增账单模块的两路线运行摘要；不含凭据，记录浏览器类型和通过路线 |
+| [real-module-retries-20261020.json](real-module-retries-20261020.json) | 账单模块真实模型的两次未通过尝试、失败原因、测试提示修正和成功重跑范围 |
 | [real-complex-retries-20261019.json](real-complex-retries-20261019.json) | 没有计为通过的真实模型重试：空回复和审批版本不一致后的安全停止；用于说明测试没有吞掉失败 |
 | [copilot-real-lifecycle-chrome.json](copilot-real-lifecycle-chrome.json) / [WebKit](copilot-real-lifecycle-webkit.json) | 真实模型、非空业务数据及 Session 重启、双标签写权、审批中刷新后继续 |
 | [assistant-scripted-chrome.json](assistant-scripted-chrome.json) / [native-scripted-chrome.json](native-scripted-chrome.json) | 最近一次复杂故事 scripted 对照证据；三路线各 11 条用户消息和 13 个检查点 |

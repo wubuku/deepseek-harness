@@ -24,6 +24,16 @@
 4. 单测、scripted 浏览器故障矩阵与真实模型多轮验收，记录网络、Session、业务 receipt 和截图。
 5. 更新导读、手动验收、实验结论，明确未验证项。
 
+## 第三轮：多模块边际成本验证
+
+在已有工单、报价和跨客户续约模块之外新增账单争议减免模块，保持同一 DSH Worker、Session、默认 Agent Loop、业务 API 约束和共享 React 组件策略。账单流程必须包含页面读取、可编辑人工审核、批准后同一 turn 续接和版本/幂等校验。
+
+1. 不修改既有 DSH 适配器，验证新增模块是否只需要增加页面能力、业务命令、共享卡片和框架级注册。
+2. 对 assistant-ui 与 CopilotKit 执行同一账单故事，断言原始 call id、DSH turn、工具结果、业务 receipt 和同源网络。
+3. 用 scripted、真实 Chrome 和 Playwright WebKit 运行矩阵；WebKit 只作为浏览器引擎证据，不宣称 Safari.app 通过。
+4. 记录真实模型非确定性失败，不用放宽断言或额外用户 prompt 把失败改成成功；修正测试用例语义后重新验收。
+5. 根据三个业务模块的固定与增量责任更新路线判断；不把“适配器可复用”直接等同于“总成本更低”。
+
 ## 约束
 
 不修改 DSH Agent Loop，不建立第二份模型历史，不把协议续接当成新 prompt。凭据只由 backend 从主工作区 `docs/drafts/.env` 读取。独立 worktree 与分支保留原实验。页面关闭终止 Worker，不承诺恢复执行中的人工等待。生产 Provider 注入尚未解决时如实标记，不为通过实验切换模型循环。

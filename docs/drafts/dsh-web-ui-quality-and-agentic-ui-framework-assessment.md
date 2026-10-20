@@ -10,7 +10,9 @@ description: "DSH 当前 Web UI 的实现质量、Agentic UI 适配能力和第�
 
 **对题设成熟 React SaaS，若 DSH 默认 Agent Loop 必须是唯一执行者，当前更推荐先以 assistant-ui 接入聊天/Agentic UI；CopilotKit 是具备更完整应用交互设施、但需要额外 DSH 分段适配的候选。**两者已在相同跨客户批量续约真实模型场景中通过 Chrome 与 Playwright WebKit；这次对照未显示 CopilotKit 减少业务实现或验收工作，assistant-ui 的集成责任更窄。该判断不是工时或生产维护费用排名；DSH 原生 UI 仍适合接受其 Client/工作区体系的产品。依据见[路线重评](#三份-poc-后的路线重评)。
 
-固定 `1.79.1` 的 `/v2` API 下，[复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)已把 `useFrontendTool`、`useHumanInTheLoop` 和 `useAgentContext` 接入同一 DSH turn，并通过 Chrome 与 Playwright WebKit 的真实模型故事及生命周期验收；assistant-ui 也通过同一复杂真实模型故事的 Chrome 与 Playwright WebKit 验收。分段 AG-UI adapter 仍是自有工程成本；生产 Agent 注入、真实认证/授权、跨进程幂等与未知提交自动对账未验收。完整覆盖与限制见[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)，WebKit 不等于 Safari.app。
+固定 `1.79.1` 的 `/v2` API 下，[复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)已把 `useFrontendTool`、`useHumanInTheLoop` 和 `useAgentContext` 接入同一 DSH turn，并通过批量续约和新增账单模块的真实 Chrome 与 Playwright WebKit 验收；assistant-ui 也通过相同两类业务故事的 Chrome 与 Playwright WebKit 验收。账单模块证明 DSH 分段 adapter 可以跨业务模块复用，但尚未证明 CopilotKit 的模块级接入成本更低。生产 Agent 注入、真实认证/授权、跨进程幂等与未知提交自动对账未验收。完整覆盖与限制见[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)，WebKit 不等于 Safari.app。
+
+assistant-ui 在 PoC 中完成了相同的用户可见闭环，但没有对应的 `useFrontendTool`、`useHumanInTheLoop` 或 `useAgentContext` 框架 API：DSH 工具桥和自定义 ToolCall 卡承接页面工具与审核，卡片以原始 DSH call id 结算等待者；页面事实通过 `page_read` 进入 DSH Session。它与 CopilotKit 是业务功能等价、框架调度机制不同，具体映射见[复杂实验的路线实现对照](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md#assistant-ui-如何实现同一业务闭环)。
 
 这里的“已有 SaaS GUI”与“聊天层”是两件不同的事：前者是已经存在的业务页面、表单、组件、路由和业务操作；后者是现在才新增的 Agent 入口。本文比较的是新增的这一层，不建议为了加入 Agent 而替换整个 SaaS GUI，也不建议第一版同时挂载多套面向用户的聊天层。无论选 DSH 原生 Web UI、assistant-ui 还是 CopilotKit，都应保留 SaaS 的业务页面和 DSH Worker、Agent Loop、Session 与后端职责。
 
@@ -38,17 +40,17 @@ description: "DSH 当前 Web UI 的实现质量、Agentic UI 适配能力和第�
 
 ## 三份 PoC 后的路线重评
 
-截至 2026-10-20 的证据有两层。[基础同口径实验](saas-agentic-ui-comparison-poc/README.md)让三条路线在相同 DSH Loop 上复用相同业务组件/API，三者均通过基础真实模型业务矩阵。[复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)让 assistant-ui 与 CopilotKit 在同一跨客户批量续约故事上分别通过真实 Chrome 和 Playwright WebKit；这次不只是确认 CopilotKit 原生 frontend tool/HITL 可运行，也能直接比较两条路线在 DSH 唯一执行者约束下的集成责任。DSH 原生 UI 没有同等的复杂真实模型矩阵。
+截至 2026-10-20 的证据有两层。[基础同口径实验](saas-agentic-ui-comparison-poc/README.md)让三条路线在相同 DSH Loop 上复用相同业务组件/API，三者均通过基础真实模型业务矩阵。[复杂续约实验](saas-agentic-ui-comparison-poc/complex/README.md)让 assistant-ui 与 CopilotKit 在跨客户批量续约和新增账单争议两个故事上分别通过真实 Chrome 和 Playwright WebKit；这次不只是确认 CopilotKit 原生 frontend tool/HITL 可运行，也能直接比较固定 adapter 在多个业务模块上的复用情况。DSH 原生 UI 没有同等的复杂真实模型矩阵。
 
 ### 复杂场景下的当前判断
 
 | 路线 | 对已有 React SaaS 的主要价值 | 主要代价与当前判断 |
 |---|---|---|
 | assistant-ui + DSH | External Store 与 ToolCall component 复用业务 React 组件，聊天层职责较窄 | 当前默认低成本路线；业务 command、权限、审批与 DSH Session 适配仍由应用维护，但没有额外 AG-UI 分段 Agent adapter。 |
-| CopilotKit + DSH | 页面就近声明工具和上下文，原生 handler/HITL 参与共享业务组件交互，结果仍结算到原 DSH turn | 高协作设施已真实跑通，但在同一批量续约实验中没有减少业务写入、模型请求或验收步骤；DSH 分段 AG-UI 桥是额外成本。若大量复用原生应用交互设施，才值得继续测量能否摊薄接入成本。 |
+| CopilotKit + DSH | 页面就近声明工具和上下文，原生 handler/HITL 参与共享业务组件交互，结果仍结算到原 DSH turn | 高协作设施已在两个业务故事中真实跑通，且固定 DSH 分段桥没有按模块复制；本轮仍没有减少业务写入、模型请求或验收步骤。若大量复用统一的应用交互模式，才值得继续测量能否摊薄初始 adapter 成本。 |
 | DSH 原生 Web UI | 直接消费 DSH Session、Tool、问答/审批语义，少一层外部消息投影 | 对 DSH-native 产品合适；嵌入既有 React SaaS 时需处理独立 renderer root、Context 同步、workspace 装配与界面裁剪。 |
 
-assistant-ui 与 CopilotKit 的批量续约复杂故事在真实 Chrome/Playwright WebKit 均通过，关键调用序列、DSH turn、工具结果数、业务写入和最终版本完全一致。按当前 DSH 唯一 Loop 约束，assistant-ui 集成责任更窄，故更新为复杂业务接入的低成本默认选择；这不是以人时、生产包体或维护周期测量的金额排名。完整比较、已解决问题和未测范围以[复杂实验评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)和[测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)为准。
+assistant-ui 与 CopilotKit 的批量续约和账单争议故事在真实 Chrome/Playwright WebKit 均通过，关键调用序列、DSH turn、工具结果数、业务写入和最终业务状态完全一致。新增账单模块没有要求复制 DSH adapter，但也没有显示 CopilotKit 比 assistant-ui 少写业务代码或少做验收。按当前 DSH 唯一 Loop 约束，assistant-ui 仍是复杂业务接入的低成本默认选择，CopilotKit 是具有真实应用交互价值、但要继续用更多模块验证规模收益的条件性候选；这不是以人时、生产包体或维护周期测量的金额排名。完整比较、已解决问题和未测范围以[复杂实验评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)和[测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)为准。
 
 ### 原三份独立 PoC 的证据范围
 
@@ -439,7 +441,7 @@ Browser-Native PoC 证明的是运行位置和连接方式：现有 DSH Web UI �
 
 第五，PoC v2 的 Chromium E2E 证明真实 DSH Web UI、Worker Host、`ctx.agentLoop`、同源 LLM route、正式 Session event 和 flush durability 的一次闭环；assistant-ui 增量 PoC 证明外部聊天层可以在不复制 Loop 和权威历史的情况下接入同一闭环。这些事实仍然成立。
 
-第六，原 CopilotKit PoC 首先增加 mock SaaS 表单证据，基础同口径实验随后证明三路线都能复用业务组件；复杂实验再让 assistant-ui 与 CopilotKit 完成同一个真实模型批量续约流程。新证据把当前排序修订为：DSH Loop 唯一时先评估 assistant-ui；CopilotKit 原生工具/HITL 有真实价值，但需要证明跨多个模块的复用收益能覆盖专属分段 adapter。DSH 原生 UI 仍没有同等真实模型复杂矩阵。结论边界见[路线重评](#三份-poc-后的路线重评)。
+第六，原 CopilotKit PoC 首先增加 mock SaaS 表单证据，基础同口径实验随后证明三路线都能复用业务组件；复杂实验再让 assistant-ui 与 CopilotKit 完成批量续约和账单争议两个真实模型故事。新证据把当前排序修订为：DSH Loop 唯一时先评估 assistant-ui；CopilotKit 原生工具/HITL 有真实价值，固定 adapter 已显示跨模块复用，但尚未证明收益覆盖专属分段 adapter 的初始和长期维护成本。DSH 原生 UI 仍没有同等真实模型复杂矩阵。结论边界见[路线重评](#三份-poc-后的路线重评)。
 
 -----
 
@@ -462,4 +464,4 @@ Browser-Native PoC 证明的是运行位置和连接方式：现有 DSH Web UI �
 
 ## Dev Note
 
-本文主体保留 2026-10-17 的源码与前两份 PoC 评估；2026-10-19 增补基础三路线对照、CopilotKit 主验收和 assistant-ui 复杂真实故事对照。最新判断以[路线重评](#三份-poc-后的路线重评)和[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)为准；旧独立 PoC 的限制不套用到新实验，也不因新实验通过就宣称旧代码已修复。本文是研究草稿，不是 DSH 已发布的架构承诺。
+本文主体保留 2026-10-17 的源码与前两份 PoC 评估；2026-10-20 增补基础三路线对照、CopilotKit 原生交互验收、assistant-ui 复杂真实故事对照和第三个账单模块的跨模块验证。最新判断以[路线重评](#三份-poc-后的路线重评)和[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)为准；旧独立 PoC 的限制不套用到新实验，也不因新实验通过就宣称旧代码已修复。本文是研究草稿，不是 DSH 已发布的架构承诺。

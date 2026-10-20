@@ -41,7 +41,7 @@ https_proxy=http://127.0.0.1:9981 http_proxy=http://127.0.0.1:9981 all_proxy=soc
 
 三条真实模型命令都再追加 `--webkit` 执行；生命周期命令本轮仍只针对 CopilotKit。测试进程需要 `--use-env-proxy`；仅设置代理环境变量时 Node 不会自动把模型 fetch 路由到 HTTP 代理。`NO_PROXY` 保证本机 E2E 请求直连本机服务。
 
-`npm test` 的父实验曾有 9 个单测通过，新实验本轮 `test:complex` 的 14 个单测通过。后者还覆盖批量计划批准必须绑定客户集合、报价版本和完整折扣/预算；`check:complex` 的 strict 检查通过，但范围仅为业务域、桥和分段适配器，依赖已构建的 DSH 声明，不是全 GUI 或全仓 typecheck。
+`npm test` 的父实验曾有 9 个单测通过，新实验本轮 `test:complex` 的 15 个单测通过。后者还覆盖批量计划批准必须绑定客户集合、报价版本和完整折扣/预算，以及账单批准、版本和 stale plan；`check:complex` 的 strict 检查通过，但范围仅为业务域、桥和分段适配器，依赖已构建的 DSH 声明，不是全 GUI 或全仓 typecheck。
 
 局部多入口构建通过，保留 Vite 大 chunk 告警。首次环境的 `npm ci` 没有重新执行；此次复用相同实验 checkpoint 的忽略构建产物与固定局部依赖，不能据此宣称已验证干净机器安装。没有单独执行全仓构建；当前主工作区的 `doc-sync` 已重新通过，详见文末。
 
@@ -76,6 +76,23 @@ https_proxy=http://127.0.0.1:9981 http_proxy=http://127.0.0.1:9981 all_proxy=soc
 归档证据包括 [assistant-ui Chrome JSON](evidence/assistant-multi-object-real-chrome-20261020.json) / [截图](evidence/assistant-multi-object-real-chrome-20261020.png)、[CopilotKit Chrome JSON](evidence/copilot-multi-object-real-chrome-20261020.json) / [截图](evidence/copilot-multi-object-real-chrome-20261020.png)、[assistant-ui WebKit JSON](evidence/assistant-multi-object-real-webkit-20261020.json) / [截图](evidence/assistant-multi-object-real-webkit-20261020.png) 和 [CopilotKit WebKit JSON](evidence/copilot-multi-object-real-webkit-20261020.json) / [截图](evidence/copilot-multi-object-real-webkit-20261020.png)。证据保留调用序列、结果身份、模型请求数量、同源网络和最终业务状态，不包含密钥、Cookie 或环境文件。
 
 **成本判断：** 两条路线复用了同一 SaaS 页面、批量编辑器、审批/版本/幂等规则和 backend，且获得相同的业务与模型计数。assistant-ui 的定制聊天适配没有阻止这个复杂工作流；CopilotKit 原生 frontend tool/HITL 确实参与了工作流，但没有减少本次业务实现、模型请求、写入或验收步骤，还需要 DSH 专属 AG-UI 分段 adapter。因此在“DSH Loop 是唯一执行者”的当前约束下，assistant-ui 的总接入成本暂时更低。此结论是基于拥有的集成部件与维护面，不是人时或生产维护费用测量；CopilotKit 对大规模、反复复用其应用交互设施的收益尚未达到可证盈亏平衡的证据。
+
+## 第三个业务模块：账单争议减免
+
+本轮在既有工单、报价和续约组合之外新增账单争议减免页面，验证业务模块增加后是否需要复制 DSH-CopilotKit adapter。用例要求 `page_read`、`billing_review`、人工修改并批准、`billing_apply` 按顺序完成；批准前禁止提交，批准后必须在同一 DSH turn 续接。测试断言最终金额为 ¥8000、账单状态为 `credited`、版本从 1 变为 2、业务写入恰好 2 次，并且工具调用与结果按原始 call id 配对。
+
+| 路线 / 浏览器 | DSH turn | 工具调用 / 结果 | 业务写入 | 结果 |
+|---|---:|---:|---:|---|
+| assistant-ui / Chrome | 1 | 3 / 3 | 2 | 通过 |
+| CopilotKit / Chrome | 1 | 3 / 3 | 2 | 通过 |
+| assistant-ui / Playwright WebKit | 1 | 3 / 3 | 2 | 通过 |
+| CopilotKit / Playwright WebKit | 1 | 3 / 3 | 2 | 通过 |
+
+四份脱敏证据见[assistant-ui Chrome](evidence/assistant-billing-module-real-chrome-20261020.json)、[CopilotKit Chrome](evidence/copilot-billing-module-real-chrome-20261020.json)、[assistant-ui WebKit](evidence/assistant-billing-module-real-webkit-20261020.json)和[CopilotKit WebKit](evidence/copilot-billing-module-real-webkit-20261020.json)，截图与运行摘要见[证据索引](evidence/README.md)。两条路线均复用同一个业务组件、业务命令、Worker 工具目录、Session 事实和 backend；新增模块没有修改 `DshSessionAdapter`、`DshSegmentedAgent` 或 `FrontendBridge`。
+
+真实 Chrome 首次运行曾返回空 `assistant/message`；第二次运行完成批准但因原提示同时写“等待批准”和“不要直接提交”而安全停止，均未被计为通过。测试提示改为“批准前不提交、批准后立即续接”，之后 Chrome 与 WebKit 两条路线均通过。失败和成功重跑范围见[重试索引](evidence/real-module-retries-20261020.json)。这个修正保留了真实模型的安全行为，也避免把测试提示歧义错误归因于 CopilotKit 或 assistant-ui。
+
+**新增模块的判断：** CopilotKit 的固定 DSH 分段适配确实跨模块复用，frontend tool、HITL 和 Agent context 也确实能承载新的业务交互；但本轮没有观察到它比 assistant-ui 少写业务代码、少发模型请求、少产生测试步骤或少产生业务副作用。该结果把 CopilotKit 从“尚未证明有用”提升为“具有可验证应用交互价值但尚未证明总成本优势”的条件性候选。
 
 ## CopilotKit 完整业务证据
 

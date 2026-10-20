@@ -1,0 +1,25 @@
+{
+  "recordedDate": "2026-10-20",
+  "purpose": "记录账单模块真实模型验收中没有计为通过的尝试；不包含模型凭据、Cookie 或完整请求体。",
+  "attempts": [
+    {
+      "route": "assistant-ui",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "首轮真实模型返回空 assistant/message，未产生 page_read 或 billing_review；等待超时，未计为通过。"
+    },
+    {
+      "route": "assistant-ui",
+      "browser": "installed Chrome",
+      "result": "rejected",
+      "failure": "模型完成 page_read、billing_review 和人工批准，但原提示同时要求等待批准且不要提交，模型在批准后安全停止，未调用 billing_apply；未计为通过。"
+    }
+  ],
+  "correction": "验收提示改为批准前禁止 billing_apply、批准后立即在同一 DSH turn 续接 billing_apply，并保留原始 call id、turn 和业务 receipt 断言。",
+  "successfulReruns": [
+    "assistant-ui / installed Chrome",
+    "CopilotKit / installed Chrome",
+    "assistant-ui / Playwright WebKit",
+    "CopilotKit / Playwright WebKit"
+  ]
+}

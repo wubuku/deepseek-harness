@@ -9,11 +9,27 @@
   "files": [
     {
       "file": "README.md",
-      "sha256": "a069c1a013c79fb56c0612859e27acfc2f74a0bc762a37263ff11e4e895cb881"
+      "sha256": "8c762dff2592b096c0e2ae1617bb84d6985ca27c05d2d033eb8272298a1d65c6"
     },
     {
       "file": "acceptance-server-smoke.json",
       "sha256": "38324225d526321614c1d8cf5570f02e13461cd1bf5f2cf8fce77412446aa794"
+    },
+    {
+      "file": "assistant-billing-module-real-chrome-20261020.json",
+      "sha256": "dc9b1f591f41acc8f8875f6564e121e8d4c134122595964c26ff0c6293480edf"
+    },
+    {
+      "file": "assistant-billing-module-real-chrome-20261020.png",
+      "sha256": "9fa393ea2f472c865b2dab845de646a1dba3f115c44fcf573a2287bc3971f190"
+    },
+    {
+      "file": "assistant-billing-module-real-webkit-20261020.json",
+      "sha256": "5d7557b0a1ad141e606223627cd482a1b7ef9ab942c823236cfa49a817708257"
+    },
+    {
+      "file": "assistant-billing-module-real-webkit-20261020.png",
+      "sha256": "8639ee4185344c400198270e013e68174a13f7707d88ea8dd67a804597a33f5c"
     },
     {
       "file": "assistant-complex-scripted-chrome.png",
@@ -58,6 +74,22 @@
     {
       "file": "controls-scripted-chrome-summary.json",
       "sha256": "668d82255e12510cd10ef7924a9fa31d99b97c1e4f0d2941ae82c5a9a2fffd79"
+    },
+    {
+      "file": "copilot-billing-module-real-chrome-20261020.json",
+      "sha256": "12ba5fc0b2be1398db2dbee37fb74bfa4d82ceaa2edee9748ec03154a6a52655"
+    },
+    {
+      "file": "copilot-billing-module-real-chrome-20261020.png",
+      "sha256": "a496d82f7d3810ee8fdb2f2e05ae779ec577c315a392f424a10c132363b48a03"
+    },
+    {
+      "file": "copilot-billing-module-real-webkit-20261020.json",
+      "sha256": "a0ecf0962d8ba90d6bbabf11051fe41579f88911ed924015d6e441914feee4a5"
+    },
+    {
+      "file": "copilot-billing-module-real-webkit-20261020.png",
+      "sha256": "99035dd5332b1470f531dac7c3231ae23d97f38e7f6c913fab139360cfc55b5b"
     },
     {
       "file": "copilot-complex-real-chrome.png",
@@ -128,6 +160,14 @@
       "sha256": "a3aced67799f57bbe465bcd5aaf5812dee304c2c9c060c90fe9b1044baea56a1"
     },
     {
+      "file": "module-matrix-real-chrome-20261020.json",
+      "sha256": "9d64eeae4e33eeb29b23497625ac9d3fd1a057e3694dba7ec537686711493a03"
+    },
+    {
+      "file": "module-matrix-real-webkit-20261020.json",
+      "sha256": "b7cb5a85c391e6c8ca23354e8ce46b4746796bc42ec29a06b24bca906bb388f2"
+    },
+    {
       "file": "native-complex-scripted-chrome.png",
       "sha256": "bd8a58d613026f6def9afce404665f4cffaa83daf1329ef23fe7e407d82b1927"
     },
@@ -146,6 +186,10 @@
     {
       "file": "real-complex-retries-20261019.json",
       "sha256": "41d9651238f44db42220db20daf1d90775331a7cdb8ee5afa8a43ea532b1b273"
+    },
+    {
+      "file": "real-module-retries-20261020.json",
+      "sha256": "6886d836aa6b17a5cb494337fe9c66d3dd7e6f92556c4e903fac705adc1fd61e"
     },
     {
       "file": "shared-form-real-chrome.png",

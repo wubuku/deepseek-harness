@@ -1,0 +1,16 @@
+{
+  "real": true,
+  "browser": "Playwright WebKit (not Safari.app)",
+  "outcomes": [
+    {
+      "ui": "assistant",
+      "passed": true,
+      "evidence": "assistant-billing-module-real-webkit-20261020.json"
+    },
+    {
+      "ui": "copilot",
+      "passed": true,
+      "evidence": "copilot-billing-module-real-webkit-20261020.json"
+    }
+  ]
+}

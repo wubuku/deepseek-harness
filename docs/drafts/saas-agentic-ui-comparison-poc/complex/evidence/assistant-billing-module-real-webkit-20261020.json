@@ -1,0 +1,273 @@
+{
+  "ui": "assistant",
+  "workspace": "module-assistant",
+  "writes": 2,
+  "turns": 1,
+  "calls": [
+    {
+      "name": "page_read",
+      "callId": "call_bc5dbfdb775a4e1e9ed45e19a4798ff3"
+    },
+    {
+      "name": "billing_review",
+      "callId": "call_226f01e9ae74428ba9ec15c9e261a7cd"
+    },
+    {
+      "name": "billing_apply",
+      "callId": "call_36938f7e5f114dde969081e2baf8e983"
+    }
+  ],
+  "results": [
+    {
+      "callId": "call_bc5dbfdb775a4e1e9ed45e19a4798ff3",
+      "text": "{\"ok\":true,\"page\":\"billing\",\"context\":{\"page\":\"billing\",\"customerId\":\"acme\",\"customer\":\"青禾科技\",\"billing\":{\"invoiceId\":\"INV-1007\",\"amount\":50000,\"disputed\":12000,\"creditAmount\":0,\"reason\":\"\",\"version\":1,\"status\":\"open\"},\"role\":\"editor\"},\"frameworkContext\":[{\"description\":\"当前 SaaS 页面\",\"value\":{\"page\":\"billing\",\"customerId\":\"acme\",\"customer\":\"青禾科技\",\"billing\":{\"invoiceId\":\"INV-1007\",\"amount\":50000,\"disputed\":12000,\"creditAmount\":0,\"reason\":\"\",\"version\":1,\"status\":\"open\"},\"role\":\"editor\"}}]}"
+    },
+    {
+      "callId": "call_226f01e9ae74428ba9ec15c9e261a7cd",
+      "text": "{\"approved\":true,\"customerId\":\"acme\",\"expectedVersion\":1,\"creditAmount\":8000,\"reason\":\"服务中断补偿（人工确认）\"}"
+    },
+    {
+      "callId": "call_36938f7e5f114dde969081e2baf8e983",
+      "text": "{\"ok\":true,\"operationId\":\"session-79e52d1f-0969-4646-a277-d4b0fd32b18b:call_36938f7e5f114dde969081e2baf8e983\",\"kind\":\"billing_apply\",\"customerId\":\"acme\",\"record\":{\"name\":\"青禾科技\",\"quote\":{\"budget\":120000,\"discount\":5,\"version\":1,\"status\":\"draft\"},\"billing\":{\"invoiceId\":\"INV-1007\",\"amount\":50000,\"disputed\":12000,\"creditAmount\":8000,\"reason\":\"服务中断补偿（人工确认）\",\"version\":2,\"status\":\"credited\"},\"tickets\":[{\"id\":\"TK-41\",\"title\":\"导出报表超时\",\"assignee\":\"陈晨\"},{\"id\":\"TK-42\",\"title\":\"续约账号迁移\",\"assignee\":\"林悦\"},{\"id\":\"TK-43\",\"title\":\"账单邮箱变更\",\"assignee\":\"陈晨\"}]}}"
+    }
+  ],
+  "business": {
+    "invoiceId": "INV-1007",
+    "amount": 50000,
+    "disputed": 12000,
+    "creditAmount": 8000,
+    "reason": "服务中断补偿（人工确认）",
+    "version": 2,
+    "status": "credited"
+  },
+  "network": [
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/complex/index.html?ui=assistant&workspace=module-assistant",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/assets/index-Jg00VggX.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BIVLrgiM.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/assets/mermaid-VLURNSYL-BKcSulQ2.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/assets/index-51D8Vc0P.css",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/assets/browser-native-worker-C4zbGGge.js",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/preview/vfs-image.tar.gz",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "blob:http://127.0.0.1:51225/e5f6ee87-aed4-4967-aed3-546198d05099",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:51225/a866d365-d277-4cd7-997d-6ad0d4ec2dfc",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/complex/open-in-app/apps",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/saas-agentic-ui-comparison-poc/complex/plugins/events",
+      "method": "GET"
+    },
+    {
+      "url": "blob:http://127.0.0.1:51225/e59aed69-a27f-4835-ae3b-b1953a533807",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/list",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/create",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/llm",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/operations",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/complex/module-assistant/snapshot",
+      "method": "GET"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/append",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/session/flush",
+      "method": "POST"
+    },
+    {
+      "url": "http://127.0.0.1:51225/api/browser-native/llm",
+      "method": "POST"
+    }
+  ]
+}

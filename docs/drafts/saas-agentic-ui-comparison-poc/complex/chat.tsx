@@ -9,7 +9,7 @@ import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import ReactMarkdown from 'react-markdown'
 import { DshSessionAdapter } from '../../assistant-ui-browser-native-dsh-poc/src/dsh-session-adapter.ts'
 import { DshSegmentedAgent } from './dsh-segmented-agent.ts'
-import { Business, executeCommand, PortfolioReviewCard, questionSchema, ReviewCard, ToolCard, useBusiness } from './business.tsx'
+import { BillingReviewCard, billingReviewSchema, Business, executeCommand, PortfolioReviewCard, questionSchema, ReviewCard, ToolCard, useBusiness } from './business.tsx'
 
 function FrontendTool({ name }: { name: string }): null {
   const business = useBusiness()
@@ -27,15 +27,18 @@ function CopilotRegistrations(): React.ReactElement {
   const { copilotkit } = useCopilotKit()
   const { agent } = useAgent({ agentId: 'dsh-browser-native' })
   const pending = useSyncExternalStore(business.client.frontendTools.subscribe, business.client.frontendTools.getSnapshot)
-  const quote = business.data.accounts[business.customerId].quote
-  useAgentContext({ description: '当前 SaaS 页面；经 page_read 记录后供 DSH 模型使用', value: { page: business.page, customerId: business.customerId, selected: business.selected, role: business.role, quote: { budget: quote.budget, discount: quote.discount, version: quote.version } } })
+  const account = business.data.accounts[business.customerId]
+  useAgentContext({ description: '当前 SaaS 页面；经 page_read 记录后供 DSH 模型使用', value: { page: business.page, customerId: business.customerId, selected: business.selected, role: business.role, quote: { budget: account.quote.budget, discount: account.quote.discount, version: account.quote.version }, billing: { invoiceId: account.billing.invoiceId, disputed: account.billing.disputed, version: account.billing.version, status: account.billing.status } } })
   useHumanInTheLoop({ name: 'ask_user_question', agentId: 'dsh-browser-native', parameters: questionSchema,
     render: ({ toolCallId, respond }) => <ReviewCard callId={toolCallId} respond={respond} />,
   }, [])
   useHumanInTheLoop({ name: 'portfolio_review', agentId: 'dsh-browser-native', parameters: z.object({ changes: z.array(z.object({ customerId: z.enum(['acme', 'birch']), expectedVersion: z.number(), budget: z.number(), discount: z.number() }).strict()) }),
     render: ({ toolCallId, respond }) => <PortfolioReviewCard callId={toolCallId} respond={respond} />,
   }, [])
-  const names = ['page_read', ...(business.role === 'viewer' ? [] : business.page === 'tickets' ? ['bulk_assign'] : business.page === 'quote' ? ['quote_patch', 'quote_send'] : ['portfolio_apply'])]
+  useHumanInTheLoop({ name: 'billing_review', agentId: 'dsh-browser-native', parameters: billingReviewSchema,
+    render: ({ toolCallId, respond }) => <BillingReviewCard callId={toolCallId} respond={respond} />,
+  }, [])
+  const names = ['page_read', ...(business.role === 'viewer' ? [] : business.page === 'tickets' ? ['bulk_assign'] : business.page === 'quote' ? ['quote_patch', 'quote_send'] : business.page === 'portfolio' ? ['portfolio_apply'] : ['billing_apply'])]
   return <>{names.map(name => <FrontendTool key={name} name={name} />)}{pending.length ? <button className="stop-operation" type="button" onClick={() => { copilotkit.stopAgent({ agent }) }}>停止当前操作</button> : null}</>
 }
 

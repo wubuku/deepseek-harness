@@ -46,6 +46,12 @@
 
 自动化另在批准旧方案后修改青禾科技报价，确认旧 expectedVersion 的批量提交返回 `VERSION_CONFLICT`、不增加写入；之后 Agent 读取新版本、重新呈现并等待批准，再提交成功。Chrome 与 Playwright WebKit 的真实模型证据按框架分别归档；WebKit 不是 Safari.app。
 
+## 7. 账单争议减免模块
+
+切到“账单减免”。输入：`请处理当前页面的账单争议：先只调用一次 page_read，然后调用 billing_review 展示可编辑减免预览，建议减免 10000 元，理由为服务中断补偿。批准前不要调用 billing_apply，等待我在审核卡中修改并批准；我批准后立即在同一 DSH turn 续接调用 billing_apply，不要再次 page_read 或重新询问。`
+
+聊天中出现账单减免卡后，将减免金额改为 `8000`，原因改为“服务中断补偿（人工确认）”，保存草稿并点击“批准账单减免”。应先产生一份 `billing_approve` receipt，再由同一 DSH turn 调用 `billing_apply`；最终账单状态为 `credited`、版本从 1 变为 2、减免金额为 ¥8000，并且没有第二条用户 prompt、重复工具结果或重复业务 receipt。若模型在批准后因为提示歧义停止，不能把空白回复或只批准未提交判为通过，应发送新请求明确要求继续执行，或重新从干净 workspace 验收。
+
 ## 怎样判定没有“偷偷另跑一套”
 
 自动化 evidence 中包含每轮用户输入数、DSH turn 数、原始 call id 与 result id、原生 handler 计数、协议段和 API receipt。一个 DSH turn 对应多个 AG-UI 段是正常现象；增加新的 DSH 用户 prompt 或重复业务 receipt 则不正常。对外请求应只有同源 API，模型凭据不得出现在页面、请求和 Session 内。

@@ -82,6 +82,19 @@ test('批量批准绑定完整内容，改折扣、预算、客户集合或拒�
   assert.equal(database.writes, 2)
 })
 
+test('账单减免必须经过当前版本批准，批准内容变化后不能提交', () => {
+  const database = fixture()
+  const plan = { customerId: 'acme' as const, expectedVersion: 1, creditAmount: 10000, reason: '服务中断补偿' }
+  assert.throws(() => applyOperation(database, { operationId: 'billing-early', kind: 'billing_apply', ...plan }, 'editor'), /提交前需要批准/)
+  applyOperation(database, { operationId: 'billing-approve', kind: 'billing_approve', approved: true, ...plan }, 'editor')
+  assert.equal(database.accounts.acme.billing.approval?.creditAmount, 10000)
+  assert.throws(() => applyOperation(database, { operationId: 'billing-stale', kind: 'billing_apply', ...plan, creditAmount: 8000 }, 'editor'), /批准当前账单减免/)
+  applyOperation(database, { operationId: 'billing-apply', kind: 'billing_apply', ...plan }, 'editor')
+  assert.equal(database.accounts.acme.billing.status, 'credited')
+  assert.equal(database.accounts.acme.billing.version, 2)
+  assert.equal(database.writes, 2)
+})
+
 test('原生 handler 不提前结算 DSH waiter；取消后拒绝迟到副作用', async () => {
   const messages: unknown[] = []
   const bridge = new FrontendBridgeWithSegments({ postMessage: value => { messages.push(value) } })

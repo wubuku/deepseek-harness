@@ -9,6 +9,8 @@
     "test:complex:e2e": "node --import tsx complex/tests/experiment.e2e.mjs",
     "test:complex:multi": "node --import tsx complex/tests/multi-object.e2e.mjs",
     "test:complex:multi:real": "node --import tsx complex/tests/multi-object.e2e.mjs --real",
+    "test:complex:modules": "node --import tsx complex/tests/module-matrix.e2e.mjs",
+    "test:complex:modules:real": "node --import tsx complex/tests/module-matrix.e2e.mjs --real",
     "test:complex:lifecycle": "node --import tsx complex/tests/lifecycle.e2e.mjs",
     "check:complex": "node complex/check-adapter.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
