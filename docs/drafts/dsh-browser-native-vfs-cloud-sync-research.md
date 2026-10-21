@@ -14,9 +14,9 @@ description: "调研 Browser-Native DSH 的虚拟文件系统、默认插件持�
 2. **DSH Session 事实层天然适合 append-only。**`SessionEvent` 是逻辑上的只追加日志；默认 JSONL 后端的正常提交路径也是 append + fsync。但该后端仍需要目录创建、临时文件、link/rename、unlink、目录 fsync、锁文件、失败回滚 truncate 和 torn-tail truncate，不能把它描述成只依赖 append API 的存储。
 3. **当前 Browser-Native Workspace PoC 已经完成“文件级增量”闭环。**它使用 SHA-256 内容寻址 blob、manifest revision、`baseRevision` CAS、幂等 `operationId`、启动前 hydrate 和 stale-writer conflict；同内容 hash 不重复上传。当前 checkout 的无密钥单元/契约测试复跑通过。
 4. **当前 PoC 的“增量”不是块级 delta。**修改大文件中的一个字节仍会产生新的整文件 blob。它尚未实现 OPFS/IndexedDB 离线 outbox、content-defined chunking、VCDIFF/rsync-like byte delta、三方合并或生产对象存储。
-5. **生产级成熟方案是“本地 durable outbox + immutable chunk/blob + versioned manifest + CAS commit + pull/notification”。**小文件可以用整文件 blob；大文件用 content-defined chunking；rsync/VCDIFF 更适合作为传输优化，不适合作为云端权威模型。
+5. **生产级成熟方案是“本地 durable outbox + immutable chunk/blob + versioned manifest + CAS commit + pull/notification”。**当前 `VfsMutationSink` 只是 post-commit observer，不能满足 journal-first durability；生产接口必须新增 write-intent、事务、联合提交或由 durable store 反向驱动 VFS。小文件可以用整文件 blob；大文件用 content-defined chunking；rsync/VCDIFF 更适合作为传输优化，不适合作为云端权威模型。
 6. **允 eventual consistency 的前提是把状态说清楚。**本地写入成功、本地 durable、上传中、云端已提交、冲突和服务端结果 unknown 必须是不同状态；不能把 Agent 的最终文字或 `Vfs.flush()` 当成云端持久化回执。
-7. **Session log 与 Workspace manifest 是两个存储对象，不能假设跨存储原子事务。**需要用 `operationId`、workspace revision 和 Session tool receipt 做恢复时的 reconcile。
+7. **Session log 与 Workspace manifest 是两个存储对象，不能假设跨存储原子事务。**需要用 `operationId`、workspace revision 和 Session tool receipt 做恢复时的 reconcile；reconcile 只能追加后续事实，不能重写已提交 Session 事件。
 
 本报告是研究文档，不改变任何运行时行为。它引用当前 `research` 分支的 Browser-Native Workspace PoC 作为实现证据；这些结论绑定当前 checkout，不代表已发布的生产能力。
 
@@ -124,6 +124,8 @@ description: "调研 Browser-Native DSH 的虚拟文件系统、默认插件持�
 
 ### 默认 base 组合的持久化分类
 
+下表只列出与 Workspace 同步决策直接相关的持久化和运行时状态面，不是默认 base 组合所有插件状态的完整清单。进程内状态、Session event 状态、外部 telemetry 和独立 durable store 不应混入同一个可写文件树。
+
 | 数据 | 当前默认实现 | 写入形态 | 是否纳入 Workspace 同步 | 原因 |
 |---|---|---|---|---|
 | Session event log | `session-persistence-jsonl`，root 为 `$DSH_HOME/sessions` | 逻辑 append；正常路径 append + fsync；有物理例外 | 否 | Session 事实与 Workspace 事实生命周期不同，需要远程 Session persistence |
@@ -135,6 +137,11 @@ description: "调研 Browser-Native DSH 的虚拟文件系统、默认插件持�
 | Session query SQLite | 默认 `:memory:` 且 `openAt: never` | 打开时才是 SQLite 页式写 | 否 | 可选索引，不是权威；默认不落盘 |
 | Spill 文件 | `spill-local` | 新文件 write-once，清理可删除 | 否 | 是临时大输出，不是权威 workspace |
 | Runtime image / overlay | Worker packed image + overlays | 只读 seed | 否 | 由构建与部署版本拥有 |
+| Goal / Plan / Todo 等模型可见状态 | `goal`、`plan-mode`、`tool-todo` 等 | Session event 追加，投影回放 | 否 | 状态权威是 Session log，不是独立文件 |
+| 用户审批与权限交互 | `user-approval`、sandbox escalation、authorization flow | 请求/结果进入 Session audit 或 credentials 服务 | 否 | 权限决策有独立安全边界，不能当普通 KV 或 Agent 可写文件 |
+| 后台 job registry | `jobs-local` | 进程内 in-memory 记录与 output ring | 否 | 生命周期属于 harness 进程；跨重启需要新的 durable job backend |
+| subprocess/shell 运行时状态 | `subprocess-local`、bash/job 运行时 | 进程句柄、Job 生命周期、输出流等 ephemeral state | 否 | 只能恢复为新的进程事实；已有输出和工具结果经 Session/spill 记录 |
+| Session telemetry | `session-telemetry-otel` | 经用户反馈授权后向 OTLP collector 导出 Session 记录 | 否 | 有独立隐私、脱敏和外流边界，不是 Workspace 文件同步 |
 | Agent workspace | `ctx.fs` / tool-fs | 文件工具原子写/编辑；shell 可任意写 | 是，但只应同步显式 root | 这是本报告的目标数据面 |
 
 ### 当前 PoC 的范围选择是必要的
@@ -190,6 +197,8 @@ DSH 的 Session 真源不是可变快照，而是只追加的 `SessionEvent` 流
 | truncate | torn tail 恢复 | 丢弃崩溃留下的不完整物理尾部 |
 | 新 generation 发布 | 历史格式迁移 | 旧 generation 不变，写入后继 |
 
+`flock`/semaphore 只描述 Node Host 的跨进程语义。当前 Browser Worker runtime 用单进程替换模块把 `tryLockExclusive()` 立即置为成功；这依赖“该 Worker 内的 in-process write claim 已经排除所有写者”的前提，不提供浏览器多标签页、多 Worker 或跨设备的内核锁语义。当前 cloud-backed PoC 的 Session backend 另有进程内 write-owner claim、renew、close 和过期 reclaim，用于 fencing Session API 写者；它不是内核 `flock`，也不是 Workspace commit lease。生产 Browser-Native 仍必须分别定义 Session 写权、Workspace writer lease 和浏览器本地 coordinator，不能把任一机制外推成全局锁。
+
 因此：
 
 - **Session 事实模型适合 append-only 存储**；
@@ -244,6 +253,31 @@ type VfsMutation =
 `write` mutation 携带完整 post-write bytes、mode、entryChanged 和可选 append offset；rename 被表示为 source removal 加 destination complete write/mkdir，保证 sink 能独立 materialize 目标。
 
 `VfsMutationSink.record()` 是同步的，不延迟已完成的内存 VFS mutation；`flush()` 只等待之前 recorded 的 mutation 被 sink 处理。接口约定 sink 遇到持久化错误应报告并停止镜像，而不是拒绝已经提交的内存写入。
+
+#### 当前 `VfsMutationSink` 不是 journal-first durable journal
+
+`MemoryVfs.publish()` 在 VFS 状态变化之后调用 sink。当前接口最多能形成：
+
+```text
+VFS mutation committed in memory
+  → synchronous sink.record() attempt
+  → later sink.flush()
+```
+
+它不能形成：
+
+```text
+journal durable
+  → VFS mutation
+  → local accepted
+```
+
+原因是 `record()` 是 post-commit observer：observer 抛错不能回滚已成功的内存 mutation，`flush()` 也只等待已经 recorded 的变更。若浏览器在内存 mutation 与 `record()`、`record()` 与持久化完成之间终止，当前 PoC 不能保证恢复该 mutation。生产实现至少需要以下一种新能力：
+
+1. VFS 写入前持久化 write intent；
+2. VFS transaction API，允许 journal 与 VFS 状态共同提交或回滚；
+3. journal 是权威存储，VFS 由 journal/durable store 回放驱动，而不是由 post-commit sink 镜像；
+4. 文件工具层先写 intent，再调用 VFS，并把两段状态纳入恢复状态机。
 
 ### Worker Host 启动顺序
 
@@ -325,7 +359,7 @@ PoC backend 的 `WorkspaceStore`：
 | `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` | 14 项测试通过 |
 | `pnpm exec vitest run packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts packages/experimental/webworker-runtime/tests/storage/tar.spec.ts` | 2 个文件、24 项测试通过 |
 
-这些测试覆盖了 hydrate、hash 去重、operation ID 重试、CAS conflict、dirty 本地保留、DSH atomic-write staging 过滤、Workspace 持久化、幂等、identity 隔离、无效路径、未验证 blob、并发 commit 串行化和 backend 应用实例恢复。
+这些测试覆盖了 hydrate、hash 去重、operation ID 重试、CAS conflict、dirty 本地保留、DSH atomic-write staging 过滤、Workspace 持久化、幂等、identity 隔离、无效路径、未验证 blob、并发 commit 串行化、backend 应用实例恢复、empty/binary/Unicode/rename/remove/chmod entries，以及 Session backend 的写 owner fencing、lease reclaim 和 durable restart。它们仍不覆盖独立 operation status 查询、Workspace writer lease、浏览器本地 coordinator、OPFS/IndexedDB outbox 或生产对象存储。
 
 ### PoC 进度文档记录的真实 E2E
 
@@ -402,7 +436,7 @@ IndexedDB 适合：
 - conflict record；
 - server cursor/notification state。
 
-W3C IndexedDB 3 将 transaction 定义为原子且持久的数据访问/变更集合，同时 `durability` 是 performance 与 durability 的提示；`strict` 表示用户代理只有在验证变更写入持久介质后才认为 commit 成功。生产实现应明确 transaction scope 和 durability hint，并用应用级 checksum/receipt 补足浏览器差异。
+W3C IndexedDB 3 将 transaction 定义为原子且持久的数据访问/变更集合，但 `durability` 是提交时向用户代理表达的偏好提示。`strict` 允许用户代理在验证未完成变更已写入持久存储介质后才认为 transaction committed；规范同时说明这是提示，浏览器会权衡性能与电量。IndexedDB transaction 因此提供事务性提交和失败回滚语义，不提供跨浏览器、跨设备、跨故障模型的云端持久化承诺。生产实现应明确 transaction scope 和 durability hint，并用应用级 checksum、恢复扫描、operation receipt 和云端重建补足浏览器差异。
 
 ### 推荐的本地分工
 
@@ -458,7 +492,7 @@ Cloud Workspace Service
 
 ### 关键不变式
 
-1. **本地 mutation 先入 durable journal，再报告本地 accepted**。如果只在内存中 accepted，刷新即丢。
+1. **生产接口必须让本地 mutation 进入 durable journal 后才报告“可恢复的 local accepted”**。当前 `MemoryVfs` 只暴露 post-commit sink，不能自然得到该不变式；如果只在内存中 accepted，刷新即丢。
 2. **重试复用同一 `operationId` 与同一 resulting manifest digest**。超时不能生成新 operation。
 3. **commit 前 service 必须能验证所有 referenced chunks/blobs**。
 4. **云端 revision 只能由 CAS commit 前进**。
@@ -471,7 +505,7 @@ Cloud Workspace Service
 <a id="八增量传输的四个层级"></a>
 ## 八、增量传输的四个层级
 
-### Level 1：Workspace-level delta
+### Level 1：Manifest/path-level delta
 
 只提交变化路径，不重传整个 tree。
 
@@ -486,7 +520,7 @@ path -> FileVersion
 FileVersion -> hash + size + mode
 ```
 
-相同 hash 只上传一次。Git 是该模式的成熟先例：blob、tree、commit 构成内容寻责文件系统，相同内容产生相同对象。当前 PoC 已在 Workspace blob 层采用 SHA-256 内容寻址。
+相同 hash 只上传一次。Git 是该模式的成熟先例：blob、tree、commit 构成内容寻址文件系统，相同内容产生相同对象。当前 PoC 已在 Workspace blob 层采用 SHA-256 内容寻址。
 
 适用：
 
@@ -631,12 +665,14 @@ type WorkspaceOperationState =
   | 'aborted-local'
 ```
 
-`journal-writing` 到 `local-applied` 的实现可以选择两种顺序：
+`journal-writing` 到 `local-applied` 的生产实现可以选择两种顺序：
 
 1. **先写 journal 占位，再应用 VFS**：崩溃后可扫描未完成 operation，回滚或修复；
-2. **先应用内存，再立即写 journal**：实现简单，但存在极小窗口；必须承认该窗口内只是 memory accepted，不承诺刷新恢复。
+2. **先应用内存，再同步记录 post-commit observer**：实现简单，但存在 VFS 已提交而 journal 未记录的崩溃窗口；必须承认该窗口内只是 memory accepted，不承诺刷新恢复。
 
 生产方案建议第一种，至少对模型工具写入和用户显式保存使用。
+
+当前 `VfsMutationSink` 只能实现第二种顺序。它看到 mutation 时，内存 VFS 已经提交；`record()` 同步调用也不能把 IndexedDB transaction 本身变成同步 durable commit。如果生产要求“local accepted 后可恢复”，必须增加前一节的 write-intent/transaction/replay 能力，或在工具层把 durable intent 和 VFS mutation 拆成显式两阶段并处理中间态。
 
 ### 状态机
 
@@ -648,8 +684,8 @@ journal-writing
   → committed
 
 commit-pending --timeout/refresh--> unknown
-unknown --query receipt--> committed | not-found
-not-found --same operation retry--> commit-pending
+unknown --authoritative lookup--> committed | not-committed | indeterminate
+not-committed --same operation retry--> commit-pending
 
 server CAS reject --> conflict
 conflict --> user/agent explicit resolution
@@ -659,10 +695,24 @@ conflict --> user/agent explicit resolution
 
 - `unknown` 不能映射为失败或成功；
 - 查询必须携带原 `operationId`；
+- 查询结果必须区分权威未提交、暂时不可见和 receipt 已过期/不可判定；
+- 只有服务端权威存储确认“从未提交”时，才能自动用原 `operationId` 重试；
 - 不能用新 `operationId` 重试同一本地 operation；
+- 重试必须复用原 resulting manifest digest，包括所有 path、hash、mode 和 precondition；
 - `conflict` 后本地文件不能被删除；
-- 上传 blob/chunk 是幂等的，目标 key 是 hash；
+- `unknown` 或“权威未提交”状态下可以幂等重传 blob/chunk，目标 key 是 hash；
 - commit 才改变 server head revision。
+
+Operation lookup 应是生产 API 的一等结果，而不是把 HTTP 404 直接当成可重试。以下语义是本报告的生产设计要求（L5），当前 PoC 未实现独立查询接口：
+
+| Lookup 结果 | 含义 | 自动重试 |
+|---|---|---|
+| `committed` | 权威 commit log 找到该 `operationId`，返回原 receipt | 否；采用 receipt 并推进 head |
+| `authoritatively-not-committed` | 权威 commit log 在保留窗口内确认从未提交 | 是；原 `operationId`、原 digest、原 blob 引用 |
+| `not-visible-yet` | 查询路径读到的是副本/缓存，无法排除延迟可见 | 否；稍后重查或读权威路径 |
+| `receipt-expired` / `indeterminate` | receipt 已被 GC、服务端分区不可判或保留期外 | 否；要求人工/产品级 reconciliation |
+
+服务端 receipt 保留期必须长于客户端最大离线重试窗口；receipt GC 前应保证 commit 历史和审计仍可回答“该 operation 是否曾提交”。如果查询服务不能线性一致地区分“未提交”和“不可见”，它必须返回 indeterminate，不能返回可自动重试的 not-found。
 
 ### batching 与 coalescing
 
@@ -721,14 +771,49 @@ interface WorkspaceFileEntry {
   readonly chunked?: ChunkedFileVersion
 }
 
-/** Immutable tree manifest. */
+/** Immutable directory entry referenced by a manifest. */
+interface WorkspaceDirectoryEntry {
+  readonly path: string
+  readonly kind: 'directory'
+  readonly mode: number
+}
+
+/** Snapshot entry in one immutable tree manifest. */
+type WorkspaceManifestEntry = WorkspaceFileEntry | WorkspaceDirectoryEntry
+
+/** Durable deletion fact in a commit history; a snapshot manifest need not inline it. */
+interface WorkspaceRemoveChange {
+  readonly path: string
+  readonly priorHash?: string
+  readonly priorKind: 'file' | 'directory'
+  readonly subtree?: boolean
+}
+
+/** Durable move fact with source and destination preconditions. */
+interface WorkspaceMoveChange {
+  readonly fromPath: string
+  readonly toPath: string
+  readonly expectedFromHash?: string
+  readonly priorToPathState: 'absent' | 'file' | 'directory'
+}
+
+/** Production change model. A change is journal/commit data, not necessarily an inline manifest entry. */
+type WorkspaceChange =
+  | WorkspaceFileEntry
+  | WorkspaceDirectoryEntry
+  | WorkspaceRemoveChange
+  | WorkspaceMoveChange
+
+/** Immutable tree snapshot. */
 type WorkspaceManifest = Readonly<{
   readonly manifestHash: string
-  readonly entries: readonly WorkspaceFileEntry[]
+  readonly entries: readonly WorkspaceManifestEntry[]
 }>
 ```
 
-### API 形态
+当前 PoC 的 manifest 已区分 `file` 和 `directory`，但 change 仍用 `path + deleted/kind/hash` 表示，没有 durable tombstone、move precondition 或祖先 manifest 语义。以下 `WorkspaceRemoveChange`、`WorkspaceMoveChange` 和 operation status API 是生产设计，不是当前 checkout 已实现接口。
+
+### 生产 Workspace Service 的建议 API 与能力矩阵
 
 ```text
 GET  /workspaces/:id/head
@@ -738,8 +823,21 @@ GET  /chunks/:hash
 PUT  /chunks/:hash
 POST /workspaces/:id/commit
 GET  /workspaces/:id/operations/:operationId
-SUB  /workspaces/:id/events
+WebSocket/SSE /workspaces/:id/events
 ```
+
+能力矩阵：
+
+| 能力 | 生产设计 | 当前 PoC |
+|---|---|---|
+| identity/authorization | 真实登录、租户授权、workspace ACL | 匿名 HttpOnly cookie 和 per-principal workspace |
+| head/manifest | 独立 head 与历史 manifest 读取 | `manifest` 返回当前 revision、entries 和 digest |
+| blob upload/download | 可续传、租户隔离、hash/size 验证 | `PUT/GET blob/:hash`，SHA-256/size 验证 |
+| CAS commit | 权威事务数据库、revision CAS、幂等 receipt | 本地 dataDir、workspace revision CAS、幂等 operation |
+| operation status | 权威查询 `committed/not-committed/indeterminate` | 未实现；只能重放原 commit 请求 |
+| change notification | WebSocket/SSE 或 cursor pull | 未实现 |
+| commit history/audit | 保留 commit、receipt、actor/session | 仅内存 operation map 随 workspace state 持久化，无生产审计模型 |
+| resumable upload | 分块上传和断点恢复 | 未实现 |
 
 commit 请求携带：
 
@@ -801,6 +899,21 @@ Dropbox 文件 API 用 folder cursor 和 `list_folder/continue` 表达增量变�
 - turn 结束或文件工具 checkpoint 时提交。
 
 这避免了多主文件同步的复杂合并问题，适合当前 Agent 使用场景。
+
+### 浏览器内的本地 coordinator
+
+Workspace 服务端 lease 只解决跨客户端的提交权威，不自动解决同一浏览器中两个标签页各自持有 `MemoryVfs`、outbox 和旧 head 的问题。当前 PoC 的双标签 E2E 证明 revision CAS 能阻止旧 revision 静默覆盖，但没有实现 Workspace 本地 coordinator；conflict 后如何合并 dirty 文件、谁 pull 新 manifest、谁重试 outbox，仍由产品层处理。Session backend owner lease 也不能替代这个 coordinator。
+
+生产方案应为每个 workspace 明确一个 origin-local coordinator。以下是本报告的架构设计（L5），当前未实现，也未在多标签压力或 leader 切换场景中验证：
+
+1. 用 Web Locks、BroadcastChannel、SharedWorker 或等价机制选择一个 active worker；
+2. active worker 持有本地 VFS 写权和 outbox dispatch 权，其他标签显示只读副本或创建显式 detached workspace；
+3. 本地 writer epoch 与服务端 lease/fencing token 绑定，commit 请求携带 token，过期 owner 的迟到提交被服务端拒绝；
+4. coordinator 负责 pull、刷新本地 head、处理通知和排队重试，避免多个 worker 对同一 local base 生成不同 operation；
+5. outbox 记录必须按 `operationId` 去重，leader 切换时通过 durable journal 接管 pending operation；
+6. 若无法取得 coordinator 或服务端 lease，UI 不得把本地可编辑状态表述为已同步。
+
+当前 checkout 没有该 coordinator、Workspace 本地 durable outbox、Workspace 本地 writer epoch 或 Workspace Service writer lease。这些是生产多标签支持的前置条件，不是 revision CAS 或 Session owner lease 的自动产物。
 
 ### 第二阶段：path-level CAS
 
@@ -898,7 +1011,7 @@ interface WorkspaceMove {
 
 如果 source 在本地 base 后被远端修改，或 target 被并发创建，必须冲突。对目录 move 还要原子移动 subtree entries。
 
-当前 `MemoryVfs` mutation sink 将 rename 展开为 remove destination 内容和完整目标写入，这是可 materialize 的保守表示；生产 manifest 协议可以选择保留 move 语义，或明确所有 rename 都按 delete+create 提交并接受元数据损失。
+当前 `MemoryVfs` mutation sink 将 rename 展开为 source entry removal，以及 destination 的完整 `write`/`mkdir` mutation。该表示允许 sink 在不读取 VFS 旧状态的情况下 materialize destination；它不会移除 destination 的既有内容，destination 已存在时的替换语义由 VFS rename 规则先处理。生产 manifest 协议可以选择保留 move 语义，或明确所有 rename 都按 delete+create 提交并接受元数据损失；同步器不能把上述 source removal 误实现为删除 destination。
 
 ### chmod / mtime
 
@@ -953,7 +1066,7 @@ Workspace store 记录：
 |---|---|---|---|
 | committed | committed | 已保存文件与对话事实 | 正常恢复 |
 | committed | pending/unknown | 对话说工具已执行，但云端文件未确认 | 查询 operation；显示 pending/unknown |
-| flush failed | committed | 文件已保存，但对话事实缺失 | 以 Workspace receipt 修复或提示 reconcile |
+| flush failed | committed | 文件已保存，但对话事实缺失 | 保留 Workspace receipt，追加 reconciliation event 或提示用户恢复；不能重写原 Session 事件 |
 | unknown | unknown | 两边结果不明 | 分别按幂等 ID 查询，不能重放副作用 |
 
 ### Tool receipt
@@ -977,11 +1090,14 @@ interface WorkspaceToolReceipt {
 
 1. 从 Session event 找 workspace tool receipt；
 2. 用 operationId 查询 Workspace service；
-3. 将 unknown 分为 committed/not-found；
+3. 将 unknown 分为 committed/authoritatively-not-committed/indeterminate；
 4. 对 committed 更新本地 head；
-5. 对 not-found 保留本地 dirty outbox；
+5. 对 authoritative not-committed 保留本地 dirty outbox 并按原 `operationId` 重试；
 6. 对 conflict 保留本地文件并呈现选择；
-7. 后续模型输入必须描述真实状态，不能沿用“已保存”的旧叙述。
+7. 对 indeterminate 持续查询或进入产品级 reconciliation；
+8. 后续模型输入必须描述真实状态，不能沿用“已保存”的旧叙述。
+
+Reconciliation 事件可以记录“Workspace operation 已提交、原 Session flush 失败、恢复时已查询到该 receipt”，并为 UI/模型投影提供补偿状态。它不能改写已提交的 tool result、伪造当时的原子提交，也不能把 Workspace receipt 直接写回历史事件。若需要标注旧 tool result 的后续云状态，只能通过追加事件建立关联。
 
 ### flush 语义
 
@@ -1013,7 +1129,7 @@ interface WorkspaceToolReceipt {
 
 ### 浏览器存储 eviction
 
-浏览器 Storage API 管理 IndexedDB、Cache 和 File System/OPFS 等配额。默认 best-effort storage 可能在压力下 eviction；`navigator.storage.persist()` 可为关键数据请求持久存储，持久 origin 会跳过该 eviction 机制，但最终仍受浏览器授权和 quota 限制。
+浏览器 Storage API 管理 IndexedDB、Cache 和 File System/OPFS 等配额。默认 best-effort storage 可能在压力下 eviction；`navigator.storage.persist()` 可为关键数据请求持久存储，持久 origin 会跳过该 eviction 机制，但最终仍受浏览器授权和 quota 限制。`persist()` 是可选优化，不能作为产品数据安全承诺；生产必须假设本地 OPFS/IndexedDB 可能被清空，并用 manifest/blob checksum、operation receipt 和云端重建恢复。
 
 应用必须：
 
@@ -1123,7 +1239,8 @@ CRDT 适合的子问题：
 
 ### 阶段 1：本地 durable outbox
 
-- 把 VFS mutation journal 持久到 IndexedDB；
+- 新增 write-intent/transaction/replay 能力，不能假设当前 post-commit `VfsMutationSink` 已提供 journal-first durability；
+- 把 operation intent/journal 持久到 IndexedDB；
 - bytes 持久到 OPFS；
 - 刷新/Worker 重建后恢复 dirty operations；
 - 重试复用 operationId；
@@ -1138,6 +1255,7 @@ CRDT 适合的子问题：
 - 服务端 hash/size 验证；
 - 审计、配额、并发上限；
 - operation status 查询；
+- status 查询区分 committed/authoritatively-not-committed/indeterminate；
 - cursor/notification；
 - 对象 GC。
 
@@ -1153,6 +1271,8 @@ CRDT 适合的子问题：
 ### 阶段 4：多端与冲突
 
 - workspace writer lease；
+- 浏览器内 workspace coordinator 和本地 writer epoch；
+- coordinator 切换时接管 pending outbox；
 - turn-start refresh；
 - SSE/WebSocket head notification；
 - pull manifests since revision；
@@ -1178,6 +1298,7 @@ CRDT 适合的子问题：
 
 - 刷新页面后未提交 dirty 文件仍可恢复；
 - Worker terminate 后恢复；
+- VFS mutation 与 journal record 之间崩溃时状态可判定或可恢复；
 - OPFS/IndexedDB quota 不足时明确失败；
 - 本地 cache 删除后能从云端 head 重建；
 - 本地 metadata 与 bytes hash 不一致时拒绝并重建。
@@ -1197,6 +1318,8 @@ CRDT 适合的子问题：
 - stale baseRevision 返回 conflict；
 - 重复 operationId + same digest 返回原 receipt；
 - 重复 operationId + different digest 拒绝；
+- status 查询区分 committed、authoritatively-not-committed、not-visible-yet、receipt-expired；
+- 只有 authoritative not-committed 自动用原 operation 重试；
 - blob 未上传不能 commit；
 - 并发 commit 线性化；
 - 服务端重启后 head/receipt/manifest 可恢复。
@@ -1204,6 +1327,8 @@ CRDT 适合的子问题：
 ### 一致性与冲突
 
 - 双标签旧 revision 写入不覆盖新 head；
+- 双标签通过本地 coordinator 取得单一写者；
+- coordinator 崩溃后 pending operation 可被新 leader 接管；
 - conflict 后本地 dirty 不丢；
 - 远端 pull 不覆盖本地 dirty path；
 - rename/delete/并发创建检测；
@@ -1214,9 +1339,11 @@ CRDT 适合的子问题：
 
 - Session tool call 能找到 operationId；
 - commit 超时后查询原 operation；
-- not-found 时保留本地 pending；
+- authoritative not-committed 时保留本地 pending 并用原 operation 重试；
+- indeterminate 不自动重试 commit；
 - committed 时更新 head；
 - conflict 时进入显式解决；
+- reconciliation 只追加事件，不改写历史 Session 事实；
 - 模型不会把 pending 说成已云端保存。
 
 ### 安全与配额
@@ -1241,10 +1368,13 @@ CRDT 适合的子问题：
 | 只用 dirty path，没有 hash/manifest | 无法检测并发冲突 |
 | last-write-wins 覆盖同 path | 静默丢失 Agent/用户工作 |
 | 网络超时后生成新 operationId | 破坏幂等，可能重复提交 |
+| 把 operation 查询的 404 当作权威未提交 | 延迟可见或 receipt GC 会诱发重复副作用 |
 | 把 `Vfs.flush()` 当云端回执 | 本地 sink drain 不是 server commit |
 | 把 Session 事件当文件存储 | 模型历史膨胀，文件 bytes 与对话事实耦合 |
 | 把 Workspace commit 嵌入 Session event 作为唯一存储 | 云端文件恢复需要拉完整 Session，权限和生命周期耦合 |
 | 假设 Session 与 Workspace 跨存储原子提交 | 两个 service 可能一面成功一面失败 |
+| 用 Workspace receipt 改写历史 Session 事件 | 已提交 Session 事实只能追加，不能伪造原子提交 |
+| 把 Browser Worker 的 flock stub 当跨标签锁 | 该替换只覆盖单进程 in-process claim 假设 |
 | 用 CRDT 合并任意文件树 | 二进制、路径、rename、源码语义无法自动收敛 |
 | 只依赖 localStorage/sessionStorage | 容量、类型和持久性不适合 workspace |
 | 不处理 OPFS eviction/quota | 刷新或压力下本地 pending 丢失 |
@@ -1286,32 +1416,40 @@ Browser-Native DSH 的 Workspace 不应追求“浏览器里有一个通用远�
 | DSH FileSystem seam 与原子写 | L1 | [fs/src/index.ts](../../packages/fs/fs/src/index.ts)、[fs-local/src/fsio.ts](../../packages/fs/fs-local/src/fsio.ts) |
 | 默认 base 中 Session、attachment、storage、SQLite、projection cache 与 fs-sandbox 的组合 | L1 | [base cordis.patch.yml](../../packages/bundle/base/cordis.patch.yml) |
 | Session JSONL append/物化/回滚/torn tail | L1 | [session-persistence-jsonl/src/index.ts](../../packages/session/session-persistence-jsonl/src/index.ts) |
+| Node Session kernel lock 与 Browser Worker 单进程替换 | L1 | [lease.ts](../../packages/session/session-persistence-jsonl/src/lease.ts)、[node-addon-system-flock.ts](../../packages/experimental/webworker-runtime/src/node/external_packages/node-addon-system-flock.ts) |
 | storage-json 原子替换 | L1 | [storage-json/src](../../packages/storage/storage-json/src/index.ts) |
 | credentials YAML 原子替换 | L1 | [credentials-local/src/index.ts](../../packages/credentials/credentials-local/src/index.ts) |
+| jobs-local 进程内 in-memory registry | L1 | [jobs-local README](../../packages/jobs/jobs-local/README.md) |
+| Session telemetry 的反馈授权与外部 OTLP 边界 | L1 | [session-telemetry-otel README](../../packages/session/session-telemetry-otel/README.md) |
+| Goal/Plan/Todo/审批状态由 Session event 承载 | L1 | [goal README](../../packages/goal/goal/README.md)、[plan-mode README](../../packages/plan/plan-mode/README.md)、[tool-todo README](../../packages/todo/tool-todo/README.md)、[user-approval README](../../packages/interaction/user-approval/README.md) |
+| subprocess/shell/job 的进程生命周期边界 | L1 | [subprocess-local README](../../packages/subprocess/subprocess-local/README.md)、[tool-bash README](../../packages/shell/tool-bash/README.md) |
 | 当前 Workspace mirror 文件级 blob、CAS、状态机 | L1 | [browser-native-workspace.ts](browser-native-dsh-poc/browser-native-workspace.ts) |
 | 当前 backend WorkspaceStore 幂等/CAS/blob 验证 | L1 | [workspace-v2.mjs](browser-native-dsh-poc/workspace-v2.mjs) |
+| cloud-backed PoC Session backend 的写 owner claim/renew/reclaim | L1 | [browser-native README](browser-native-dsh-poc/README.md)、[backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) |
 | 当前 PoC 规划与限制 | L1/L5 | [cloud-backed-workspace-sync-plan.md](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md) |
 | 当前 PoC 真实 Chrome/LLM 记录 | L3 | [cloud-backed-workspace-sync-progress.md](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md) |
 | 本报告复跑无密钥测试 | L2 | 见第五节命令 |
 
 ### 外部来源
 
-| 事实 | 等级 | 来源 |
-|---|---|---|
-| OPFS 是 origin-private File System 存储 endpoint | L4 | [WHATWG File System Standard](https://fs.spec.whatwg.org/) |
-| OPFS Worker 中有同步 access handle | L4 | [MDN OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)、[MDN FileSystemSyncAccessHandle](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) |
-| IndexedDB transaction 原子/持久与 durability hint | L4 | [W3C IndexedDB 3](https://www.w3.org/TR/IndexedDB-3/) |
-| 浏览器 storage quota、eviction 与 persist | L4 | [MDN Storage quotas](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria)、[MDN Storage API](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API) |
-| Git blob/tree/commit 内容寻址 | L4 | [Git Objects](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects) |
-| Git pack delta compression | L4 | [git-pack-objects](https://git-scm.com/docs/git-pack-objects) |
-| VCDIFF 标准 delta format | L4 | [RFC 3284](https://www.rfc-editor.org/rfc/rfc3284.html) |
-| rsync delta-transfer 与 whole-file checksum | L4 | [rsync manual](https://github.com/RsyncProject/rsync/blob/master/rsync.1.md) |
-| FastCDC content-defined chunking | L4 | [FastCDC paper](https://www.usenix.org/system/files/conference/atc16/atc16-paper-xia.pdf) |
-| restic SHA-256/dedup design | L4 | [restic design](https://github.com/restic/restic/blob/master/doc/design.rst) |
-| S3 conditional requests | L4 | [Amazon S3 conditional requests](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html) |
-| Dropbox cursor/continue 增量变化 | L4 | [Dropbox detecting changes](https://docs.dropboxapi.com/dropbox-api/docs/detecting-changes) |
-| Automerge local-first CRDT | L4 | [Automerge docs](https://automerge.org/docs/hello/) |
-| Yjs incremental updates/offline | L4 | [Yjs offline support](https://docs.yjs.dev/getting-started/allowing-offline-editing) |
+外部页面统一在 2026-10-21 复核。Living standard 和厂商文档会变化；下表的日期/commit 是本报告的版本锚点。Git、rsync、S3、Dropbox、restic、Automerge 和 Yjs 只用于命名成熟机制，不表示 DSH 已接入这些系统。
+
+| 事实 | 等级 | 版本/检索锚点 | 来源 |
+|---|---|---|---|
+| OPFS 是 origin-private File System 存储 endpoint | L4 | Living Standard，2026-10-19，commit `d76d3455d5afe2f85754ed24ffdbf99fe30032d4` | [WHATWG File System Standard](https://fs.spec.whatwg.org/) |
+| OPFS Worker 中有同步 access handle | L4 | MDN 页面修改时间分别为 2025-07-14 与 2025-04-09 | [MDN OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)、[MDN FileSystemSyncAccessHandle](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) |
+| IndexedDB transaction 语义与 durability hint | L4 | W3C Working Draft，2025-08-13 | [W3C IndexedDB 3](https://www.w3.org/TR/IndexedDB-3/) |
+| 浏览器 storage quota、eviction 与 persist | L4 | MDN 页面修改时间分别为 2026-01-05 与 2026-10-12 | [MDN Storage quotas](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria)、[MDN StorageManager.persist](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist) |
+| Git blob/tree/commit 内容寻址 | L4 | 当前线上版次，2026-10-21 | [Git Objects](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects) |
+| Git pack delta compression | L4 | 当前线上版次，2026-10-21 | [git-pack-objects](https://git-scm.com/docs/git-pack-objects) |
+| VCDIFF 标准 delta format | L4 | RFC 3284，2002-06 | [RFC 3284](https://www.rfc-editor.org/rfc/rfc3284.html) |
+| rsync delta-transfer 与 whole-file checksum | L4 | master 分支当前页面，2026-10-21 | [rsync manual](https://github.com/RsyncProject/rsync/blob/master/rsync.1.md) |
+| FastCDC content-defined chunking | L4 | USENIX ATC '16 论文 | [FastCDC paper](https://www.usenix.org/system/files/conference/atc16/atc16-paper-xia.pdf) |
+| restic SHA-256/dedup design | L4 | master 分支当前页面，2026-10-21 | [restic design](https://github.com/restic/restic/blob/master/doc/design.rst) |
+| S3 conditional requests | L4 | 当前线上文档，2026-10-21 | [Amazon S3 conditional requests](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html) |
+| Dropbox cursor/continue 增量变化 | L4 | 当前线上文档，2026-10-21 | [Dropbox detecting changes](https://docs.dropboxapi.com/dropbox-api/docs/detecting-changes) |
+| Automerge local-first CRDT | L4 | 当前线上文档，2026-10-21 | [Automerge docs](https://automerge.org/docs/hello/) |
+| Yjs incremental updates/offline | L4 | 当前线上文档，2026-10-21 | [Yjs offline support](https://docs.yjs.dev/getting-started/allowing-offline-editing) |
 
 ---
 
