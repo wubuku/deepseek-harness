@@ -92,6 +92,15 @@ export interface WorkerHostOptions {
   readonly image: Uint8Array | string
   /** Ordered data overlays applied after the base image and before boot. */
   readonly overlays?: readonly (Uint8Array | string)[]
+  /** VFS instance used by the image, overlays, module loader, and Cordis tree. */
+  readonly vfs?: MemoryVfs
+  /**
+   * Prepare mutable VFS state after image and overlay seeding but before the
+   * module loader or Cordis tree starts. Use `seed` methods for restored data
+   * that must not enter the runtime mutation sink.
+   * @param vfs - Mounted VFS shared by the worker host.
+   */
+  readonly prepareVfs?: (vfs: MemoryVfs) => void | Promise<void>
   /** Virtual root; defaults to {@link DEFAULT_ROOT}. */
   readonly root?: string
   /** Composed configuration inside the image; defaults to `<root>/config/cordis.yml`. */
@@ -192,13 +201,14 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         readImage(options.image),
         Promise.all((options.overlays ?? []).map(readImage)),
       ])
-      const mounted = loadVfsImage(bytes, root)
+      const mounted = loadVfsImage(bytes, root, options.vfs)
       for (const overlay of overlays) loadVfsOverlay(overlay, root, mounted)
       // Belt and braces over the image's own empty-directory entries: a hand
       // -built image without them still boots.
       for (const directory of IMAGE_EMPTY_DIRECTORIES) {
         mounted.seedDirectory(join(root, directory.replace(/\/$/, '')))
       }
+      await options.prepareVfs?.(mounted)
       setActiveVfs(mounted)
       vfs = mounted
 

@@ -11,6 +11,7 @@ import { createServer } from 'node:http'
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -78,17 +79,39 @@ async function readBody(request) {
   }
 }
 
-function sendJson(response, status, body) {
+function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'x-browser-native-protocol': String(PROTOCOL_VERSION),
+    ...headers,
   })
   response.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...body }))
 }
 
+function sendBytes(response, bytes) {
+  response.writeHead(200, {
+    'content-type': 'application/octet-stream',
+    'content-length': String(bytes.byteLength),
+    'cache-control': 'no-store',
+    'x-browser-native-protocol': String(PROTOCOL_VERSION),
+  })
+  response.end(bytes)
+}
+
+async function readRawBody(request, maximumBytes) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > maximumBytes) throw new WorkspaceError('REQUEST_TOO_LARGE', 'workspace blob exceeds the upload limit', 413)
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 function sendError(response, error) {
-  const detail = error instanceof BackendError
+  const detail = error instanceof BackendError || error instanceof WorkspaceError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -96,6 +119,7 @@ function sendError(response, error) {
       code: detail.code,
       message: detail.message,
       ...(detail.retryAfterMs === undefined ? {} : { retryAfterMs: detail.retryAfterMs }),
+      ...(detail.details === undefined ? {} : { details: detail.details }),
     },
   })
 }
@@ -576,6 +600,8 @@ export async function createBrowserNativeV2Server(options) {
     now: options.testHooks?.now,
   })
   await store.load()
+  const workspaces = new WorkspaceStore(options.dataDir)
+  await workspaces.load()
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
   const server = createServer(async (request, response) => {
@@ -583,6 +609,45 @@ export async function createBrowserNativeV2Server(options) {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       if (request.method === 'GET' && url.pathname === '/api/browser-native/health') {
         sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model, ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }) })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/identity') {
+        const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
+        sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookie })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/manifest') {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        sendJson(response, 200, workspaces.manifest(request, url.searchParams.get('workspaceId')))
+        return
+      }
+      if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/blob\/[a-f0-9]{64}$/.test(url.pathname)) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const hash = url.pathname.split('/').at(-1)
+        const bytes = await workspaces.getBlob(request, url.searchParams.get('workspaceId'), hash)
+        sendBytes(response, bytes)
+        return
+      }
+      if (request.method === 'PUT' && /^\/api\/browser-native\/workspace\/blob\/[a-f0-9]{64}$/.test(url.pathname)) {
+        if (request.headers['x-browser-native-protocol'] !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const hash = url.pathname.split('/').at(-1)
+        const workspaceId = request.headers['x-workspace-id']
+        const requestId = request.headers['x-request-id']
+        if (typeof requestId !== 'string' || requestId.length === 0) throw new WorkspaceError('INVALID_REQUEST', 'requestId is required')
+        const bytes = await readRawBody(request, MAX_BODY_BYTES)
+        sendJson(response, 200, await workspaces.putBlob(request, workspaceId, hash, bytes))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/commit') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.commit(request, body))
         return
       }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
@@ -623,6 +688,7 @@ export async function createBrowserNativeV2Server(options) {
   return {
     server,
     store,
+    workspaces,
     llm,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       server.once('error', reject)

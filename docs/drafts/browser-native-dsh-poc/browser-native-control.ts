@@ -5,6 +5,15 @@ export interface BrowserNativeOwnerNotice {
   readonly message?: string
 }
 
+export interface BrowserNativeWorkspaceStatus {
+  readonly type: 'workspace'
+  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+  readonly workspaceId?: string
+  readonly revision?: number
+  readonly dirtyCount: number
+  readonly message?: string
+}
+
 let controlPort: MessagePort | undefined
 const resumeOwnerTokens = new Map<string, string>()
 
@@ -27,5 +36,10 @@ export function takeBrowserNativeResumeOwner(sessionId: string): string | undefi
 
 /** Publish the current write owner to the page without using the DSH event log. */
 export function publishBrowserNativeOwner(notice: BrowserNativeOwnerNotice): void {
+  controlPort?.postMessage(notice)
+}
+
+/** Publish the current Workspace synchronization state to the owning page. */
+export function publishBrowserNativeWorkspaceStatus(notice: BrowserNativeWorkspaceStatus): void {
   controlPort?.postMessage(notice)
 }

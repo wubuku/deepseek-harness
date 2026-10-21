@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -81,6 +82,43 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }
 
+async function openWorkspaceIdentity(origin) {
+  const response = await fetch(`${origin}/api/browser-native/workspace/identity`)
+  const body = await response.json()
+  assert.equal(response.ok, true, JSON.stringify(body))
+  const setCookie = response.headers.get('set-cookie')
+  assert.equal(typeof setCookie, 'string')
+  return { workspaceId: body.workspaceId, cookie: setCookie.split(';', 1)[0] }
+}
+
+async function postWorkspace(origin, identity, operation, body) {
+  const response = await fetch(`${origin}/api/browser-native/workspace/${operation}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: identity.cookie },
+    body: JSON.stringify(envelope(`workspace-${randomUUID()}`, { workspaceId: identity.workspaceId, ...body })),
+  })
+  const value = await response.json()
+  return { response, value }
+}
+
+async function uploadWorkspaceBlob(origin, identity, bytes) {
+  const hash = createHash('sha256').update(bytes).digest('hex')
+  const response = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
+    method: 'PUT',
+    headers: {
+      cookie: identity.cookie,
+      'content-type': 'application/octet-stream',
+      'x-browser-native-protocol': '1',
+      'x-request-id': randomUUID(),
+      'x-workspace-id': identity.workspaceId,
+    },
+    body: bytes,
+  })
+  const value = await response.json()
+  assert.equal(response.ok, true, JSON.stringify(value))
+  return { hash, bytes: bytes.byteLength, reused: value.reused }
+}
+
 afterEach(async () => {
   for (const app of liveApps) {
     await app.close()
@@ -153,6 +191,321 @@ describe('browser-native DSH v2 backend', () => {
     }))
     assert.deepEqual(read.events, [event])
     assert.equal(read.eventState, 'shared-frozen')
+  })
+
+  it('persists workspace blobs and commits revisions idempotently with compare-and-swap', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const initialResponse = await fetch(`${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const initial = await initialResponse.json()
+    assert.equal(initial.revision, 0)
+    assert.deepEqual(initial.entries, [])
+
+    const bytes = Buffer.from('cloud workspace ✓\n')
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const uploaded = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
+      method: 'PUT',
+      headers: {
+        cookie: identity.cookie,
+        'content-type': 'application/octet-stream',
+        'x-browser-native-protocol': '1',
+        'x-request-id': 'blob-upload-one',
+        'x-workspace-id': identity.workspaceId,
+      },
+      body: bytes,
+    })
+    const uploadedBody = await uploaded.json()
+    assert.equal(uploaded.ok, true, JSON.stringify(uploadedBody))
+    assert.equal(uploadedBody.reused, false)
+
+    const operationId = randomUUID()
+    const changes = [{ path: 'notes/daily.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }]
+    const committed = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      changes,
+    })
+    assert.equal(committed.response.ok, true, JSON.stringify(committed.value))
+    assert.equal(committed.value.revision, 1)
+    assert.equal(committed.value.replayed, false)
+
+    const replay = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      changes,
+    })
+    assert.equal(replay.response.ok, true)
+    assert.equal(replay.value.replayed, true)
+    assert.equal(replay.value.revision, 1)
+
+    const conflicting = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes,
+    })
+    assert.equal(conflicting.response.status, 409)
+    assert.equal(conflicting.value.error.code, 'WORKSPACE_CONFLICT')
+    assert.equal(conflicting.value.error.details.current.revision, 1)
+
+    const manifestResponse = await fetch(`${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const manifest = await manifestResponse.json()
+    assert.deepEqual(manifest.entries, [{ path: 'notes', kind: 'directory', mode: 0o755 }, { path: 'notes/daily.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }])
+    const downloaded = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes)
+  })
+
+  it('isolates workspace identity and restores it after backend restart', async () => {
+    const dataDir = await temporaryDirectory()
+    const first = await start({ dataDir, llmMode: 'scripted' })
+    const owner = await openWorkspaceIdentity(first.origin)
+    const other = await openWorkspaceIdentity(first.origin)
+    assert.notEqual(owner.workspaceId, other.workspaceId)
+
+    const denied = await fetch(`${first.origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${owner.workspaceId}`, {
+      headers: { cookie: other.cookie },
+    })
+    assert.equal(denied.status, 403)
+    assert.equal((await denied.json()).error.code, 'WORKSPACE_FORBIDDEN')
+
+    const bytes = Buffer.from('survives backend restart')
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const upload = await fetch(`${first.origin}/api/browser-native/workspace/blob/${hash}`, {
+      method: 'PUT',
+      headers: {
+        cookie: owner.cookie,
+        'content-type': 'application/octet-stream',
+        'x-browser-native-protocol': '1',
+        'x-request-id': 'restart-upload',
+        'x-workspace-id': owner.workspaceId,
+      },
+      body: bytes,
+    })
+    assert.equal(upload.ok, true)
+    const committed = await postWorkspace(first.origin, owner, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes: [{ path: 'persisted.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }],
+    })
+    assert.equal(committed.response.ok, true, JSON.stringify(committed.value))
+
+    const foreignRead = await fetch(`${first.origin}/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${owner.workspaceId}`, {
+      headers: { cookie: other.cookie },
+    })
+    assert.equal(foreignRead.status, 403)
+    assert.equal((await foreignRead.json()).error.code, 'WORKSPACE_FORBIDDEN')
+
+    const foreignBytes = Buffer.from('must remain private')
+    const foreignHash = createHash('sha256').update(foreignBytes).digest('hex')
+    const foreignUpload = await fetch(`${first.origin}/api/browser-native/workspace/blob/${foreignHash}`, {
+      method: 'PUT',
+      headers: {
+        cookie: other.cookie,
+        'content-type': 'application/octet-stream',
+        'x-browser-native-protocol': '1',
+        'x-request-id': 'foreign-workspace-upload',
+        'x-workspace-id': owner.workspaceId,
+      },
+      body: foreignBytes,
+    })
+    assert.equal(foreignUpload.status, 403)
+    assert.equal((await foreignUpload.json()).error.code, 'WORKSPACE_FORBIDDEN')
+
+    const foreignCommit = await postWorkspace(first.origin, other, 'commit', {
+      workspaceId: owner.workspaceId,
+      operationId: randomUUID(),
+      baseRevision: 1,
+      changes: [{ path: 'intrusion.txt', deleted: true }],
+    })
+    assert.equal(foreignCommit.response.status, 403)
+    assert.equal(foreignCommit.value.error.code, 'WORKSPACE_FORBIDDEN')
+
+    await first.app.close()
+    liveApps.delete(first.app)
+    const restarted = await start({ dataDir, llmMode: 'scripted' })
+    const restored = await fetch(`${restarted.origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${owner.workspaceId}`, {
+      headers: { cookie: owner.cookie },
+    })
+    const restoredBody = await restored.json()
+    assert.equal(restored.ok, true, JSON.stringify(restoredBody))
+    assert.equal(restoredBody.revision, 1)
+    assert.deepEqual(restoredBody.entries, [{ path: 'persisted.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }])
+  })
+
+  it('serializes concurrent commits against one workspace revision', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const contenders = await Promise.all(Array.from({ length: 8 }, async (_, index) => {
+      const bytes = Buffer.from(`concurrent-${String(index)}`)
+      const hash = createHash('sha256').update(bytes).digest('hex')
+      const uploaded = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
+        method: 'PUT',
+        headers: {
+          cookie: identity.cookie,
+          'content-type': 'application/octet-stream',
+          'x-browser-native-protocol': '1',
+          'x-request-id': `concurrent-upload-${String(index)}`,
+          'x-workspace-id': identity.workspaceId,
+        },
+        body: bytes,
+      })
+      assert.equal(uploaded.ok, true)
+      return {
+        operationId: randomUUID(),
+        baseRevision: 0,
+        changes: [{ path: `contender-${String(index)}.txt`, kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }],
+      }
+    }))
+
+    const results = await Promise.all(contenders.map(body => postWorkspace(origin, identity, 'commit', body)))
+    const committed = results.filter(result => result.response.ok)
+    const conflicts = results.filter(result => result.response.status === 409
+      && result.value.error.code === 'WORKSPACE_CONFLICT')
+    assert.equal(committed.length, 1)
+    assert.equal(conflicts.length, contenders.length - 1)
+
+    const manifestResponse = await fetch(`${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const manifest = await manifestResponse.json()
+    assert.equal(manifest.revision, 1)
+    assert.equal(manifest.entries.filter(entry => entry.kind === 'file').length, 1)
+  })
+
+  it('requires Workspace upload authorization before referencing another user blob', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const owner = await openWorkspaceIdentity(origin)
+    const other = await openWorkspaceIdentity(origin)
+    const bytes = Buffer.from('owner-only-content')
+    const uploaded = await uploadWorkspaceBlob(origin, owner, bytes)
+    const changes = [{ path: 'private.txt', kind: 'file', hash: uploaded.hash, bytes: uploaded.bytes, mode: 0o600 }]
+    const denied = await postWorkspace(origin, other, 'commit', {
+      operationId: randomUUID(), baseRevision: 0, changes,
+    })
+    assert.equal(denied.response.status, 403)
+    assert.equal(denied.value.error.code, 'BLOB_FORBIDDEN')
+
+    const uploadedByOther = await uploadWorkspaceBlob(origin, other, bytes)
+    assert.equal(uploadedByOther.reused, true)
+    const allowed = await postWorkspace(origin, other, 'commit', {
+      operationId: randomUUID(), baseRevision: 0, changes,
+    })
+    assert.equal(allowed.response.ok, true, JSON.stringify(allowed.value))
+    assert.equal(allowed.value.revision, 1)
+  })
+
+  it('persists empty, binary, Unicode, renamed, removed, and chmod entries', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const binary = Buffer.from([0, 255, 128, 1])
+    const emptyBlob = await uploadWorkspaceBlob(origin, identity, Buffer.alloc(0))
+    const binaryBlob = await uploadWorkspaceBlob(origin, identity, binary)
+    const textBlob = await uploadWorkspaceBlob(origin, identity, Buffer.from('alpha\nbeta\n'))
+    const initial = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(), baseRevision: 0,
+      changes: [
+        { path: '目录', kind: 'directory', mode: 0o750 },
+        { path: '目录/空文件', kind: 'file', hash: emptyBlob.hash, bytes: 0, mode: 0o600 },
+        { path: 'binary.dat', kind: 'file', hash: binaryBlob.hash, bytes: binaryBlob.bytes, mode: 0o600 },
+        { path: 'old.txt', kind: 'file', hash: textBlob.hash, bytes: textBlob.bytes, mode: 0o644 },
+      ],
+    })
+    assert.equal(initial.response.ok, true, JSON.stringify(initial.value))
+    const changed = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(), baseRevision: 1,
+      changes: [
+        { path: 'old.txt', deleted: true },
+        { path: '目录/已重命名.txt', kind: 'file', hash: textBlob.hash, bytes: textBlob.bytes, mode: 0o600 },
+        { path: 'binary.dat', kind: 'file', hash: binaryBlob.hash, bytes: binaryBlob.bytes, mode: 0o640 },
+      ],
+    })
+    assert.equal(changed.response.ok, true, JSON.stringify(changed.value))
+    const manifestResponse = await fetch(`${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const manifest = await manifestResponse.json()
+    assert.equal(manifest.revision, 2)
+    assert.equal(manifest.entries.some(entry => entry.path === 'old.txt'), false)
+    assert.equal(manifest.entries.find(entry => entry.path === 'binary.dat').mode, 0o640)
+    assert.equal(manifest.entries.find(entry => entry.path === '目录/空文件').bytes, 0)
+    for (const [hash, expected] of [[binaryBlob.hash, binary], [emptyBlob.hash, Buffer.alloc(0)]]) {
+      const downloaded = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+        headers: { cookie: identity.cookie },
+      })
+      assert.equal(downloaded.ok, true)
+      assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), expected)
+    }
+    const removed = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(), baseRevision: 2, changes: [{ path: '目录', deleted: true }],
+    })
+    assert.equal(removed.response.ok, true, JSON.stringify(removed.value))
+    const durable = JSON.parse(await readFile(join(dataDir, 'workspace-v2', 'workspaces', `${identity.workspaceId}.json`), 'utf8'))
+    assert.equal(durable.revision, 3)
+    assert.deepEqual(durable.entries.map(entry => entry.path), ['binary.dat'])
+  })
+
+  it('rejects invalid workspace paths, unverified blobs, and mismatched idempotency replays', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const badUpload = await fetch(`${origin}/api/browser-native/workspace/blob/${'0'.repeat(64)}`, {
+      method: 'PUT',
+      headers: {
+        cookie: identity.cookie,
+        'content-type': 'application/octet-stream',
+        'x-browser-native-protocol': '1',
+        'x-request-id': 'bad-hash',
+        'x-workspace-id': identity.workspaceId,
+      },
+      body: Buffer.from('not the requested hash'),
+    })
+    assert.equal(badUpload.status, 400)
+    assert.equal((await badUpload.json()).error.code, 'BLOB_HASH_MISMATCH')
+
+    const invalidPath = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes: [{ path: '../outside', kind: 'file', hash: '0'.repeat(64), bytes: 1, mode: 0o600 }],
+    })
+    assert.equal(invalidPath.response.status, 400)
+    assert.equal(invalidPath.value.error.code, 'INVALID_PATH')
+
+    const bytes = Buffer.from('one')
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
+      method: 'PUT',
+      headers: {
+        cookie: identity.cookie,
+        'content-type': 'application/octet-stream',
+        'x-browser-native-protocol': '1',
+        'x-request-id': 'valid-hash',
+        'x-workspace-id': identity.workspaceId,
+      },
+      body: bytes,
+    })
+    const operationId = randomUUID()
+    const first = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      changes: [{ path: 'one.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }],
+    })
+    assert.equal(first.response.ok, true)
+    const replay = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      changes: [{ path: 'different.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }],
+    })
+    assert.equal(replay.response.status, 409)
+    assert.equal(replay.value.error.code, 'OPERATION_ID_REUSED')
   })
 
   it('fences write ownership and releases it on close', async () => {

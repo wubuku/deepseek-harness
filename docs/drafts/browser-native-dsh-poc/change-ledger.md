@@ -31,6 +31,23 @@ deleteCondition: PoC backend 不再由该模块管理 HTTP server，或 teardown
 status: implemented
 ```
 
+### BN-P2-005：为 Worker Host 提供可持久化 VFS 和启动前恢复 seam
+
+```text
+changeId: BN-P2-005
+upstreamBaseline: dsh-v0.2.0-rc.2 / packages/experimental/webworker-runtime/src/worker-host.ts
+file: packages/experimental/webworker-runtime/src/worker-host.ts; packages/experimental/webworker-runtime/src/index.ts; packages/experimental/webworker-runtime/README.md; packages/experimental/webworker-runtime/README.zh.md; packages/experimental/webworker-runtime/tests/*; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/*
+reason: Browser-Native Workspace 同步需要在同一个 Worker VFS 中装载只读 runtime image、恢复云端授权 Workspace，并观察后续 VFS 写入；现有 Worker Host 内部创建 VFS，调用方无法连接 mutation sink 或在 Cordis boot 前 hydrate。
+existingExtensionPointsChecked: `MemoryVfs` 已接受 `VfsMutationSink`；`loadVfsImage()` 和 `loadVfsOverlay()` 可向传入的 VFS 静默 seed。Worker Host 组合点是 image/overlay mount 与 `WorkerModuleLoader` 建立之间。
+whyDraftOnlyWasInsufficient: Workspace 持久化 adapter 位于 PoC 内，但 VFS 创建与启动时序由 runtime 包独占；在 PoC Worker 中旁路创建另一个 VFS 会使 Host 插件、Node fs proxy 和同步队列观察不同的文件系统。
+behaviorChange: 新增可选的调用方 VFS 注入和异步启动前准备回调；默认不传时保留现有 Worker Host 行为。回调在镜像、overlay 和空目录 seed 后、模块加载及 Cordis boot 前运行；失败中止 Host 启动。Browser-Native 页面通过本地化的状态提示显示 Workspace 加载、dirty、同步、错误、冲突和已确认 revision。
+consumersUpdated: Browser-Native Workspace PoC 注入带同步 sink 的 `MemoryVfs`，从 backend 恢复授权文件，再让同一 VFS 服务 Host 与插件；页面控制端接收并呈现同步状态。
+tests: `pnpm exec vitest run packages/experimental/webworker-runtime/tests/storage/tar.spec.ts packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts`; PoC workspace adapter specs; backend contract tests; runtime package typecheck/build; Chrome scripted/real Workspace E2E。
+syncReplaySteps: 上游更新后重新核对 WorkerHostOptions、VFS mount 顺序、MemoryVfs mutation 与 seed 语义；若 runtime 已提供等价 VFS factory/hydrate hook，改用上游 API 并删除重复 seam；否则重放最小可选扩展，运行 webworker-runtime storage/host 测试、typecheck/build 与 Browser-Native Chrome E2E。
+deleteCondition: Worker Host 已提供正式且等价的 VFS 注入和 boot 前 hydrate seam，且 PoC 与 package 测试不再依赖该改动。
+status: implemented
+```
+
 ### BN-V2-003：拒绝无内容的上游模型完成
 
 ```text

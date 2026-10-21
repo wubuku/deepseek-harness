@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest'
 import { packTar, parseTar } from '../../src/storage/tar.ts'
 import { loadVfsImage, loadVfsOverlay } from '../../src/storage/memory.ts'
+import { MemoryVfs } from '../../src/storage/memory.ts'
+import type { VfsMutation, VfsMutationSink } from '../../src/storage/types.ts'
 
 const encoder = new TextEncoder()
 
@@ -54,5 +56,28 @@ describe('tar codec', () => {
       'config/cordis.yml': encoder.encode('replaced'),
     }), '/dsh', vfs)).toThrow(/overlay entry must stay under home\/ or workspace/)
     expect(vfs.readFileSync('/dsh/config/cordis.yml', 'utf8')).toBe('- id: subject\n')
+  })
+
+  it('mounts and restores through an injected VFS without recording seed data', async () => {
+    const mutations: VfsMutation[] = []
+    let flushes = 0
+    const sink: VfsMutationSink = {
+      record: (mutation) => { mutations.push(mutation) },
+      flush: async () => { flushes += 1 },
+    }
+    const vfs = new MemoryVfs({ sink })
+    loadVfsImage(packTar({
+      'config/cordis.yml': encoder.encode('- id: subject\n'),
+    }), '/dsh', vfs)
+    loadVfsOverlay(packTar({
+      'workspace/base.txt': encoder.encode('image'),
+    }), '/dsh', vfs)
+    vfs.seed('/dsh/workspace/restored.txt', 'cloud')
+    expect(vfs.readFileSync('/dsh/workspace/restored.txt', 'utf8')).toBe('cloud')
+    expect(mutations).toEqual([])
+    vfs.writeFileSync('/dsh/workspace/live.txt', 'worker')
+    expect(mutations).toMatchObject([{ kind: 'write', path: '/dsh/workspace/live.txt' }])
+    await vfs.flush()
+    expect(flushes).toBe(1)
   })
 })

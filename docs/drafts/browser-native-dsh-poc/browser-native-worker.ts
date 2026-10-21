@@ -25,6 +25,7 @@ import { runShellProcess } from '../../../packages/experimental/webworker-runtim
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import { setBrowserNativeControlPort, setBrowserNativeResumeOwner } from './browser-native-control.ts'
+import { createBrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -64,6 +65,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
+    const workspace = createBrowserNativeWorkspaceRuntime()
     const created = createWorkerHost({
       staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules() },
       staticModulePrefixes: REPLACED_PREFIXES,
@@ -71,6 +73,8 @@ self.addEventListener('message', (event: MessageEvent) => {
       alsCausality,
       image: data.image,
       overlays: data.overlays as string[],
+      vfs: workspace.vfs,
+      prepareVfs: workspace.prepareVfs,
     })
     host = created
     for (const queued of pending) {

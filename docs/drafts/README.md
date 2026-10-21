@@ -69,6 +69,8 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 从[Cloud Agent 架构建议](dsh-cloud-agent-architecture-recommendation.md)开始，按需要进入[Cloud Agent OSS 全景](dsh-cloud-agent-oss-landscape-review.md)、[Cloud 项目本地代码阅读备忘](dsh-cloud-projects-local-code-reading-memo.md)、[部署与租户隔离](dsh-deployment-and-tenancy-deep-dive.md)和[Remote Durable Workspace](dsh-remote-durable-workspace-pgfs-research.md)。E2B/CubeSandbox 的对比文档用于具体基础设施选型，不是 Browser-Native Agentic UI 的前置阅读。
 
+Browser-Native DSH 的云端 Workspace 增量同步实验从 [PoC 规划](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md)进入；[实施进度](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md)只记录已执行验证，不替代规划中的验收标准。
+
 -----
 
 ## 研究总览
@@ -80,7 +82,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 | 研究轴 | 回答的问题 | 主要成果 |
 |---|---|---|
 | Interaction plane：Agentic UI | 用户在 Chat UI 中看到什么、操作什么，怎样复用已有 SaaS GUI，以及当前 Web UI 是否适合作为实现基础 | `dsh-agentic-ui-research.md`、`dsh-browser-native-agentic-ui-research.md`、`dsh-web-ui-quality-and-agentic-ui-framework-assessment.md` |
-| Execution plane：Browser-Native | Agent Loop 在哪里运行，怎样访问浏览器状态和前端 Tool | `dsh-browser-native-agent-loop-research.md`、`dsh-browser-native-runtime-research.md`、PoC v2 |
+| Execution plane：Browser-Native | Agent Loop 在哪里运行，怎样访问浏览器状态和前端 Tool | `dsh-browser-native-agent-loop-research.md`、`dsh-browser-native-runtime-research.md`、`dsh-browser-native-vfs-cloud-sync-research.md`、PoC v2 |
 | Durability plane：Cloud/Durable Agent | 页面退出、机器故障或长任务发生后，谁继续执行以及状态如何恢复 | Cloud Agent 系列、Remote Durable Workspace、实施方案中的 handoff 章节 |
 | Coordination plane：Agent 协作 | 多个 agent 如何互相通信、共享任务状态，跨进程与跨厂商时用什么协议 | `dsh-agent-collaboration-research.md` |
 
@@ -150,8 +152,9 @@ Agentic UI 事实核查
 1. [Browser-Native Agent Loop 研究](dsh-browser-native-agent-loop-research.md)
 2. [Browser-Native Runtime 研究](dsh-browser-native-runtime-research.md)
 3. [Browser-Native 实施方案](dsh-browser-native-agent-implementation-plan.md)
-4. [PoC v2 当前实现与限制](browser-native-dsh-poc/README.md#当前实现快照)
-5. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
+4. [Browser-Native VFS 与云端增量同步调研](dsh-browser-native-vfs-cloud-sync-research.md)：默认插件持久化分类、Session append-only 边界、Workspace manifest/blob/chunk、outbox、冲突与 Session/Workspace reconciliation。
+5. [PoC v2 当前实现与限制](browser-native-dsh-poc/README.md#当前实现快照)
+6. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 
 ### 路径 C：直接复现 PoC
 
@@ -260,7 +263,9 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [runtime-validation-report.md](browser-native-dsh-poc/runtime-validation-report.md) | Chrome 最新复测与历史 WebKit/Safari 部分证据；记录真实模型、VFS、Session、刷新和 Worker 生命周期的验证矩阵及限制。 |
 | [runtime-validation-manual.md](browser-native-dsh-poc/runtime-validation-manual.md) | 可复制的 scripted/real E2E、Chrome 长回复流式观测、浏览器存储探测、生命周期测试和人工验收步骤；后续浏览器复测仅用 Chrome。 |
 | [tests/browser-storage-boundary.e2e.mjs](browser-native-dsh-poc/tests/browser-storage-boundary.e2e.mjs) | 已有 Chrome/WebKit 的 Storage API 与 OPFS 能力探测结果，不替代 DSH Session durability；本轮不复跑 WebKit。 |
-| [next-validation-plan.md](browser-native-dsh-poc/next-validation-plan.md) / [进度](browser-native-dsh-poc/next-validation-progress.md) | Chrome 真实流式 UI、旧 owner close、跨设备恢复的计划与状态；Safari 测试按当前安排暂停。 |
+| [next-validation-plan.md](browser-native-dsh-poc/next-validation-plan.md) / [进度](browser-native-dsh-poc/next-validation-progress.md) | 已完成批次的 Chrome 运行时验证计划与进度；Safari 测试按当前安排暂停。 |
+| [cloud-backed-workspace-sync-plan.md](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md) | 云端 Workspace 同步 PoC 的目标、协议、验收标准和仍未完成的浏览器压力/生产化工作。 |
+| [cloud-backed-workspace-sync-progress.md](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md) | 已执行的 Workspace 同步证据：真实 Chrome/LLM 四轮闭环、文件变更矩阵、OS backend 重启、8 客户端协议并发、失败观察和限制。 |
 
 ### v2 实现和测试入口
 
