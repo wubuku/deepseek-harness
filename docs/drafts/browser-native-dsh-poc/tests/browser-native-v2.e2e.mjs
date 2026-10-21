@@ -86,15 +86,33 @@ async function readSession(origin, id) {
   return body
 }
 
-async function waitForSession(origin, id, predicate, timeoutMs) {
+function eventText(event) {
+  const content = event.data?.content ?? event.data?.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+}
+
+async function waitForTurn(origin, id, prompt, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   let latest
   while (Date.now() < deadline) {
     latest = await readSession(origin, id)
-    if (predicate(latest)) return latest
+    const userIndex = latest.events.findLastIndex(event => event.type === 'user/message'
+      && eventText(event).trim() === prompt.trim())
+    if (userIndex >= 0) {
+      const turnEnd = latest.events.slice(userIndex + 1).find(event => event.type === 'turn/end')
+      if (turnEnd !== undefined) return { session: latest, turnEnd }
+    }
     await new Promise(resolveDelay => setTimeout(resolveDelay, 250))
   }
-  throw new Error(`Session did not reach the expected state; event types: ${JSON.stringify(latest?.events?.map(event => event.type) ?? [])}`)
+  throw new Error(`Session did not reach a terminal turn; latest events: ${JSON.stringify(latest?.events?.slice(-12).map(event => ({
+    seq: event.seq,
+    type: event.type,
+    turn: event.data?.turn,
+    name: event.data?.name,
+    reason: event.data?.reason,
+  })) ?? [])}`)
 }
 
 async function readSecrets(file) {
@@ -114,6 +132,9 @@ const pageErrors = []
 const browserConsoleErrors = []
 const browserHttpErrors = []
 const llmStatuses = []
+let createRequest
+let sessionId
+let latestSession
 page.on('request', request => {
   if (request.url().includes('/api/browser-native/')) requests.push({ url: request.url(), method: request.method(), body: requestJson(request) })
 })
@@ -136,13 +157,13 @@ try {
   const input = page.locator('[data-composer-input][contenteditable="true"]').last()
   await input.waitFor({ timeout: 15_000 })
   const sendButton = page.getByRole('button', { name: /^(Send message|发送消息)$/ })
-  let createRequest
-  let sessionId
   for (let index = 0; index < prompts.length; index += 1) {
     const currentPrompt = prompts[index]
     const expectedReply = expectedReplies[index]
     assert.notEqual(currentPrompt, undefined)
     assert.notEqual(expectedReply, undefined)
+    const turnStartedAt = Date.now()
+    process.stdout.write(`${JSON.stringify({ phase: 'turn-start', turn: index + 1, mode, browser: browserName })}\n`)
     await input.fill(currentPrompt)
     assert.equal(await sendButton.isEnabled(), true, 'the Web UI must accept each non-empty message')
     await sendButton.click()
@@ -157,23 +178,24 @@ try {
       sessionId = createRequest.body.sessionId
     }
     assert.notEqual(sessionId, undefined)
-    const session = await waitForSession(origin, sessionId, value => {
-      const userMessages = value.events.filter(event => event.type === 'user/message')
-      const completedTurns = value.events.filter(event => event.type === 'turn/end')
-      const assistantText = value.events
-        .filter(event => event.type === 'assistant/message')
-        .flatMap(event => event.data.message.content ?? [])
-        .filter(block => block.type === 'text')
-        .map(block => block.text)
-        .join('\n')
-      return userMessages.length >= index + 1
-        && completedTurns.length >= index + 1
-        && assistantText.includes(expectedReply)
-    }, mode === 'real' ? 240_000 : 30_000)
+    const { session, turnEnd } = await waitForTurn(origin, sessionId, currentPrompt,
+      Number(process.env.DSH_POC_TURN_TIMEOUT_MS ?? (mode === 'real' ? 300_000 : 30_000)))
+    latestSession = session
+    const reason = turnEnd.data.reason
+    assert.equal(reason.kind, 'completed',
+      `Turn ${turnEnd.data.turn} ended as ${JSON.stringify(reason)} after prompt ${JSON.stringify(currentPrompt)}`)
+    const assistantText = session.events
+      .filter(event => event.type === 'assistant/message' && event.data.turn === turnEnd.data.turn)
+      .map(eventText)
+      .join('\n')
+    assert.equal(assistantText.includes(expectedReply), true,
+      `Turn ${turnEnd.data.turn} completed without expected marker ${expectedReply}; assistant text: ${JSON.stringify(assistantText.slice(-800))}`)
     assert.equal(session.events.filter(event => event.type === 'user/message').length >= index + 1, true)
     await page.getByText(expectedReply, { exact: false }).last().waitFor({ timeout: 30_000 })
+    process.stdout.write(`${JSON.stringify({ phase: 'turn-complete', turn: index + 1, reason: reason.kind, elapsedMs: Date.now() - turnStartedAt, eventCount: session.events.length })}\n`)
   }
   const session = await readSession(origin, sessionId)
+  latestSession = session
   const eventTypes = session.events.map(event => event.type)
   assert.equal(eventTypes.includes('user/message') || eventTypes.includes('agent/inbox/spliced'), true, JSON.stringify(eventTypes))
   assert.equal(eventTypes.includes('assistant/message'), true, JSON.stringify(eventTypes))
@@ -235,8 +257,36 @@ try {
       streamSpanMs: event.data.stream.filter(record => record.type === 'text-chunks')
         .reduce((sum, record) => sum + record.dt.reduce((total, gap) => total + gap, 0), 0),
     })),
+    llmRequestSummaries: requests.filter(request => request.url.endsWith('/llm')).map(request => ({
+      messageCount: Array.isArray(request.body?.messages) ? request.body.messages.length : null,
+      toolNames: Array.isArray(request.body?.tools)
+        ? request.body.tools.map(tool => tool.function?.name ?? tool.name ?? null).filter(name => name !== null)
+        : [],
+    })),
     browserApiRoutes: [...new Set(requests.map(request => new URL(request.url).pathname))],
   })}\n`)
+} catch (error) {
+  const events = latestSession?.events ?? []
+  process.stderr.write(`${JSON.stringify({
+    failure: error instanceof Error ? error.message : String(error),
+    sessionId,
+    dataDir,
+    llmStatuses,
+    browserHttpErrors,
+    pageErrors,
+    browserConsoleErrors,
+    recentEvents: events.slice(-20).map(event => ({
+      seq: event.seq,
+      type: event.type,
+      turn: event.data?.turn,
+      step: event.data?.step,
+      name: event.data?.name,
+      callId: event.data?.callId,
+      reason: event.data?.reason,
+      text: event.type === 'assistant/message' ? eventText(event).slice(0, 240) : undefined,
+    })),
+  })}\n`)
+  throw error
 } finally {
   await page.close()
   await browser.close()

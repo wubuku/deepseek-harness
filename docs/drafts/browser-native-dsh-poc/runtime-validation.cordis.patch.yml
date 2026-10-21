@@ -1,0 +1,44 @@
+- id: session-persistence-jsonl
+  disabled: true
+
+- id: agent-default-model
+  config:
+    provider: browser-native
+    model: browser-native
+
+- id: preset-standard
+  config:
+    id: standard
+    name: Browser runtime validation
+    order: 1
+    plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: >-
+            You are running in a browser Dedicated Worker, not a host operating
+            system. Only the listed tools are available. Files belong to the
+            Worker virtual filesystem, not the user's computer. Workspace files
+            are not guaranteed to survive a page reload. Session history is
+            stored separately by the same-origin backend. There is no host bash,
+            web search, or web fetch tool in this profile. Never claim to have
+            fetched live information without a tool result. Report tool errors
+            honestly; do not invent missing capabilities or loop on alternatives.
+          suffix: Your working directory is {{cwd}}. Reply in the user's language.
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+      - id: tool-fs-search
+        name: '@deepseek-ai/dsh-tool-fs-search'
+        config:
+          sampleOverCapGlobResults: false
+      - id: tool-todo
+        name: '@deepseek-ai/dsh-tool-todo'
+        config:
+          allowParallelInProgress: true
+
+- insert:
+    - id: session-persistence-browser-native
+      name: './browser-native-session-persistence.js'
+    - id: llm-browser-native
+      name: './browser-native-llm.js'
+      inject: [llm]

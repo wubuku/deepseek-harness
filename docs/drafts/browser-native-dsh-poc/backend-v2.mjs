@@ -396,7 +396,7 @@ async function scriptedLlm(response, messages) {
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
   for (const part of text.match(/.{1,32}/g) ?? []) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: part } })
-    await new Promise(resolveDelay => setTimeout(resolveDelay, 40))
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 120))
   }
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
   writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
@@ -493,8 +493,9 @@ async function realLlm(response, request, config, body) {
       const finish = item.choices?.[0]?.finish_reason
       if (finish !== undefined && finish !== null) {
         if (toolCalls.size === 0 && textIndex === undefined) {
-          textIndex = nextIndex++
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: textIndex, blockType: 'text' } })
+          writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
+          finished = true
+          return true
         }
         if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
         for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
@@ -627,11 +628,15 @@ export async function createBrowserNativeV2Server(options) {
       server.once('error', reject)
       server.listen(port, host, () => {
         server.off('error', reject)
-        resolveListen(`http://${host}:${port}`)
+        const address = server.address()
+        resolveListen(`http://${host}:${address.port}`)
       })
     }),
     close: async () => {
-      await new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()))
+      await new Promise((resolveClose, reject) => {
+        server.closeAllConnections()
+        server.close(error => error ? reject(error) : resolveClose())
+      })
     },
   }
 }

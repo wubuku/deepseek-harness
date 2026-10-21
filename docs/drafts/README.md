@@ -164,6 +164,7 @@ Agentic UI 事实核查
 6. [手动验收说明](browser-native-dsh-poc/manual-acceptance.md)：真实浏览器、工具调用、多轮记忆、流式输出、刷新续接和故障排查。
 7. [工具连续尝试事实核查](browser-native-dsh-poc/agent-loop-tool-attempt-analysis.md)：用真实 Session 解释工具可见性、模型决策、默认 Agent Loop 和 Browser-Native 能力缺口之间的关系。
 8. [工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)：核查 profile、agent preset、`tool-web` 开关和 Browser-specific capability 的设计边界。
+9. [运行时验证报告](browser-native-dsh-poc/runtime-validation-report.md)与[下一轮验证进度](browser-native-dsh-poc/next-validation-progress.md)：区分 Chrome 最新复测、历史 WebKit/Safari 结果和未验证的生产边界。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -248,6 +249,10 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [browser-native-dsh-progress-v2.md](browser-native-dsh-poc/browser-native-dsh-progress-v2.md) | 当前人工验收、测试结果、已修复缺口和未完成范围。 |
 | [manual-acceptance.md](browser-native-dsh-poc/manual-acceptance.md) | 两个 PoC 共用的启动命令、手动验收脚本、Session 证据和故障排查。 |
 | [change-ledger.md](browser-native-dsh-poc/change-ledger.md) | PoC 目录外接线、upstream 重放和删除条件。 |
+| [runtime-validation-report.md](browser-native-dsh-poc/runtime-validation-report.md) | Chrome 最新复测与历史 WebKit/Safari 部分证据；记录真实模型、VFS、Session、刷新和 Worker 生命周期的验证矩阵及限制。 |
+| [runtime-validation-manual.md](browser-native-dsh-poc/runtime-validation-manual.md) | 可复制的 scripted/real E2E、Chrome 长回复流式观测、浏览器存储探测、生命周期测试和人工验收步骤；后续浏览器复测仅用 Chrome。 |
+| [tests/browser-storage-boundary.e2e.mjs](browser-native-dsh-poc/tests/browser-storage-boundary.e2e.mjs) | 已有 Chrome/WebKit 的 Storage API 与 OPFS 能力探测结果，不替代 DSH Session durability；本轮不复跑 WebKit。 |
+| [next-validation-plan.md](browser-native-dsh-poc/next-validation-plan.md) / [进度](browser-native-dsh-poc/next-validation-progress.md) | Chrome 真实流式 UI、旧 owner close、跨设备恢复的计划与状态；Safari 测试按当前安排暂停。 |
 
 ### v2 实现和测试入口
 
@@ -259,6 +264,10 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [run-v2.mjs](browser-native-dsh-poc/run-v2.mjs) | 构建产物上的 v2 launcher。 |
 | [tests/backend-v2.test.mjs](browser-native-dsh-poc/tests/backend-v2.test.mjs) | backend contract tests。 |
 | [tests/browser-native-v2.e2e.mjs](browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs) | 真实 DSH Web UI + Chromium + backend 的组合 E2E。 |
+| [tests/runtime-validation.e2e.mjs](browser-native-dsh-poc/tests/runtime-validation.e2e.mjs) | Browser-specific roster、真实 LLM VFS 闭环、Session 记忆、刷新易失性、流式 DOM 与凭据流向检查。 |
+| [tests/runtime-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-lifecycle.e2e.mjs) | scripted Chrome 生命周期复测；历史 WebKit 结果仅作对照，覆盖刷新、Stop、失败恢复、backend 重启、lease 冲突和 Worker terminate。 |
+| [tests/runtime-real-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs) | 真实模型 Chrome Stop、`aborted → completed` 恢复、durable Session 和密钥流向检查；历史 WebKit 结果不在本轮复测。 |
+| [tests/runtime-streaming.e2e.mjs](browser-native-dsh-poc/tests/runtime-streaming.e2e.mjs) | 真实 Chrome 长回复的逐步 DOM、输入草稿、Stop、滚动和主线程 long-task 观测。 |
 
 ### assistant-ui 增量 PoC 入口
 

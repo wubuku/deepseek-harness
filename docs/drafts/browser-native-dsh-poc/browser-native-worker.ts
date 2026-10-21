@@ -1,11 +1,10 @@
+import './symbol-dispose'
+
 /**
  * Browser-native PoC Worker entry.
  *
- * This entry intentionally mirrors the upstream WebWorker bootstrap while
- * keeping the experimental injection point in this draft directory. Phase 1
- * only proves that the existing Host and tunnel can boot from this entry;
- * provider factories are added through the same `staticModules` table in the
- * next phase.
+ * This entry mirrors the upstream WebWorker bootstrap while keeping the
+ * Browser-Native provider injection and owner-control channel in this draft.
  */
 import { createWorkerHost } from '../../../packages/experimental/webworker-runtime/src/worker-host.ts'
 import '../../../packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/buffer.ts'
@@ -78,8 +77,8 @@ self.addEventListener('message', (event: MessageEvent) => {
       runAtAsyncContextRoot(() => { created.handleMessage(queued) })
     }
     pending.length = 0
-    created.start().catch(() => {
-      // start() reports the boot failure through the tunnel.
+    created.start().catch(error => {
+      console.error('browser-native dsh: Worker Host startup failed', error)
     })
     return
   }

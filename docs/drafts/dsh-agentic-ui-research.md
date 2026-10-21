@@ -40,7 +40,9 @@ description: "对共享 ChatGPT 对话中的 Agentic UI 方案逐项做事实核
 
 直接使用 `curl` 读取共享页面时连接被远端重置；随后使用真实无头浏览器加载页面，页面返回 HTTP 200，并从浏览器渲染结果提取正文。抓取过程的临时证据保存在 `/tmp/chatgpt-share.body.txt`、`/tmp/chatgpt-share.html`、`/tmp/chatgpt-share.responses.json` 和 `/tmp/chatgpt-share.png`，这些文件不是本报告的持久证据源。
 
-本报告的外部事实以 2026 年 10 月 11 日可访问的官方页面、规范或项目源码为准；外部项目的版本和页面状态可能继续变化，链接只表示本次核查入口。
+本报告最初以 2026 年 10 月 11 日可访问的官方页面、规范或项目源码为外部事实基线；2026 年 10 月 20 日复核了 OpenAI 对 Intelligent UI、GPT-6 和 Apps SDK widget state 的官方说明。外部项目的版本和页面状态可能继续变化，链接只表示核查入口。
+
+2026 年 10 月 20 日的官方复核确认：OpenAI 于 2026 年 10 月 7 日发布 GPT-6 Intelligent UI，说明其可组合文本、视觉和交互元素，并可在使用工具时开始逐步回答；这说明对话内交互 UI 的产品形态已成为主流产品能力，但不能据此推断 OpenAI 提供可直接嵌入任意 SaaS 的 Agentic UI runtime。Apps SDK 文档将 `window.openai.widgetState` 定义为 widget render 间的状态快照，同时明确该状态不跨 chat thread 保留；`ui/update-model-context` 更新模型可见上下文，而跨 thread 的业务数据仍应由应用后端持久化。参见 [OpenAI GPT-6 与 Intelligent UI 发布说明](https://help.openai.com/en/articles/6825453-chatgpt-release-notes)、[Intelligent UI 帮助页](https://help.openai.com/en/articles/20001598-intelligent-ui-in-chatgpt)、[Apps SDK UI 指南](https://developers.openai.com/plugins/build/chatgpt-ui)。
 
 本报告的 DSH 事实针对当前本地 `research` checkout，其代码基线日期为 2026 年 10 月 6 日；本地 `upstream/master` 已包含更晚提交，因此本文不把 upstream 的后续变化隐含为当前 checkout 的能力。
 
@@ -79,7 +81,7 @@ description: "对共享 ChatGPT 对话中的 Agentic UI 方案逐项做事实核
 | 共享对话断言 | 结论 | 核验与修正 | 对 DSH 方案的影响 |
 |---|---|---|---|
 | Intelligent UI 可以创建可交互小工具，但不是自动创建完整 CRM 后端的平台 | 基本正确 | 这是合理的产品边界判断，但 `Intelligent UI` 不是一个足以定义实现边界的稳定协议名；完整 CRM 仍需要开发者拥有的业务服务、鉴权、数据模型、事务和审计。 | DSH 方案必须把 SaaS 后端视为权威业务系统，不把 Chat UI 当数据库。 |
-| 交互状态刷新后可能保留，但不会跨聊天保留 | 过于绝对 | 当前 OpenAI Apps/Plugins 文档已提供 widget-scoped persistence、`ui/update-model-context` 和服务端保存状态的机制；这些能力不等于自动跨租户保存 CRM 数据，但足以否定“一律不能跨聊天”的表述。 | 报告应区分 widget 草稿、Session 事实和 CRM 业务数据三种状态。 |
+| 交互状态刷新后可能保留，但不会跨聊天保留 | 对 widget state 正确，对业务状态不完整 | 官方说明 widget state 可跨同一 chat thread 的渲染/刷新保留，但不跨 thread；`ui/update-model-context` 更新模型上下文，应用后端仍可持久化 CRM 权威业务状态。不能把 widget state 持久化扩大成自动跨聊天能力，也不能据此说业务数据不可跨对话恢复。 | 分开设计 widget 草稿、模型可见 Session 事实和 SaaS 后端业务状态。 |
 | Apps SDK + MCP + 自己的后端可以做长期使用的 CRM | 正确 | Apps SDK/MCP 负责 Host 与 Tool/widget 的连接，开发者仍要实现应用逻辑、后端授权和持久化。 | 该模式与“既有 SaaS API 继续负责业务”一致。 |
 | CopilotKit Components as Tools 可把既有 React 组件带入聊天 | 正确但不完整 | 官方 `useComponent` 文档支持注册 React 组件和 props；基础组件呈现本身不自动完成提交处理、业务授权、事务或服务端写入。`useFrontendTool` 解决的是前端工具和状态协作，不替代后端权限。 | React SaaS 可把它作为参考；DSH 仍需自己实现 Client slot 和业务 action seam。 |
 | 旧页面可用 iframe、Web Component 或微前端嵌入 | 作为集成策略成立 | 它解决的是交付和隔离，不会自动解决 Cookie、跨域、尺寸、路由、全局 Context、弹窗、下载和回调通信。MCP Apps 的 sandbox iframe 也是受控 widget，不是任意页面无改动嵌入的保证。 | 复杂旧模块可先嵌入，但应把嵌入层当过渡或受信 widget，而非第一阶段所有 UI 的默认形态。 |

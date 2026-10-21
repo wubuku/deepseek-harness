@@ -10,7 +10,7 @@ description: "评估 DSH 浏览器原生运行时、云端工作区与可选本�
 
 仓库中的实验性 WebWorker runtime 已具备在 Dedicated Web Worker 内装载 Cordis Host 插件树的实现，preview 验收代码覆盖启动、Remote 调用、预置 Session 展示及部分状态修改。SSH provider 家族则提供了通过现有 `ctx.fs`、`ctx.subprocess`、`ctx.sandbox` 接口承载远程能力的先例。这两项基础使浏览器原生运行时不必从零建设，也不必另建一套 Agent framework。
 
-主要缺口集中在真实 Agent 执行闭环、浏览器持久化、云端 Session 与 Workspace 服务、多执行者写权、Native Bridge 授权和页面退出后的任务连续性。现有 preview 测试中的工具与子代理历史来自 fixture，不能作为浏览器已经完成 live prompt → model → tool → model 回路的证据。
+Browser-Native PoC 现已在真实 Chrome 与 Playwright WebKit 中证明选定的 DSH Host composition、Agent Loop、浏览器 VFS 工具、同源真实模型代理和 Session persistence 可形成 live prompt → model → tool → model 回路。剩余缺口集中在生产级浏览器持久化、云端 Session/Workspace、多执行者 ownership、Native Bridge 授权、性能和页面退出后的任务连续性；普通 preview boot fixture 仍不能单独作为 live-loop 证据。
 
 建议采用 **Browser-first，而非强制 Browser-only** 的产品路线：浏览器承担交互式 Agent 计算，云端保存已提交事实并提供可选的持续执行能力，本机桥接只提供明确授权的操作系统能力。WASM 是补充工具能力的一种手段，不是迁移整个 DSH runtime 的前提。
 
@@ -19,8 +19,8 @@ description: "评估 DSH 浏览器原生运行时、云端工作区与可选本�
 | 运行目标 | 判定 | 说明 |
 |---|---|---|
 | 在 Dedicated Worker 中运行选定 DSH Host composition | 已有实现基础 | 现有 runtime 已能装载 Host tree 并连接页面 Client |
-| 不依赖配套本地 Node Host 运行 Agent Loop | 架构上可行，尚未完成 live-loop 验收 | 需要确定性模型与工具闭环验证 |
-| 在真实浏览器中接入真实模型 | 路径可行，尚未端到端验证 | 需要目标 Worker runtime、模型代理、流式与取消测试 |
+| 不依赖配套本地 Node Host 运行选定 Agent Loop | PoC 已在 Chrome 与 Playwright WebKit 验证 | 真实 DSH Host、`ctx.agentLoop`、VFS tool 和同源模型代理闭环；不代表完整 Node DSH |
+| 在真实浏览器中接入真实模型 | PoC 已端到端验证 | backend 独占凭据；真实 VFS 工具、Chrome 长回复逐步 DOM 呈现、Session 记忆和刷新恢复已验证，WebKit/Safari 长回复、性能分布及生产安全未验证 |
 | 原封不动运行完整 Node 版 DSH | 不可作为目标 | Node native module、系统进程和任意二进制需要替代 provider |
 | 仅依赖浏览器实现页面关闭后的持续执行 | 不可行 | 需要具有独立生命周期的云端 worker |
 | 在 Main Thread 中运行 Host 与 Agent Loop | 不属于建议架构 | Main Thread 继续承载 Client Cordis、Client model 与 UI |
@@ -60,7 +60,7 @@ description: "评估 DSH 浏览器原生运行时、云端工作区与可选本�
 | 验证边界 | 现有测试实际覆盖的行为，以及尚未获得运行证据的行为 |
 | 建议设计 | 面向目标产品的方案，不代表已经实现或已经确定的技术选型 |
 
-本文依据源码与已有测试内容评估实现基础，未重新执行浏览器 preview、真实模型调用、OPFS 恢复或多标签页并发实验。因此，“存在实现与验收代码”不等于“本次调研已实测通过”，更不等于“已满足生产环境要求”。
+本文的源码考古结合 2026 年 10 月 21 日对 Browser-Native PoC 的真实 Chrome、Playwright WebKit、Safari.app 和 scripted lifecycle 复测；细节与失败边界见 [runtime-validation-report.md](browser-native-dsh-poc/runtime-validation-report.md)。OPFS 已完成能力探测，Safari.app 已完成聊天和刷新恢复的部分验收，但 Safari 工具输入、生产多租户和跨进程 HA 仍未验证；“PoC 已实测通过”不等于“已经满足生产环境要求”。
 
 Browser-native 描述 Agent 计算的部署位置，不描述模型、Workspace、身份认证和持久化服务的位置。浏览器中的 Agent Loop 仍然调用云端模型代理、Cloud Workspace 与 Cloud Session；“无配套 Node Host”只排除为浏览器会话运行本地或云端 Node 进程作为 Agent 执行者，不等于离线运行或无后端产品。
 
@@ -228,6 +228,8 @@ Host Worker 与 command Worker 的文件语义也不同：Host 内的 `node:fs` 
 - 部分 Remote 写入路径已有浏览器验收代码。
 
 它不能证明真实 prompt → model → tool → model 回路、并发子代理执行、模型取消或崩溃后的持续执行已经完成；Profile 编辑和配置文件查看也仍然只覆盖当前 Worker 生命周期，不构成跨重启持久化或浏览器内的完整包管理能力。
+
+这与本目录的 Browser-Native v2 runtime validation 是两组不同证据：v2 E2E 会在浏览器中实时提交 prompt，由真实 `ctx.agentLoop` 请求同源 LLM backend，执行 DSH VFS 工具并检查 Session `tool/call`、`tool/result`、`turn/end` 和 durable JSON。此前真实 Chrome 与 Playwright WebKit 都记录了该闭环；按当前安排，最新复测只在 Chrome 运行。该证据证明的是选定 Browser-specific profile 与 PoC backend 的能力，不是全部 Web profile、全部 DSH 工具、OPFS 或生产级恢复。VFS 写入文件刷新后消失，但已 flush 的 Session 仍保留随机 token，明确显示 Session 记忆与工作区持久化必须分开设计。
 
 preview 中的 `credentials/set/describe/unset` 也只验证 Remote 调用与 VFS-backed provider 的写入读取路径。文件型 credentials provider 不隔离同一执行用户下的秘密，它不是平台托管 key 的 browser-native 方案；平台密钥应留在服务端，浏览器只接收引用、configured 状态和必要的短期授权。
 
@@ -471,9 +473,9 @@ Native Bridge 不是浏览器原生 runtime 的前置条件。首个可用版本
 
 该架构值得继续推进，理由不是“浏览器已经足够强大”，而是 DSH 已经具备两项直接相关的代码基础：**Worker 内的 Host 装载实现，以及通过现有服务接口提供远程能力的 provider 模式。**是否继续投入，建议由三项递进的验收条件决定：
 
-1. **浏览器 live Agent loop 验收。** Worker 中完成 prompt → scripted model 流式 → tool call → tool result → 第二次模型请求 → final response，覆盖取消、`turn`/`step` 边界事件与并发发起者归属，并在同一 Worker 生命周期内可从 Session event 重建模型可见内容。该验收未通过前，不以 Cloud Session、Cloud Workspace 或 UI 建设替代执行闭环验证；Cloud 服务的接口、身份和授权设计可以并行。
-2. **持久化与失败状态验收。** 内存成功、本地持久化、云端提交三种状态可区分；checkpoint 失败 fail closed；OPFS 与云端失败在 UI 与恢复流程中可见；副作用结果未知时不自动重试。
-3. **云端授权与执行所有权验收。** principal 到 Session/Workspace/Blob/租约的重新授权、旧 owner fencing、双写者拒绝、Browser/Cloud 安全点 handoff 与跨租户拒绝都有验收；不互信执行具备进程级以上隔离。
+1. **浏览器 live Agent loop 验收。** 既有真实 Chrome 与 Playwright WebKit 记录包含 prompt → real model stream → tool call → tool result → follow-up model response；最新一批按当前安排只在 Chrome 复测，并验证多轮 Session 记忆、刷新恢复、VFS 易失性、停止和失败后继续。真实 Chrome 长回复观察到 84 次递增 DOM 样本。该结果不覆盖所有 Profile/plugin 组合，不证明稳定帧率，也不证明 Safari.app 工具路径支持。
+2. **持久化与失败状态验收。** 当前 PoC 区分 Session append 与 flush，并确认 Worker VFS 写入不能跨刷新恢复；生产方案仍需区分本地 durability、云端提交和结果不明状态，定义 checkpoint 失败、OPFS/云端失败与副作用未知时的恢复语义。
+3. **云端授权与执行所有权验收。** PoC scripted 测试验证双标签写权冲突、backend 重启后的 durable Session 恢复、Worker lease 到期和重新 claim；生产仍需 principal 到 Session/Workspace/Blob/租约的重新授权、跨进程 fencing、Browser/Cloud 安全点 handoff、跨租户拒绝和进程级以上隔离。
 
 最终目标不是把 Node 应用的所有能力复制到浏览器，而是让同一套 Agent 与工具服务接口在不同执行位置获得明确、可验证的能力，并使状态提交、权限和故障恢复具有一致语义。
 

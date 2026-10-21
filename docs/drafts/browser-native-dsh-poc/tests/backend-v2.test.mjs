@@ -93,6 +93,15 @@ afterEach(async () => {
 })
 
 describe('browser-native DSH v2 backend', () => {
+  it('returns the allocated port when listening on port zero', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin, app } = await start({ dataDir, port: 0, llmMode: 'scripted' })
+    assert.equal(Number(new URL(origin).port), app.server.address().port)
+    assert.notEqual(new URL(origin).port, '0')
+    const response = await fetch(`${origin}/api/browser-native/health`)
+    assert.equal(response.ok, true)
+  })
+
   it('creates, lists, reads, appends, and rejects a stale sequence', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })
@@ -227,6 +236,25 @@ describe('browser-native DSH v2 backend', () => {
       events: [],
     }))
     assert.equal(staleAppend.code, 'SESSION_OWNERSHIP_LOST')
+    const staleClose = await failure(origin, '/api/browser-native/session/close', envelope('expired-stale-close', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+    }))
+    assert.equal(staleClose.status, 409)
+    assert.equal(staleClose.code, 'SESSION_OWNERSHIP_LOST')
+    await post(origin, '/api/browser-native/session/append', envelope('reclaimed-append-after-stale-close', {
+      sessionId: id,
+      ownerToken: reclaimed.owner.ownerToken,
+      expectedNextSeq: 0,
+      events: [{ seq: 0, type: 'user/message', payload: { content: 'new owner remains writable' } }],
+    }))
+    await post(origin, '/api/browser-native/session/flush', envelope('reclaimed-flush-after-stale-close', {
+      sessionId: id,
+      ownerToken: reclaimed.owner.ownerToken,
+    }))
+    const durable = JSON.parse(await readFile(join(dataDir, 'sessions', `${id}.json`), 'utf8'))
+    assert.equal(durable.events[0].payload.content, 'new owner remains writable')
+    assert.equal(durable.durableThroughSeq, 0)
     const renewed = await post(origin, '/api/browser-native/session/renew', envelope('expired-renew', {
       sessionId: id,
       ownerToken: reclaimed.owner.ownerToken,
@@ -331,8 +359,19 @@ describe('browser-native DSH v2 backend', () => {
   it('proxies an OpenAI-compatible stream without exposing the backend secret', async () => {
     const upstream = createServer(async (request, response) => {
       assert.equal(request.headers.authorization, 'Bearer contract-secret')
-      for await (const _chunk of request) {}
+      const requestChunks = []
+      for await (const chunk of request) requestChunks.push(chunk)
+      const requestBody = JSON.parse(Buffer.concat(requestChunks).toString('utf8'))
       response.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (JSON.stringify(requestBody.messages).includes('EMPTY_CONTRACT_PROMPT')) {
+        response.end([
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\n'))
+        return
+      }
       response.end([
         'data: {"choices":[{"delta":{"content":"REAL_CONTRACT_OK"}}]}',
         '',
@@ -369,6 +408,18 @@ describe('browser-native DSH v2 backend', () => {
       assert.equal(response.ok, true, body)
       assert.match(body, /REAL_CONTRACT_OK/)
       assert.equal(body.includes('contract-secret'), false)
+
+      const emptyResponse = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-empty', {
+          messages: [{ role: 'user', content: 'EMPTY_CONTRACT_PROMPT' }],
+        })),
+      })
+      const emptyItems = await readNdjson(emptyResponse)
+      assert.equal(emptyResponse.ok, true)
+      assert.equal(emptyItems.at(-1).kind, 'error')
+      assert.equal(emptyItems.at(-1).error.code, 'UPSTREAM_LLM_EMPTY')
     } finally {
       await close(upstream)
     }

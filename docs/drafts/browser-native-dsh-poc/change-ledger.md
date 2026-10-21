@@ -10,9 +10,60 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 任何修改 `docs/drafts` 之外文件的实施者，都必须在提交该修改前增加一条记录，写明当前 DSH 版本、文件、必要性、被检查过的扩展点、测试、上游同步步骤和删除条件。没有登记的目录外修改视为 PoC 未完成，而不是“实现细节”。
 
-当前实现遵守这一原则：backend、Worker、profile overlay、launcher 和 browser-native tests 全部位于本目录；目录外只保留已登记的 `apps/web/src/preview.ts` Worker 接线、opt-in overlay、`packages/core/tools` 的跨浏览器 schema 兼容修复和 `scripts/translation-pairing.manifest.json` scratch 文档登记。当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
+当前 PoC 的 backend、Worker、profile overlay、page-control bridge、launcher 和测试均位于本目录；目录外的 preview Worker 接线、卸载生命周期处理、`packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记均有记录。当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
 ## PoC 内部兼容性变更
+
+### BN-V2-002：backend close 释放 keep-alive 连接
+
+```text
+changeId: BN-V2-002
+upstreamBaseline: docs-owned v2 backend on 2026-10-20 / backend-v2.mjs
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs
+reason: Playwright/Node fetch 在真实模型回合结束后会留下 HTTP keep-alive sockets；server.close() 等待这些 idle connections，使 E2E 已打印完整成功证据后仍不退出。
+existingExtensionPointsChecked: backend 是本 PoC 独立 Node server，现有 close() 是唯一 teardown 入口；没有共享 DSH Host 或公开 package API 的生命周期要求。
+whyDraftOnlyWasInsufficient: 退出等待发生在 docs-owned backend 的 server handle，不是浏览器 Worker teardown；测试 runner 无法从外部安全关闭其私有 sockets。
+behaviorChange: close() 先调用 Node HTTP server.closeAllConnections()，再等待 server.close() 完成；仅影响显式关闭此 PoC backend 的时刻。
+consumersUpdated: runtime-validation.e2e.mjs、runtime-lifecycle.e2e.mjs 和人工停止 backend 继续通过同一 close() 入口释放连接。
+tests: 2026-10-21 backend/Symbol tests 9 passed；scripted Chrome/WebKit runtime 和 lifecycle E2E 通过；真实 Chrome/WebKit runtime E2E 均以退出码 0 输出完整 Session 与安全摘要。
+syncReplaySteps: 从上游同步 backend 或 Node 运行时基线后，确认 closeAllConnections() 可用且 close() 不需保留响应连接；运行 backend-v2.test.mjs、runtime-validation.e2e.mjs 和 runtime-lifecycle.e2e.mjs。
+deleteCondition: PoC backend 不再由该模块管理 HTTP server，或 teardown 改用具备等价 idle/active connection disposal 语义的生命周期 API。
+status: implemented
+```
+
+### BN-V2-003：拒绝无内容的上游模型完成
+
+```text
+changeId: BN-V2-003
+upstreamBaseline: docs-owned v2 backend before 2026-10-21 / backend-v2.mjs
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs
+reason: OpenAI-compatible provider 可以在没有文本和工具调用的情况下返回 `finish_reason=stop`；旧 proxy 将其包装成空文本块，Session 因而记录成功完成，但用户没有收到回复。
+existingExtensionPointsChecked: 行为位于 docs-owned LLM proxy 的上游 SSE 转换；DSH LLM adapter 会消费 proxy 的终止流事件，不需要改 Agent Loop 或 Session event 类型。
+whyDraftOnlyWasInsufficient: 错误发生在真实 provider 响应转换处，UI 无法可靠区分有效空答复与 provider 空完成。
+behaviorChange: 收到无文本、无工具调用的上游完成信号时，proxy 发出 `UPSTREAM_LLM_EMPTY` 错误，不再生成空 assistant completion。
+consumersUpdated: backend contract test 覆盖该响应映射；真实 Chrome Stop/恢复脚本在该错误出现时只允许一次显式用户重试。真实 provider 后续复测没有再次自然触发此分支。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs`; `node --test docs/drafts/browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs` with real Chrome and the configured model backend.
+syncReplaySteps: 更新 backend 后保留无 delta 但含 finish 的 SSE fixture，运行 backend contract tests；在真实 Chrome 运行 Stop/恢复 E2E，确认空 completion 以错误结束且用户重试能创建新的 DSH turn。
+deleteCondition: 上游 provider adapter 或正式 LLM proxy 明确拒绝无内容的成功完成，并有同等 contract test 覆盖。
+status: implemented
+```
+
+### BN-V2-004：返回系统分配的动态监听端口
+
+```text
+changeId: BN-V2-004
+upstreamBaseline: docs-owned v2 backend before 2026-10-21 / backend-v2.mjs
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+reason: E2E 为隔离并行运行使用 `port: 0`；原 server 返回字面端口 `0`，而不是操作系统实际绑定的 loopback 端口，导致测试无法向 backend 发请求。
+existingExtensionPointsChecked: 该值只由 PoC backend 的 `listen()` 向启动器返回；Node HTTP server 的 `address()` 是实际监听地址的来源。
+whyDraftOnlyWasInsufficient: 端口分配发生在 backend 持有的 server socket 上，调用方无法从其外部获知实际分配端口。
+behaviorChange: `listen()` 在 server 启动后从 `server.address().port` 返回实际端口；显式指定非零端口时仍返回实际监听 origin。
+consumersUpdated: backend runtime E2E 和验证启动器可使用动态端口，不共享固定端口。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs`，其中新增 `port: 0` 启动、返回端口和健康路由请求断言。
+syncReplaySteps: 同步 backend 时检查监听回调是否返回真实绑定地址；运行 backend contract tests 中的动态端口用例及 runtime validation E2E。
+deleteCondition: PoC backend 不再支持动态端口测试，或新的 server adapter 返回并验证等价的实际监听 origin。
+status: implemented
+```
 
 ### BN-V2-001：Session list 同时提供 Persistence snapshot 与 Controller items
 
@@ -50,9 +101,26 @@ deleteCondition: v2 PoC 移除或上游 preview 提供等价的 Worker injection
 status: implemented
 ```
 
+### BN-P1-002：Browser-Native preview 卸载时终止所属 Worker
+
+```text
+changeId: BN-P1-002
+upstreamBaseline: dsh-v0.2.0-rc.2 / apps/web/src/preview.ts; packages/experimental/webworker-runtime/src/client/index.ts
+file: apps/web/src/preview.ts
+reason: Browser-Native preview 需要明确终止由页面拥有的 Worker，并将 teardown 期间特定的 boot-payload failure 与活动页面启动失败区分；此前报告的刷新 503 最终定位为 E2E 每轮执行两次导航造成，修复测试后连续刷新未复现。
+existingExtensionPointsChecked: 已核对 `connectWorkerHost()` 的 boot payload handshake、`AppWebEntry.run()` 对 `__DSH_BOOT_READY__` 的等待、WorkerTunnel 和 Browser-Native `pagehide` owner close beacon；处理仅绑定 `?browser-native=1`，未改通用 Worker transport 或普通 Web/desktop 启动。
+whyDraftOnlyWasInsufficient: `apps/web/src/preview.ts` 是 Vite preview 的 Worker 创建入口；只在 docs-owned page helper 中添加 listener 无法在 Worker 创建前捕获顶层 bootstrap rejection，也无法终止由 preview 页面创建的 Worker。
+behaviorChange: Browser-Native preview 在非 BFCache 的 `pagehide` 时标记页面卸载并 terminate 页面拥有的 Worker；若该页面等待 boot payload 时因 teardown 收到匹配的 boot failure，则只结束正在卸载的 bootstrap。其他错误和活动页面中的相同错误仍会抛出。默认 preview 与 `browser-native=0` 路径保持原启动失败行为。
+consumersUpdated: docs-owned Worker page-control beacon 仍在正常 unload 时请求 Session close/flush；runtime-validation helper 在 `page.reload()` 后只等待已加载页面，不再再次 `page.goto()`；lifecycle E2E 复用同一等待逻辑。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`; backend/Symbol tests 9 passed; scripted Chrome/WebKit runtime/lifecycle E2E; WebKit scripted five-refresh run; real Chrome/WebKit runtime E2E with two refreshes each; `git diff --check`。
+syncReplaySteps: upstream 更新后重查 preview bootstrap、boot readiness rejection 和 Worker ownership；若上游提供页面销毁钩子，则迁移 terminate 行为到该钩子；保留仅 opt-in 的卸载处理，并运行默认 preview boot acceptance、Browser-Native scripted lifecycle 和真实 Chrome/WebKit refresh E2E。
+deleteCondition: Worker connector 自行提供等价的 page teardown cancellation/cleanup，且移除此 opt-in 行为后 Chrome、WebKit 和目标 Safari.app 刷新没有未处理 boot error，也不遗留旧 Worker 请求。
+status: implemented
+```
+
 ### 目录外改动审计结论
 
-当前 PoC 唯一的运行时目录外接线文件是 `apps/web/src/preview.ts`；它静态导入并始终实例化 docs-owned Worker，只在 `?browser-native=1` 时追加 profile overlay。`packages/` 没有 browser-native 专用分支。未来从 upstream tag 或 main 重放时，先重放本文件已登记的最小 preview patch，再运行默认 preview acceptance 和 browser-native v2 E2E；如果上游提供等价 Worker/profile injection hook，则删除该 patch，并验证普通 preview 与 opt-in preview 都通过。
+当前 Browser-Native PoC 的运行时代码目录外接线位于 `apps/web/src/preview.ts`；它静态导入 docs-owned Worker，opt-in 页面装载 Browser-Native overlay、连接 owner control channel，并在正常 pagehide 时结束页面拥有的 Worker。其他已登记的目录外改动分别位于 core tool schema converter 和翻译 manifest。未来从 upstream tag 或 main 重放时，按各 changeId 检查上游是否已有等价 Worker、schema 或文档登记扩展点；移除可替代 patch 后运行默认 preview acceptance、package tests 和 Browser-Native Chrome/WebKit E2E。
 
 ### BN-P2-001：browser-native preview profile 与远程 provider
 
