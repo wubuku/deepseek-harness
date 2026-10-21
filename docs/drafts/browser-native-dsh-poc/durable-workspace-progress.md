@@ -8,7 +8,7 @@ description: "记录 Browser-Native DSH durable Workspace PoC 的实施进度、
 
 - **分支**：`research`
 - **目标**：在不破坏既有文件级 Workspace PoC 的前提下，验证 OPFS/IndexedDB 本地 durable outbox 与真实 Browser-Native DSH 文件工具的兼容性。
-- **当前阶段**：M0–M3 已完成首轮验证，M4 的 503 commit 恢复子项已通过；上传失败、超时、存储损坏和 eviction 等故障矩阵仍未完成。
+- **当前阶段**：M0–M3 已完成首轮验证，M4 已补充上传失败和 commit unknown 的首轮 Chrome 验证；超时、存储损坏和 eviction 等故障仍未完成。
 - **最后更新**：2026-10-21
 
 ## 里程碑
@@ -19,7 +19,7 @@ description: "记录 Browser-Native DSH durable Workspace PoC 的实施进度、
 | M1 本地 durable store | 已完成首轮 | `durable-workspace.spec.ts`、Chrome OPFS/IndexedDB round-trip | OPFS bytes + IndexedDB metadata，孤儿 blob GC 尚未实现 |
 | M2 pending 恢复与幂等 | 已完成首轮 | 15 项 Workspace 单测；真实 Chrome 503 故障恢复 E2E | 失败后的 operationId 保留由单测和真实刷新重试共同证明 |
 | M3 真实 DSH 文件工具 | 已完成首轮 | 真实 Chrome + 真实 LLM：`read → write → read`、刷新后 `read`、Workspace commit | 验收使用 `/dsh/home/workspace`，证明了 Worker/DSH/VFS/mirror 链路 |
-| M4 故障注入与证据 | 部分完成 | `durable-workspace-recovery.e2e.mjs`：真实 Chrome Worker、OPFS、IndexedDB、503、刷新、同一 operationId 重试 | 仅证明一次性 commit 503 的刷新恢复；上传失败、commit 超时、缺 blob、损坏 snapshot、eviction 和 Safari/WebKit 仍未验证 |
+| M4 故障注入与证据 | 部分完成 | `durable-workspace-recovery.e2e.mjs` 和 `durable-workspace-failure-matrix.e2e.mjs`：真实 Chrome Worker、OPFS、IndexedDB、503、上传失败、commit 响应丢失、operation 查询和幂等恢复 | 上传失败与 commit unknown 已有首轮证据；commit 超时、缺 blob、损坏 snapshot、eviction 和 Safari/WebKit 仍未验证 |
 
 ## 实施记录
 
@@ -46,6 +46,13 @@ description: "记录 Browser-Native DSH durable Workspace PoC 的实施进度、
 - 测试第一次 `/api/browser-native/workspace/commit` 强制返回 503；确认 IndexedDB snapshot 仍含 `retryBatch.operationId` 和 `recovery.txt`，OPFS 中仍有对应 content-addressed blob；随后刷新页面，新的 Worker 先 hydrate 远端 manifest，再恢复本地 retry，并以相同 `operationId` 成功提交。
 - 真实 Chrome 结果通过：`commitAttempts=2`、`revisions=[0,1]`、无 page error、无跨 origin 请求；刷新后 IndexedDB 的 `pending=[]` 且没有 `retryBatch`，远端 manifest 和 blob 内容与本地写入一致。
 - 该测试接缝只用于 PoC 自动化验收，不是产品 API；它证明的是 Worker/OPFS/IndexedDB/Workspace commit 的恢复链路，不替代真实 LLM `tool-fs` 闭环。
+
+### 2026-10-22：高价值故障与并发验证
+
+- `durable-workspace-failure-matrix.e2e.mjs` 在真实 Chrome Worker 中注入一次 blob upload 503，并在第二个文件的 commit 响应被连接重置后查询 operation receipt；最终 `uploadAttempts=3`、`commitAttempts=2`、`operationLookups=2`、revision `0 → 2`，无 page error 和跨 origin 请求。
+- `workspace-v2.mjs` 增加显式 Workspace writer lease、fencing token 和 operation receipt query；它们只在 `browser-native-workspace-lease=1` 下由 Worker 使用，默认 Browser-Native 和内存 Workspace 行为不变。
+- `workspace-writer-lease.e2e.mjs` 使用同一 Chrome context 的两个页面验证 claim 冲突、release/reclaim 和旧 token renew 被拒。该测试先续租，避免 preview 启动超过 30 秒时把自然过期误判为并发冲突。
+- `browser-native-file-matrix.e2e.mjs` 验证 Worker VFS 的 mkdir、write、append、stat、list、chmod、rename、remove、Unicode、二进制和 atomic-write staging 过滤；`session-workspace-reconciliation.test.mjs` 只验证 receipt 协议和失败分类，尚未接入 DSH Agent Loop 的自动 receipt 写入。
 
 ## 实施经验
 

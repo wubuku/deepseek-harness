@@ -17,7 +17,7 @@ async function temporaryDirectory(prefix = 'browser-native-v2-test-') {
 }
 
 async function start(options) {
-  const app = await createBrowserNativeV2Server(options)
+  const app = await createBrowserNativeV2Server({ port: 0, ...options })
   const origin = await app.listen()
   liveApps.add(app)
   return { app, origin }
@@ -795,5 +795,59 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(response.ok, true)
     assert.equal(body.includes('apiKey'), false)
     assert.equal(body.includes('secret'), false)
+  })
+
+  it('fences Workspace writers and exposes an idempotent operation receipt query', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const firstLease = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(firstLease.response.ok, true, JSON.stringify(firstLease.value))
+    assert.equal(typeof firstLease.value.writerToken, 'string')
+    assert.equal(firstLease.value.fencingToken, 1)
+
+    const secondClaim = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(secondClaim.response.status, 409)
+    assert.equal(secondClaim.value.error.code, 'WORKSPACE_ALREADY_OWNED')
+
+    const released = await postWorkspace(origin, identity, 'lease', {
+      operation: 'release',
+      writerToken: firstLease.value.writerToken,
+      fencingToken: firstLease.value.fencingToken,
+    })
+    assert.equal(released.response.ok, true, JSON.stringify(released.value))
+    const secondLease = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(secondLease.response.ok, true, JSON.stringify(secondLease.value))
+    assert.equal(secondLease.value.fencingToken, 2)
+
+    const bytes = Buffer.from('writer fenced')
+    const uploaded = await uploadWorkspaceBlob(origin, identity, bytes)
+    const operationId = randomUUID()
+    const staleCommit = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      writerToken: firstLease.value.writerToken,
+      fencingToken: firstLease.value.fencingToken,
+      changes: [{ path: 'fenced.txt', kind: 'file', hash: uploaded.hash, bytes: uploaded.bytes, mode: 0o600 }],
+    })
+    assert.equal(staleCommit.response.status, 409)
+    assert.equal(staleCommit.value.error.code, 'WORKSPACE_OWNERSHIP_LOST')
+
+    const committed = await postWorkspace(origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      writerToken: secondLease.value.writerToken,
+      fencingToken: secondLease.value.fencingToken,
+      changes: [{ path: 'fenced.txt', kind: 'file', hash: uploaded.hash, bytes: uploaded.bytes, mode: 0o600 }],
+    })
+    assert.equal(committed.response.ok, true, JSON.stringify(committed.value))
+    const queried = await fetch(`${origin}/api/browser-native/workspace/operation/${operationId}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const queryBody = await queried.json()
+    assert.equal(queried.ok, true, JSON.stringify(queryBody))
+    assert.equal(queryBody.found, true)
+    assert.equal(queryBody.receipt.operationId, operationId)
+    assert.equal(queryBody.receipt.revision, 1)
   })
 })

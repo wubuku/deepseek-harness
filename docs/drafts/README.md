@@ -61,6 +61,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 6. [Browser-Native PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和[进度记录](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)：区分设计提案与实际验证。
 7. [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)：验证第三方聊天层不另建 Agent Loop，如何通过 DSH Session Controller 接入真实 Worker Host。
 8. [Browser-Native Durable Workspace 规划与进度](browser-native-dsh-poc/durable-workspace-plan.md)及[实施记录](browser-native-dsh-poc/durable-workspace-progress.md)：验证 OPFS/IndexedDB 本地 bytes、pending/retry 恢复和真实 DSH 文件工具在 Worker 重建后的行为；其中模型无关的 503 刷新恢复入口是 [durable-workspace-recovery.e2e.mjs](browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs)。
+9. [Browser-Native 高价值验证计划](browser-native-dsh-poc/high-value-validation-plan.md)及[进度](browser-native-dsh-poc/high-value-validation-progress.md)：验证上传失败、commit unknown、Workspace writer lease/fencing、文件操作矩阵和 Session/Workspace receipt 协调；明确哪些仍未接入 Agent Loop。
 
 ### 需要实现或审查代码时
 

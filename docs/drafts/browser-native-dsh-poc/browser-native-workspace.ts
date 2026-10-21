@@ -50,6 +50,11 @@ export interface PendingBatch {
   readonly changes: readonly WorkspaceChange[]
 }
 
+export interface BrowserNativeWorkspaceWriterLease {
+  readonly writerToken: string
+  readonly fencingToken: number
+}
+
 type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,10 +148,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private scheduleTimer: ReturnType<typeof setTimeout> | undefined
   private localPersistChain: Promise<void> = Promise.resolve()
   private localPersistFailure: Error | undefined
+  private writerToken: string | undefined
+  private fencingToken: number | undefined
 
   constructor(
     private readonly onStatus = statusMessage,
     private readonly store: DurableWorkspaceStore | undefined,
+    private readonly useWriterLease = false,
   ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
@@ -159,6 +167,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         throw new Error('browser-native workspace: identity response omitted a workspace id')
       }
       this.workspaceId = identity.workspaceId
+      if (this.useWriterLease) await this.claimWriter()
       const manifestResponse = await fetch(
         `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
         { credentials: 'same-origin' },
@@ -279,6 +288,31 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   async flushLocalWorkspace(): Promise<void> {
     await this.awaitLocalPersist()
+  }
+
+  getWriterLease(): BrowserNativeWorkspaceWriterLease | undefined {
+    if (this.writerToken === undefined || this.fencingToken === undefined) return undefined
+    return { writerToken: this.writerToken, fencingToken: this.fencingToken }
+  }
+
+  async releaseWriter(): Promise<void> {
+    if (!this.useWriterLease || this.workspaceId === undefined || this.writerToken === undefined || this.fencingToken === undefined) return
+    const response = await fetch(`${WORKSPACE_API}/lease`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId: this.workspaceId,
+        operation: 'release',
+        writerToken: this.writerToken,
+        fencingToken: this.fencingToken,
+      }),
+    })
+    await readJson(response)
+    this.writerToken = undefined
+    this.fencingToken = undefined
   }
 
   private snapshot(): DurableWorkspaceSnapshot | undefined {
@@ -426,6 +460,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       this.onStatus('syncing', this.workspaceId, this.revision, this.pending.size + batch.changes.length)
       try {
         const changes = await this.uploadChanges(batch.changes)
+        if (this.useWriterLease) await this.renewWriter()
         const response = await fetch(`${WORKSPACE_API}/commit`, {
           method: 'POST',
           credentials: 'same-origin',
@@ -437,27 +472,19 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
             baseRevision: batch.baseRevision,
             operationId: batch.operationId,
             changes,
+            ...(this.writerToken === undefined ? {} : { writerToken: this.writerToken }),
+            ...(this.fencingToken === undefined ? {} : { fencingToken: this.fencingToken }),
           }),
         })
         const receipt = await readJson(response)
-        if (!Number.isSafeInteger(receipt.revision) || receipt.revision !== batch.baseRevision + 1) {
-          throw new Error('browser-native workspace: commit response has an invalid revision')
-        }
-        this.revision = receipt.revision
-        for (const change of batch.changes) {
-          if (change.deleted === true) {
-            for (const path of this.knownPaths) {
-              if (path === change.path || path.startsWith(`${change.path}/`)) this.knownPaths.delete(path)
-            }
-          } else {
-            this.knownPaths.add(change.path)
-          }
-        }
-        this.retryBatch = undefined
-        this.failure = undefined
-        this.queueLocalPersist()
+        this.applyReceipt(batch, receipt)
       } catch (error) {
         const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
+        const receipt = await this.lookupOperation(batch)
+        if (receipt !== undefined) {
+          this.applyReceipt(batch, receipt)
+          continue
+        }
         const message = error instanceof Error ? error.message : String(error)
         this.retryBatch = batch
         this.failure = { state: code === 'WORKSPACE_CONFLICT' ? 'conflict' : 'error', message }
@@ -473,6 +500,86 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       return
     }
     this.onStatus('synced', this.workspaceId, this.revision, 0)
+  }
+
+  private async claimWriter(): Promise<void> {
+    if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot claim writer before identity')
+    const response = await fetch(`${WORKSPACE_API}/lease`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId: this.workspaceId,
+        operation: 'claim',
+      }),
+    })
+    const lease = await readJson(response)
+    this.setWriterLease(lease)
+  }
+
+  private async renewWriter(): Promise<void> {
+    if (!this.useWriterLease || this.workspaceId === undefined) return
+    if (this.writerToken === undefined || this.fencingToken === undefined) return await this.claimWriter()
+    const response = await fetch(`${WORKSPACE_API}/lease`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId: this.workspaceId,
+        operation: 'renew',
+        writerToken: this.writerToken,
+        fencingToken: this.fencingToken,
+      }),
+    })
+    this.setWriterLease(await readJson(response))
+  }
+
+  private setWriterLease(value: Record<string, unknown>): void {
+    if (typeof value.writerToken !== 'string' || !Number.isSafeInteger(value.fencingToken)) {
+      throw new Error('browser-native workspace: backend returned an invalid writer lease')
+    }
+    this.writerToken = value.writerToken
+    this.fencingToken = value.fencingToken
+  }
+
+  private async lookupOperation(batch: PendingBatch): Promise<Record<string, unknown> | undefined> {
+    if (this.workspaceId === undefined) return undefined
+    try {
+      const response = await fetch(
+        `${WORKSPACE_API}/operation/${batch.operationId}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
+        { credentials: 'same-origin' },
+      )
+      const value = await readJson(response)
+      if (value.found !== true || !isRecord(value.receipt)) return undefined
+      return value.receipt
+    } catch {
+      return undefined
+    }
+  }
+
+  private applyReceipt(batch: PendingBatch, receipt: Record<string, unknown>): void {
+    if ((receipt.operationId !== undefined && receipt.operationId !== batch.operationId) || typeof receipt.revision !== 'number'
+      || !Number.isSafeInteger(receipt.revision) || receipt.revision !== batch.baseRevision + 1) {
+      throw new Error('browser-native workspace: commit receipt does not match the pending operation')
+    }
+    const revision = receipt.revision
+    this.revision = revision
+    for (const change of batch.changes) {
+      if (change.deleted === true) {
+        for (const path of this.knownPaths) {
+          if (path === change.path || path.startsWith(`${change.path}/`)) this.knownPaths.delete(path)
+        }
+      } else {
+        this.knownPaths.add(change.path)
+      }
+    }
+    this.retryBatch = undefined
+    this.failure = undefined
+    this.queueLocalPersist()
   }
 
   private takeBatch(): PendingBatch {
@@ -533,6 +640,10 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly flushWorkspace: () => Promise<void>
   /** Wait until the local durable snapshot has been written. */
   readonly flushLocalWorkspace: () => Promise<void>
+  /** Return the PoC writer lease for model-independent browser tests. */
+  readonly getWriterLease: () => BrowserNativeWorkspaceWriterLease | undefined
+  /** Release the PoC writer lease for model-independent browser tests. */
+  readonly releaseWriter: () => Promise<void>
 }
 
 /** Optional local persistence for the Browser-Native Workspace PoC. */
@@ -543,6 +654,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly store?: DurableWorkspaceStore
   /** Publish status updates to a test observer instead of the page control channel. */
   readonly onStatus?: typeof statusMessage
+  /** Claim a backend writer lease before mirroring Workspace mutations. */
+  readonly writerLease?: boolean
 }
 
 /**
@@ -554,7 +667,7 @@ export function createBrowserNativeWorkspaceRuntime(
 ): BrowserNativeWorkspaceRuntime {
   let vfs: MemoryVfs
   const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore() : undefined)
-  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store)
+  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store, options.writerLease === true)
   vfs = new MemoryVfs({ sink: mirror })
   return {
     vfs,
@@ -564,5 +677,7 @@ export function createBrowserNativeWorkspaceRuntime(
     },
     flushWorkspace: async () => await mirror.flushAndRequireDurable(),
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
+    getWriterLease: () => mirror.getWriterLease(),
+    releaseWriter: async () => await mirror.releaseWriter(),
   }
 }

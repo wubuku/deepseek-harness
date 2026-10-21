@@ -644,6 +644,20 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, await workspaces.putBlob(request, workspaceId, hash, bytes))
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/lease') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.lease(request, body))
+        return
+      }
+      if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/operation\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const operationId = url.pathname.split('/').at(-1)
+        sendJson(response, 200, workspaces.operation(request, url.searchParams.get('workspaceId'), operationId))
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/commit') {
         const body = await readBody(request)
         assertProtocol(body)

@@ -338,3 +338,20 @@ status: proposed
 - **原因**：在实现 OPFS/IndexedDB 本地 durable outbox 前固定目标、故障窗口、验收条件和不应被误读的限制；不修改既有 Workspace 同步协议。
 - **验证**：规划阶段尚未运行新增代码测试；实现命令和结果写入 `durable-workspace-progress.md`。
 - **回放方式**：后续如需拆分或同步到 upstream，只需保留本 PoC 目录新增文件及 README 的两条局部索引，不要求修改正式 packages。
+
+### BN-P2-008：Workspace 故障矩阵、writer lease 与文件能力验证
+
+```text
+changeId: BN-P2-008
+upstreamBaseline: committed Browser-Native DSH PoC baseline on 2026-10-21
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/*; docs/drafts/browser-native-dsh-poc/workspace-session-reconciliation.mjs
+reason: 下一批高价值验证需要在真实 Chrome Worker 中证明上传失败、commit unknown、Workspace 多 writer 和文件操作矩阵；现有 durable PoC 没有 writer lease 或 operation receipt 查询，也没有可驱动 rename/append/stat/atomic staging 的 Worker 测试接缝。
+existingExtensionPointsChecked: Worker Host 的 prepareVfs、MemoryVfs 的 VfsMutationSink、Workspace manifest/blob/commit CAS、已有 Session owner lease 和 preview 的 URL-gated test MessagePort；未修改 Agent Loop、Session format 或正式 Workspace package。
+whyDraftOnlyWasInsufficient: Node contract test 不能证明 OPFS/IndexedDB、Dedicated Worker、同源 cookie 和两个浏览器页面共同工作；仅用真实 LLM 会把存储故障与 provider 延迟混在一起。
+behaviorChange: 显式 URL 参数 browser-native-workspace-lease=1 让 Worker 在 Host boot 前 claim Workspace writer lease；commit 可携带 writerToken/fencingToken；backend 提供 lease claim/renew/release 和 operation receipt query。browser-native-test=workspace-recovery 下新增模型无关的 lease-info/release-lease、append/mkdir/rename/remove/stat/list/chmod/write-binary 接缝；默认 browser-native 和默认 durable 入口不启用 Workspace lease。backend contract 测试默认使用随机端口，以允许独立测试进程并发运行。
+consumersUpdated: README.md、high-value-validation-plan.md、high-value-validation-progress.md、docs/drafts/README.md 和本记录。
+tests: backend-v2.test.mjs 15 passed，两个独立进程并发运行仍各为 15 passed；browser-native-workspace.spec.ts 与 durable-workspace.spec.ts 15 passed；session-workspace-reconciliation.test.mjs 3 passed；真实 Chrome durable-workspace-failure-matrix.e2e.mjs 通过 upload 503、commit response abort、operation query、无 page error/跨源请求；workspace-writer-lease.e2e.mjs 通过双页面 claim 冲突、release/reclaim 和 stale renew fencing；browser-native-file-matrix.e2e.mjs 通过 VFS 文件操作和 staging 过滤。
+syncReplaySteps: 若 Workspace lease 进入正式运行时，把 URL-gated 参数迁移到正式浏览器 Workspace 配置，把 lease/fencing/operation 查询纳入正式授权和存储服务；把 Worker test MessagePort 替换为受控测试 API，并让正式 Workspace receipt 通过 DSH 扩展点进入 Session event。若 PoC 废弃，删除上述 backend/Worker/preview 接线和新增测试，不影响默认 Browser-Native 启动。
+deleteCondition: 正式 Browser Workspace service 提供跨进程 fencing、operation 查询和可验证 receipt，且 Agent Loop 已有明确的 Workspace/Session reconciliation seam；或本批次 PoC 被删除。
+status: implemented
+```

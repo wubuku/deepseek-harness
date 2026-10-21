@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 const COOKIE_NAME = 'dsh-browser-native-principal'
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
+const WRITER_LEASE_MS = 30_000
 
 export class WorkspaceError extends Error {
   constructor(code, message, status = 400, details) {
@@ -139,7 +140,17 @@ export class WorkspaceStore {
       const entries = new Map(raw.entries.map(item => [item.path, item]))
       const operations = new Map(Object.entries(raw.operations ?? {}))
       const uploadedHashes = new Set(raw.uploadedHashes ?? [])
-      this.workspaces.set(workspaceId, { id: workspaceId, owner: raw.owner, revision: raw.revision, entries, operations, uploadedHashes })
+      this.workspaces.set(workspaceId, {
+        id: workspaceId,
+        owner: raw.owner,
+        revision: raw.revision,
+        entries,
+        operations,
+        uploadedHashes,
+        writerEpoch: Number.isSafeInteger(raw.writerEpoch) && raw.writerEpoch >= 0 ? raw.writerEpoch : 0,
+        writerToken: undefined,
+        writerExpiresAt: 0,
+      })
     }
   }
 
@@ -175,6 +186,7 @@ export class WorkspaceStore {
       entries: stableManifest(workspace.entries),
       operations: Object.fromEntries(workspace.operations),
       uploadedHashes: [...workspace.uploadedHashes].sort(),
+      writerEpoch: workspace.writerEpoch,
     }
     await atomicWrite(this.workspacePath(workspace.id), JSON.stringify(value))
   }
@@ -198,6 +210,7 @@ export class WorkspaceStore {
         const workspace = {
           id: workspaceId, owner: newPrincipalId, revision: 0,
           entries: new Map(), operations: new Map(), uploadedHashes: new Set(),
+          writerEpoch: 0, writerToken: undefined, writerExpiresAt: 0,
         }
         await this.persistWorkspace(workspace)
         await this.writeIdentities(identities)
@@ -267,6 +280,74 @@ export class WorkspaceStore {
     })
   }
 
+  async lease(request, body) {
+    const principalId = this.principalFromRequest(request)
+    const workspaceId = assertId(body.workspaceId, 'workspaceId')
+    const operation = body.operation
+    if (!['claim', 'renew', 'release'].includes(operation)) {
+      throw new WorkspaceError('INVALID_REQUEST', 'workspace lease operation is invalid')
+    }
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const now = Date.now()
+      if (operation === 'release') {
+        this.assertWriter(workspace, body.writerToken, body.fencingToken)
+        workspace.writerToken = undefined
+        workspace.writerExpiresAt = 0
+        return { workspaceId, released: true, fencingToken: workspace.writerEpoch }
+      }
+      if (operation === 'renew') {
+        this.assertWriter(workspace, body.writerToken, body.fencingToken)
+        workspace.writerExpiresAt = now + WRITER_LEASE_MS
+        return this.writerLease(workspace)
+      }
+      if (workspace.writerToken !== undefined && workspace.writerExpiresAt > now) {
+        throw new WorkspaceError(
+          'WORKSPACE_ALREADY_OWNED',
+          'Workspace is already owned by another browser writer',
+          409,
+          { retryAfterMs: workspace.writerExpiresAt - now },
+        )
+      }
+      const next = {
+        ...workspace,
+        writerEpoch: workspace.writerEpoch + 1,
+        writerToken: randomUUID(),
+        writerExpiresAt: now + WRITER_LEASE_MS,
+      }
+      await this.persistWorkspace(next)
+      this.workspaces.set(workspaceId, next)
+      return this.writerLease(next)
+    })
+  }
+
+  writerLease(workspace) {
+    return {
+      workspaceId: workspace.id,
+      writerToken: workspace.writerToken,
+      fencingToken: workspace.writerEpoch,
+      leaseDurationMs: WRITER_LEASE_MS,
+      renewAfterMs: Math.floor(WRITER_LEASE_MS / 3),
+    }
+  }
+
+  assertWriter(workspace, writerToken, fencingToken) {
+    if (typeof writerToken !== 'string' || writerToken !== workspace.writerToken
+      || fencingToken !== workspace.writerEpoch || workspace.writerExpiresAt <= Date.now()) {
+      throw new WorkspaceError('WORKSPACE_OWNERSHIP_LOST', 'Workspace writer lease is no longer valid', 409)
+    }
+  }
+
+  operation(request, workspaceId, operationId) {
+    const principalId = this.principalFromRequest(request)
+    const workspace = this.requireWorkspace(principalId, workspaceId)
+    assertId(operationId, 'operationId')
+    const operation = workspace.operations.get(operationId)
+    return operation === undefined
+      ? { workspaceId, operationId, found: false }
+      : { workspaceId, operationId, found: true, receipt: structuredClone(operation.receipt) }
+  }
+
   async getBlob(request, workspaceId, hash) {
     const principalId = this.principalFromRequest(request)
     const workspace = this.requireWorkspace(principalId, workspaceId)
@@ -311,6 +392,9 @@ export class WorkspaceStore {
     const operationDigest = hashBytes(Buffer.from(JSON.stringify({ baseRevision: body.baseRevision, changes })))
     return await this.exclusive(workspaceId, async () => {
       const workspace = this.requireWorkspace(principalId, workspaceId)
+      if (body.writerToken !== undefined || body.fencingToken !== undefined) {
+        this.assertWriter(workspace, body.writerToken, body.fencingToken)
+      }
       const prior = workspace.operations.get(operationId)
       if (prior !== undefined) {
         if (prior.digest !== operationDigest) throw new WorkspaceError('OPERATION_ID_REUSED', 'operationId was reused with different changes', 409)

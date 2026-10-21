@@ -48,6 +48,27 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。
 
+## 高价值验证批次
+
+本批次围绕 Browser-Native DSH 的运行时正确性，不扩展 SaaS 或聊天 UI。计划和退出条件见[验证计划](high-value-validation-plan.md)，实际证据和限制见[验证进度](high-value-validation-progress.md)。
+
+显式启用 Workspace writer lease 的浏览器入口需要增加 `browser-native-workspace-lease=1`：
+
+```text
+http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&preview-fixture=none
+```
+
+本批次新增的模型无关验收覆盖上传失败、commit 响应丢失后的 operation 查询、真实 Chrome Worker/OPFS/IndexedDB、多页面 writer lease/fencing、Workspace 文件操作矩阵，以及 Session receipt 与 Workspace receipt 的协议级关联。`workspace-session-reconciliation.mjs` 只定义和测试 receipt 状态，不表示它已经自动接入 DSH Agent Loop；当前 Agent 工具写入与 Session event 之间仍需要正式的扩展点。
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-failure-matrix.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-lease.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-matrix.e2e.mjs
+```
+
+以上浏览器命令需要先运行 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，并设置 `DSH_POC_PLAYWRIGHT_MODULE`。故障矩阵和文件矩阵使用 scripted backend；它们证明浏览器存储和协议语义，不替代真实 LLM Agent Loop 验收。
+
 聚焦单测和真实 Chrome storage 探针：
 
 ```sh
@@ -85,6 +106,8 @@ node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 
 v2 当前不是独立的 HTML demo。浏览器加载现有 `preview.html`，页面仍由 `AppWebEntry` 和 DSH Web UI 渲染。`apps/web/src/preview.ts` 静态导入并始终实例化本目录的 [`browser-native-worker.ts`](browser-native-worker.ts)；`browser-native=1` 只控制是否追加本目录的 profile overlay，不控制 Worker entry 的选择。Worker 使用现有 `appBoot.boot()`、Cordis composition、Session Controller 和 `ctx.agentLoop`；[`browser-native-providers.ts`](browser-native-providers.ts) 只提供正式 `SessionPersistence` 和 `LlmAdapter` 的远程实现。
 
+Workspace mirror 仍默认使用内存模式；`browser-native-durable=1` 才启用 OPFS/IndexedDB 本地 snapshot 和 retry。`browser-native-workspace-lease=1` 额外启用 Workspace writer lease、fencing token 和 commit operation 查询；lease 是 PoC backend 的单进程协议，不是生产级跨进程锁。
+
 若需要验证第三方聊天层，可以阅读同级的[assistant-ui + Browser-Native DSH 增量 PoC](../assistant-ui-browser-native-dsh-poc/README.md)。该 PoC 复用本目录的 Worker、profile overlay、backend 和 Session protocol，但自行启动 DSH Client 并只挂载 assistant-ui 聊天层；它不改变本目录的现有页面或实现文件。
 
 同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
@@ -102,6 +125,8 @@ v2 要求非空 `requestId`，但没有基于它的请求去重或结果重放�
 ```sh
 node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 ```
+
+`backend-v2.test.mjs` 还覆盖 Workspace writer lease、迟到 writer fencing 和 operation receipt 查询；`session-workspace-reconciliation.test.mjs` 覆盖 Workspace 已提交但 Session receipt append 被写权阻塞时的可观测状态。两者都是协议证据，不等同于生产云存储或跨服务事务。
 
 基础 Browser-Native E2E `tests/browser-native-v2.e2e.mjs` 覆盖三轮真实模型对话、todo 工具和窗口记忆。新增 runtime 验证 `tests/runtime-validation.e2e.mjs` 使用 docs-local 临时 profile overlay，对真实模型请求中的 tool roster、VFS `read`/`write`/`read` 参数与结果、durable Session、刷新后记忆恢复和 VFS 文件易失性作断言；scripted 模式还用动画帧采样检查 assistant DOM 增长。生命周期测试 `tests/runtime-lifecycle.e2e.mjs` 覆盖刷新续聊、真实 UI Stop、失败后继续、第二个 owner 请求被拒、backend 重启读回 durable Session，以及强制 terminate Worker 后 lease 回收和续聊；`tests/runtime-real-lifecycle.e2e.mjs` 在 Chrome 真实模型下验证 Stop 后恢复；`tests/browser-storage-boundary.e2e.mjs` 探测 Storage API 和 OPFS 能力差异。当前执行只继续 Chrome；既有 WebKit/Safari 证据保留为历史对照。运行命令、最新结果和已知限制见[运行时验证说明](runtime-validation-manual.md)与[运行时验证报告](runtime-validation-report.md)。
 

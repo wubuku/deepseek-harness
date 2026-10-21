@@ -39,6 +39,7 @@ console.info('browser-native dsh: worker entry active')
 let host: { handleMessage(data: unknown): void } | undefined
 let shellRole = false
 let durableWorkspace = false
+let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
 const pending: unknown[] = []
@@ -46,9 +47,13 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'read' | 'flush-local' | 'flush-workspace'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease'
   readonly path?: string
+  readonly from?: string
+  readonly to?: string
   readonly content?: string
+  readonly base64?: string
+  readonly mode?: number
 }
 
 function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspaceTestRequest {
@@ -56,7 +61,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   const data = value as Record<string, unknown>
   return data.type === 'browser-native-workspace-test-request'
     && typeof data.requestId === 'string'
-    && ['write', 'read', 'flush-local', 'flush-workspace'].includes(String(data.action))
+    && ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease'].includes(String(data.action))
 }
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
@@ -76,6 +81,24 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
+    if (request.action === 'lease-info') {
+      const lease = workspaceRuntime.getWriterLease()
+      workspaceTestResponse(request.requestId, { ok: lease !== undefined, ...lease })
+      return
+    }
+    if (request.action === 'release-lease') {
+      await workspaceRuntime.releaseWriter()
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'rename') {
+      if (typeof request.from !== 'string' || typeof request.to !== 'string') throw new Error('browser-native workspace test: rename paths are required')
+      if (!request.from.startsWith('/dsh/home/workspace/') || !request.to.startsWith('/dsh/home/workspace/')) throw new Error('browser-native workspace test: rename paths must be inside the Workspace')
+      workspaceRuntime.vfs.renameSync(request.from, request.to)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, from: request.from, to: request.to })
+      return
+    }
     if (typeof request.path !== 'string' || !request.path.startsWith('/dsh/home/workspace/')) {
       throw new Error('browser-native workspace test: path must be inside the Workspace')
     }
@@ -84,6 +107,50 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceRuntime.vfs.writeFileSync(request.path, request.content)
       await workspaceRuntime.flushLocalWorkspace()
       workspaceTestResponse(request.requestId, { ok: true, path: request.path, content: request.content })
+      return
+    }
+    if (request.action === 'write-binary') {
+      if (typeof request.base64 !== 'string') throw new Error('browser-native workspace test: base64 content is required')
+      const binary = atob(request.base64)
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+      workspaceRuntime.vfs.writeFileSync(request.path, bytes)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path, bytes: bytes.byteLength })
+      return
+    }
+    if (request.action === 'append') {
+      if (typeof request.content !== 'string') throw new Error('browser-native workspace test: content is required')
+      workspaceRuntime.vfs.appendFileSync(request.path, request.content)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path })
+      return
+    }
+    if (request.action === 'mkdir') {
+      workspaceRuntime.vfs.mkdirSync(request.path, { recursive: true, mode: request.mode })
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path })
+      return
+    }
+    if (request.action === 'remove') {
+      workspaceRuntime.vfs.rmSync(request.path, { recursive: true, force: true })
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path })
+      return
+    }
+    if (request.action === 'chmod') {
+      if (!Number.isSafeInteger(request.mode)) throw new Error('browser-native workspace test: mode is required')
+      workspaceRuntime.vfs.chmodSync(request.path, request.mode)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path, mode: request.mode })
+      return
+    }
+    if (request.action === 'stat') {
+      const stats = workspaceRuntime.vfs.statSync(request.path)
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path, kind: stats.isDirectory() ? 'directory' : 'file', mode: stats.mode, bytes: stats.size })
+      return
+    }
+    if (request.action === 'list') {
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path, entries: workspaceRuntime.vfs.readdirSync(request.path) })
       return
     }
     const content = workspaceRuntime.vfs.readFileSync(request.path, { encoding: 'utf8' })
@@ -128,6 +195,11 @@ self.addEventListener('message', (event: MessageEvent) => {
     durableWorkspace = true
     return
   }
+  if (data?.type === 'browser-native-workspace-lease-init') {
+    if (host !== undefined) throw new Error('browser-native worker: Workspace lease must be selected before Host init')
+    workspaceWriterLease = true
+    return
+  }
   if (host === undefined && isShellStartFrame(data)) {
     shellRole = true
     installProcessGlobal({ cwd: data.cwd, env: data.env })
@@ -141,7 +213,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
-    const workspace = createBrowserNativeWorkspaceRuntime({ durable: durableWorkspace })
+    const workspace = createBrowserNativeWorkspaceRuntime({ durable: durableWorkspace, writerLease: workspaceWriterLease })
     workspaceRuntime = workspace
     const created = createWorkerHost({
       staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules() },
