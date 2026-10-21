@@ -21,12 +21,17 @@ const mode = process.env.DSH_POC_LLM ?? 'scripted'
 const browserName = process.env.DSH_POC_BROWSER ?? 'chrome'
 const envFile = process.env.DSH_POC_ENV_FILE
 const roster = process.env.DSH_POC_ROSTER ?? 'browser'
+const durableWorkspace = process.env.DSH_POC_DURABLE_WORKSPACE === '1'
+const blockWorkspaceCommitOnce = process.env.DSH_POC_BLOCK_WORKSPACE_COMMIT_ONCE === '1'
+const skipPostRefreshTurns = process.env.DSH_POC_SKIP_POST_REFRESH_TURNS === '1'
 const port = Number(process.env.DSH_POC_PORT ?? '0')
 const turnTimeout = Number(process.env.DSH_POC_TURN_TIMEOUT_MS ?? (mode === 'real' ? 600_000 : 40_000))
 const refreshCycles = Number(process.env.DSH_POC_REFRESH_CYCLES ?? '1')
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-browser-runtime-e2e-')))
 const token = `BROWSER_VFS_${crypto.randomUUID().replaceAll('-', '').toUpperCase()}`
-const outputPath = '/dsh/home/browser-validation/output.txt'
+const outputPath = durableWorkspace
+  ? '/dsh/home/workspace/browser-validation/output.txt'
+  : '/dsh/home/browser-validation/output.txt'
 const firstMarker = 'BROWSER_NATIVE_VFS_READY'
 const secondMarker = 'BROWSER_NATIVE_VFS_MEMORY_OK'
 
@@ -74,6 +79,7 @@ let phase = 'setup'
 const httpErrors = []
 const consoleErrors = []
 const llmStatuses = []
+let blockedWorkspaceCommit = false
 try {
   image = await createRuntimeValidationDist({ roster })
   app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: mode, envFile })
@@ -122,6 +128,11 @@ try {
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
   page.on('response', response => {
     if (response.url().endsWith('/api/browser-native/llm')) llmStatuses.push(response.status())
+    const requestRecord = requests.find(request => request.request === response.request())
+    if (requestRecord !== undefined) {
+      requestRecord.status = response.status()
+      requestRecord.settledAt = Date.now()
+    }
     if (response.url().includes('/api/browser-native/session/')) {
       const requestId = requestBody(response.request())?.requestId
       const record = requests.find(request => request.body?.requestId === requestId)
@@ -132,10 +143,21 @@ try {
     }
     if (response.status() >= 400) httpErrors.push({ path: new URL(response.url()).pathname, status: response.status() })
   })
+  if (blockWorkspaceCommitOnce) {
+    await page.route(`${origin}/api/browser-native/workspace/commit`, async route => {
+      if (blockedWorkspaceCommit) return await route.continue()
+      blockedWorkspaceCommit = true
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'TEST_COMMIT_BLOCKED', message: 'commit blocked by durable Workspace E2E' } }),
+      })
+    })
+  }
 
   phase = 'initial preview boot'
   const initialBootStartedAt = Date.now()
-  await openPreview(page, `${origin}/preview.html?browser-native=1&preview-fixture=none`)
+  await openPreview(page, `${origin}/preview.html?browser-native=1&${durableWorkspace ? 'browser-native-durable=1&' : ''}preview-fixture=none`)
   const initialBootMs = Date.now() - initialBootStartedAt
   await page.getByText('Browser-native remote', { exact: true }).waitFor({ timeout: 20_000 })
 
@@ -171,6 +193,9 @@ try {
       },
     } : {}),
   })
+  if (blockWorkspaceCommitOnce) {
+    await waitFor(() => blockedWorkspaceCommit, 'one blocked durable Workspace commit', 30_000)
+  }
   if (mode === 'scripted') {
     assert.equal(first.streamSamples.length >= 2, true,
       `expected multiple visible assistant DOM updates during streaming; got ${JSON.stringify(first.streamSamples)}`)
@@ -183,8 +208,12 @@ try {
       await page.getByText(mode === 'real' ? token : 'BROWSER_NATIVE_RUNTIME_VALIDATION_OK', { exact: false }).last().waitFor({ timeout: 20_000 })
     }
   }
+  if (blockWorkspaceCommitOnce) {
+    await waitFor(() => requests.some(request => request.path.endsWith('/workspace/commit') && request.status === 200),
+      'durable Workspace retry commit after Worker reconstruction', 30_000)
+  }
   phase = 'post-refresh memory turn'
-  const second = mode === 'real'
+  const second = mode === 'real' && !skipPostRefreshTurns
     ? await sendTurn({
       page,
       origin,
@@ -195,7 +224,7 @@ try {
     })
     : undefined
   let refreshProbe
-  if (mode === 'real') {
+  if (mode === 'real' && !skipPostRefreshTurns) {
     phase = 'post-refresh VFS probe'
     refreshProbe = await sendTurn({
       page,
@@ -220,7 +249,7 @@ try {
   }
   if (mode === 'real') {
     const text = assistantText(session)
-    assert.equal(text.includes(token), true, 'the same Session did not retain the VFS token')
+    if (!skipPostRefreshTurns) assert.equal(text.includes(token), true, 'the same Session did not retain the VFS token')
     const calls = session.events.filter(event => event.type === 'tool/call' && event.data.turn === 1)
     const results = new Map(session.events.filter(event => event.type === 'tool/result')
       .map(event => [event.data.message?.toolCallId ?? event.data.toolCallId ?? event.data.callId, event]))
@@ -250,17 +279,19 @@ try {
     const verificationRead = results.get(callsWithArguments[writeIndex + 1].event.data.callId)
     assert.match(firstRead.data.message.content.map(block => block.text ?? '').join('\n'), /VFS_INPUT_READY/)
     assert.match(verificationRead.data.message.content.map(block => block.text ?? '').join('\n'), new RegExp(token))
-    assert.equal(session.events.filter(event => event.type === 'turn/end').length, 3)
-    assert.equal(session.events.filter(event => event.type === 'tool/call' && event.data.turn === 2).length, 0,
-      'the second turn should recover the token from Session context without another VFS call')
-    assert.equal(text.includes(token), true, 'the second turn must recall the VFS token from Session context')
-    const refreshRead = session.events.filter(event => event.type === 'tool/call' && event.data.turn === 3 && event.data.name === 'read')
-    assert.equal(refreshRead.length >= 1, true, 'the post-refresh probe must use DSH read against the same VFS path')
-    const refreshReadResult = results.get(refreshRead[0].data.callId)
-    const refreshReadText = refreshReadResult.data.message.content.map(block => block.text ?? '').join('\n')
-    const vfsFileAfterRefresh = refreshReadResult.data.message.isError ? 'missing' : 'available'
-    if (vfsFileAfterRefresh === 'missing') assert.match(refreshReadText, /not found/)
-    else assert.match(refreshReadText, new RegExp(token))
+    assert.equal(session.events.filter(event => event.type === 'turn/end').length, skipPostRefreshTurns ? 1 : 3)
+    if (!skipPostRefreshTurns) {
+      assert.equal(session.events.filter(event => event.type === 'tool/call' && event.data.turn === 2).length, 0,
+        'the second turn should recover the token from Session context without another VFS call')
+      assert.equal(text.includes(token), true, 'the second turn must recall the VFS token from Session context')
+      const refreshRead = session.events.filter(event => event.type === 'tool/call' && event.data.turn === 3 && event.data.name === 'read')
+      assert.equal(refreshRead.length >= 1, true, 'the post-refresh probe must use DSH read against the same VFS path')
+      const refreshReadResult = results.get(refreshRead[0].data.callId)
+      const refreshReadText = refreshReadResult.data.message.content.map(block => block.text ?? '').join('\n')
+      const vfsFileAfterRefresh = refreshReadResult.data.message.isError ? 'missing' : 'available'
+      if (vfsFileAfterRefresh === 'missing') assert.match(refreshReadText, /not found/)
+      else assert.match(refreshReadText, new RegExp(token))
+    }
   }
   assert.equal(llmStatuses.every(status => status === 200), true, JSON.stringify(llmStatuses))
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${JSON.stringify(pageErrors)}`)
@@ -276,6 +307,18 @@ try {
     .filter(request => new URL(request.url).pathname === '/api/browser-native/llm')
     .map(request => new URL(request.url).origin))]
   assert.deepEqual(llmRequestOrigins, [origin], 'LLM traffic must use the same-origin backend proxy')
+  if (durableWorkspace) {
+    assert.equal(requests.some(request => request.path.endsWith('/workspace/identity')), true,
+      'durable Workspace mode must open the same-origin Workspace identity')
+    assert.equal(requests.some(request => request.path.endsWith('/workspace/commit')), true,
+      'durable Workspace mode must commit the DSH file mutation')
+  }
+  if (blockWorkspaceCommitOnce) {
+    assert.equal(requests.some(request => request.path.endsWith('/workspace/commit') && request.status === 503), true,
+      'fault injection must produce one failed Workspace commit')
+    assert.equal(requests.filter(request => request.path.endsWith('/workspace/commit') && request.status === 200).length >= 1, true,
+      'Worker reconstruction must retry the durable Workspace commit')
+  }
   const durable = JSON.parse(await readFile(join(dataDir, 'sessions', `${first.sessionId}.json`), 'utf8'))
   assert.equal(durable.durableThroughSeq, durable.events.length - 1)
   const firstTurnFlushes = requests.filter(request => request.path.endsWith('/session/flush')
@@ -288,6 +331,9 @@ try {
     mode,
     browser: browserName,
     roster,
+    durableWorkspace,
+    blockedWorkspaceCommit,
+    workspaceCommitStatuses: requests.filter(request => request.path.endsWith('/workspace/commit')).map(request => request.status),
     model: app.llm.model,
     sessionId: first.sessionId,
     eventCount: session.events.length,
@@ -296,7 +342,7 @@ try {
     vfsToolSequence: mode === 'real'
       ? session.events.filter(event => event.type === 'tool/call' && event.data.turn === 1).map(event => event.data.name)
       : [],
-    vfsFileAfterRefresh: mode === 'real'
+    vfsFileAfterRefresh: mode === 'real' && !skipPostRefreshTurns
       ? (() => {
         const call = session.events.find(event => event.type === 'tool/call' && event.data.turn === 3 && event.data.name === 'read')
         const result = session.events.find(event => event.type === 'tool/result'
@@ -305,6 +351,7 @@ try {
       })()
       : null,
     refreshedBetweenRealTurns: mode === 'real',
+    skipPostRefreshTurns,
     refreshCycles: mode === 'real' ? refreshCycles : 0,
     assistantStreamStats: session.events.filter(event => event.type === 'assistant/message').map(event => ({
       turn: event.data.turn,

@@ -11,9 +11,42 @@ import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
-const browserNative = new URLSearchParams(window.location.search).get('browser-native') === '1'
+const searchParams = new URLSearchParams(window.location.search)
+const browserNative = searchParams.get('browser-native') === '1'
+const browserNativeDurable = browserNative && searchParams.get('browser-native-durable') === '1'
+const browserNativeWorkspaceTest = browserNative && searchParams.get('browser-native-test') === 'workspace-recovery'
 const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
+
+interface BrowserNativeWorkspaceTestRequest {
+  readonly action: 'write' | 'read' | 'flush-local' | 'flush-workspace'
+  readonly path?: string
+  readonly content?: string
+}
+
+interface BrowserNativeWorkspaceTestResponse {
+  readonly ok: boolean
+  readonly path?: string
+  readonly content?: string
+  readonly error?: string
+}
+
+function browserNativeTestUuid(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  view.setUint8(6, (view.getUint8(6) & 0x0f) | 0x40)
+  view.setUint8(8, (view.getUint8(8) & 0x3f) | 0x80)
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+declare global {
+  interface Window {
+    __DSH_BROWSER_NATIVE_WORKSPACE_TEST__?:
+    (request: BrowserNativeWorkspaceTestRequest) => Promise<BrowserNativeWorkspaceTestResponse>
+  }
+}
+
 if (browserNative) {
   window.addEventListener('pagehide', (event) => {
     if (event.persisted) return
@@ -25,9 +58,26 @@ const image = `preview/${IMAGE_FILE_NAME}`
 try {
   const source = await chooseWorkerHostSource({ image })
   if (!browserNative || !pageLifecycle.unloading) {
-    worker = new DshWorker({ name: 'dsh-host' })
-    if (browserNative) connectBrowserNativePageControl(worker)
-    await connectWorkerHost(worker, {
+    const currentWorker = new DshWorker({ name: 'dsh-host' })
+    worker = currentWorker
+    if (browserNativeWorkspaceTest) {
+      const channel = new MessageChannel()
+      const pending = new Map<string, (response: BrowserNativeWorkspaceTestResponse) => void>()
+      channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestResponse & { requestId: string }>) => {
+        pending.get(event.data.requestId)?.(event.data)
+        pending.delete(event.data.requestId)
+      })
+      channel.port1.start()
+      currentWorker.postMessage({ type: 'browser-native-workspace-test-init' }, [channel.port2])
+      window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
+        const requestId = browserNativeTestUuid()
+        pending.set(requestId, resolve)
+        currentWorker.postMessage({ type: 'browser-native-workspace-test-request', requestId, ...request })
+      })
+    }
+    if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
+    if (browserNative) connectBrowserNativePageControl(currentWorker)
+    await connectWorkerHost(currentWorker, {
       image,
       overlays: browserNative
         ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]

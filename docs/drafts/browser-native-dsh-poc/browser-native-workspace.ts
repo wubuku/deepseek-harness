@@ -5,6 +5,13 @@ import type {
   VfsSeedOptions,
 } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
 import { publishBrowserNativeWorkspaceStatus } from './browser-native-control.ts'
+import {
+  createBrowserDurableWorkspaceStore,
+} from './browser-native-workspace-store.ts'
+import type {
+  DurableWorkspaceSnapshot,
+  DurableWorkspaceStore,
+} from './browser-native-workspace-store.ts'
 
 const PROTOCOL_VERSION = 1
 const WORKSPACE_ROOT = '/dsh/home/workspace'
@@ -25,7 +32,8 @@ interface WorkspaceManifest {
   readonly entries: readonly WorkspaceEntry[]
 }
 
-interface WorkspaceChange {
+/** One coalesced change mirrored from the Browser-Native VFS. */
+export interface WorkspaceChange {
   readonly path: string
   readonly deleted?: true
   readonly kind?: 'directory' | 'file'
@@ -35,7 +43,8 @@ interface WorkspaceChange {
   readonly content?: Uint8Array
 }
 
-interface PendingBatch {
+/** One cloud commit retained locally until its receipt is known. */
+export interface PendingBatch {
   readonly operationId: string
   readonly baseRevision: number
   readonly changes: readonly WorkspaceChange[]
@@ -83,7 +92,9 @@ function manifestEntries(value: unknown): WorkspaceEntry[] {
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  const input = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(input).set(bytes)
+  const digest = await crypto.subtle.digest('SHA-256', input)
   return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
 }
 
@@ -130,8 +141,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private retryBatch: PendingBatch | undefined
   private running: Promise<void> | undefined
   private scheduleTimer: ReturnType<typeof setTimeout> | undefined
+  private localPersistChain: Promise<void> = Promise.resolve()
+  private localPersistFailure: Error | undefined
 
-  constructor(private readonly onStatus = statusMessage) {}
+  constructor(
+    private readonly onStatus = statusMessage,
+    private readonly store: DurableWorkspaceStore | undefined,
+  ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
     this.vfs = vfs
@@ -158,6 +174,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         entries: manifestEntries(rawManifest.entries),
       }
       this.knownPaths.clear()
+      this.knownBlobHashes.clear()
       for (const entry of manifest.entries) this.knownPaths.add(entry.path)
       this.clearWorkspace(vfs)
       const directories = manifest.entries.filter(entry => entry.kind === 'directory')
@@ -184,8 +201,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.knownBlobHashes.add(entry.hash)
       }
       this.revision = manifest.revision
+      const localSnapshot = await this.store?.load(this.workspaceId)
+      if (localSnapshot !== undefined) this.restoreLocalSnapshot(vfs, localSnapshot)
       this.ready = true
-      this.onStatus('synced', this.workspaceId, this.revision, 0)
+      const dirtyCount = this.pending.size + (this.retryBatch?.changes.length ?? 0)
+      this.onStatus(dirtyCount === 0 ? 'synced' : 'dirty', this.workspaceId, this.revision, dirtyCount)
+      if (dirtyCount > 0) this.schedule()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.failure = { state: 'error', message }
@@ -223,9 +244,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
     if (this.blocked) {
       this.onStatus('conflict', this.workspaceId, this.revision, this.pending.size + (this.retryBatch?.changes.length ?? 0), this.failure?.message)
+      this.queueLocalPersist()
       return
     }
     this.onStatus('dirty', this.workspaceId, this.revision, this.pending.size)
+    this.queueLocalPersist()
     this.schedule()
   }
 
@@ -236,15 +259,101 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       this.scheduleTimer = undefined
     }
     if (this.failure !== undefined) this.failure = undefined
+    try {
+      await this.awaitLocalPersist()
+    } catch (error) {
+      this.setLocalPersistFailure(error)
+      return
+    }
     await this.drain()
   }
 
   async flushAndRequireDurable(): Promise<void> {
     await this.flush()
+    await this.awaitLocalPersist()
     if (this.failure !== undefined) throw new Error(this.failure.message)
     if (this.pending.size > 0 || this.retryBatch !== undefined) {
       throw new Error('browser-native workspace: mutations remain uncommitted')
     }
+  }
+
+  async flushLocalWorkspace(): Promise<void> {
+    await this.awaitLocalPersist()
+  }
+
+  private snapshot(): DurableWorkspaceSnapshot | undefined {
+    if (this.workspaceId === undefined || this.revision === undefined) return undefined
+    return {
+      version: 1,
+      workspaceId: this.workspaceId,
+      revision: this.revision,
+      pending: [...this.pending.values()],
+      ...(this.retryBatch === undefined ? {} : { retryBatch: this.retryBatch }),
+    }
+  }
+
+  private queueLocalPersist(): void {
+    if (this.store === undefined) return
+    const snapshot = this.snapshot()
+    if (snapshot === undefined) return
+    this.localPersistFailure = undefined
+    this.localPersistChain = this.localPersistChain.then(async () => {
+      await this.store?.save(snapshot)
+    }).catch(error => {
+      this.setLocalPersistFailure(error)
+    })
+  }
+
+  private async awaitLocalPersist(): Promise<void> {
+    await this.localPersistChain
+    if (this.localPersistFailure !== undefined) throw this.localPersistFailure
+  }
+
+  private setLocalPersistFailure(error: unknown): void {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    this.localPersistFailure = failure
+    this.failure = { state: 'error', message: failure.message }
+    this.onStatus('error', this.workspaceId, this.revision, this.pending.size + (this.retryBatch?.changes.length ?? 0), failure.message)
+  }
+
+  private restoreLocalSnapshot(vfs: MemoryVfs, snapshot: DurableWorkspaceSnapshot): void {
+    if (snapshot.workspaceId !== this.workspaceId) throw new Error('browser-native workspace: local snapshot workspace mismatch')
+    const retryChanges = snapshot.retryBatch?.changes ?? []
+    this.replayChanges(vfs, [...retryChanges, ...snapshot.pending])
+    this.retryBatch = snapshot.retryBatch
+    for (const change of snapshot.pending) this.pending.set(change.path, change)
+    if (this.retryBatch !== undefined) this.revision = this.retryBatch.baseRevision
+    else if (snapshot.pending.length > 0) this.revision = snapshot.revision
+  }
+
+  private replayChanges(vfs: MemoryVfs, changes: readonly WorkspaceChange[]): void {
+    const ordered = [...changes].sort((left, right) => {
+      const leftDeleted = left.deleted === true
+      const rightDeleted = right.deleted === true
+      if (leftDeleted !== rightDeleted) return leftDeleted ? -1 : 1
+      if (leftDeleted) return right.path.split('/').length - left.path.split('/').length
+      const leftDirectory = left.kind === 'directory'
+      const rightDirectory = right.kind === 'directory'
+      if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1
+      return left.path.localeCompare(right.path)
+    })
+    for (const change of ordered) this.applyChange(vfs, change)
+  }
+
+  private applyChange(vfs: MemoryVfs, change: WorkspaceChange): void {
+    const target = `${WORKSPACE_ROOT}/${change.path}`
+    if (change.deleted === true) {
+      vfs.rmSync(target, { recursive: true, force: true })
+      return
+    }
+    if (change.kind === 'directory') {
+      vfs.seedDirectory(target, { mode: change.mode })
+      return
+    }
+    if (change.kind !== 'file' || change.content === undefined) {
+      throw new Error(`browser-native workspace: local file change is incomplete for ${change.path}`)
+    }
+    vfs.seed(target, change.content, { mode: change.mode })
   }
 
   private clearWorkspace(vfs: MemoryVfs): void {
@@ -307,6 +416,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     while (this.retryBatch !== undefined || this.pending.size > 0) {
       const batch = this.retryBatch ?? this.takeBatch()
       this.retryBatch = batch
+      this.queueLocalPersist()
+      try {
+        await this.awaitLocalPersist()
+      } catch (error) {
+        this.setLocalPersistFailure(error)
+        return
+      }
       this.onStatus('syncing', this.workspaceId, this.revision, this.pending.size + batch.changes.length)
       try {
         const changes = await this.uploadChanges(batch.changes)
@@ -339,6 +455,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         }
         this.retryBatch = undefined
         this.failure = undefined
+        this.queueLocalPersist()
       } catch (error) {
         const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
         const message = error instanceof Error ? error.message : String(error)
@@ -348,6 +465,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.onStatus(this.failure.state, this.workspaceId, this.revision, this.pending.size + batch.changes.length, message)
         return
       }
+    }
+    try {
+      await this.awaitLocalPersist()
+    } catch (error) {
+      this.setLocalPersistFailure(error)
+      return
     }
     this.onStatus('synced', this.workspaceId, this.revision, 0)
   }
@@ -383,7 +506,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
             'x-request-id': crypto.randomUUID(),
             'x-workspace-id': this.workspaceId ?? '',
           },
-          body: content,
+          body: new Uint8Array(toArrayBuffer(content)),
         })
         await readJson(response)
         this.knownBlobHashes.add(hash)
@@ -395,6 +518,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const output = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(output).set(bytes)
+  return output
+}
+
 export interface BrowserNativeWorkspaceRuntime {
   /** VFS shared with the Worker Host and VFS mutation mirror. */
   readonly vfs: MemoryVfs
@@ -402,15 +531,30 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly prepareVfs: (vfs: MemoryVfs) => Promise<void>
   /** Retry pending writes and reject unless the current changes have receipts. */
   readonly flushWorkspace: () => Promise<void>
+  /** Wait until the local durable snapshot has been written. */
+  readonly flushLocalWorkspace: () => Promise<void>
+}
+
+/** Optional local persistence for the Browser-Native Workspace PoC. */
+export interface BrowserNativeWorkspaceRuntimeOptions {
+  /** Enable OPFS/IndexedDB persistence instead of the default memory-only mirror. */
+  readonly durable?: boolean
+  /** Inject a deterministic store for tests or a host-specific implementation. */
+  readonly store?: DurableWorkspaceStore
+  /** Publish status updates to a test observer instead of the page control channel. */
+  readonly onStatus?: typeof statusMessage
 }
 
 /**
  * Create the VFS and synchronization hooks for the Browser-Native Workspace PoC.
  * @returns The shared VFS, pre-boot hydrator, and explicit durability check.
  */
-export function createBrowserNativeWorkspaceRuntime(): BrowserNativeWorkspaceRuntime {
+export function createBrowserNativeWorkspaceRuntime(
+  options: BrowserNativeWorkspaceRuntimeOptions = {},
+): BrowserNativeWorkspaceRuntime {
   let vfs: MemoryVfs
-  const mirror = new BrowserNativeWorkspaceMirror()
+  const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore() : undefined)
+  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store)
   vfs = new MemoryVfs({ sink: mirror })
   return {
     vfs,
@@ -419,5 +563,6 @@ export function createBrowserNativeWorkspaceRuntime(): BrowserNativeWorkspaceRun
       await mirror.prepare(mounted)
     },
     flushWorkspace: async () => await mirror.flushAndRequireDurable(),
+    flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
   }
 }

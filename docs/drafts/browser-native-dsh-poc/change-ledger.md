@@ -12,7 +12,32 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### 2026-10-21：durable Workspace opt-in 接线
+
+- **文件**：`apps/web/src/preview.ts`、`docs/drafts/browser-native-dsh-poc/browser-native-worker.ts`。
+- **必要性**：真实 Worker 的 VFS 只能在 Host 创建前选择 durable store；仅修改 draft 内的 mirror 无法让浏览器入口在不改变默认行为的情况下启用 OPFS/IndexedDB。
+- **范围**：仅识别 `preview.html?browser-native=1&browser-native-durable=1`，在 Worker Host 初始化前发送一次 opt-in 消息；默认 URL 不发送消息，继续使用原有内存模式。
+- **验证**：后续运行 Browser-Native Workspace 单测、Web 类型检查和真实 Chrome durable storage E2E；未完成前不宣称浏览器端闭环已通过。
+- **上游重放**：若 durable Workspace 进入正式运行时，将此消息改为正式配置字段并迁移到受支持的 preview 配置入口；若 PoC 废弃，删除本段两处 opt-in 接线即可，不影响默认 Browser-Native 启动。
+
 ## PoC 内部兼容性变更
+
+### BN-P2-007：增加模型无关的 durable Workspace 故障恢复测试接缝
+
+```text
+changeId: BN-P2-007
+upstreamBaseline: dsh-v0.2.0-rc.2 / Browser-Native DSH PoC on 2026-10-21
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs
+reason: 真实模型上游超时使一次性 Workspace commit 503 故障恢复无法单独归因；需要在真实 Chrome Worker 中直接驱动共享 VFS，并在刷新后检查 OPFS/IndexedDB retry 和云端 commit。
+existingExtensionPointsChecked: preview.ts 已是 Browser-Native Worker 的 opt-in 入口；browser-native-worker.ts 在 Host boot 前创建 Workspace runtime；Workspace mirror 已提供 flushLocalWorkspace() 和 flushWorkspace()，可作为测试接缝而不复制 Agent Loop。
+whyDraftOnlyWasInsufficient: Node 单测不能证明 Dedicated Worker、OPFS、IndexedDB、页面刷新和浏览器 cookie/session 共同工作；真实 LLM E2E 又会把上游模型超时混入 Workspace 故障结论。
+behaviorChange: 只有 URL 同时包含 browser-native=1 和 browser-native-test=workspace-recovery 时，preview 才建立 PoC 专用 MessagePort。该接缝可在 Worker 共享 VFS 写入/读取并等待本地或云端 Workspace flush；默认 preview 和普通 browser-native URL 不暴露该入口。
+consumersUpdated: durable-workspace-recovery.e2e.mjs、README.md、durable-workspace-progress.md 和 docs/drafts/README.md。
+tests: 真实 Chrome 通过：第一次 workspace/commit 返回 503，刷新后从 IndexedDB retry 和 OPFS blob 恢复，以相同 operationId 成功提交 revision 1；commitAttempts=2；无 page error；无跨 origin 请求。preview build 通过。
+syncReplaySteps: 若 durable Workspace 进入正式运行时，删除本测试接缝并改用正式受控测试接口或宿主级故障注入；保留同样的断言：本地 snapshot/blob 存在、operationId 不变、恢复后 manifest/blob 与提交内容一致。若 PoC 废弃，删除 preview/Worker 接缝和该 E2E。
+deleteCondition: durable Workspace 具备正式的可观测故障注入或端到端测试 seam，且不再需要在生产构建中携带该 URL-gated MessagePort；或 durable Workspace PoC 被删除。
+status: implemented
+```
 
 ### BN-V2-002：backend close 释放 keep-alive 连接
 
@@ -258,6 +283,23 @@ deleteCondition: 本目录内所有文档都进入双语文档 corpus，且 tran
 status: implemented
 ```
 
+### BN-P2-006：durable Workspace 的 OPFS/IndexedDB opt-in
+
+```text
+changeId: BN-P2-006
+upstreamBaseline: dsh-v0.2.0-rc.2 / packages/experimental/webworker-runtime/src/storage, apps/web/src/preview.ts
+file: docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-storage-boundary.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+reason: Browser-Native DSH 的 MemoryVfs 变更需要在 Worker 重建后可恢复；本批次先验证 OPFS bytes + IndexedDB snapshot/outbox，不重写正式 VFS 或 Session format。
+existingExtensionPointsChecked: 已核对 MemoryVfs 的 post-commit VfsMutationSink、Worker Host 的 vfs/prepareVfs 注入、preview Worker 创建顺序和已有 Workspace manifest/CAS backend。
+whyDraftOnlyWasInsufficient: durable store 必须在 Worker Host boot 前注入 VFS，并需要真实 Chrome 的 OPFS/IndexedDB；只增加文档或独立 storage demo 不能证明 DSH 文件工具写入已经进入恢复路径。
+behaviorChange: 默认 Browser-Native preview 不变；显式 `browser-native-durable=1` 时，Worker 使用 OPFS blob + IndexedDB snapshot，启动时回放本地 pending/retry，真实 Workspace 文件工具可以在刷新后恢复。
+consumersUpdated: durable plan/progress、PoC README、Worker/preview opt-in、Memory store 单测、Chrome storage E2E 和真实 runtime validation 共同记录该能力及其 post-commit 崩溃窗口。
+tests: `pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts`; preview build; Chrome storage boundary; one real Chrome + real LLM durable file-tool run passed; commit-503 fault injection was observed but its follow-up LLM probe was unstable.
+syncReplaySteps: 从 upstream 更新后重新核对 MemoryVfs sink、Worker Host vfs/prepareVfs 和 preview Worker 创建顺序；优先迁移到正式配置 hook，再运行 durable unit tests、preview build 和 Chrome E2E；若 upstream 提供 journal-first VFS 或 durable Workspace seam，删除本地 adapter 中重复代码。
+deleteCondition: 上游提供等价的 pre-boot durable VFS injection、OPFS/IndexedDB persistence and recovery tests，且删除本目录 adapter/opt-in 后默认 preview 与 Browser-Native durable acceptance 仍通过。
+status: implemented-as-draft
+```
+
 ## 登记模板
 
 复制下面的模板创建新的 `changeId`。不要用提交 hash 代替 `upstreamBaseline`；仓库的上游版本、tag 或被核对的公开文件路径才是未来重放所需的事实。
@@ -290,3 +332,9 @@ status: proposed
 ## Dev Note
 
 本账本本身属于 PoC 草稿，不是 release note，也不是永久架构决策。若某项改动最终进入正式 DSH，应在完成上游化后把决定转移到对应 package README、architecture 文档或 Agent Note，并在本账本保留一条指向新 owner 的简短记录。
+## 2026-10-21：Durable Workspace PoC 规划
+
+- **范围**：新增 `durable-workspace-plan.md` 和 `durable-workspace-progress.md`，并在本 PoC README 增加入口。
+- **原因**：在实现 OPFS/IndexedDB 本地 durable outbox 前固定目标、故障窗口、验收条件和不应被误读的限制；不修改既有 Workspace 同步协议。
+- **验证**：规划阶段尚未运行新增代码测试；实现命令和结果写入 `durable-workspace-progress.md`。
+- **回放方式**：后续如需拆分或同步到 upstream，只需保留本 PoC 目录新增文件及 README 的两条局部索引，不要求修改正式 packages。

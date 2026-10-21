@@ -25,7 +25,10 @@ import { runShellProcess } from '../../../packages/experimental/webworker-runtim
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import { setBrowserNativeControlPort, setBrowserNativeResumeOwner } from './browser-native-control.ts'
-import { createBrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
+import {
+  createBrowserNativeWorkspaceRuntime,
+} from './browser-native-workspace.ts'
+import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -35,10 +38,78 @@ console.info('browser-native dsh: worker entry active')
 
 let host: { handleMessage(data: unknown): void } | undefined
 let shellRole = false
+let durableWorkspace = false
+let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
+let workspaceTestPort: MessagePort | undefined
 const pending: unknown[] = []
+
+interface BrowserNativeWorkspaceTestRequest {
+  readonly type: 'browser-native-workspace-test-request'
+  readonly requestId: string
+  readonly action: 'write' | 'read' | 'flush-local' | 'flush-workspace'
+  readonly path?: string
+  readonly content?: string
+}
+
+function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspaceTestRequest {
+  if (value === null || typeof value !== 'object') return false
+  const data = value as Record<string, unknown>
+  return data.type === 'browser-native-workspace-test-request'
+    && typeof data.requestId === 'string'
+    && ['write', 'read', 'flush-local', 'flush-workspace'].includes(String(data.action))
+}
+
+function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
+  workspaceTestPort?.postMessage({ requestId, ...response })
+}
+
+async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
+  try {
+    if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
+    if (request.action === 'flush-local') {
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'flush-workspace') {
+      await workspaceRuntime.flushWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (typeof request.path !== 'string' || !request.path.startsWith('/dsh/home/workspace/')) {
+      throw new Error('browser-native workspace test: path must be inside the Workspace')
+    }
+    if (request.action === 'write') {
+      if (typeof request.content !== 'string') throw new Error('browser-native workspace test: content is required')
+      workspaceRuntime.vfs.writeFileSync(request.path, request.content)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, path: request.path, content: request.content })
+      return
+    }
+    const content = workspaceRuntime.vfs.readFileSync(request.path, { encoding: 'utf8' })
+    workspaceTestResponse(request.requestId, { ok: true, path: request.path, content })
+  } catch (error) {
+    workspaceTestResponse(request.requestId, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as Record<string, unknown> | null
+  if (data?.type === 'browser-native-workspace-test-init') {
+    const port = event.ports[0]
+    if (port === undefined) throw new Error('browser-native workspace test: init frame needs a MessagePort')
+    workspaceTestPort?.close()
+    workspaceTestPort = port
+    workspaceTestPort.start()
+    return
+  }
+  if (isWorkspaceTestRequest(data)) {
+    void handleWorkspaceTestRequest(data)
+    return
+  }
   if (data?.type === 'browser-native-control-init') {
     const port = event.ports[0]
     if (port === undefined) throw new Error('browser-native worker: control init frame needs a MessagePort')
@@ -50,6 +121,11 @@ self.addEventListener('message', (event: MessageEvent) => {
       throw new Error('browser-native worker: resume owner frame needs sessionId and ownerToken')
     }
     setBrowserNativeResumeOwner(data.sessionId, data.ownerToken)
+    return
+  }
+  if (data?.type === 'browser-native-durable-workspace-init') {
+    if (host !== undefined) throw new Error('browser-native worker: durable Workspace must be selected before Host init')
+    durableWorkspace = true
     return
   }
   if (host === undefined && isShellStartFrame(data)) {
@@ -65,7 +141,8 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
-    const workspace = createBrowserNativeWorkspaceRuntime()
+    const workspace = createBrowserNativeWorkspaceRuntime({ durable: durableWorkspace })
+    workspaceRuntime = workspace
     const created = createWorkerHost({
       staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules() },
       staticModulePrefixes: REPLACED_PREFIXES,

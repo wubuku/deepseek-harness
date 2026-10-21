@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## Summary
 
-本目录包含两个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。本轮云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
+本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
@@ -37,6 +37,49 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
 ```
 
 本机真实 provider 配置文件是仓库根目录下的 `docs/drafts/.env`。API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
+
+## Durable Workspace 增量验证
+
+在浏览器内验证 OPFS bytes、IndexedDB snapshot 和 Worker 重建恢复时，使用额外的 `browser-native-durable=1` 参数；不带该参数仍是原有内存 Workspace mirror：
+
+```text
+http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none
+```
+
+本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。
+
+聚焦单测和真实 Chrome storage 探针：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts
+DSH_POC_BROWSER=chrome \
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+node docs/drafts/browser-native-dsh-poc/tests/browser-storage-boundary.e2e.mjs
+```
+
+不依赖 LLM、直接验收真实 Worker/OPFS/IndexedDB 的一次性 commit 失败恢复：
+
+```sh
+DSH_POC_BROWSER=chrome \
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs
+```
+
+该测试只在 `browser-native-test=workspace-recovery` URL 下启用 PoC 专用 Worker MessagePort 接缝：在 Worker 共享 VFS 写入文件，第一次 Workspace commit 被注入 503，刷新后检查 IndexedDB retry、OPFS blob、同一 `operationId` 重试、远端 manifest/blob 和页面错误。它是模型无关的故障恢复证据，不是产品 API，也不替代真实 LLM 文件工具验收。该测试通过不等于 M4 故障矩阵全部完成；上传失败、超时、缺 blob、损坏 snapshot、quota/eviction 仍未验证。
+
+真实文件工具验收需要真实模型配置，并把输出写入 Workspace mirror：
+
+```sh
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome \
+DSH_POC_DURABLE_WORKSPACE=1 \
+DSH_POC_ENV_FILE=docs/drafts/.env \
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+该命令的真实 provider 可能因上游响应延迟失败；只有看到脚本自身输出成功 JSON，才能把该轮写成真实通过。`persisted=false` 也不表示 OPFS/IndexedDB 不可用，它只表示浏览器尚未授予持久化存储保证。
 
 ## 当前实现快照
 

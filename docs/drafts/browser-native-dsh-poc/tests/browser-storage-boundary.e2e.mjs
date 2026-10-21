@@ -34,7 +34,13 @@ try {
   const launcher = browserName === 'webkit' ? webkit : chromium
   browser = await launcher.launch({ headless: true, ...(browserName === 'chrome' ? { channel: 'chrome' } : {}) })
   page = await browser.newPage({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
-  await openPreview(page, `${origin}/preview.html?browser-native=1&preview-fixture=none`)
+  const pageErrors = []
+  const nonLocalRequests = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('request', request => {
+    if (new URL(request.url()).origin !== new URL(origin).origin) nonLocalRequests.push(request.url())
+  })
+  await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none`)
   const result = await page.evaluate(async () => {
     let estimate
     let estimateError
@@ -75,11 +81,50 @@ try {
         }
       }
     }
-    return { estimate, estimateError, persisted, persistedError, opfs }
+    const indexedDb = { supported: typeof indexedDB !== 'undefined' }
+    if (indexedDb.supported) {
+      let database
+      try {
+        database = await new Promise((resolve, reject) => {
+          const request = indexedDB.open('dsh-browser-native-storage-probe', 1)
+          request.onupgradeneeded = () => { request.result.createObjectStore('probe', { keyPath: 'id' }) }
+          request.onsuccess = () => { resolve(request.result) }
+          request.onerror = () => { reject(request.error ?? new Error('IndexedDB open failed')) }
+        })
+        await new Promise((resolve, reject) => {
+          const transaction = database.transaction('probe', 'readwrite')
+          transaction.objectStore('probe').put({ id: 'round-trip', value: 'BROWSER_IDB_PROBE_OK' })
+          transaction.oncomplete = () => { resolve() }
+          transaction.onerror = () => { reject(transaction.error ?? new Error('IndexedDB write failed')) }
+          transaction.onabort = () => { reject(transaction.error ?? new Error('IndexedDB write aborted')) }
+        })
+        const value = await new Promise((resolve, reject) => {
+          const transaction = database.transaction('probe', 'readonly')
+          const request = transaction.objectStore('probe').get('round-trip')
+          request.onsuccess = () => { resolve(request.result) }
+          request.onerror = () => { reject(request.error ?? new Error('IndexedDB read failed')) }
+        })
+        indexedDb.readBack = value?.value
+        database.close()
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.deleteDatabase('dsh-browser-native-storage-probe')
+          request.onsuccess = () => { resolve() }
+          request.onerror = () => { reject(request.error ?? new Error('IndexedDB delete failed')) }
+        })
+      } catch (error) {
+        indexedDb.error = { name: error.name, message: error.message }
+        database?.close()
+      }
+    }
+    return { estimate, estimateError, persisted, persistedError, opfs, indexedDb }
   })
   assert.equal(result.opfs.supported === false || result.opfs.readBack === 'BROWSER_OPFS_PROBE_OK' || result.opfs.error !== undefined, true,
     `OPFS probe did not round-trip: ${JSON.stringify(result)}`)
-  process.stdout.write(`${JSON.stringify({ browser: browserName, ...result })}\n`)
+  assert.equal(result.indexedDb.supported === false || result.indexedDb.readBack === 'BROWSER_IDB_PROBE_OK' || result.indexedDb.error !== undefined, true,
+    `IndexedDB probe did not round-trip: ${JSON.stringify(result)}`)
+  assert.deepEqual(pageErrors, [], `browser page errors: ${JSON.stringify(pageErrors)}`)
+  assert.deepEqual(nonLocalRequests, [], `unexpected non-local requests: ${JSON.stringify(nonLocalRequests)}`)
+  process.stdout.write(`${JSON.stringify({ browser: browserName, pageErrors, nonLocalRequests, ...result })}\n`)
 } finally {
   await page?.close()
   await browser?.close()

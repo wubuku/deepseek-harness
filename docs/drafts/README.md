@@ -60,6 +60,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 5. [Browser-Native 实施方案](dsh-browser-native-agent-implementation-plan.md)：查看协议、包归属、测试矩阵、迁移和上线限制。
 6. [Browser-Native PoC v2 规划与进度](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和[进度记录](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)：区分设计提案与实际验证。
 7. [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)：验证第三方聊天层不另建 Agent Loop，如何通过 DSH Session Controller 接入真实 Worker Host。
+8. [Browser-Native Durable Workspace 规划与进度](browser-native-dsh-poc/durable-workspace-plan.md)及[实施记录](browser-native-dsh-poc/durable-workspace-progress.md)：验证 OPFS/IndexedDB 本地 bytes、pending/retry 恢复和真实 DSH 文件工具在 Worker 重建后的行为；其中模型无关的 503 刷新恢复入口是 [durable-workspace-recovery.e2e.mjs](browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs)。
 
 ### 需要实现或审查代码时
 
@@ -69,7 +70,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 从[Cloud Agent 架构建议](dsh-cloud-agent-architecture-recommendation.md)开始，按需要进入[Cloud Agent OSS 全景](dsh-cloud-agent-oss-landscape-review.md)、[Cloud 项目本地代码阅读备忘](dsh-cloud-projects-local-code-reading-memo.md)、[部署与租户隔离](dsh-deployment-and-tenancy-deep-dive.md)和[Remote Durable Workspace](dsh-remote-durable-workspace-pgfs-research.md)。E2B/CubeSandbox 的对比文档用于具体基础设施选型，不是 Browser-Native Agentic UI 的前置阅读。
 
-Browser-Native DSH 的云端 Workspace 增量同步实验从 [PoC 规划](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md)进入；[实施进度](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md)只记录已执行验证，不替代规划中的验收标准。
+Browser-Native DSH 的云端 Workspace 增量同步实验从 [PoC 规划](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md)进入；[实施进度](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md)只记录已执行验证，不替代规划中的验收标准。浏览器本地 durable store 另见 [durable Workspace 规划](browser-native-dsh-poc/durable-workspace-plan.md)、[进度与经验教训](browser-native-dsh-poc/durable-workspace-progress.md)和 [变更账本](browser-native-dsh-poc/change-ledger.md)。
 
 -----
 
@@ -155,6 +156,7 @@ Agentic UI 事实核查
 4. [Browser-Native VFS 与云端增量同步调研](dsh-browser-native-vfs-cloud-sync-research.md)：默认插件持久化分类、Session append-only 边界、Workspace manifest/blob/chunk、outbox、冲突与 Session/Workspace reconciliation。
 5. [PoC v2 当前实现与限制](browser-native-dsh-poc/README.md#当前实现快照)
 6. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
+7. [Durable Workspace 规划](browser-native-dsh-poc/durable-workspace-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-workspace-progress.md)：区分 OPFS/IndexedDB 本地恢复能力、云端 commit 和尚未消除的 post-commit 崩溃窗口。
 
 ### 路径 C：直接复现 PoC
 
@@ -266,6 +268,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [next-validation-plan.md](browser-native-dsh-poc/next-validation-plan.md) / [进度](browser-native-dsh-poc/next-validation-progress.md) | 已完成批次的 Chrome 运行时验证计划与进度；Safari 测试按当前安排暂停。 |
 | [cloud-backed-workspace-sync-plan.md](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md) | 云端 Workspace 同步 PoC 的目标、协议、验收标准和仍未完成的浏览器压力/生产化工作。 |
 | [cloud-backed-workspace-sync-progress.md](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md) | 已执行的 Workspace 同步证据：真实 Chrome/LLM 四轮闭环、文件变更矩阵、OS backend 重启、8 客户端协议并发、失败观察和限制。 |
+| [durable-workspace-plan.md](browser-native-dsh-poc/durable-workspace-plan.md) / [durable-workspace-progress.md](browser-native-dsh-poc/durable-workspace-progress.md) | 浏览器本地 OPFS/IndexedDB durable Workspace 规划、实现进度、503 刷新恢复证据和未完成故障矩阵。 |
 
 ### v2 实现和测试入口
 
@@ -279,6 +282,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [tests/backend-v2.test.mjs](browser-native-dsh-poc/tests/backend-v2.test.mjs) | backend contract tests。 |
 | [tests/browser-native-v2.e2e.mjs](browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs) | 真实 DSH Web UI + Chromium + backend 的组合 E2E。 |
 | [tests/runtime-validation.e2e.mjs](browser-native-dsh-poc/tests/runtime-validation.e2e.mjs) | Browser-specific roster、真实 LLM VFS 闭环、Session 记忆、刷新易失性、流式 DOM 与凭据流向检查。 |
+| [tests/durable-workspace-recovery.e2e.mjs](browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs) | 模型无关的真实 Chrome Worker/OPFS/IndexedDB 503 故障恢复和刷新重试。 |
 | [tests/runtime-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-lifecycle.e2e.mjs) | scripted Chrome 生命周期复测；历史 WebKit 结果仅作对照，覆盖刷新、Stop、失败恢复、backend 重启、lease 冲突和 Worker terminate。 |
 | [tests/runtime-real-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs) | 真实模型 Chrome Stop、`aborted → completed` 恢复、durable Session 和密钥流向检查；历史 WebKit 结果不在本轮复测。 |
 | [tests/runtime-streaming.e2e.mjs](browser-native-dsh-poc/tests/runtime-streaming.e2e.mjs) | 真实 Chrome 长回复的逐步 DOM、输入草稿、Stop、滚动和主线程 long-task 观测。 |
