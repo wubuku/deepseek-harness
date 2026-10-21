@@ -82,6 +82,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 | Interaction plane：Agentic UI | 用户在 Chat UI 中看到什么、操作什么，怎样复用已有 SaaS GUI，以及当前 Web UI 是否适合作为实现基础 | `dsh-agentic-ui-research.md`、`dsh-browser-native-agentic-ui-research.md`、`dsh-web-ui-quality-and-agentic-ui-framework-assessment.md` |
 | Execution plane：Browser-Native | Agent Loop 在哪里运行，怎样访问浏览器状态和前端 Tool | `dsh-browser-native-agent-loop-research.md`、`dsh-browser-native-runtime-research.md`、PoC v2 |
 | Durability plane：Cloud/Durable Agent | 页面退出、机器故障或长任务发生后，谁继续执行以及状态如何恢复 | Cloud Agent 系列、Remote Durable Workspace、实施方案中的 handoff 章节 |
+| Coordination plane：Agent 协作 | 多个 agent 如何互相通信、共享任务状态，跨进程与跨厂商时用什么协议 | `dsh-agent-collaboration-research.md` |
 
 三条轴合并后的目标拓扑是：
 
@@ -177,6 +178,12 @@ Agentic UI 事实核查
 5. [E2B 与 CubeSandbox 深度对比](dsh-e2b-vs-cubesandbox-deep-comparison.md)
 6. [CubeSandbox 深度调研](dsh-cubesandbox-deep-research.md)
 
+### 路径 E：多 agent 协作与跨进程协议
+
+适合回答“两个独立运行的 agent 如何互相通信、共享任务状态，跨机器时用什么协议”。
+
+1. [DSH Agent 协作深度调研](dsh-agent-collaboration-research.md)：区分委派与 peer 协作，核实 Agent Teams 的单进程边界与 Session 单写者约束，并提出尚未实现的 broker + peer 插件方案与 ACP／A2A 选型。
+
 -----
 
 ## Agentic UI 与 Browser-Native
@@ -232,6 +239,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 |---|---|---|
 | [dsh-developer-reading-guide.md](dsh-developer-reading-guide.md) | DSH 代码库阅读路线和架构定位 | 新开发者需要从架构、包边界和入口开始阅读代码时。 |
 | [dsh-herdr-agent-management-research.md](dsh-herdr-agent-management-research.md) | DSH Agent 与 Herdr 状态观察、reporter 和恢复 | 需要把 Agent 状态接入外部终端管理或 watchdog 时。 |
+| [dsh-agent-collaboration-research.md](dsh-agent-collaboration-research.md) | DSH agent 之间的协作形态、跨进程边界与协议选型 | 需要让多个 agent 互相通信、共享任务状态，或评估 ACP／A2A 时。 |
 | [dsh-research-branch-push-memo.md](dsh-research-branch-push-memo.md) | 研究分支提交、推送和文档登记流程 | 需要把新的研究草稿安全存档到当前研究分支时。 |
 
 这些文档不是 Browser-Native Agentic UI 的产品设计，但提供了实现研究所需的代码阅读、外部状态观察和研究分支维护入口。
