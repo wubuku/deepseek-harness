@@ -99,7 +99,7 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
       sessionId,
       ownerToken,
       expectedNextSeq: 0,
-      events: [{ seq: 0, type: 'workspace/receipt', data: receipt }],
+      events: [{ seq: 0, type: 'browser-native/workspace-receipt', ignorable: true, data: receipt }],
     })
     assert.equal(appended.response.ok, true, JSON.stringify(appended.value))
     const flushed = await post(origin, '/api/browser-native/session/flush', { sessionId, ownerToken })
@@ -107,6 +107,7 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
 
     const read = await post(origin, '/api/browser-native/session/read', { sessionId, offset: 0 })
     assert.deepEqual(read.value.events[0].data, receipt)
+    assert.equal(read.value.events[0].ignorable, true)
     const operation = await fetch(`${origin}/api/browser-native/workspace/operation/${operationId}?protocolVersion=1&workspaceId=${identity.workspaceId}`, { headers: { cookie: identity.cookie } })
     const operationBody = await operation.json()
     assert.equal(operationBody.found, true)

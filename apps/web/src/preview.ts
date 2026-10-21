@@ -20,7 +20,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction'
   readonly path?: string
   readonly from?: string
   readonly to?: string
@@ -42,6 +42,7 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly kind?: 'directory' | 'file'
   readonly mode?: number
   readonly bytes?: number
+  readonly receipts?: readonly Record<string, unknown>[]
 }
 
 function browserNativeTestUuid(): string {

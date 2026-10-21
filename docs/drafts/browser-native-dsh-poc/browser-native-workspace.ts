@@ -12,6 +12,7 @@ import type {
   DurableWorkspaceSnapshot,
   DurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
+import { DurableWorkspaceStoreError } from './browser-native-workspace-store.ts'
 
 const PROTOCOL_VERSION = 1
 const WORKSPACE_ROOT = '/dsh/home/workspace'
@@ -41,6 +42,17 @@ export interface WorkspaceChange {
   readonly hash?: string
   readonly bytes?: number
   readonly content?: Uint8Array
+  readonly operation?: WorkspaceToolOperation
+}
+
+/** DSH tool call that caused one or more Workspace mutations. */
+export interface WorkspaceToolOperation {
+  readonly sessionId: string
+  readonly turn: number
+  readonly step: number
+  readonly callId: string
+  readonly toolName: string
+  readonly toolCallSeq: number
 }
 
 /** One cloud commit retained locally until its receipt is known. */
@@ -48,6 +60,19 @@ export interface PendingBatch {
   readonly operationId: string
   readonly baseRevision: number
   readonly changes: readonly WorkspaceChange[]
+  readonly operation?: WorkspaceToolOperation
+}
+
+/** Durable acknowledgement returned by one Workspace commit. */
+export interface WorkspaceReceipt {
+  readonly operationId: string
+  readonly workspaceId: string
+  readonly baseRevision: number
+  readonly revision: number
+  readonly manifestDigest: string
+  readonly paths: readonly string[]
+  readonly replayed: boolean
+  readonly operation?: WorkspaceToolOperation
 }
 
 export interface BrowserNativeWorkspaceWriterLease {
@@ -55,7 +80,7 @@ export interface BrowserNativeWorkspaceWriterLease {
   readonly fencingToken: number
 }
 
-type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -135,6 +160,8 @@ function statusMessage(
 
 class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private readonly pending = new Map<string, WorkspaceChange>()
+  private readonly committedReceipts: WorkspaceReceipt[] = []
+  private readonly receiptOutbox: WorkspaceReceipt[] = []
   private readonly knownBlobHashes = new Set<string>()
   private readonly knownPaths = new Set<string>()
   private vfs: MemoryVfs | undefined
@@ -144,12 +171,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private blocked = false
   private failure: { readonly state: 'error' | 'conflict'; readonly message: string } | undefined
   private retryBatch: PendingBatch | undefined
-  private running: Promise<void> | undefined
+  private running: Promise<readonly WorkspaceReceipt[]> | undefined
   private scheduleTimer: ReturnType<typeof setTimeout> | undefined
   private localPersistChain: Promise<void> = Promise.resolve()
   private localPersistFailure: Error | undefined
   private writerToken: string | undefined
   private fencingToken: number | undefined
+  private activeOperation: WorkspaceToolOperation | undefined
 
   constructor(
     private readonly onStatus = statusMessage,
@@ -218,8 +246,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (dirtyCount > 0) this.schedule()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.failure = { state: 'error', message }
-      this.onStatus('error', this.workspaceId, this.revision, 0, message)
+      const state = error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
+        ? 'local-corrupt'
+        : 'error'
+      this.failure = { state: state === 'local-corrupt' ? 'error' : state, message }
+      this.onStatus(state, this.workspaceId, this.revision, this.pending.size, message)
       throw error
     }
   }
@@ -236,6 +267,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       return
     }
     if (change === undefined) return
+    if (this.activeOperation !== undefined) change = { ...change, operation: this.activeOperation }
     if (change.deleted === true) {
       const removed = (path: string): boolean => path === change.path || path.startsWith(`${change.path}/`)
       for (const path of this.pending.keys()) {
@@ -246,7 +278,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         ...(this.retryBatch?.changes.filter(item => item.deleted !== true).map(item => item.path) ?? []),
       ])
       for (const path of remotePaths) {
-        if (removed(path)) this.pending.set(path, { path, deleted: true })
+        if (removed(path)) this.pending.set(path, {
+          path,
+          deleted: true,
+          ...(this.activeOperation === undefined ? {} : { operation: this.activeOperation }),
+        })
       }
     } else {
       this.pending.set(change.path, change)
@@ -261,8 +297,8 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.schedule()
   }
 
-  async flush(): Promise<void> {
-    if (!this.ready || this.blocked) return
+  async flush(): Promise<readonly WorkspaceReceipt[]> {
+    if (!this.ready || this.blocked) return []
     if (this.scheduleTimer !== undefined) {
       clearTimeout(this.scheduleTimer)
       this.scheduleTimer = undefined
@@ -272,21 +308,51 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       await this.awaitLocalPersist()
     } catch (error) {
       this.setLocalPersistFailure(error)
-      return
+      return []
     }
     await this.drain()
+    try {
+      await this.awaitLocalPersist()
+    } catch (error) {
+      this.setLocalPersistFailure(error)
+      return []
+    }
+    return this.committedReceipts.splice(0)
   }
 
-  async flushAndRequireDurable(): Promise<void> {
-    await this.flush()
+  async flushAndRequireDurable(): Promise<readonly WorkspaceReceipt[]> {
+    const receipts = await this.flush()
     await this.awaitLocalPersist()
     if (this.failure !== undefined) throw new Error(this.failure.message)
     if (this.pending.size > 0 || this.retryBatch !== undefined) {
       throw new Error('browser-native workspace: mutations remain uncommitted')
     }
+    return receipts
   }
 
   async flushLocalWorkspace(): Promise<void> {
+    await this.awaitLocalPersist()
+  }
+
+  async runToolOperation<T>(operation: WorkspaceToolOperation, run: () => Promise<T>): Promise<T> {
+    if (this.activeOperation !== undefined) throw new Error('browser-native workspace: overlapping file-tool operation context')
+    this.activeOperation = operation
+    try {
+      return await run()
+    } finally {
+      this.activeOperation = undefined
+    }
+  }
+
+  pendingReceipts(sessionId: string): readonly WorkspaceReceipt[] {
+    return this.receiptOutbox.filter(receipt => receipt.operation?.sessionId === sessionId)
+  }
+
+  async acknowledgeReceipt(operationId: string): Promise<void> {
+    const index = this.receiptOutbox.findIndex(receipt => receipt.operationId === operationId)
+    if (index < 0) return
+    this.receiptOutbox.splice(index, 1)
+    this.queueLocalPersist()
     await this.awaitLocalPersist()
   }
 
@@ -322,6 +388,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       workspaceId: this.workspaceId,
       revision: this.revision,
       pending: [...this.pending.values()],
+      ...(this.receiptOutbox.length === 0 ? {} : { receipts: [...this.receiptOutbox] }),
       ...(this.retryBatch === undefined ? {} : { retryBatch: this.retryBatch }),
     }
   }
@@ -355,6 +422,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     const retryChanges = snapshot.retryBatch?.changes ?? []
     this.replayChanges(vfs, [...retryChanges, ...snapshot.pending])
     this.retryBatch = snapshot.retryBatch
+    this.receiptOutbox.splice(0, this.receiptOutbox.length, ...(snapshot.receipts ?? []))
     for (const change of snapshot.pending) this.pending.set(change.path, change)
     if (this.retryBatch !== undefined) this.revision = this.retryBatch.baseRevision
     else if (snapshot.pending.length > 0) this.revision = snapshot.revision
@@ -435,18 +503,19 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }, SYNC_DEBOUNCE_MS)
   }
 
-  private async drain(): Promise<void> {
+  private async drain(): Promise<readonly WorkspaceReceipt[]> {
     if (this.running !== undefined) return await this.running
-    if (!this.ready || this.blocked || this.workspaceId === undefined || this.revision === undefined) return
+    if (!this.ready || this.blocked || this.workspaceId === undefined || this.revision === undefined) return []
     this.running = this.performDrain()
     try {
-      await this.running
+      return await this.running
     } finally {
       this.running = undefined
     }
   }
 
-  private async performDrain(): Promise<void> {
+  private async performDrain(): Promise<readonly WorkspaceReceipt[]> {
+    const receipts: WorkspaceReceipt[] = []
     while (this.retryBatch !== undefined || this.pending.size > 0) {
       const batch = this.retryBatch ?? this.takeBatch()
       this.retryBatch = batch
@@ -455,7 +524,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         await this.awaitLocalPersist()
       } catch (error) {
         this.setLocalPersistFailure(error)
-        return
+        return receipts
       }
       this.onStatus('syncing', this.workspaceId, this.revision, this.pending.size + batch.changes.length)
       try {
@@ -477,12 +546,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
           }),
         })
         const receipt = await readJson(response)
-        this.applyReceipt(batch, receipt)
+        receipts.push(this.applyReceipt(batch, receipt))
       } catch (error) {
         const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
         const receipt = await this.lookupOperation(batch)
         if (receipt !== undefined) {
-          this.applyReceipt(batch, receipt)
+          receipts.push(this.applyReceipt(batch, receipt))
           continue
         }
         const message = error instanceof Error ? error.message : String(error)
@@ -490,16 +559,17 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.failure = { state: code === 'WORKSPACE_CONFLICT' ? 'conflict' : 'error', message }
         this.blocked = code === 'WORKSPACE_CONFLICT'
         this.onStatus(this.failure.state, this.workspaceId, this.revision, this.pending.size + batch.changes.length, message)
-        return
+        return receipts
       }
     }
     try {
       await this.awaitLocalPersist()
     } catch (error) {
       this.setLocalPersistFailure(error)
-      return
+      return receipts
     }
     this.onStatus('synced', this.workspaceId, this.revision, 0)
+    return receipts
   }
 
   private async claimWriter(): Promise<void> {
@@ -561,9 +631,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
   }
 
-  private applyReceipt(batch: PendingBatch, receipt: Record<string, unknown>): void {
+  private applyReceipt(batch: PendingBatch, receipt: Record<string, unknown>): WorkspaceReceipt {
     if ((receipt.operationId !== undefined && receipt.operationId !== batch.operationId) || typeof receipt.revision !== 'number'
-      || !Number.isSafeInteger(receipt.revision) || receipt.revision !== batch.baseRevision + 1) {
+      || !Number.isSafeInteger(receipt.revision) || receipt.revision !== batch.baseRevision + 1
+      || (receipt.workspaceId !== undefined && typeof receipt.workspaceId !== 'string')
+      || (receipt.digest !== undefined && typeof receipt.digest !== 'string')
+      || (receipt.changedPaths !== undefined && (!Array.isArray(receipt.changedPaths)
+        || receipt.changedPaths.some(path => typeof path !== 'string')))) {
       throw new Error('browser-native workspace: commit receipt does not match the pending operation')
     }
     const revision = receipt.revision
@@ -577,15 +651,41 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.knownPaths.add(change.path)
       }
     }
+    const result: WorkspaceReceipt = {
+      operationId: batch.operationId,
+      workspaceId: typeof receipt.workspaceId === 'string' ? receipt.workspaceId : this.workspaceId ?? '',
+      baseRevision: batch.baseRevision,
+      revision,
+      manifestDigest: typeof receipt.digest === 'string' ? receipt.digest : '',
+      paths: receipt.changedPaths === undefined ? batch.changes.map(change => change.path) : receipt.changedPaths,
+      replayed: receipt.replayed === true,
+      ...(batch.operation === undefined ? {} : { operation: batch.operation }),
+    }
     this.retryBatch = undefined
     this.failure = undefined
+    this.committedReceipts.push(result)
+    if (result.operation !== undefined && !this.receiptOutbox.some(item => item.operationId === result.operationId)) {
+      this.receiptOutbox.push(result)
+    }
     this.queueLocalPersist()
+    return result
   }
 
   private takeBatch(): PendingBatch {
-    const changes = [...this.pending.values()].sort((left, right) => left.path.localeCompare(right.path))
-    this.pending.clear()
-    return { operationId: crypto.randomUUID(), baseRevision: this.revision ?? 0, changes }
+    const ordered = [...this.pending.values()].sort((left, right) => left.path.localeCompare(right.path))
+    const operation = ordered[0]?.operation
+    const operationKey = operation === undefined ? undefined : JSON.stringify(operation)
+    const changes = ordered.filter(change => {
+      const changeKey = change.operation === undefined ? undefined : JSON.stringify(change.operation)
+      return changeKey === operationKey
+    })
+    for (const change of changes) this.pending.delete(change.path)
+    return {
+      operationId: crypto.randomUUID(),
+      baseRevision: this.revision ?? 0,
+      changes,
+      ...(operation === undefined ? {} : { operation }),
+    }
   }
 
   private async uploadChanges(changes: readonly WorkspaceChange[]): Promise<readonly Record<string, unknown>[]> {
@@ -637,7 +737,13 @@ export interface BrowserNativeWorkspaceRuntime {
   /** Restore the authorized remote Workspace before the Worker Host boots. */
   readonly prepareVfs: (vfs: MemoryVfs) => Promise<void>
   /** Retry pending writes and reject unless the current changes have receipts. */
-  readonly flushWorkspace: () => Promise<void>
+  readonly flushWorkspace: () => Promise<readonly WorkspaceReceipt[]>
+  /** Tag VFS mutations made by one DSH file-tool execution. */
+  readonly runToolOperation: <T>(operation: WorkspaceToolOperation, run: () => Promise<T>) => Promise<T>
+  /** Read unacknowledged receipts belonging to one DSH Session. */
+  readonly pendingReceipts: (sessionId: string) => readonly WorkspaceReceipt[]
+  /** Remove a receipt after its Session event is durable. */
+  readonly acknowledgeReceipt: (operationId: string) => Promise<void>
   /** Wait until the local durable snapshot has been written. */
   readonly flushLocalWorkspace: () => Promise<void>
   /** Return the PoC writer lease for model-independent browser tests. */
@@ -656,6 +762,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly onStatus?: typeof statusMessage
   /** Claim a backend writer lease before mirroring Workspace mutations. */
   readonly writerLease?: boolean
+  /** Inject storage faults through the PoC-only Worker test port. */
+  readonly testHooks?: { readonly abortNextMetadataTransaction?: () => boolean }
 }
 
 /**
@@ -666,7 +774,7 @@ export function createBrowserNativeWorkspaceRuntime(
   options: BrowserNativeWorkspaceRuntimeOptions = {},
 ): BrowserNativeWorkspaceRuntime {
   let vfs: MemoryVfs
-  const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore() : undefined)
+  const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore(options.testHooks) : undefined)
   const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store, options.writerLease === true)
   vfs = new MemoryVfs({ sink: mirror })
   return {
@@ -676,6 +784,9 @@ export function createBrowserNativeWorkspaceRuntime(
       await mirror.prepare(mounted)
     },
     flushWorkspace: async () => await mirror.flushAndRequireDurable(),
+    runToolOperation: async (operation, run) => await mirror.runToolOperation(operation, run),
+    pendingReceipts: sessionId => mirror.pendingReceipts(sessionId),
+    acknowledgeReceipt: async operationId => await mirror.acknowledgeReceipt(operationId),
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
     getWriterLease: () => mirror.getWriterLease(),
     releaseWriter: async () => await mirror.releaseWriter(),

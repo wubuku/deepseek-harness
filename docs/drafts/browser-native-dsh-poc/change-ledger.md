@@ -39,6 +39,23 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P0-001：本地损坏诊断与 Agent Workspace receipt 崩溃恢复
+
+```text
+changeId: BN-P0-001
+upstreamBaseline: dsh-v0.2.0-rc.2 / research checkout on 2026-10-22
+file: apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-events.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/*
+reason: 本地 snapshot/blob 损坏必须 fail closed；Workspace 已提交但 Session receipt 尚未到达 backend 时，Worker 终止必须能通过本地 outbox 补写同一 Session 的 receipt，且不能重放 Workspace 副作用。
+existingExtensionPointsChecked: MemoryVfs 的 VfsMutationSink、Worker Host 的 VFS/prepareVfs 注入、Session append/flush 生命周期和 tools/execute waterfall；实现限于 PoC provider、runtime 与 preview 状态，不修改正式 Agent Loop、Session event catalog 或 SESSION_FORMAT_VERSION。
+whyDraftOnlyWasInsufficient: Node 单测无法证明真实 OPFS/IndexedDB、Dedicated Worker、Session backend 与刷新后的同源身份共同满足跨存储恢复顺序；真实 LLM 会将协议错误与 provider 波动混淆。
+behaviorChange: durable Workspace 对 snapshot/blob 损坏报告 local-corrupt；PoC provider 将真实 DSH write/edit 工具调用身份附加到本地 Workspace batch，将 commit receipt 存入 OPFS/IndexedDB outbox，再追加同一 Session 的 browser-native/workspace-receipt event。该事件仅在持久化时标记 ignorable=true。首次 Session receipt append 被中断并终止 Worker 后，刷新重开同一 Session 可补写且去重；默认 preview 行为不变。
+consumersUpdated: next-high-value-validation-plan.md、next-high-value-validation-progress.md、README.md、docs/drafts/README.md、durable-workspace.spec.ts、durable-workspace-idb-abort.e2e.mjs、agent-workspace-receipt.e2e.mjs、agent-workspace-receipt-recovery.e2e.mjs。
+tests: pnpm run build 与 preview build 通过；Vitest 19/19、backend/reconciliation Node tests 18/18；真实 Chrome corruption、真实 IndexedDB transaction abort、Worker retry、Agent receipt 和 commit-before-Session-receipt crash recovery E2E 均通过。测试使用 scripted LLM；未运行 Safari/WebKit、真实 LLM、quota/eviction 或浏览器进程崩溃。
+syncReplaySteps: 迁移到正式 DSH 前，先为 Workspace receipt 定义受支持的 Session event schema 与 unknown-reader 兼容策略；将本地 outbox 和 page status 纳入正式 Workspace 服务；复用崩溃恢复 E2E 的顺序断言。若不产品化，删除本段所列 PoC provider/runtime、UI状态和测试，不改正式 Session format。
+deleteCondition: 正式 Workspace capability 提供 receipt、outbox recovery 和 Session reconciliation 的支持接口，且对应集成测试不再依赖本 PoC；或 Browser-Native Workspace PoC 被删除。
+status: implemented-as-draft
+```
+
 ### BN-V2-002：backend close 释放 keep-alive 连接
 
 ```text

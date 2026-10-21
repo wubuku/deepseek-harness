@@ -1,4 +1,5 @@
 import './symbol-dispose'
+import './browser-native-session-events.ts'
 
 /**
  * Browser-native PoC Worker entry.
@@ -42,12 +43,13 @@ let durableWorkspace = false
 let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
+let abortNextMetadataTransaction = false
 const pending: unknown[] = []
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction'
   readonly path?: string
   readonly from?: string
   readonly to?: string
@@ -61,7 +63,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   const data = value as Record<string, unknown>
   return data.type === 'browser-native-workspace-test-request'
     && typeof data.requestId === 'string'
-    && ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease'].includes(String(data.action))
+    && ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction'].includes(String(data.action))
 }
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
@@ -77,8 +79,8 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       return
     }
     if (request.action === 'flush-workspace') {
-      await workspaceRuntime.flushWorkspace()
-      workspaceTestResponse(request.requestId, { ok: true })
+      const receipts = await workspaceRuntime.flushWorkspace()
+      workspaceTestResponse(request.requestId, { ok: true, receipts })
       return
     }
     if (request.action === 'lease-info') {
@@ -88,6 +90,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'release-lease') {
       await workspaceRuntime.releaseWriter()
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'abort-next-metadata-transaction') {
+      abortNextMetadataTransaction = true
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
@@ -213,10 +220,22 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
-    const workspace = createBrowserNativeWorkspaceRuntime({ durable: durableWorkspace, writerLease: workspaceWriterLease })
+    const workspace = createBrowserNativeWorkspaceRuntime({
+      durable: durableWorkspace,
+      writerLease: workspaceWriterLease,
+      ...(workspaceTestPort === undefined ? {} : {
+        testHooks: {
+          abortNextMetadataTransaction: () => {
+            if (!abortNextMetadataTransaction) return false
+            abortNextMetadataTransaction = false
+            return true
+          },
+        },
+      }),
+    })
     workspaceRuntime = workspace
     const created = createWorkerHost({
-      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules() },
+      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace) },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,

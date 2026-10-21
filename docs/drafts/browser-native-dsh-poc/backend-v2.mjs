@@ -415,8 +415,50 @@ function writeStreamError(response, code, message) {
   response.end()
 }
 
-async function scriptedLlm(response, messages) {
-  const text = `Browser-native DSH completed this turn: ${textContent(messages).slice(0, 240)}`
+function hasUserMarker(messages, marker) {
+  return messages.some(message => message.role === 'user' && typeof message.content === 'string' && message.content.includes(marker))
+}
+
+function hasToolResult(messages) {
+  return messages.some(message => message.role === 'tool')
+}
+
+function hasTool(tools, name) {
+  return Array.isArray(tools) && tools.some(tool => tool?.function?.name === name || tool?.name === name)
+}
+
+async function scriptedWorkspaceToolCall(response) {
+  const argumentsText = JSON.stringify({
+    file_path: '/dsh/home/workspace/agent-receipt.txt',
+    content: 'BROWSER_NATIVE_WORKSPACE_TOOL_OK\n',
+  })
+  writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
+  writeStream(response, { kind: 'chunk', chunk: {
+    type: 'tool-call-delta', index: 0, id: 'browser-native-workspace-tool-call', name: 'write', argumentsDelta: argumentsText,
+  } })
+  writeStream(response, { kind: 'chunk', chunk: {
+    type: 'block-end', index: 0, block: {
+      type: 'tool-call', id: 'browser-native-workspace-tool-call', name: 'write', arguments: argumentsText,
+    },
+  } })
+  writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
+  response.end()
+}
+
+async function scriptedLlm(response, messages, tools) {
+  const workspaceMarker = [
+    'BROWSER_NATIVE_WORKSPACE_TOOL_E2E',
+    'BROWSER_NATIVE_WORKSPACE_CRASH_E2E',
+  ].find(marker => hasUserMarker(messages, marker))
+  if (workspaceMarker !== undefined && !hasToolResult(messages) && hasTool(tools, 'write')) {
+    await scriptedWorkspaceToolCall(response)
+    return
+  }
+  const text = workspaceMarker === 'BROWSER_NATIVE_WORKSPACE_TOOL_E2E'
+    ? 'BROWSER_NATIVE_WORKSPACE_TOOL_DONE'
+    : workspaceMarker === 'BROWSER_NATIVE_WORKSPACE_CRASH_E2E'
+      ? 'BROWSER_NATIVE_WORKSPACE_CRASH_DONE'
+      : `Browser-native DSH completed this turn: ${textContent(messages).slice(0, 240)}`
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
   for (const part of text.match(/.{1,32}/g) ?? []) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: part } })
@@ -683,7 +725,7 @@ export async function createBrowserNativeV2Server(options) {
         }
         if (llm.mode === 'scripted') {
           response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
-          await scriptedLlm(response, body.messages)
+          await scriptedLlm(response, body.messages, body.tools)
         } else {
           await realLlm(response, request, llm, body)
         }

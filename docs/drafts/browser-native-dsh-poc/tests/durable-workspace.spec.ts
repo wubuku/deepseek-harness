@@ -6,6 +6,7 @@ import {
 import {
   MemoryDurableWorkspaceStore,
 } from '../browser-native-workspace-store.ts'
+import { DurableWorkspaceStoreError } from '../browser-native-workspace-store.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
 const remoteBytes = new TextEncoder().encode('remote value')
@@ -124,5 +125,151 @@ describe('durable Browser-Native Workspace state', () => {
     await runtime.prepareVfs(runtime.vfs)
     expect(runtime.vfs.readFileSync('/dsh/home/workspace/draft.txt', 'utf8')).toBe('draft')
     expect(statuses).toContain('dirty')
+  })
+
+  it('publishes a durable receipt instead of only returning a successful flush', async () => {
+    vi.useFakeTimers()
+    const store = new MemoryDurableWorkspaceStore()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      requests.push(`${method} ${url}`)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
+      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
+      if (url.endsWith('/commit')) {
+        const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number; changes: Array<{ path: string }> }
+        return jsonResponse({
+          workspaceId,
+          revision: 1,
+          operationId: body.operationId,
+          changedPaths: body.changes.map(change => change.path),
+          digest: 'a'.repeat(64),
+          replayed: false,
+        })
+      }
+      throw new Error(`unexpected request ${method} ${url}`)
+    }))
+
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/receipt.txt', 'receipt')
+    const receipts = await runtime.flushWorkspace()
+
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({
+      workspaceId,
+      baseRevision: 0,
+      revision: 1,
+      manifestDigest: 'a'.repeat(64),
+      paths: ['receipt.txt'],
+      replayed: false,
+    })
+    expect(requests.some(request => request.startsWith('POST /api/browser-native/workspace/commit'))).toBe(true)
+  })
+
+  it('keeps the DSH tool-call link in the durable retry batch and receipt outbox', async () => {
+    vi.useFakeTimers()
+    const store = new MemoryDurableWorkspaceStore()
+    const operation = {
+      sessionId: 'session-linked-receipt',
+      turn: 2,
+      step: 1,
+      callId: 'tool-call-linked-receipt',
+      toolName: 'write',
+      toolCallSeq: 7,
+    }
+    const commits: Array<{ operationId: string; baseRevision: number }> = []
+    let failFirstCommit = true
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
+      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
+      if (url.endsWith('/commit')) {
+        const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number; changes: Array<{ path: string }> }
+        commits.push({ operationId: body.operationId, baseRevision: body.baseRevision })
+        if (failFirstCommit) {
+          failFirstCommit = false
+          return jsonResponse({ error: { code: 'TEMPORARY', message: 'commit response unavailable' } }, 503)
+        }
+        return jsonResponse({
+          workspaceId,
+          revision: body.baseRevision + 1,
+          operationId: body.operationId,
+          changedPaths: body.changes.map(change => change.path),
+          digest: 'b'.repeat(64),
+          replayed: true,
+        })
+      }
+      if (url.includes('/operation/')) return jsonResponse({ found: false })
+      throw new Error(`unexpected request ${method} ${url}`)
+    }))
+
+    const first = createBrowserNativeWorkspaceRuntime({ store })
+    await first.prepareVfs(first.vfs)
+    await first.runToolOperation(operation, async () => {
+      first.vfs.writeFileSync('/dsh/home/workspace/linked.txt', 'linked receipt')
+    })
+    await expect(first.flushWorkspace()).rejects.toThrow('commit response unavailable')
+    const interrupted = await store.load(workspaceId)
+    expect(interrupted?.retryBatch?.operation).toEqual(operation)
+    const operationId = interrupted?.retryBatch?.operationId
+    expect(typeof operationId).toBe('string')
+
+    const second = createBrowserNativeWorkspaceRuntime({ store })
+    await second.prepareVfs(second.vfs)
+    const receipts = await second.flushWorkspace()
+    expect(commits.map(commit => commit.operationId)).toEqual([operationId, operationId])
+    expect(receipts[0]).toMatchObject({ operationId, operation, replayed: true })
+    expect(second.pendingReceipts(operation.sessionId)).toEqual([receipts[0]])
+    expect((await store.load(workspaceId))?.receipts).toEqual([receipts[0]])
+
+    await second.acknowledgeReceipt(operationId as string)
+    expect((await store.load(workspaceId))?.receipts).toBeUndefined()
+  })
+
+  it('does not publish synced when the local durable snapshot is corrupt', async () => {
+    const statuses: string[] = []
+    stubRemoteManifest(0)
+    const store = {
+      load: async () => {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_MISSING', 'browser-native workspace: local blob is missing (test)')
+      },
+      save: async () => {},
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({
+      store,
+      onStatus: status => { statuses.push(status) },
+    })
+
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toMatchObject({ code: 'LOCAL_BLOB_MISSING' })
+    expect(statuses).toContain('local-corrupt')
+    expect(statuses).not.toContain('synced')
+  })
+
+  it('does not claim local durability when the metadata transaction aborts', async () => {
+    const statuses: string[] = []
+    stubRemoteManifest(0)
+    const store = {
+      load: async () => undefined,
+      save: async () => {
+        throw new DurableWorkspaceStoreError('LOCAL_STORE_UNAVAILABLE', 'browser-native workspace: IndexedDB transaction aborted')
+      },
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({
+      store,
+      onStatus: status => { statuses.push(status) },
+    })
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/aborted.txt', 'not durable')
+
+    await expect(runtime.flushLocalWorkspace()).rejects.toThrow('IndexedDB transaction aborted')
+    expect(statuses).toContain('error')
+    expect(statuses.at(-1)).toBe('error')
   })
 })

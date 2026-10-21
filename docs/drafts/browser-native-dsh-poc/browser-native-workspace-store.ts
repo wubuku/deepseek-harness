@@ -1,4 +1,4 @@
-import type { PendingBatch, WorkspaceChange } from './browser-native-workspace.ts'
+import type { PendingBatch, WorkspaceChange, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
 
 const STORE_VERSION = 1
 const DATABASE_NAME = 'dsh-browser-native-workspace-v1'
@@ -12,6 +12,7 @@ export interface DurableWorkspaceSnapshot {
   readonly revision: number
   readonly pending: readonly WorkspaceChange[]
   readonly retryBatch?: PendingBatch
+  readonly receipts?: readonly WorkspaceReceipt[]
 }
 
 /** Local store used by the Workspace mirror to survive Worker reconstruction. */
@@ -24,6 +25,19 @@ export interface DurableWorkspaceStore {
   clear(workspaceId: string): Promise<void>
 }
 
+/** Failure raised when local durable Workspace state cannot be trusted. */
+export class DurableWorkspaceStoreError extends Error {
+  override readonly name = 'DurableWorkspaceStoreError'
+
+  constructor(
+    readonly code: 'LOCAL_STORE_UNAVAILABLE' | 'LOCAL_METADATA_INVALID' | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+  }
+}
+
 interface StoredChange extends Omit<WorkspaceChange, 'content'> {
   readonly contentHash?: string
 }
@@ -32,6 +46,7 @@ interface StoredBatch {
   readonly operationId: string
   readonly baseRevision: number
   readonly changes: readonly StoredChange[]
+  readonly operation?: WorkspaceToolOperation
 }
 
 interface StoredSnapshot {
@@ -40,6 +55,7 @@ interface StoredSnapshot {
   readonly revision: number
   readonly pending: readonly StoredChange[]
   readonly retryBatch?: StoredBatch
+  readonly receipts?: readonly WorkspaceReceipt[]
 }
 
 interface WorkspaceDatabaseRecord extends StoredSnapshot {
@@ -68,8 +84,10 @@ function cloneSnapshot(snapshot: DurableWorkspaceSnapshot): DurableWorkspaceSnap
         operationId: snapshot.retryBatch.operationId,
         baseRevision: snapshot.retryBatch.baseRevision,
         changes: snapshot.retryBatch.changes.map(cloneChange),
+        ...(snapshot.retryBatch.operation === undefined ? {} : { operation: snapshot.retryBatch.operation }),
       },
     }),
+    ...(snapshot.receipts === undefined ? {} : { receipts: snapshot.receipts.map(receipt => ({ ...receipt, paths: [...receipt.paths] })) }),
   }
 }
 
@@ -101,7 +119,9 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     transaction.oncomplete = () => { resolve() }
-    transaction.onerror = () => { reject(transaction.error ?? new Error('browser-native workspace: IndexedDB transaction failed')) }
+    transaction.onerror = () => {
+      if (transaction.error !== null) reject(transaction.error)
+    }
     transaction.onabort = () => { reject(transaction.error ?? new Error('browser-native workspace: IndexedDB transaction aborted')) }
   })
 }
@@ -134,6 +154,7 @@ function storedChange(change: WorkspaceChange, contentHash?: string): StoredChan
     ...(change.mode === undefined ? {} : { mode: change.mode }),
     ...(change.hash === undefined ? {} : { hash: change.hash }),
     ...(change.bytes === undefined ? {} : { bytes: change.bytes }),
+    ...(change.operation === undefined ? {} : { operation: change.operation }),
   }
   return {
     ...metadata,
@@ -149,6 +170,7 @@ function restoreChange(change: StoredChange, content: Uint8Array | undefined): W
     ...(change.mode === undefined ? {} : { mode: change.mode }),
     ...(change.hash === undefined ? {} : { hash: change.hash }),
     ...(change.bytes === undefined ? {} : { bytes: change.bytes }),
+    ...(change.operation === undefined ? {} : { operation: change.operation }),
   }
   if (change.deleted === true || change.kind === 'directory') return metadata
   if (change.contentHash === undefined || content === undefined) throw new Error(`browser-native workspace: local blob is missing for ${change.path}`)
@@ -160,6 +182,7 @@ function assertStoredChange(value: unknown): asserts value is StoredChange {
   if (!isRecord(value) || typeof value.path !== 'string') {
     throw new Error('browser-native workspace: local change is invalid')
   }
+  if (value.operation !== undefined) assertStoredOperation(value.operation)
   if (value.deleted === true) return
   if (value.kind === 'directory') {
     if (value.contentHash !== undefined || !Number.isSafeInteger(value.mode)) {
@@ -174,12 +197,37 @@ function assertStoredChange(value: unknown): asserts value is StoredChange {
   }
 }
 
+function assertStoredOperation(value: unknown): asserts value is WorkspaceToolOperation {
+  if (!isRecord(value) || typeof value.sessionId !== 'string' || value.sessionId.length === 0
+    || !Number.isSafeInteger(value.turn) || !Number.isSafeInteger(value.step)
+    || typeof value.callId !== 'string' || value.callId.length === 0
+    || typeof value.toolName !== 'string' || value.toolName.length === 0
+    || !Number.isSafeInteger(value.toolCallSeq) || value.toolCallSeq < 0) {
+    throw new Error('browser-native workspace: local tool operation is invalid')
+  }
+}
+
+function assertStoredReceipt(value: unknown): asserts value is WorkspaceReceipt {
+  if (!isRecord(value) || typeof value.operationId !== 'string' || value.operationId.length === 0
+    || typeof value.workspaceId !== 'string' || !Number.isSafeInteger(value.baseRevision)
+    || !Number.isSafeInteger(value.revision) || typeof value.manifestDigest !== 'string'
+    || !Array.isArray(value.paths) || value.paths.some(path => typeof path !== 'string')
+    || typeof value.replayed !== 'boolean') {
+    throw new Error('browser-native workspace: local receipt is invalid')
+  }
+  if (value.operation !== undefined) assertStoredOperation(value.operation)
+}
+
 function assertStoredSnapshot(value: unknown): asserts value is WorkspaceDatabaseRecord {
   if (!isRecord(value) || value.version !== STORE_VERSION || typeof value.workspaceId !== 'string'
     || !Number.isSafeInteger(value.revision) || !Array.isArray(value.pending)) {
     throw new Error('browser-native workspace: local snapshot is invalid')
   }
   for (const change of value.pending) assertStoredChange(change)
+  if (value.receipts !== undefined) {
+    if (!Array.isArray(value.receipts)) throw new Error('browser-native workspace: local receipt outbox is invalid')
+    for (const receipt of value.receipts) assertStoredReceipt(receipt)
+  }
   if (value.retryBatch !== undefined) {
     if (!isRecord(value.retryBatch) || typeof value.retryBatch.operationId !== 'string'
       || value.retryBatch.operationId.length === 0 || !Number.isSafeInteger(value.retryBatch.baseRevision)
@@ -187,6 +235,7 @@ function assertStoredSnapshot(value: unknown): asserts value is WorkspaceDatabas
       throw new Error('browser-native workspace: local retry batch is invalid')
     }
     for (const change of value.retryBatch.changes) assertStoredChange(change)
+    if (value.retryBatch.operation !== undefined) assertStoredOperation(value.retryBatch.operation)
   }
 }
 
@@ -195,6 +244,9 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   private database: IDBDatabase | undefined
   private opfsRoot: FileSystemDirectoryHandle | undefined
   private readonly blobDirectories = new Map<string, FileSystemDirectoryHandle>()
+
+  /** @param testHooks - Optional fault injection used only by Browser-Native PoC tests. */
+  constructor(private readonly testHooks?: { readonly abortNextMetadataTransaction?: () => boolean }) {}
 
   private async resources(workspaceId: string): Promise<{ database: IDBDatabase; blobDirectory: FileSystemDirectoryHandle }> {
     this.database ??= await openDatabase()
@@ -218,7 +270,15 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     const result = await requestResult(transaction.objectStore(METADATA_STORE).get(workspaceId))
     await transactionDone(transaction)
     if (result === undefined) return undefined
-    assertStoredSnapshot(result)
+    try {
+      assertStoredSnapshot(result)
+    } catch (error) {
+      throw new DurableWorkspaceStoreError(
+        'LOCAL_METADATA_INVALID',
+        'browser-native workspace: local durable snapshot is invalid',
+        { cause: error },
+      )
+    }
     if (result.workspaceId !== workspaceId) throw new Error('browser-native workspace: local snapshot workspace mismatch')
     return result
   }
@@ -252,10 +312,19 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     try {
       file = await (await directory.getFileHandle(hash)).getFile()
     } catch (error) {
-      throw new Error(`browser-native workspace: local blob is missing (${hash})`, { cause: error })
+      throw new DurableWorkspaceStoreError(
+        'LOCAL_BLOB_MISSING',
+        `browser-native workspace: local blob is missing (${hash})`,
+        { cause: error },
+      )
     }
     const bytes = new Uint8Array(await file.arrayBuffer())
-    if (await sha256(bytes) !== hash) throw new Error(`browser-native workspace: local blob hash mismatch (${hash})`)
+    if (await sha256(bytes) !== hash) {
+      throw new DurableWorkspaceStoreError(
+        'LOCAL_BLOB_CORRUPT',
+        `browser-native workspace: local blob hash mismatch (${hash})`,
+      )
+    }
     return bytes
   }
 
@@ -268,7 +337,14 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
 
   private async decodeChange(directory: FileSystemDirectoryHandle, change: StoredChange): Promise<WorkspaceChange> {
     if (change.contentHash === undefined) return restoreChange(change, undefined)
-    return restoreChange(change, await this.readBlob(directory, change.contentHash))
+    const content = await this.readBlob(directory, change.contentHash)
+    if (change.bytes !== undefined && change.bytes !== content.byteLength) {
+      throw new DurableWorkspaceStoreError(
+        'LOCAL_BLOB_SIZE_MISMATCH',
+        `browser-native workspace: local blob size mismatch for ${change.path}`,
+      )
+    }
+    return restoreChange(change, content)
   }
 
   async load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
@@ -280,6 +356,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       operationId: record.retryBatch.operationId,
       baseRevision: record.retryBatch.baseRevision,
       changes: await Promise.all(record.retryBatch.changes.map(change => this.decodeChange(blobDirectory, change))),
+      ...(record.retryBatch.operation === undefined ? {} : { operation: record.retryBatch.operation }),
     }
     return {
       version: STORE_VERSION,
@@ -287,6 +364,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       revision: record.revision,
       pending,
       ...(retryBatch === undefined ? {} : { retryBatch }),
+      ...(record.receipts === undefined ? {} : { receipts: record.receipts }),
     }
   }
 
@@ -297,6 +375,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       operationId: snapshot.retryBatch.operationId,
       baseRevision: snapshot.retryBatch.baseRevision,
       changes: await Promise.all(snapshot.retryBatch.changes.map(change => this.encodeChange(blobDirectory, change))),
+      ...(snapshot.retryBatch.operation === undefined ? {} : { operation: snapshot.retryBatch.operation }),
     }
     const record: WorkspaceDatabaseRecord = {
       version: STORE_VERSION,
@@ -304,10 +383,13 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       revision: snapshot.revision,
       pending,
       ...(retryBatch === undefined ? {} : { retryBatch }),
+      ...(snapshot.receipts === undefined ? {} : { receipts: snapshot.receipts }),
     }
     const transaction = database.transaction(METADATA_STORE, 'readwrite')
+    const committed = transactionDone(transaction)
     transaction.objectStore(METADATA_STORE).put(record)
-    await transactionDone(transaction)
+    if (this.testHooks?.abortNextMetadataTransaction?.() === true) transaction.abort()
+    await committed
   }
 
   async clear(workspaceId: string): Promise<void> {
@@ -326,7 +408,13 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return output
 }
 
-/** Create the browser implementation explicitly at the opt-in integration seam. */
-export function createBrowserDurableWorkspaceStore(): DurableWorkspaceStore {
-  return new BrowserDurableWorkspaceStore()
+/**
+ * Create the browser implementation explicitly at the opt-in integration seam.
+ * @param testHooks - Optional fault injection used only by Browser-Native PoC tests.
+ * @returns The OPFS and IndexedDB Workspace store.
+ */
+export function createBrowserDurableWorkspaceStore(
+  testHooks?: { readonly abortNextMetadataTransaction?: () => boolean },
+): DurableWorkspaceStore {
+  return new BrowserDurableWorkspaceStore(testHooks)
 }

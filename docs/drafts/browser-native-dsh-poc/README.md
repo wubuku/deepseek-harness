@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## Summary
 
-本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
+本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
@@ -58,7 +58,7 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&preview-fixture=none
 ```
 
-本批次新增的模型无关验收覆盖上传失败、commit 响应丢失后的 operation 查询、真实 Chrome Worker/OPFS/IndexedDB、多页面 writer lease/fencing、Workspace 文件操作矩阵，以及 Session receipt 与 Workspace receipt 的协议级关联。`workspace-session-reconciliation.mjs` 只定义和测试 receipt 状态，不表示它已经自动接入 DSH Agent Loop；当前 Agent 工具写入与 Session event 之间仍需要正式的扩展点。
+本批次新增的模型无关验收覆盖上传失败、commit 响应丢失后的 operation 查询、真实 Chrome Worker/OPFS/IndexedDB、多页面 writer lease/fencing、Workspace 文件操作矩阵，以及 Session receipt 与 Workspace receipt 的协议级关联。最新 P0 批次覆盖本地 snapshot/blob 损坏的 fail-closed 状态、Worker 终止后的恢复，以及真实 DSH 文件工具到 Workspace receipt 的 scripted Agent Loop 闭环；其中还故意中断 Session receipt append，再杀 Worker、刷新并重开同一 Session，验证本地 outbox 补写且不重复 Workspace commit。证据和未完成项见 [next-high-value-validation-progress.md](next-high-value-validation-progress.md)。`workspace-session-reconciliation.mjs` 仍是协议级状态测试；`browser-native/workspace-receipt` 是本 PoC 独有并标为 `ignorable` 的 Session event，不是正式事件目录或 Session 格式能力。
 
 ```sh
 node --test docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs
@@ -88,7 +88,21 @@ DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
 node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs
 ```
 
-该测试只在 `browser-native-test=workspace-recovery` URL 下启用 PoC 专用 Worker MessagePort 接缝：在 Worker 共享 VFS 写入文件，第一次 Workspace commit 被注入 503，刷新后检查 IndexedDB retry、OPFS blob、同一 `operationId` 重试、远端 manifest/blob 和页面错误。它是模型无关的故障恢复证据，不是产品 API，也不替代真实 LLM 文件工具验收。该测试通过不等于 M4 故障矩阵全部完成；上传失败、超时、缺 blob、损坏 snapshot、quota/eviction 仍未验证。
+该测试只在 `browser-native-test=workspace-recovery` URL 下启用 PoC 专用 Worker MessagePort 接缝：在 Worker 共享 VFS 写入文件，第一次 Workspace commit 被注入 503，刷新后检查 IndexedDB retry、OPFS blob、同一 `operationId` 重试、远端 manifest/blob 和页面错误。它是模型无关的故障恢复证据，不是产品 API，也不替代真实 LLM 文件工具验收。损坏 snapshot/blob 的真实 Chrome 入口见 `tests/durable-workspace-corruption.e2e.mjs`；真实 IndexedDB transaction abort 见 `tests/durable-workspace-idb-abort.e2e.mjs`；Worker 终止后恢复入口见 `tests/worker-lifecycle-recovery.e2e.mjs`；真实 DSH 文件工具和同 Session receipt 崩溃恢复的 scripted 入口分别见 `tests/agent-workspace-receipt.e2e.mjs` 与 `tests/agent-workspace-receipt-recovery.e2e.mjs`。真实 Chrome 尚未覆盖 quota/eviction 或浏览器进程强制崩溃。
+
+真实 Chrome IndexedDB transaction abort 验收：test port 在 OPFS/IndexedDB durable store 的 metadata `put` 后调用 `IDBTransaction.abort()`。预期 Worker 明确返回本地持久化错误，retry batch 最终保留在 IndexedDB；测试阻断随后的 blob 上传，并确认 Workspace manifest 未提交该文件。
+
+```sh
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-idb-abort.e2e.mjs
+```
+
+真实 DSH `write` 工具已接入本地 receipt outbox 与同一 Session 的 PoC-only event。Provider 在持久化 `browser-native/workspace-receipt` 时附加 `ignorable: true`，不改正式 Session event catalog 或 format version。下列脚本用 scripted LLM 和真实 Chrome Worker Host：在 receipt append 发往 Session backend 前暂停请求，确认 Workspace commit 和 OPFS/IndexedDB outbox 已落盘后终止 Worker；刷新后让同一 Session 重开并完成 receipt append。验收要求是 Session 仅有一条匹配 receipt、Workspace commit 仅一次、outbox 清空。
+
+```sh
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-receipt-recovery.e2e.mjs
+```
 
 真实文件工具验收需要真实模型配置，并把输出写入 Workspace mirror：
 

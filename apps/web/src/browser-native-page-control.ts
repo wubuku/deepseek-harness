@@ -10,7 +10,7 @@ interface BrowserNativeOwnerNotice {
 
 interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
@@ -65,7 +65,7 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
       notice.message,
     )
     workspaceStatus.dataset.state = notice.state
-    workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict' ? '#f87171'
+    workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict' || notice.state === 'local-corrupt' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
   }
   channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativePageNotice>) => {

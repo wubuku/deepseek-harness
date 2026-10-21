@@ -1,4 +1,4 @@
-type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -8,6 +8,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     syncing: 'Workspace syncing…',
     error: 'Workspace sync failed',
     conflict: 'Workspace revision conflict',
+    'local-corrupt': 'Local Workspace state is corrupt',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -16,6 +17,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     syncing: '工作区正在同步…',
     error: '工作区同步失败',
     conflict: '工作区发生版本冲突',
+    'local-corrupt': '本地工作区状态损坏',
   },
 }
 

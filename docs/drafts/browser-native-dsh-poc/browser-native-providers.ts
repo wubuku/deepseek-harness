@@ -7,6 +7,7 @@
  * that loads them.
  */
 import { requireActiveModuleLoader, type StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
+import './browser-native-session-events.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   GenerateOptions,
@@ -24,6 +25,8 @@ import type {
   SessionLogOffset,
   Session,
 } from '@deepseek-ai/dsh-session'
+import type { BrowserNativeWorkspaceReceiptEvent } from './browser-native-session-events.ts'
+import type { BrowserNativeWorkspaceRuntime, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
 import type {
   SessionAccess,
   SessionHandle,
@@ -244,11 +247,14 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   private async appendEvents(events: readonly SessionEvent[], signal?: AbortSignal): Promise<void> {
     if (events.length === 0) return
     const owner = this.ownerBody()
+    const persistedEvents = events.map(event => event.type === 'browser-native/workspace-receipt'
+      ? { ...event, ignorable: true as const }
+      : event)
     const result = await sessionRequest('append', {
       sessionId: this.id,
       ...owner,
       expectedNextSeq: this.nextSeq,
-      events,
+      events: persistedEvents,
     }, signal)
     this.nextSeq = required(result.nextSeq, 'nextSeq')
   }
@@ -339,12 +345,15 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   }
 }
 
-function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistence {
+function createRemoteSessionPersistenceClass(
+  workspace: BrowserNativeWorkspaceRuntime,
+): typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistence {
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
     override readonly name = 'session-persistence-browser-native'
     private readonly handles = new Set<RemoteSessionHandle>()
     private readonly writers = new Map<SessionId, RemoteSessionHandle>()
+    private readonly receiptWrites = new Map<SessionId, Promise<void>>()
 
     constructor(ctx: Context) {
       super(ctx)
@@ -352,10 +361,22 @@ function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-
         this.writers.get(session.id)?.enqueueLive(event, error => {
           ctx.logger.warn(`browser-native session write failed for "${session.id}": ${String(error)}`)
         })
+        if (event.type === 'tool/result') {
+          const callId = String(event.data.message.source.callId)
+          queueMicrotask(() => {
+            void this.persistWorkspaceReceipts(session, callId).catch(error => {
+              ctx.logger.warn(`browser-native Workspace receipt persistence failed for "${session.id}": ${String(error)}`)
+            })
+          })
+        }
       })
-      ctx.on('session/flush', (session: Session) => {
-        const handle = this.writers.get(session.id)
-        return handle === undefined ? undefined : handle.flush()
+      ctx.on('session/created', (session: Session) => {
+        void this.persistWorkspaceReceipts(session).catch(error => {
+          ctx.logger.warn(`browser-native Workspace receipt recovery failed for "${session.id}": ${String(error)}`)
+        })
+      })
+      ctx.on('session/flush', async (session: Session) => {
+        await this.persistWorkspaceReceipts(session)
       })
       ctx.on('session/disposed', (session: Session) => {
         const handle = this.writers.get(session.id)
@@ -375,6 +396,85 @@ function createRemoteSessionPersistenceClass(): typeof import('@deepseek-ai/dsh-
         }
         if (errors.length > 0) throw new AggregateError(errors, 'browser-native session persistence dispose failed')
       }, 'session-persistence-browser-native open handles')
+      ctx.on('tools/execute', async (exec, next) => {
+        if ((exec.name !== 'write' && exec.name !== 'edit') || exec.agent === undefined) return await next()
+        const session = exec.agent.session
+        const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)
+        if (call === undefined || call.type !== 'tool/call') return await next()
+        const operation: WorkspaceToolOperation = {
+          sessionId: String(session.id),
+          turn: call.data.turn,
+          step: call.data.step,
+          callId: String(call.data.callId),
+          toolName: call.data.name,
+          toolCallSeq: Number(call.seq),
+        }
+        const result = await workspace.runToolOperation(operation, next)
+        if (!result.isError) {
+          try {
+            await workspace.flushWorkspace()
+          } catch (error) {
+            ctx.logger.warn(`browser-native Workspace commit for tool call "${String(exec.callId)}" remains pending: ${String(error)}`)
+          }
+        }
+        return result
+      })
+    }
+
+    private async persistWorkspaceReceipts(session: Session, callId?: string): Promise<void> {
+      const existingWrite = this.receiptWrites.get(session.id)
+      const currentWrite = (existingWrite ?? Promise.resolve()).catch(() => undefined).then(async () => {
+        const handle = this.writers.get(session.id)
+        if (handle === undefined) return
+        const pending = workspace.pendingReceipts(String(session.id))
+          .filter(receipt => callId === undefined || receipt.operation?.callId === callId)
+        if (pending.length === 0) return
+        const events = session.snapshotEvents()
+        const appendedOperations = new Set<string>()
+        for (const receipt of pending) {
+          const operation = receipt.operation
+          if (operation === undefined) continue
+          const call = events.find(event => event.type === 'tool/call' && event.seq === operation.toolCallSeq
+            && String(event.data.callId) === operation.callId && event.data.name === operation.toolName
+            && event.data.turn === operation.turn && event.data.step === operation.step)
+          if (call === undefined) continue
+          const existing = events.find(event => event.type === 'browser-native/workspace-receipt'
+            && event.data.operationId === receipt.operationId)
+          if (existing !== undefined) {
+            if (existing.type !== 'browser-native/workspace-receipt' || existing.data.callId !== operation.callId
+              || existing.data.toolCallSeq !== operation.toolCallSeq || existing.data.workspaceId !== receipt.workspaceId) {
+              throw new Error(`receipt operation "${receipt.operationId}" is already linked to different Session data`)
+            }
+            appendedOperations.add(receipt.operationId)
+            continue
+          }
+          const data: BrowserNativeWorkspaceReceiptEvent = {
+            turn: operation.turn,
+            step: operation.step,
+            callId: operation.callId,
+            toolName: operation.toolName,
+            toolCallSeq: operation.toolCallSeq,
+            operationId: receipt.operationId,
+            workspaceId: receipt.workspaceId,
+            baseRevision: receipt.baseRevision,
+            revision: receipt.revision,
+            manifestDigest: receipt.manifestDigest,
+            paths: receipt.paths,
+            replayed: receipt.replayed,
+          }
+          session.append('browser-native/workspace-receipt', data)
+          appendedOperations.add(receipt.operationId)
+        }
+        if (appendedOperations.size === 0) return
+        await handle.flush()
+        for (const operationId of appendedOperations) await workspace.acknowledgeReceipt(operationId)
+      })
+      this.receiptWrites.set(session.id, currentWrite)
+      try {
+        await currentWrite
+      } finally {
+        if (this.receiptWrites.get(session.id) === currentWrite) this.receiptWrites.delete(session.id)
+      }
     }
 
     private untrack(handle: RemoteSessionHandle): void {
@@ -599,10 +699,10 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
   }
 }
 
-function createSessionModule(): unknown {
+function createSessionModule(workspace: BrowserNativeWorkspaceRuntime): unknown {
   let module: unknown
   return () => {
-    const RemoteSessionPersistence = createRemoteSessionPersistenceClass()
+    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace)
     module ??= { default: RemoteSessionPersistence, RemoteSessionPersistence }
     return module
   }
@@ -624,9 +724,9 @@ function createLlmModule(): unknown {
 }
 
 /** Return the static module table consumed by the custom Worker entry. */
-export function createBrowserNativeStaticModules(): Readonly<Record<string, StaticModuleFactory>> {
+export function createBrowserNativeStaticModules(workspace: BrowserNativeWorkspaceRuntime): Readonly<Record<string, StaticModuleFactory>> {
   return {
-    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(),
+    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace),
     '@deepseek-ai/dsh-browser-native-llm': createLlmModule(),
   }
 }
