@@ -427,18 +427,15 @@ function hasTool(tools, name) {
   return Array.isArray(tools) && tools.some(tool => tool?.function?.name === name || tool?.name === name)
 }
 
-async function scriptedWorkspaceToolCall(response) {
-  const argumentsText = JSON.stringify({
-    file_path: '/dsh/home/workspace/agent-receipt.txt',
-    content: 'BROWSER_NATIVE_WORKSPACE_TOOL_OK\n',
-  })
+async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolArguments }) {
+  const argumentsText = JSON.stringify(toolArguments)
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
   writeStream(response, { kind: 'chunk', chunk: {
-    type: 'tool-call-delta', index: 0, id: 'browser-native-workspace-tool-call', name: 'write', argumentsDelta: argumentsText,
+    type: 'tool-call-delta', index: 0, id, name, argumentsDelta: argumentsText,
   } })
   writeStream(response, { kind: 'chunk', chunk: {
     type: 'block-end', index: 0, block: {
-      type: 'tool-call', id: 'browser-native-workspace-tool-call', name: 'write', arguments: argumentsText,
+      type: 'tool-call', id, name, arguments: argumentsText,
     },
   } })
   writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
@@ -446,12 +443,57 @@ async function scriptedWorkspaceToolCall(response) {
 }
 
 async function scriptedLlm(response, messages, tools) {
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_WORKSPACE_EDIT_E2E')
+    && ['write', 'read', 'edit'].every(name => hasTool(tools, name))) {
+    const sequence = [
+      {
+        id: 'browser-native-edit-sequence-write-initial',
+        name: 'write',
+        arguments: { file_path: '/dsh/home/workspace/agent-edit.txt', content: 'alpha\nbeta\n' },
+      },
+      {
+        id: 'browser-native-edit-sequence-read-before-edit',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/agent-edit.txt' },
+      },
+      {
+        id: 'browser-native-edit-sequence-edit',
+        name: 'edit',
+        arguments: { file_path: '/dsh/home/workspace/agent-edit.txt', old_string: 'beta', new_string: 'BETA' },
+      },
+      {
+        id: 'browser-native-edit-sequence-write-second-file',
+        name: 'write',
+        arguments: { file_path: '/dsh/home/workspace/agent-edit-summary.txt', content: 'edited=agent-edit.txt\n' },
+      },
+    ]
+    const completedCalls = messages.filter(message => message.role === 'tool').length
+    if (completedCalls < sequence.length) {
+      await scriptedWorkspaceToolCall(response, sequence[completedCalls])
+      return
+    }
+    const text = 'BROWSER_NATIVE_WORKSPACE_EDIT_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   const workspaceMarker = [
     'BROWSER_NATIVE_WORKSPACE_TOOL_E2E',
     'BROWSER_NATIVE_WORKSPACE_CRASH_E2E',
   ].find(marker => hasUserMarker(messages, marker))
   if (workspaceMarker !== undefined && !hasToolResult(messages) && hasTool(tools, 'write')) {
-    await scriptedWorkspaceToolCall(response)
+    await scriptedWorkspaceToolCall(response, {
+      id: 'browser-native-workspace-tool-call',
+      name: 'write',
+      arguments: {
+        file_path: '/dsh/home/workspace/agent-receipt.txt',
+        content: 'BROWSER_NATIVE_WORKSPACE_TOOL_OK\n',
+      },
+    })
     return
   }
   const text = workspaceMarker === 'BROWSER_NATIVE_WORKSPACE_TOOL_E2E'

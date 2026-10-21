@@ -63,6 +63,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 8. [Browser-Native Durable Workspace 规划与进度](browser-native-dsh-poc/durable-workspace-plan.md)及[实施记录](browser-native-dsh-poc/durable-workspace-progress.md)：验证 OPFS/IndexedDB 本地 bytes、pending/retry 恢复和真实 DSH 文件工具在 Worker 重建后的行为；其中模型无关的 503 刷新恢复入口是 [durable-workspace-recovery.e2e.mjs](browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs)。
 9. [Browser-Native 高价值验证计划](browser-native-dsh-poc/high-value-validation-plan.md)及[进度](browser-native-dsh-poc/high-value-validation-progress.md)：验证上传失败、commit unknown、Workspace writer lease/fencing、文件操作矩阵和 Session/Workspace receipt 协调；明确哪些仍未接入 Agent Loop。
 10. [Browser-Native 下一批 P0 验证计划](browser-native-dsh-poc/next-high-value-validation-plan.md)及[实施进度](browser-native-dsh-poc/next-high-value-validation-progress.md)：Chrome 已验证本地 snapshot/blob 损坏时 fail closed、真实 IndexedDB abort 的错误与 retry 保留、真实 DSH `write` 工具产生 PoC-only Session receipt，以及 receipt append 中断后杀 Worker、刷新并重开同一 Session 的恢复；quota/eviction、浏览器进程崩溃和带 Workspace lease 的完整页面生命周期仍未验证。
+11. [Browser-Native 下一批验证计划](browser-native-dsh-poc/next-round-validation-plan.md)及[进度](browser-native-dsh-poc/next-round-validation-progress.md)：三项真实 Chrome/Worker 验证均通过 scripted LLM，包括已提交 Workspace 缓存清除后重建、Agent `write → read → edit → write` 的 Session receipt 对账，以及同标签页刷新后含“resume 已成功但响应丢失”注入的 writer lease 恢复与旧 token fencing；真实模型、quota/eviction 和 OS 级浏览器进程崩溃未验证。
 
 ### 需要实现或审查代码时
 

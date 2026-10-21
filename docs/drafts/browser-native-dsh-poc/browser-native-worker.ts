@@ -25,7 +25,11 @@ import { isShellStartFrame } from '../../../packages/experimental/webworker-runt
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
-import { setBrowserNativeControlPort, setBrowserNativeResumeOwner } from './browser-native-control.ts'
+import {
+  setBrowserNativeControlPort,
+  setBrowserNativeResumeOwner,
+  setBrowserNativeResumeWorkspaceLease,
+} from './browser-native-control.ts'
 import {
   createBrowserNativeWorkspaceRuntime,
 } from './browser-native-workspace.ts'
@@ -195,6 +199,20 @@ self.addEventListener('message', (event: MessageEvent) => {
       throw new Error('browser-native worker: resume owner frame needs sessionId and ownerToken')
     }
     setBrowserNativeResumeOwner(data.sessionId, data.ownerToken)
+    return
+  }
+  if (data?.type === 'browser-native-control-resume-workspace-lease') {
+    if (typeof data.workspaceId !== 'string' || typeof data.writerToken !== 'string'
+      || typeof data.fencingToken !== 'number' || !Number.isSafeInteger(data.fencingToken)
+      || typeof data.resumeId !== 'string') {
+      throw new Error('browser-native worker: resume Workspace lease frame is invalid')
+    }
+    setBrowserNativeResumeWorkspaceLease({
+      workspaceId: data.workspaceId,
+      writerToken: data.writerToken,
+      fencingToken: data.fencingToken,
+      resumeId: data.resumeId,
+    })
     return
   }
   if (data?.type === 'browser-native-durable-workspace-init') {

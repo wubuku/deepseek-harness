@@ -372,3 +372,21 @@ syncReplaySteps: 若 Workspace lease 进入正式运行时，把 URL-gated 参�
 deleteCondition: 正式 Browser Workspace service 提供跨进程 fencing、operation 查询和可验证 receipt，且 Agent Loop 已有明确的 Workspace/Session reconciliation seam；或本批次 PoC 被删除。
 status: implemented
 ```
+
+### BN-P2-009：缓存清除重建、Agent edit receipt 与 lease 刷新恢复
+
+```text
+changeId: BN-P2-009
+upstreamBaseline: research checkout after BN-P2-008; 2026-10-22
+file: apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-cache-reset.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-edit-receipt.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-writer-reload.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-round-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-round-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 验证已提交 Workspace 缓存丢失后的重建、DSH write/read/edit/write 操作与 Session receipt 的一一对应，以及同标签页刷新后的 writer lease 安全恢复；已有故障矩阵未覆盖这些恢复和真实 Agent edit 路径。
+existingExtensionPointsChecked: 复用 MemoryVfs mutation sink、Worker Host boot 前 VFS 准备、现有 Workspace manifest/blob/commit API、PoC writer lease 和 preview 的显式 browser-native opt-in；未修改 Agent Loop、正式 Session event catalog、Session format 或 Workspace API。
+whyDraftOnlyWasInsufficient: 存储协议单测不能覆盖 OPFS/IndexedDB 清除后的 Worker hydrate、真实 DSH file tool 到 Session receipt 的关联，或刷新页面后由新 Worker 接管写权的时序；模型无关 scripted LLM 可把这些状态验证与上游模型可用性隔离。
+behaviorChange: backend 增加同 Workspace lease 的 resume 操作，校验旧 writerToken/fencingToken 后原子轮换 token 并递增 fencingToken；稳定 resumeId 对当前 backend 进程内已成功但响应丢失的 resume 提供幂等重放，requestId 仍是逐请求诊断标识。page controller 通过当前标签页 sessionStorage 将恢复凭据交给新 Worker；旧凭据缺少 resumeId 时会先持久化新 ID；Worker 在 Workspace hydrate 前恢复 lease，释放后清除凭据。workspace lease 仍是显式 opt-in。新增三项模型无关的真实 Chrome E2E，分别覆盖远端已提交文件的本地缓存重建、DSH write/read/edit/write Session receipt 及刷新后 lease resume/fencing；lease E2E 在真实 Chrome 中完成 backend 响应丢失注入，确认重放不重复增加 fencing epoch。
+directoryOutChangeReason: apps/web/src/browser-native-page-control.ts 必须在主线程保存并跨页面刷新恢复 tab-scoped 凭据；Dedicated Worker 无法读取 window.sessionStorage。修改仅服务于显式启用 browser-native-workspace-lease 的 PoC 入口，不改变默认 Web/Preview/桌面行为。
+consumersUpdated: Browser-Native Workspace Worker、页面控制器、backend lease handler、backend contract tests、三项真实 Chrome E2E、PoC README、验证计划/进度和 docs/drafts 索引。
+tests: DSH_POC_BROWSER=chrome 下运行 durable-workspace-cache-reset.e2e.mjs、agent-workspace-edit-receipt.e2e.mjs、workspace-writer-reload.e2e.mjs 均通过真实 Chrome；缓存重建后 revision/commit 保持 1，Agent 三次 mutation receipt 对应 revision 1–3 且刷新后无副作用重放，lease E2E 先模拟旧凭据无 resumeId，再丢弃第一次已执行的 resume 响应，以相同 resumeId 重试并只提升一次 fencing epoch，随后拒绝 stale renew/commit 与第二标签页 claim。backend-v2.test.mjs 验证 resumeId 重放返回同一 lease。测试均无 page error 或非同源请求。真实 LLM、quota/eviction、OS 级浏览器进程崩溃和生产授权未验证。
+syncReplaySteps: 从 upstream 更新时先检查 browser-native-page-control.ts 是否已有正式的 Worker/page refresh credential hook；若无，保留该文件中仅供 preview PoC 使用的最小 sessionStorage 接线。随后重放 backend lease resume/token rotation，再重放 browser-native-control.ts、browser-native-worker.ts 与 browser-native-workspace.ts 的凭据传递和 hydrate 顺序；最后保留三项 E2E 和 backend lease test，执行这些测试及 preview build。若上游提供 Workspace lease handoff/fencing API，则迁移 PoC 并删除重复实现。
+deleteCondition: 上游提供等价的 tab-scoped Worker lease resume 与 backend fencing 能力，并且三项 E2E 改用该正式接口后仍通过；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```

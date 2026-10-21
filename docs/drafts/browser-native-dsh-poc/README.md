@@ -48,6 +48,25 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。
 
+## 缓存重建、Agent edit receipt 与 lease 刷新验证
+
+本批次的[计划](next-round-validation-plan.md)与[进度记录](next-round-validation-progress.md)覆盖三项真实 Chrome 验证：清除 OPFS/IndexedDB 后从 backend 重建已提交 Workspace；真实 DSH Loop 执行 `write → read → edit → write` 并关联 Session receipt；同一标签页刷新后恢复 Workspace writer lease，同时 fencing 旧 token，并注入一次“backend 已完成 resume、响应被丢弃”的故障。三项 E2E 均使用真实 Chrome、真实 Dedicated Worker/DSH Host 和 scripted LLM，不依赖真实模型。
+
+在已安装 Playwright 的环境中运行：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js
+
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-cache-reset.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-edit-receipt.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-reload.e2e.mjs
+```
+
+若 Playwright 安装位置不同，请把 `DSH_POC_PLAYWRIGHT_MODULE` 改为当前环境中 `playwright` 的入口文件。刷新恢复仅适用于原标签页的 `sessionStorage` 凭据；旧凭据缺少 `resumeId` 时页面会先生成并保存一个稳定 ID。该 ID 使当前 backend 进程可以重放已成功但响应丢失的 resume，而 `requestId` 仍是每次 HTTP 请求各自的诊断标识。backend 必须轮换 writer token 并提升 fencing token。完全清除本地存储后，只能重建已提交到 backend 的文件；本地唯一持有的 dirty bytes、真实 quota/eviction、浏览器进程崩溃和生产级多租户授权不在本批验证范围内。
+
 ## 高价值验证批次
 
 本批次围绕 Browser-Native DSH 的运行时正确性，不扩展 SaaS 或聊天 UI。计划和退出条件见[验证计划](high-value-validation-plan.md)，实际证据和限制见[验证进度](high-value-validation-progress.md)。

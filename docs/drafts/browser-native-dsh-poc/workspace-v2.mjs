@@ -284,7 +284,7 @@ export class WorkspaceStore {
     const principalId = this.principalFromRequest(request)
     const workspaceId = assertId(body.workspaceId, 'workspaceId')
     const operation = body.operation
-    if (!['claim', 'renew', 'release'].includes(operation)) {
+    if (!['claim', 'renew', 'release', 'resume'].includes(operation)) {
       throw new WorkspaceError('INVALID_REQUEST', 'workspace lease operation is invalid')
     }
     return await this.exclusive(workspaceId, async () => {
@@ -294,7 +294,35 @@ export class WorkspaceStore {
         this.assertWriter(workspace, body.writerToken, body.fencingToken)
         workspace.writerToken = undefined
         workspace.writerExpiresAt = 0
+        workspace.lastResume = undefined
         return { workspaceId, released: true, fencingToken: workspace.writerEpoch }
+      }
+      if (operation === 'resume') {
+        assertId(body.resumeId, 'resumeId')
+        const previousResume = workspace.lastResume
+        if (previousResume?.resumeId === body.resumeId
+          && previousResume.writerToken === workspace.writerToken
+          && previousResume.fencingToken === workspace.writerEpoch
+          && workspace.writerExpiresAt > now) {
+          return structuredClone(previousResume.lease)
+        }
+        this.assertWriter(workspace, body.writerToken, body.fencingToken)
+        const next = {
+          ...workspace,
+          writerEpoch: workspace.writerEpoch + 1,
+          writerToken: randomUUID(),
+          writerExpiresAt: now + WRITER_LEASE_MS,
+        }
+        const lease = this.writerLease(next)
+        next.lastResume = {
+          resumeId: body.resumeId,
+          writerToken: next.writerToken,
+          fencingToken: next.writerEpoch,
+          lease,
+        }
+        await this.persistWorkspace(next)
+        this.workspaces.set(workspaceId, next)
+        return lease
       }
       if (operation === 'renew') {
         this.assertWriter(workspace, body.writerToken, body.fencingToken)
@@ -314,6 +342,7 @@ export class WorkspaceStore {
         writerEpoch: workspace.writerEpoch + 1,
         writerToken: randomUUID(),
         writerExpiresAt: now + WRITER_LEASE_MS,
+        lastResume: undefined,
       }
       await this.persistWorkspace(next)
       this.workspaces.set(workspaceId, next)

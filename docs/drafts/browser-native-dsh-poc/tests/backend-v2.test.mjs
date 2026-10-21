@@ -797,7 +797,7 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(body.includes('secret'), false)
   })
 
-  it('fences Workspace writers and exposes an idempotent operation receipt query', async () => {
+  it('rotates resumed Workspace leases and fences stale writers', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })
     const identity = await openWorkspaceIdentity(origin)
@@ -806,19 +806,55 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(typeof firstLease.value.writerToken, 'string')
     assert.equal(firstLease.value.fencingToken, 1)
 
+    const resumeId = randomUUID()
+    const resumed = await postWorkspace(origin, identity, 'lease', {
+      operation: 'resume',
+      resumeId,
+      writerToken: firstLease.value.writerToken,
+      fencingToken: firstLease.value.fencingToken,
+    })
+    assert.equal(resumed.response.ok, true, JSON.stringify(resumed.value))
+    assert.equal(resumed.value.fencingToken, 2)
+    assert.notEqual(resumed.value.writerToken, firstLease.value.writerToken)
+
+    const resumedReplay = await postWorkspace(origin, identity, 'lease', {
+      operation: 'resume',
+      resumeId,
+      writerToken: firstLease.value.writerToken,
+      fencingToken: firstLease.value.fencingToken,
+    })
+    assert.equal(resumedReplay.response.ok, true, JSON.stringify(resumedReplay.value))
+    assert.deepEqual(resumedReplay.value, resumed.value)
+
+    const staleRenew = await postWorkspace(origin, identity, 'lease', {
+      operation: 'renew',
+      writerToken: firstLease.value.writerToken,
+      fencingToken: firstLease.value.fencingToken,
+    })
+    assert.equal(staleRenew.response.status, 409)
+    assert.equal(staleRenew.value.error.code, 'WORKSPACE_OWNERSHIP_LOST')
+
     const secondClaim = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
     assert.equal(secondClaim.response.status, 409)
     assert.equal(secondClaim.value.error.code, 'WORKSPACE_ALREADY_OWNED')
 
     const released = await postWorkspace(origin, identity, 'lease', {
       operation: 'release',
+      writerToken: resumed.value.writerToken,
+      fencingToken: resumed.value.fencingToken,
+    })
+    assert.equal(released.response.ok, true, JSON.stringify(released.value))
+    const staleResumeReplay = await postWorkspace(origin, identity, 'lease', {
+      operation: 'resume',
+      resumeId,
       writerToken: firstLease.value.writerToken,
       fencingToken: firstLease.value.fencingToken,
     })
-    assert.equal(released.response.ok, true, JSON.stringify(released.value))
+    assert.equal(staleResumeReplay.response.status, 409)
+    assert.equal(staleResumeReplay.value.error.code, 'WORKSPACE_OWNERSHIP_LOST')
     const secondLease = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
     assert.equal(secondLease.response.ok, true, JSON.stringify(secondLease.value))
-    assert.equal(secondLease.value.fencingToken, 2)
+    assert.equal(secondLease.value.fencingToken, 3)
 
     const bytes = Buffer.from('writer fenced')
     const uploaded = await uploadWorkspaceBlob(origin, identity, bytes)

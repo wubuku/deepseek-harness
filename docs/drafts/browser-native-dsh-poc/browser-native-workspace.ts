@@ -4,7 +4,11 @@ import type {
   VfsMutationSink,
   VfsSeedOptions,
 } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
-import { publishBrowserNativeWorkspaceStatus } from './browser-native-control.ts'
+import {
+  publishBrowserNativeWorkspaceLease,
+  publishBrowserNativeWorkspaceStatus,
+  takeBrowserNativeResumeWorkspaceLease,
+} from './browser-native-control.ts'
 import {
   createBrowserDurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
@@ -379,6 +383,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     await readJson(response)
     this.writerToken = undefined
     this.fencingToken = undefined
+    publishBrowserNativeWorkspaceLease({ type: 'workspace-lease-released', workspaceId: this.workspaceId })
   }
 
   private snapshot(): DurableWorkspaceSnapshot | undefined {
@@ -574,6 +579,30 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   private async claimWriter(): Promise<void> {
     if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot claim writer before identity')
+    const resumeLease = takeBrowserNativeResumeWorkspaceLease(this.workspaceId)
+    if (resumeLease !== undefined) {
+      try {
+        await this.requestWriterLease('resume', resumeLease)
+        return
+      } catch (error) {
+        if (isRecord(error) && error.code === 'WORKSPACE_OWNERSHIP_LOST') {
+          publishBrowserNativeWorkspaceLease({ type: 'workspace-lease-released', workspaceId: this.workspaceId })
+        } else if (error instanceof TypeError) {
+          await this.requestWriterLease('resume', resumeLease)
+          return
+        } else {
+          throw error
+        }
+      }
+    }
+    await this.requestWriterLease('claim')
+  }
+
+  private async requestWriterLease(
+    operation: 'claim' | 'resume',
+    previous?: { readonly writerToken: string; readonly fencingToken: number; readonly resumeId: string },
+  ): Promise<void> {
+    if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot claim writer before identity')
     const response = await fetch(`${WORKSPACE_API}/lease`, {
       method: 'POST',
       credentials: 'same-origin',
@@ -582,7 +611,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         protocolVersion: PROTOCOL_VERSION,
         requestId: crypto.randomUUID(),
         workspaceId: this.workspaceId,
-        operation: 'claim',
+        operation,
+        ...(previous === undefined ? {} : {
+          writerToken: previous.writerToken,
+          fencingToken: previous.fencingToken,
+          resumeId: previous.resumeId,
+        }),
       }),
     })
     const lease = await readJson(response)
@@ -614,6 +648,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
     this.writerToken = value.writerToken
     this.fencingToken = value.fencingToken
+    if (this.workspaceId !== undefined) {
+      publishBrowserNativeWorkspaceLease({
+        type: 'workspace-lease',
+        workspaceId: this.workspaceId,
+        writerToken: this.writerToken,
+        fencingToken: this.fencingToken,
+      })
+    }
   }
 
   private async lookupOperation(batch: PendingBatch): Promise<Record<string, unknown> | undefined> {
