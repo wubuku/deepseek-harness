@@ -10,7 +10,7 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 任何修改 `docs/drafts` 之外文件的实施者，都必须在提交该修改前增加一条记录，写明当前 DSH 版本、文件、必要性、被检查过的扩展点、测试、上游同步步骤和删除条件。没有登记的目录外修改视为 PoC 未完成，而不是“实现细节”。
 
-当前 PoC 的 backend、Worker、profile overlay、page-control bridge、launcher 和测试均位于本目录；目录外的 preview Worker 接线、卸载生命周期处理、`packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记均有记录。当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
+当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
 ## PoC 内部兼容性变更
 
@@ -111,10 +111,27 @@ reason: Browser-Native preview 需要明确终止由页面拥有的 Worker，并
 existingExtensionPointsChecked: 已核对 `connectWorkerHost()` 的 boot payload handshake、`AppWebEntry.run()` 对 `__DSH_BOOT_READY__` 的等待、WorkerTunnel 和 Browser-Native `pagehide` owner close beacon；处理仅绑定 `?browser-native=1`，未改通用 Worker transport 或普通 Web/desktop 启动。
 whyDraftOnlyWasInsufficient: `apps/web/src/preview.ts` 是 Vite preview 的 Worker 创建入口；只在 docs-owned page helper 中添加 listener 无法在 Worker 创建前捕获顶层 bootstrap rejection，也无法终止由 preview 页面创建的 Worker。
 behaviorChange: Browser-Native preview 在非 BFCache 的 `pagehide` 时标记页面卸载并 terminate 页面拥有的 Worker；若该页面等待 boot payload 时因 teardown 收到匹配的 boot failure，则只结束正在卸载的 bootstrap。其他错误和活动页面中的相同错误仍会抛出。默认 preview 与 `browser-native=0` 路径保持原启动失败行为。
-consumersUpdated: docs-owned Worker page-control beacon 仍在正常 unload 时请求 Session close/flush；runtime-validation helper 在 `page.reload()` 后只等待已加载页面，不再再次 `page.goto()`；lifecycle E2E 复用同一等待逻辑。
+consumersUpdated: `apps/web/src/browser-native-page-control.ts` 的 page-control beacon 仍在正常 unload 时请求 Session close/flush；runtime-validation helper 在 `page.reload()` 后只等待已加载页面，不再再次 `page.goto()`；lifecycle E2E 复用同一等待逻辑。
 tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`; backend/Symbol tests 9 passed; scripted Chrome/WebKit runtime/lifecycle E2E; WebKit scripted five-refresh run; real Chrome/WebKit runtime E2E with two refreshes each; `git diff --check`。
 syncReplaySteps: upstream 更新后重查 preview bootstrap、boot readiness rejection 和 Worker ownership；若上游提供页面销毁钩子，则迁移 terminate 行为到该钩子；保留仅 opt-in 的卸载处理，并运行默认 preview boot acceptance、Browser-Native scripted lifecycle 和真实 Chrome/WebKit refresh E2E。
 deleteCondition: Worker connector 自行提供等价的 page teardown cancellation/cleanup，且移除此 opt-in 行为后 Chrome、WebKit 和目标 Safari.app 刷新没有未处理 boot error，也不遗留旧 Worker 请求。
+status: implemented
+```
+
+### BN-P1-003：将 preview 页面 bridge 纳入 Web TypeScript 项目
+
+```text
+changeId: BN-P1-003
+upstreamBaseline: dsh-v0.2.0-rc.2 / apps/web/tsconfig.json; apps/web/src/preview.ts
+file: apps/web/src/browser-native-page-control.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: `apps/web/src/preview.ts` 从 `docs/drafts` 直接导入 TypeScript 时，推送钩子执行的 `tsc -b tsconfig.client.json` 报告 TS6059 和 TS6307，因为草稿文件不在 Web 项目的 `rootDir` 和文件列表内。
+existingExtensionPointsChecked: 已核对 Web 项目的 `rootDir`/include 配置、preview 的 Worker 注入入口和既有 pagehide owner-close 实现；没有扩大 TS 项目范围，也没有把 PoC Worker、backend、profile 或测试移入正式应用目录。
+whyDraftOnlyWasInsufficient: preview 必须同步执行 owner-token MessagePort、刷新续接和 unload close beacon；其静态导入必须属于 `apps/web` TypeScript project 才能通过推送钩子的项目类型检查。
+behaviorChange: 页面 bridge 代码位置从 docs-local 草稿移动到 `apps/web/src`，运行逻辑不变；PoC 配置、Worker、backend、测试和说明仍在 `docs/drafts/browser-native-dsh-poc`。
+consumersUpdated: `preview.ts` 导入项目内 bridge；PoC README 链接到该源码；此账本记录目录外改动与 upstream 重放步骤。
+tests: 2026-10-21 移动后 `pnpm run typecheck` 和 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`pnpm exec tsx scripts/run-oxlint.ts apps/web/src/preview.ts apps/web/src/browser-native-page-control.ts` 通过；Chrome scripted `runtime-lifecycle.e2e.mjs` 与 `runtime-validation.e2e.mjs` 在移动后通过。首次 typecheck 在移动前以 TS6059/TS6307 失败；移动后全仓类型检查确认错误消失。真实 Chrome Browser-specific E2E 在 bridge 移动前通过，详细记录见运行时验证报告。
+syncReplaySteps: 更新 Web 项目时先检查 apps/web TS project root/include；如果 preview lifecycle bridge 仍由 `preview.ts` 导入，保留 bridge 在 `apps/web/src`，PoC 其余源码留在 docs；若上游提供正式 preview lifecycle hook，则迁移到该 hook 并删除本地 bridge。
+deleteCondition: preview 使用正式生命周期 API 管理 Worker/Session owner，且移除本文件后 Web typecheck、刷新续接、pagehide close 和双标签 lease E2E 均通过。
 status: implemented
 ```
 

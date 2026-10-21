@@ -53,7 +53,7 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
         headers: { 'content-type': 'application/json', 'x-browser-native-protocol': '1' },
         body,
         keepalive: true,
-      }).catch(error => { console.warn('browser-native DSH: page unload could not release Session write access', error) })
+      }).catch((error: unknown) => { console.warn('browser-native DSH: page unload could not release Session write access', error) })
     }
   }
   window.addEventListener('pagehide', handlePageHide)

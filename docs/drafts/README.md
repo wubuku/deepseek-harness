@@ -259,6 +259,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | 文件 | 用途 |
 |---|---|
 | [browser-native-worker.ts](browser-native-dsh-poc/browser-native-worker.ts) | 在 Dedicated Worker 中启动真实 DSH Host。 |
+| [browser-native-page-control.ts](../../apps/web/src/browser-native-page-control.ts) | preview 主线程保存 Worker Session owner token、刷新续租，并在 pagehide 请求关闭 Session。 |
 | [browser-native-providers.ts](browser-native-dsh-poc/browser-native-providers.ts) | Worker 侧远程 `SessionPersistence` 和 `LlmAdapter` provider。 |
 | [backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) | 当前 v2 的实际 Session/LLM 字段、durability、进程内 owner token 校验和 30 秒 lease 过期；没有请求去重账本或跨进程 owner epoch。 |
 | [run-v2.mjs](browser-native-dsh-poc/run-v2.mjs) | 构建产物上的 v2 launcher。 |

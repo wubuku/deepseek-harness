@@ -6,7 +6,7 @@
  */
 import DshWorker from '../../../docs/drafts/browser-native-dsh-poc/browser-native-worker.ts?worker'
 import browserNativeProfileOverlay from '../../../docs/drafts/browser-native-dsh-poc/browser-native-profile-overlay.tar.gz?url'
-import { connectBrowserNativePageControl } from '../../../docs/drafts/browser-native-dsh-poc/browser-native-page-control.ts'
+import { connectBrowserNativePageControl } from './browser-native-page-control.ts'
 import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'

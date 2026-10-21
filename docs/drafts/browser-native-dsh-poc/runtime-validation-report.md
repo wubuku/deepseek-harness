@@ -42,7 +42,7 @@ description: "Browser-Native DSH v2 下一轮运行时验证结果：记录真�
 
 `backend-v2.mjs` 只在 Node 进程加载真实模型凭据，并将 Session JSON 的 `durableThroughSeq` 与真实文件内容作为 durability 证据。`append` 只表示当前 backend 内存接受事件；测试中显式验证文件 flush 与 backend 重启恢复。测试也发现 `listen(0)` 必须返回实际系统分配端口，backend 已修正为读取 `server.address().port`。
 
-`browser-native-page-control.ts` 通过 `MessageChannel` 收取 Worker owner token，存入 tab-scoped `sessionStorage`，刷新后交给新 Worker；`pagehide` 使用 close beacon 请求 flush/释放。`preview.ts` 在 Browser-Native opt-in 页面卸载时 terminate 页面拥有的 Worker；若该页面正等待 boot payload，只忽略卸载阶段特定的 tunnel boot failure，活动页面的启动错误仍会抛出。复查发现旧刷新测试在 `page.reload()` 后又调用含 `page.goto()` 的 `openPreview()`，Worker terminate recovery 也曾有同样的双重导航；两处改为只等待已加载页面后，WebKit scripted 五次连续刷新和真实 Chrome/WebKit 各两次刷新均未出现该 503。该证据支持测试夹具双重导航是此前复现条件，但不能证明所有浏览器卸载竞态都已消除。强制进程退出和浏览器崩溃仍不能保证 unload beacon 完成。
+`apps/web/src/browser-native-page-control.ts` 通过 `MessageChannel` 收取 Worker owner token，存入 tab-scoped `sessionStorage`，刷新后交给新 Worker；`pagehide` 使用 close beacon 请求 flush/释放。`preview.ts` 在 Browser-Native opt-in 页面卸载时 terminate 页面拥有的 Worker；若该页面正等待 boot payload，只忽略卸载阶段特定的 tunnel boot failure，活动页面的启动错误仍会抛出。该 bridge 位于 Web TypeScript 项目内，因为推送钩子的项目类型检查拒绝从 `docs/drafts` 导入项目外源码。复查发现旧刷新测试在 `page.reload()` 后又调用含 `page.goto()` 的 `openPreview()`，Worker terminate recovery 也曾有同样的双重导航；两处改为只等待已加载页面后，WebKit scripted 五次连续刷新和真实 Chrome/WebKit 各两次刷新均未出现该 503。该证据支持测试夹具双重导航是此前复现条件，但不能证明所有浏览器卸载竞态都已消除。强制进程退出和浏览器崩溃仍不能保证 unload beacon 完成。
 
 `symbol-dispose.ts` 在 Worker realm 缺少 `Symbol.dispose` / `Symbol.asyncDispose` 时补上 registry symbols，不覆盖现有原生实现；Worker 入口最先加载此兼容模块。对应单测和真实 WebKit Session 启动均通过。
 
