@@ -39,6 +39,40 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-011：quota 错误恢复、backend 重启 fencing 与身份存储隔离
+
+```text
+changeId: BN-P2-011
+upstreamBaseline: research checkout after BN-P2-010; 2026-10-22
+file: docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-quota-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-backend-restart-lease.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-browser-storage-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/storage-isolation-and-restart-validation-plan.md; docs/drafts/browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 前几批验证了 IndexedDB abort、离线 retry、CAS 冲突和 lease expiry，但尚未覆盖 OPFS 持久化遇到 quota 类失败、同一 dataDir 的 backend 重启，以及同源不同身份的浏览器本地数据隔离。
+existingExtensionPointsChecked: 复用 durable Workspace Store 的 OPFS/IndexedDB 写入、Worker Host 的 PoC test MessagePort、既有 backend dataDir、Workspace lease 与身份授权路径；新增 fault hook 仅从 Worker 测试端口触发，未修改正式 package、Agent Loop、Session format 或默认启动入口。
+whyDraftOnlyWasInsufficient: Node backend tests 无法验证真实 Chrome Dedicated Worker、OPFS、IndexedDB 和页面刷新间的持久化次序；源码检查也无法说明 backend 重启后旧 lease 的实际拒绝结果，或共享 origin 下切换身份时浏览器存储是否串用。
+behaviorChange: Worker 测试端口新增一次性 `quota-next-opfs-write` 故障注入；真实 Chrome E2E 验证首次持久化写入失败时不提交，恢复后以同一待处理状态持久化并只 commit 一次。另两项 E2E 验证复用 dataDir 重启 backend 后旧 fencing token 被拒且刷新获取更高 token，以及同源身份切换时 Workspace ID、IndexedDB snapshot、OPFS namespace 与 backend ACL 隔离。故障注入仅模拟 `QuotaExceededError` 传播，不模拟真实磁盘耗尽或浏览器 eviction。
+consumersUpdated: Browser-Native Workspace Worker/store、三项真实 Chrome E2E、验证计划与进度、PoC README、docs/drafts 索引及本记录。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；三项 `DSH_POC_BROWSER=chrome` E2E 在当前源码下再次通过。quota fault 首次写失败、恢复后 OPFS/IndexedDB durable 再 commit，revision 为 1 且仅 commit 一次；backend restart 后旧 renew 为 409，刷新后 fencing token 从 1 升至 2，文件/revision 保留且没有重复 commit；两个身份的交叉 manifest/blob 请求均为 403，刷新后只恢复各自内容。运行时无页面错误或跨源请求。backend contract tests 15/15、Workspace Vitest 11/11、durable Workspace Vitest 8/8、三个 E2E 脚本 `node --check` 与 `git diff --check` 通过。`pnpm run doc-sync` 首轮 42/43：唯一失败的 repository references 指向进度文档中的基线提交哈希；移除哈希后 `pnpm run verify-repository-references` 通过，其余 doc-sync gates 已通过；未在该纯文本修正后重跑完整 doc-sync。
+syncReplaySteps: upstream 更新后检查 BrowserDurableWorkspaceStore 是否已有受控 fault-injection seam；若未有，只重放 PoC Worker test MessagePort 与一次性 OPFS 错误注入，不向正式运行入口暴露。保留三项真实 Chrome E2E，先运行 preview build，再运行对应 E2E、backend-v2 tests 和 Browser-Native Workspace Vitest；如上游已提供等价 durable store/lease/身份隔离接口，则改用上游接口并删除重复 PoC 接线。
+deleteCondition: Browser-Native Workspace PoC 被移除，或正式实现提供等价 OPFS durable error recovery、backend restart lease fencing 和身份隔离行为，且迁移后的三项浏览器 E2E 仍通过。
+status: implemented
+```
+
+### BN-P2-012：Agent 文件工具 durable ack 与同 Session 重试
+
+```text
+changeId: BN-P2-012
+upstreamBaseline: research checkout after BN-P2-011; 2026-10-22
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-durable-ack.e2e.mjs; docs/drafts/browser-native-dsh-poc/durable-tool-ack-validation-plan.md; docs/drafts/browser-native-dsh-poc/durable-tool-ack-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 真实 DSH `write` 遇到 IndexedDB snapshot abort 时，provider 只记录 `flushWorkspace()` warning 并返回原成功结果；这使 Session 可能把未确认本地持久化的写操作记录为成功。
+existingExtensionPointsChecked: 复用 `BrowserNativeWorkspaceRuntime.flushLocalWorkspace()`、现有 `tools/execute` waterfall、已有 IndexedDB abort Worker test action、scripted backend 和 Session/Workspace receipt 路径；未修改正式 MemoryVfs、Agent Loop、Session format 或默认 profile。
+whyDraftOnlyWasInsufficient: Provider 源码显示了 catch-and-continue 路径，但只有真实 Chrome Worker、DSH tool dispatch、IndexedDB 和 Session event 的组合测试才能确认错误是否变成 `isError: true`，并检查 durable snapshot 是否先于云端 commit。
+behaviorChange: `write`/`edit` 成功返回后，provider 先等待 `flushLocalWorkspace()`；如果本地持久化未确认，则抛出明确说明文件可能仍只存在于 volatile Worker memory 的错误，由 DSH tool dispatch 记录为失败结果，且不开始远端 commit。仅在本地持久化成功后才调用 `flushWorkspace()`；远端同步失败仍作为待同步 Workspace 状态处理，不伪装成本地存储失败。
+consumersUpdated: Browser-Native provider、scripted backend、真实 Chrome E2E、验证计划/进度、PoC README、docs/drafts 索引及本记录。
+tests: 基线 E2E 真实复现 IDB abort 后 Session `tool/result.message.isError=false`；修复后同一路径结果为 `true`，错误明确说明 local persistence 未确认，远端 revision 保持 0 且无 receipt。用户在同一 Session 显式重试后，commit 请求到达时已从 IndexedDB 读到匹配 operationId/retry batch，并从 OPFS 读到对应内容；Workspace revision 为 1、receipt 关联重试 call，刷新后文件恢复且 commit 仍仅一次。`agent-workspace-edit-receipt.e2e.mjs`、`agent-workspace-receipt-recovery.e2e.mjs`、`durable-workspace-idb-abort.e2e.mjs` 均通过；backend tests 15/15，Workspace/durable Vitest 19/19，preview build、E2E `node --check`、`git diff --check` 通过。`pnpm run doc-sync` 43/43 通过。此验证使用 scripted LLM 与注入式 IndexedDB abort。
+syncReplaySteps: upstream 更新后检查 `tools/execute` 文件工具 middleware 是否仍在 Session 成功结果前等待本地 durable snapshot。若上游已有等价保证，迁移 E2E 并删除重复 provider 检查；否则只重放 `flushLocalWorkspace()` 前置等待与错误传播，不把远端 Workspace commit 失败改写为本地文件工具失败。先运行 preview build，再运行本 E2E、receipt recovery、IDB abort、backend tests 和 Browser-Native Workspace Vitest。
+deleteCondition: 正式 Browser Workspace tool adapter 在记录成功 `tool/result` 前提供本地 durable acknowledgement，且本 E2E 迁移到正式 adapter 后覆盖本地失败、同 Session 重试和无重复 commit；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```
+
 ### BN-P0-001：本地损坏诊断与 Agent Workspace receipt 崩溃恢复
 
 ```text

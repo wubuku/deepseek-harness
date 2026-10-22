@@ -246,7 +246,10 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   private readonly blobDirectories = new Map<string, FileSystemDirectoryHandle>()
 
   /** @param testHooks - Optional fault injection used only by Browser-Native PoC tests. */
-  constructor(private readonly testHooks?: { readonly abortNextMetadataTransaction?: () => boolean }) {}
+  constructor(private readonly testHooks?: {
+    readonly abortNextMetadataTransaction?: () => boolean
+    readonly quotaNextOpfsWrite?: () => boolean
+  }) {}
 
   private async resources(workspaceId: string): Promise<{ database: IDBDatabase; blobDirectory: FileSystemDirectoryHandle }> {
     this.database ??= await openDatabase()
@@ -291,6 +294,9 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     } catch (error) {
       // Rewrite a missing or unreadable local blob below.
       void error
+    }
+    if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
+      throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
     }
     const writable = await handle.createWritable()
     try {
@@ -414,7 +420,10 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
  * @returns The OPFS and IndexedDB Workspace store.
  */
 export function createBrowserDurableWorkspaceStore(
-  testHooks?: { readonly abortNextMetadataTransaction?: () => boolean },
+  testHooks?: {
+    readonly abortNextMetadataTransaction?: () => boolean
+    readonly quotaNextOpfsWrite?: () => boolean
+  },
 ): DurableWorkspaceStore {
   return new BrowserDurableWorkspaceStore(testHooks)
 }

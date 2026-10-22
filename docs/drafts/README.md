@@ -161,6 +161,8 @@ Agentic UI 事实核查
 6. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 7. [Durable Workspace 规划](browser-native-dsh-poc/durable-workspace-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-workspace-progress.md)：区分 OPFS/IndexedDB 本地恢复能力、云端 commit 和尚未消除的 post-commit 崩溃窗口。
 8. [进阶恢复验证计划](browser-native-dsh-poc/advanced-recovery-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：真实 Chrome 验证离线 retry、CAS 冲突保留和 writer lease 过期接管。
+9. [存储隔离与重启验证计划](browser-native-dsh-poc/storage-isolation-and-restart-validation-plan.md)与[进度](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：Chrome 验证 quota 类写失败、backend 重启租约 fencing 和同源多身份 Workspace 隔离。
+10. [文件工具持久化确认计划](browser-native-dsh-poc/durable-tool-ack-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-tool-ack-validation-progress.md)：真实 DSH `write` 在 IndexedDB 保存失败时写入 Session 错误；同 Session 显式重试验证本地 durable 状态、Workspace commit 和 Session receipt 对齐。
 
 ### 路径 C：直接复现 PoC
 
@@ -176,6 +178,8 @@ Agentic UI 事实核查
 8. [工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)：核查 profile、agent preset、`tool-web` 开关和 Browser-specific capability 的设计边界。
 9. [运行时验证报告](browser-native-dsh-poc/runtime-validation-report.md)与[下一轮验证进度](browser-native-dsh-poc/next-validation-progress.md)：区分 Chrome 最新复测、历史 WebKit/Safari 结果和未验证的生产边界。
 10. [进阶恢复 E2E 测试](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：包含可复制命令、fencing/冲突证据、已知限制和旧标签页安全拒绝表现。
+11. [存储隔离与重启 E2E](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：查看 quota fault 注入与 durable retry、单 backend 重启后的 lease epoch，以及共享 origin 存储中的身份隔离结果。
+12. [Agent 文件工具 durable ack E2E](browser-native-dsh-poc/tests/agent-workspace-durable-ack.e2e.mjs)：复现并验证本地保存失败不再成为成功工具结果，随后同会话重试只提交一次。
 
 ### 路径 D：Cloud Agent 和长期执行
 

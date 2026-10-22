@@ -805,7 +805,10 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   /** Claim a backend writer lease before mirroring Workspace mutations. */
   readonly writerLease?: boolean
   /** Inject storage faults through the PoC-only Worker test port. */
-  readonly testHooks?: { readonly abortNextMetadataTransaction?: () => boolean }
+  readonly testHooks?: {
+    readonly abortNextMetadataTransaction?: () => boolean
+    readonly quotaNextOpfsWrite?: () => boolean
+  }
 }
 
 /**

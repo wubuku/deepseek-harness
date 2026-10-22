@@ -443,6 +443,38 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  const durableAckMarker = [
+    'BROWSER_NATIVE_DURABLE_ACK_RETRY_E2E',
+    'BROWSER_NATIVE_DURABLE_ACK_FAILURE_E2E',
+  ].find(marker => hasUserMarker(messages, marker))
+  if (durableAckMarker !== undefined && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(durableAckMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: durableAckMarker === 'BROWSER_NATIVE_DURABLE_ACK_FAILURE_E2E'
+          ? 'browser-native-durable-ack-failure-write'
+          : 'browser-native-durable-ack-retry-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/durable-ack.txt',
+          content: 'durable acknowledgement retry succeeded\n',
+        },
+      })
+      return
+    }
+    const text = durableAckMarker === 'BROWSER_NATIVE_DURABLE_ACK_FAILURE_E2E'
+      ? 'BROWSER_NATIVE_DURABLE_ACK_FAILURE_TURN_DONE'
+      : 'BROWSER_NATIVE_DURABLE_ACK_RETRY_TURN_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_WORKSPACE_EDIT_E2E')
     && ['write', 'read', 'edit'].every(name => hasTool(tools, name))) {
     const sequence = [

@@ -48,12 +48,13 @@ let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
 let abortNextMetadataTransaction = false
+let quotaNextOpfsWrite = false
 const pending: unknown[] = []
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'quota-next-opfs-write'
   readonly path?: string
   readonly from?: string
   readonly to?: string
@@ -67,7 +68,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   const data = value as Record<string, unknown>
   return data.type === 'browser-native-workspace-test-request'
     && typeof data.requestId === 'string'
-    && ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction'].includes(String(data.action))
+    && ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write'].includes(String(data.action))
 }
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
@@ -99,6 +100,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'abort-next-metadata-transaction') {
       abortNextMetadataTransaction = true
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'quota-next-opfs-write') {
+      quotaNextOpfsWrite = true
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
@@ -246,6 +252,11 @@ self.addEventListener('message', (event: MessageEvent) => {
           abortNextMetadataTransaction: () => {
             if (!abortNextMetadataTransaction) return false
             abortNextMetadataTransaction = false
+            return true
+          },
+          quotaNextOpfsWrite: () => {
+            if (!quotaNextOpfsWrite) return false
+            quotaNextOpfsWrite = false
             return true
           },
         },

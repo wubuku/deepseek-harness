@@ -412,6 +412,14 @@ function createRemoteSessionPersistenceClass(
         const result = await workspace.runToolOperation(operation, next)
         if (!result.isError) {
           try {
+            await workspace.flushLocalWorkspace()
+          } catch (error) {
+            throw new Error(
+              `browser-native local Workspace persistence was not confirmed; the file change may remain only in volatile Worker memory (${String(error)})`,
+              { cause: error },
+            )
+          }
+          try {
             await workspace.flushWorkspace()
           } catch (error) {
             ctx.logger.warn(`browser-native Workspace commit for tool call "${String(exec.callId)}" remains pending: ${String(error)}`)
