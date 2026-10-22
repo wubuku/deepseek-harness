@@ -684,7 +684,9 @@ export async function createBrowserNativeV2Server(options) {
     now: options.testHooks?.now,
   })
   await store.load()
-  const workspaces = new WorkspaceStore(options.dataDir)
+  const workspaces = new WorkspaceStore(options.dataDir, {
+    writerLeaseMs: options.testHooks?.workspaceWriterLeaseMs,
+  })
   await workspaces.load()
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))

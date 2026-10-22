@@ -390,3 +390,20 @@ syncReplaySteps: 从 upstream 更新时先检查 browser-native-page-control.ts 
 deleteCondition: 上游提供等价的 tab-scoped Worker lease resume 与 backend fencing 能力，并且三项 E2E 改用该正式接口后仍通过；或 Browser-Native Workspace PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-010：离线 retry、CAS 冲突保留与 writer lease 过期接管
+
+```text
+changeId: BN-P2-010
+upstreamBaseline: research checkout after BN-P2-009; 2026-10-22
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-offline-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-conflict-retention.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs; docs/drafts/browser-native-dsh-poc/advanced-recovery-validation-plan.md; docs/drafts/browser-native-dsh-poc/advanced-recovery-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 现有检查覆盖单次 503、刷新恢复、基础 CAS 与 lease 刷新，但没有在真实 Chrome 中把离线 retry 与刷新、并发远端提交与本地 dirty 保留、租约超时接管与旧 tab fencing 放在连续故障路径中验证。
+existingExtensionPointsChecked: 复用 PoC Workspace retry batch、manifest revision CAS、lease claim/resume/release 与 fencing token；以 backend testHooks 注入短租约，不修改正式 Workspace API、Agent Loop、Session schema 或默认 profile。
+whyDraftOnlyWasInsufficient: 后端单测不能覆盖真实 Chrome Worker、OPFS/IndexedDB 和页面刷新之间的恢复时序；协议 E2E 也不能代替检查本地 dirty 文件与远端已提交版本是否同时保留。
+behaviorChange: `WorkspaceStore` 接受可选 `writerLeaseMs` 测试参数，默认仍为 30 秒，backend 仅从 `testHooks.workspaceWriterLeaseMs` 读取它。新增三条 scripted、模型无关的真实 Chrome E2E，分别验证离线写入和同 operationId 恢复提交、CAS conflict 保留本地与远端内容、过期 lease 接管和 fencing 旧 resume/renew/commit。
+consumersUpdated: PoC backend/WorkspaceStore、三条真实 Chrome E2E、进阶恢复计划/进度、PoC README 和 docs/drafts 导读。
+tests: 三条 E2E 均在真实 Chrome 通过；离线 retry 在 4 次失败请求后刷新并仅提交一次，CAS 远端 revision 为 1 且本地内容保留，lease fencing token 从 1 到 2 到 3，stale resume/renew/commit 均返回 409。`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 为 15/15，Browser-Native Workspace Vitest 为 11/11。无跨源请求；真实 LLM、Safari/WebKit、quota/eviction、OS 级浏览器崩溃、backend 多实例 lease 与生产授权未验证。租约持有期间旧 tab boot 的预期 HTTP 503 仍作为页面错误显示，已记录为后续 UX 验证点。
+syncReplaySteps: 同步上游后确认 Workspace lease 默认仍为 30 秒，测试时长只可由 PoC testHooks 注入；保留 operationId/CAS/fencing 断言并运行三条 Chrome E2E、backend-v2 tests、browser-native-workspace.spec.ts 与 preview build。若上游提供正式 Workspace lease/CAS API，则迁移测试到该 API，不复制生产逻辑到 PoC。
+deleteCondition: Browser-Native Workspace PoC 被移除，或正式 Workspace 实现与对应故障验收合并并且这些 PoC 专用 E2E 不再提供额外恢复证据。
+status: implemented
+```

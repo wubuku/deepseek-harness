@@ -160,6 +160,7 @@ Agentic UI 事实核查
 5. [PoC v2 当前实现与限制](browser-native-dsh-poc/README.md#当前实现快照)
 6. [PoC v2 进度](browser-native-dsh-poc/browser-native-dsh-progress-v2.md)
 7. [Durable Workspace 规划](browser-native-dsh-poc/durable-workspace-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-workspace-progress.md)：区分 OPFS/IndexedDB 本地恢复能力、云端 commit 和尚未消除的 post-commit 崩溃窗口。
+8. [进阶恢复验证计划](browser-native-dsh-poc/advanced-recovery-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：真实 Chrome 验证离线 retry、CAS 冲突保留和 writer lease 过期接管。
 
 ### 路径 C：直接复现 PoC
 
@@ -174,6 +175,7 @@ Agentic UI 事实核查
 7. [工具连续尝试事实核查](browser-native-dsh-poc/agent-loop-tool-attempt-analysis.md)：用真实 Session 解释工具可见性、模型决策、默认 Agent Loop 和 Browser-Native 能力缺口之间的关系。
 8. [工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)：核查 profile、agent preset、`tool-web` 开关和 Browser-specific capability 的设计边界。
 9. [运行时验证报告](browser-native-dsh-poc/runtime-validation-report.md)与[下一轮验证进度](browser-native-dsh-poc/next-validation-progress.md)：区分 Chrome 最新复测、历史 WebKit/Safari 结果和未验证的生产边界。
+10. [进阶恢复 E2E 测试](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：包含可复制命令、fencing/冲突证据、已知限制和旧标签页安全拒绝表现。
 
 ### 路径 D：Cloud Agent 和长期执行
 

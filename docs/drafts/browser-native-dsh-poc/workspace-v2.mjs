@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 const COOKIE_NAME = 'dsh-browser-native-principal'
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
-const WRITER_LEASE_MS = 30_000
+const DEFAULT_WRITER_LEASE_MS = 30_000
 
 export class WorkspaceError extends Error {
   constructor(code, message, status = 400, details) {
@@ -105,7 +105,7 @@ async function atomicWrite(path, contents) {
 }
 
 export class WorkspaceStore {
-  constructor(dataDir) {
+  constructor(dataDir, options = {}) {
     this.root = join(dataDir, 'workspace-v2')
     this.blobsDir = join(this.root, 'blobs')
     this.workspacesDir = join(this.root, 'workspaces')
@@ -113,6 +113,10 @@ export class WorkspaceStore {
     this.identities = new Map()
     this.workspaces = new Map()
     this.locks = new Map()
+    this.writerLeaseMs = options.writerLeaseMs ?? DEFAULT_WRITER_LEASE_MS
+    if (!Number.isSafeInteger(this.writerLeaseMs) || this.writerLeaseMs < 300) {
+      throw new TypeError('workspace writer lease must be an integer of at least 300 ms')
+    }
   }
 
   async load() {
@@ -311,7 +315,7 @@ export class WorkspaceStore {
           ...workspace,
           writerEpoch: workspace.writerEpoch + 1,
           writerToken: randomUUID(),
-          writerExpiresAt: now + WRITER_LEASE_MS,
+          writerExpiresAt: now + this.writerLeaseMs,
         }
         const lease = this.writerLease(next)
         next.lastResume = {
@@ -326,7 +330,7 @@ export class WorkspaceStore {
       }
       if (operation === 'renew') {
         this.assertWriter(workspace, body.writerToken, body.fencingToken)
-        workspace.writerExpiresAt = now + WRITER_LEASE_MS
+        workspace.writerExpiresAt = now + this.writerLeaseMs
         return this.writerLease(workspace)
       }
       if (workspace.writerToken !== undefined && workspace.writerExpiresAt > now) {
@@ -341,7 +345,7 @@ export class WorkspaceStore {
         ...workspace,
         writerEpoch: workspace.writerEpoch + 1,
         writerToken: randomUUID(),
-        writerExpiresAt: now + WRITER_LEASE_MS,
+        writerExpiresAt: now + this.writerLeaseMs,
         lastResume: undefined,
       }
       await this.persistWorkspace(next)
@@ -355,8 +359,8 @@ export class WorkspaceStore {
       workspaceId: workspace.id,
       writerToken: workspace.writerToken,
       fencingToken: workspace.writerEpoch,
-      leaseDurationMs: WRITER_LEASE_MS,
-      renewAfterMs: Math.floor(WRITER_LEASE_MS / 3),
+      leaseDurationMs: this.writerLeaseMs,
+      renewAfterMs: Math.floor(this.writerLeaseMs / 3),
     }
   }
 
