@@ -163,6 +163,7 @@ Agentic UI 事实核查
 8. [进阶恢复验证计划](browser-native-dsh-poc/advanced-recovery-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：真实 Chrome 验证离线 retry、CAS 冲突保留和 writer lease 过期接管。
 9. [存储隔离与重启验证计划](browser-native-dsh-poc/storage-isolation-and-restart-validation-plan.md)与[进度](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：Chrome 验证 quota 类写失败、backend 重启租约 fencing 和同源多身份 Workspace 隔离。
 10. [文件工具持久化确认计划](browser-native-dsh-poc/durable-tool-ack-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-tool-ack-validation-progress.md)：真实 DSH `write` 在 IndexedDB 保存失败时写入 Session 错误；同 Session 显式重试验证本地 durable 状态、Workspace commit 和 Session receipt 对齐。
+11. [易失文件状态隔离计划](browser-native-dsh-poc/volatile-workspace-isolation-plan.md)与[进度/经验教训](browser-native-dsh-poc/volatile-workspace-isolation-progress.md)：真实 Chrome 验证 IndexedDB 持久化失败后 Agent 不能读取、搜索或继续修改仅存在 Worker 内存的文件；刷新恢复 durable 基线，再由同 Session 新调用显式重试。
 
 ### 路径 C：直接复现 PoC
 
@@ -180,6 +181,7 @@ Agentic UI 事实核查
 10. [进阶恢复 E2E 测试](browser-native-dsh-poc/advanced-recovery-validation-progress.md)：包含可复制命令、fencing/冲突证据、已知限制和旧标签页安全拒绝表现。
 11. [存储隔离与重启 E2E](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：查看 quota fault 注入与 durable retry、单 backend 重启后的 lease epoch，以及共享 origin 存储中的身份隔离结果。
 12. [Agent 文件工具 durable ack E2E](browser-native-dsh-poc/tests/agent-workspace-durable-ack.e2e.mjs)：复现并验证本地保存失败不再成为成功工具结果，随后同会话重试只提交一次。
+13. [Agent 易失文件状态隔离 E2E](browser-native-dsh-poc/tests/agent-workspace-volatile-failure.e2e.mjs)：验证失败的 `edit`、被阻止的 `read`/`grep`/`glob`/`write`、Worker 刷新恢复与同 Session 显式重试。
 
 ### 路径 D：Cloud Agent 和长期执行
 

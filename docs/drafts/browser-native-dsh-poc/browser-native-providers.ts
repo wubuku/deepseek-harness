@@ -397,7 +397,9 @@ function createRemoteSessionPersistenceClass(
         if (errors.length > 0) throw new AggregateError(errors, 'browser-native session persistence dispose failed')
       }, 'session-persistence-browser-native open handles')
       ctx.on('tools/execute', async (exec, next) => {
-        if ((exec.name !== 'write' && exec.name !== 'edit') || exec.agent === undefined) return await next()
+        if (!['read', 'read_image', 'write', 'edit', 'grep', 'glob'].includes(exec.name) || exec.agent === undefined) return await next()
+        workspace.assertLocalWorkspaceUsable()
+        if (!['write', 'edit'].includes(exec.name)) return await next()
         const session = exec.agent.session
         const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)
         if (call === undefined || call.type !== 'tool/call') return await next()

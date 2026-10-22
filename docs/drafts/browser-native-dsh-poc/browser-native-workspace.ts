@@ -178,6 +178,8 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private running: Promise<readonly WorkspaceReceipt[]> | undefined
   private scheduleTimer: ReturnType<typeof setTimeout> | undefined
   private localPersistChain: Promise<void> = Promise.resolve()
+  private localPersistVersion = 0
+  private localPersistedVersion = 0
   private localPersistFailure: Error | undefined
   private writerToken: string | undefined
   private fencingToken: number | undefined
@@ -338,6 +340,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     await this.awaitLocalPersist()
   }
 
+  assertLocalWorkspaceUsable(): void {
+    if (this.localPersistFailure !== undefined || this.localPersistedVersion < this.localPersistVersion) {
+      throw new Error(
+        `browser-native local Workspace persistence is unresolved; reload before using Workspace files (${this.localPersistFailure?.message ?? 'save is pending'})`,
+      )
+    }
+  }
+
   async runToolOperation<T>(operation: WorkspaceToolOperation, run: () => Promise<T>): Promise<T> {
     if (this.activeOperation !== undefined) throw new Error('browser-native workspace: overlapping file-tool operation context')
     this.activeOperation = operation
@@ -402,9 +412,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (this.store === undefined) return
     const snapshot = this.snapshot()
     if (snapshot === undefined) return
-    this.localPersistFailure = undefined
+    const version = ++this.localPersistVersion
     this.localPersistChain = this.localPersistChain.then(async () => {
       await this.store?.save(snapshot)
+      this.localPersistedVersion = version
+      if (version === this.localPersistVersion) this.localPersistFailure = undefined
     }).catch(error => {
       this.setLocalPersistFailure(error)
     })
@@ -413,6 +425,9 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private async awaitLocalPersist(): Promise<void> {
     await this.localPersistChain
     if (this.localPersistFailure !== undefined) throw this.localPersistFailure
+    if (this.localPersistedVersion < this.localPersistVersion) {
+      throw new Error('browser-native workspace: local persistence is still pending')
+    }
   }
 
   private setLocalPersistFailure(error: unknown): void {
@@ -788,6 +803,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly acknowledgeReceipt: (operationId: string) => Promise<void>
   /** Wait until the local durable snapshot has been written. */
   readonly flushLocalWorkspace: () => Promise<void>
+  /** Reject Agent file tools while a local VFS mutation is not durably recorded. */
+  readonly assertLocalWorkspaceUsable: () => void
   /** Return the PoC writer lease for model-independent browser tests. */
   readonly getWriterLease: () => BrowserNativeWorkspaceWriterLease | undefined
   /** Release the PoC writer lease for model-independent browser tests. */
@@ -833,6 +850,7 @@ export function createBrowserNativeWorkspaceRuntime(
     pendingReceipts: sessionId => mirror.pendingReceipts(sessionId),
     acknowledgeReceipt: async operationId => await mirror.acknowledgeReceipt(operationId),
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
+    assertLocalWorkspaceUsable: () => mirror.assertLocalWorkspaceUsable(),
     getWriterLease: () => mirror.getWriterLease(),
     releaseWriter: async () => await mirror.releaseWriter(),
   }

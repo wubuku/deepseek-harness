@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { assistantText, openPreview, sendTurn, sessionRequest } from './runtime-test-support.mjs'
+import { assistantText, openPreview, sendTurn, sessionRequest, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -134,6 +134,16 @@ try {
   assert.equal(manifestAfterFailure.revision, 0)
   assert.equal(manifestAfterFailure.entries.some(entry => entry.path === workspacePath), false)
 
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForPreview(page)
+  await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function', undefined, { timeout: 30_000 })
+  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+    && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 0, undefined, { timeout: 30_000 })
+  const recoveredFailedWrite = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+    action: 'read', path,
+  }), `/dsh/home/workspace/${workspacePath}`)
+  assert.equal(recoveredFailedWrite?.ok, false, 'the unconfirmed in-memory write must not survive Worker reconstruction')
+
   const retryTurn = await sendTurn({
     page,
     origin,
@@ -183,7 +193,7 @@ try {
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
-    scope: 'real-DSH-write-local-durable-error-and-same-session-retry',
+    scope: 'real-DSH-write-local-durable-error-worker-reload-and-same-session-retry',
     sessionId: retryTurn.sessionId,
     workspaceId,
     firstToolError: failureText,

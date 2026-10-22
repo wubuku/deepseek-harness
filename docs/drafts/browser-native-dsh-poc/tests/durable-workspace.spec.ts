@@ -269,7 +269,44 @@ describe('durable Browser-Native Workspace state', () => {
     runtime.vfs.writeFileSync('/dsh/home/workspace/aborted.txt', 'not durable')
 
     await expect(runtime.flushLocalWorkspace()).rejects.toThrow('IndexedDB transaction aborted')
+    expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local Workspace persistence is unresolved/)
     expect(statuses).toContain('error')
     expect(statuses.at(-1)).toBe('error')
+  })
+
+  it('rejects Agent Workspace access until an in-flight local snapshot commits', async () => {
+    stubRemoteManifest(0)
+    let completeSave: () => void = () => { throw new Error('save was not started') }
+    const pendingSave = new Promise<void>(resolve => { completeSave = resolve })
+    const store = {
+      load: async () => undefined,
+      save: async () => await pendingSave,
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/pending.txt', 'pending')
+
+    expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local Workspace persistence is unresolved/)
+    completeSave()
+    await runtime.flushLocalWorkspace()
+    expect(() => runtime.assertLocalWorkspaceUsable()).not.toThrow()
+  })
+
+  it('rejects Agent Workspace access after local persistence fails', async () => {
+    stubRemoteManifest(0)
+    const store = {
+      load: async () => undefined,
+      save: async () => {
+        throw new DurableWorkspaceStoreError('LOCAL_STORE_UNAVAILABLE', 'browser-native workspace: IndexedDB transaction aborted')
+      },
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/volatile.txt', 'not durable')
+
+    await expect(runtime.flushLocalWorkspace()).rejects.toThrow('IndexedDB transaction aborted')
+    expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local Workspace persistence is unresolved/)
   })
 })

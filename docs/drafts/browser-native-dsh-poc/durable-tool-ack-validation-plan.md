@@ -16,9 +16,9 @@ description: "规划验证 Browser-Native DSH 文件工具是否会把本地 dur
 - 让 Agent 调用真实 `write` 工具，检查 Session 中该调用的 `tool/result` 是否为错误，错误信息是否表明本地 Workspace 持久化未确认。
 - 确认该失败工具调用没有产生 Workspace commit 或成功 receipt；Worker 内存可能仍含有写入，不能把它说成已回滚。
 
-### P2：同会话显式重试与持久化恢复
+### P2：Worker 重建后的同会话显式重试与持久化恢复
 
-- 第一次工具结果失败后，由用户在同一 Session 重新提出相同幂等 `write` 操作。
+- 第一次工具结果失败后刷新页面，重建 Worker 并确认恢复到最后一个 durable Workspace 状态；再由用户在同一 Session 重新提出相同幂等 `write` 操作。
 - 验证第二次写入先完成本地 OPFS/IndexedDB 持久化，再完成一次远端 commit 和 Session receipt。
 - 刷新后检查文件内容、manifest revision、receipt 和 commit 计数；不得重放已完成的操作。
 
@@ -31,6 +31,6 @@ description: "规划验证 Browser-Native DSH 文件工具是否会把本地 dur
 ## 退出条件
 
 - IndexedDB abort 后，真实 DSH `write` 的 Session 工具结果为错误，且没有远端 commit/成功 receipt。
-- 同 Session 用户重试后，本地 durable snapshot、远端 manifest 和 Session receipt 一致，commit 恰好一次，刷新无副作用重放。
+- Worker 重建后，同 Session 用户重试使本地 durable snapshot、远端 manifest 和 Session receipt 一致，commit 恰好一次，后续刷新无副作用重放。
 - 记录真实 Chrome 命令、Session 事件、OPFS/IndexedDB、manifest 与工具执行证据；明确这是注入式事务失败，不是浏览器真实 quota exhaustion 或 OS 级崩溃。
 - 更新 PoC README、进度、change ledger 和 drafts 索引；不提交或推送。

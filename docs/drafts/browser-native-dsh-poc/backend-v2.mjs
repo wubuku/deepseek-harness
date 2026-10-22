@@ -443,6 +443,82 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  const durableEditMarker = [
+    'BROWSER_NATIVE_DURABLE_EDIT_RETRY_E2E',
+    'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E',
+  ].find(marker => hasUserMarker(messages, marker))
+  if (durableEditMarker !== undefined && hasTool(tools, 'edit')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(durableEditMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E'
+          ? 'browser-native-durable-edit-before-read'
+          : 'browser-native-durable-edit-retry-before-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/durable-edit.txt' },
+      })
+      return
+    }
+    if ((durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E' && toolResults.length === 1)
+      || (durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_RETRY_E2E' && toolResults.length === 1)) {
+      await scriptedWorkspaceToolCall(response, {
+        id: durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E'
+          ? 'browser-native-durable-edit-failure'
+          : 'browser-native-durable-edit-retry',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/durable-edit.txt',
+          old_string: 'before',
+          new_string: 'after',
+        },
+      })
+      return
+    }
+    if (durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E' && toolResults.length === 2) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-durable-edit-follow-up-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/durable-edit.txt' },
+      })
+      return
+    }
+    if (durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E' && toolResults.length === 3) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-durable-edit-follow-up-grep',
+        name: 'grep',
+        arguments: { pattern: 'after', path: '/dsh/home/workspace/durable-edit.txt' },
+      })
+      return
+    }
+    if (durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E' && toolResults.length === 4) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-durable-edit-follow-up-glob',
+        name: 'glob',
+        arguments: { pattern: '**/durable-edit.txt', path: '/dsh/home/workspace' },
+      })
+      return
+    }
+    if (durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E' && toolResults.length === 5) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-durable-edit-follow-up-write',
+        name: 'write',
+        arguments: { file_path: '/dsh/home/workspace/volatile-follow-up.txt', content: 'must not write\n' },
+      })
+      return
+    }
+    const text = durableEditMarker === 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E'
+      ? 'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_TURN_DONE'
+      : 'BROWSER_NATIVE_DURABLE_EDIT_RETRY_TURN_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   const durableAckMarker = [
     'BROWSER_NATIVE_DURABLE_ACK_RETRY_E2E',
     'BROWSER_NATIVE_DURABLE_ACK_FAILURE_E2E',

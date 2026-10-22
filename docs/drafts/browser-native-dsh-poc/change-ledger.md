@@ -73,6 +73,23 @@ deleteCondition: 正式 Browser Workspace tool adapter 在记录成功 `tool/res
 status: implemented
 ```
 
+### BN-P2-013：隔离本地持久化失败后的易失 Agent 文件状态
+
+```text
+changeId: BN-P2-013
+upstreamBaseline: research checkout after BN-P2-012; 2026-10-22
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-volatile-failure.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-durable-ack.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/durable-tool-ack-validation-plan.md; docs/drafts/browser-native-dsh-poc/durable-tool-ack-validation-progress.md; docs/drafts/browser-native-dsh-poc/volatile-workspace-isolation-plan.md; docs/drafts/browser-native-dsh-poc/volatile-workspace-isolation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: IndexedDB abort 后 DSH 文件工具结果已正确报错，但 VFS mutation 先于异步 durable snapshot；存活 Worker 的 MemoryVfs 仍可能暴露未确认内容给后续 read/search 或接受更多写入。
+existingExtensionPointsChecked: 复用 PoC Browser-Native provider 的 tools/execute middleware、Workspace mirror 的本地持久化错误状态、Worker 测试 MessagePort 和真实 DSH Agent Loop；不修改正式 Agent Loop、Session schema、标准文件工具或普通 Web profile。
+whyDraftOnlyWasInsufficient: 单测无法验证真实 tool/result 顺序、同 turn 多个文件工具、Session 恢复与 Worker 刷新的交互；一次 read 单工具检查也不能发现 grep/search 或后续 write 绕过。
+behaviorChange: Browser-Native provider 在本地 Workspace snapshot 保存 pending 或失败时拒绝 Agent 的 read、read_image、write、edit、grep 和 glob；若最新 snapshot 保存成功则解除保护。测试 Worker 接缝可注入有限次数的 IndexedDB transaction abort；E2E 验证 edit 报错、后续 read/grep/glob/write 被拒、刷新恢复已提交基线、同 Session 新 edit call 成功提交一次。
+consumersUpdated: durable-workspace.spec.ts、backend-v2.mjs、agent-workspace-volatile-failure.e2e.mjs、易失文件隔离计划/进度、PoC README、docs/drafts 索引。
+tests: 真实 Chrome 的 `agent-workspace-volatile-failure.e2e.mjs` 通过：失败 edit 后内存测试口读到 after，Agent 后续 read/grep/glob/write 全部为 isError；刷新后 VFS 和远端仍为 before；Session 保留错误事件；新 edit call 关联唯一 receipt，manifest revision 从 1 增至 2，仅新增一次 commit。`agent-workspace-durable-ack.e2e.mjs` 与 `agent-workspace-edit-receipt.e2e.mjs` 也通过。Preview build、Workspace Vitest 21/21、backend tests 15/15、`test:docs` 21/21、`doc-sync` 43/43 与 `git diff --check` 通过。页面无 pageerror 或非同源请求。scripted LLM；未单独验证条件注册的 read_image、真实模型、Safari/WebKit、quota exhaustion、eviction 或浏览器进程崩溃。
+syncReplaySteps: 若转为正式 Workspace 能力，将本地 durable-failure latch 放到 Workspace provider 的正式服务状态中，并在任何能读、搜索或修改 Workspace VFS 的 Agent 工具前检查；保留“失败后内存仍可变”故障、全部文件工具拒绝、刷新恢复和显式新 call retry 的 E2E。不要在正式 Browser runtime 迁移前修改全局 DSH 文件工具或 Agent Loop。
+deleteCondition: 正式 Workspace capability 已对所有 Workspace 读/写/搜索操作提供等价的 durable failure fencing，并迁移本 E2E 到正式 provider；或 Browser-Native durable Workspace PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P0-001：本地损坏诊断与 Agent Workspace receipt 崩溃恢复
 
 ```text
