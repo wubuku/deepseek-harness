@@ -65,6 +65,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 10. [Browser-Native 下一批 P0 验证计划](browser-native-dsh-poc/next-high-value-validation-plan.md)及[实施进度](browser-native-dsh-poc/next-high-value-validation-progress.md)：Chrome 已验证本地 snapshot/blob 损坏时 fail closed、真实 IndexedDB abort 的错误与 retry 保留、真实 DSH `write` 工具产生 PoC-only Session receipt，以及 receipt append 中断后杀 Worker、刷新并重开同一 Session 的恢复；quota/eviction、浏览器进程崩溃和带 Workspace lease 的完整页面生命周期仍未验证。
 11. [Browser-Native 下一批验证计划](browser-native-dsh-poc/next-round-validation-plan.md)及[进度](browser-native-dsh-poc/next-round-validation-progress.md)：三项真实 Chrome/Worker 验证均通过 scripted LLM，包括已提交 Workspace 缓存清除后重建、Agent `write → read → edit → write` 的 Session receipt 对账，以及同标签页刷新后含“resume 已成功但响应丢失”注入的 writer lease 恢复与旧 token fencing；真实模型、quota/eviction 和 OS 级浏览器进程崩溃未验证。
 12. [Browser-Native 恢复边界验证计划](browser-native-dsh-poc/recovery-boundary-validation-plan.md)及[实测进度](browser-native-dsh-poc/recovery-boundary-validation-progress.md)：真实 Chrome 验证 DSH `write` 在本地 durable 前/后的 Worker 强制终止及 `TOOL_OUTCOME_UNKNOWN` 恢复、本地损坏数据导出、双标签 writer lease 倒计时重试与 fencing；Safari、真实模型和 OS 级浏览器崩溃未验证。
+13. [Browser-Native 交互与恢复验证计划](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md)及[实测进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md)：Chrome/scripted LLM 验证默认问答与工作目录工具、清除浏览器缓存后 backend 503 时 fail-closed、真实 Worker 写权交接，并回归缓存重建和 mutation/snapshot crash window；自然 eviction、OS crash、Safari、多实例 backend 和真实模型工具选择未验证。
 
 ### 需要实现或审查代码时
 
@@ -286,6 +287,10 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [durable-workspace-plan.md](browser-native-dsh-poc/durable-workspace-plan.md) / [durable-workspace-progress.md](browser-native-dsh-poc/durable-workspace-progress.md) | 浏览器本地 OPFS/IndexedDB durable Workspace 规划、实现进度、503 刷新恢复证据和未完成故障矩阵。 |
 | [operational-envelope-validation-plan.md](browser-native-dsh-poc/operational-envelope-validation-plan.md) / [进度](browser-native-dsh-poc/operational-envelope-validation-progress.md) | 上游 release merge 后的四个验证交付面：默认 Browser 工具清单、lazy archive 和插件兼容矩阵、Chrome 多负载容量基线、quota 与正常进程重启恢复；Safari、自然 eviction 和 OS crash 仍未验证。 |
 | [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
+| [browser-runtime-integrity-validation-plan.md](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md) / [进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md) | 默认交互工具闭环、本地缓存清除后的 backend outage fail-closed、双标签 Worker 写权交接及既有恢复路径回归；脚本使用 scripted LLM，真实模型和生产级故障仍未验证。 |
+| [tests/default-interaction-tools.e2e.mjs](browser-native-dsh-poc/tests/default-interaction-tools.e2e.mjs) | Chrome 中验证用户问答、工作目录切换和相对路径文件写入进入同一 DSH turn 与 Workspace。 |
+| [tests/workspace-cache-backend-unavailable.e2e.mjs](browser-native-dsh-poc/tests/workspace-cache-backend-unavailable.e2e.mjs) | 清除 OPFS/IndexedDB 后注入 manifest 503，验证页面与 Worker 不把空 Workspace 标成已同步。 |
+| [tests/workspace-worker-handoff.e2e.mjs](browser-native-dsh-poc/tests/workspace-worker-handoff.e2e.mjs) | 两个真实 preview Worker 交接 Workspace lease，验证 fencing token 递增、旧 token 被拒和同 Session 文件工具续接。 |
 | [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
 
 ### v2 实现和测试入口

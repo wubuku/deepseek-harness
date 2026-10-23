@@ -67,9 +67,11 @@ try {
   const modelRequest = requestRecords.find(request => JSON.stringify(request.messages).includes(marker))
   assert.ok(modelRequest, 'the Agent turn must send a model request carrying the Browser profile prompt')
   const toolNames = (modelRequest.tools ?? []).map(tool => tool.function?.name ?? tool.name).filter(Boolean)
-  for (const name of ['bash', 'read', 'write', 'edit', 'read_image', 'glob', 'grep', 'todo_write', 'ask_user_question']) {
+  for (const name of ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'todo_write', 'ask_user_question', 'working_directory']) {
     assert.equal(toolNames.includes(name), true, `Browser standard preset omitted expected tool ${name}: ${toolNames.join(', ')}`)
   }
+  assert.equal(toolNames.includes('read_image'), false,
+    `Browser standard preset must not expose image input without declared model modality: ${toolNames.join(', ')}`)
   for (const name of ['web_search', 'web_fetch', 'pwsh', 'subagent', 'subagent_fork', 'job_run']) {
     assert.equal(toolNames.includes(name), false, `Browser standard preset exposed unsupported tool ${name}: ${toolNames.join(', ')}`)
   }

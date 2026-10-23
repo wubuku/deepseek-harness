@@ -87,6 +87,21 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&b
 
 本轮[恢复边界计划](recovery-boundary-validation-plan.md)与[实测进度](recovery-boundary-validation-progress.md)验证 mutation 到本地 snapshot 之间强制终止 Worker、损坏状态的本地导出和两个真实 preview 标签间的 writer lease 冲突。Chrome 结果确认：durable 前的写入刷新后丢失，但 Session 以 `TOOL_OUTCOME_UNKNOWN` 结算且同 Session 可继续；durable 后的 retry 刷新后只 commit 一次。`local-corrupt` 页面可下载含原始 IndexedDB metadata、可读 OPFS bytes、hash 校验和缺失清单的本地恢复包，不会上传、覆盖或清除数据。租约冲突页显示等待倒计时并提供显式重试；fencing 仍由 backend 决定。恢复包最大导出 64 MiB，已被浏览器清除/驱逐或不可读的 bytes 无法还原；本批未验证 Safari、真实模型、浏览器进程崩溃或生产级 backend。
 
+最新[交互与恢复验证计划](browser-runtime-integrity-validation-plan.md)补齐默认问答和工作目录工具的真实 Worker 闭环、清除 OPFS/IndexedDB 后 backend 不可用时的 fail-closed，以及两个真实标签页间的 Worker 写权交接；同时回归缓存清除后的成功重建和 mutation/snapshot 中断窗口。计划与实测进度分别见[验证计划](browser-runtime-integrity-validation-plan.md)和[进度记录](browser-runtime-integrity-validation-progress.md)，能力状态见[兼容矩阵](operational-compatibility-matrix.md)。E2E 使用 Chrome、真实 Dedicated Worker/DSH Host 和 scripted LLM；503 由 Playwright 路由注入，handoff 使用 10 秒测试 lease。自然 eviction、OS 级浏览器崩溃、Safari/WebKit、多实例 backend、生产 lease SLA 和真实模型工具选择仍未验证。
+
+在 preview 构建后复跑本批 E2E：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/default-interaction-tools.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-cache-backend-unavailable.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-worker-handoff.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-cache-reset.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs
+```
+
 运行本批真实 Chrome 验收：
 
 ```sh

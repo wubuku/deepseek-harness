@@ -6,7 +6,7 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 ## Summary
 
-当前 checkout 已在 Chrome 中运行真实 DSH Host 与 `ctx.agentLoop`，并验证部分文件工具、受限 Bash、Session/LLM backend 和 Workspace durable store。该证据只覆盖表中列明的调用路径；preview 中存在模块、模块能 import 或插件能启动，都不能单独证明插件可以工作。
+当前 checkout 已在 Chrome 中运行真实 DSH Host 与 `ctx.agentLoop`，并验证部分文件工具、受限 Bash、用户问答、工作目录切换、Session/LLM backend 和 Workspace durable store。该证据只覆盖表中列明的调用路径；preview 中存在模块、模块能 import 或插件能启动，都不能单独证明插件可以工作。
 
 ## 状态定义
 
@@ -26,11 +26,13 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 | Worker Bash | Chrome Worker 已执行（受限命令） | [默认能力 E2E](tests/default-profile-capabilities.e2e.mjs) 通过实际 `printf` 并检查 DSH `tool/call`、`tool/result` 与 Session checkpoint；工具实现由 Worker runtime 固定命令表提供。 | 它是主机 shell、可执行任意二进制、可运行 Node、后台进程或可访问用户硬盘。 |
 | Session persistence | 同源 backend 提供 | [Browser provider](browser-native-providers.ts) 将 Session 写入同源 backend；[运行时 E2E](tests/runtime-validation.e2e.mjs) 检查多轮与刷新后事件；本批修复并验证 `session/flush` 等待远程 writer flush。 | Session JSONL 可直接放进只支持 append 的浏览器存储，或与 Workspace 组成原子事务。 |
 | LLM 调用 | 同源 backend 提供 | [运行时 E2E](tests/runtime-validation.e2e.mjs) 使用真实 provider；凭据从本机 `docs/drafts/.env` 由 Node backend 读取。 | 浏览器持有模型密钥、可绕过服务端授权，或任意模型/provider 配置已验证。 |
-| Durable Workspace | Chrome Worker 已执行 + 同源 backend 提供 | [配额 E2E](tests/browser-quota-enforcement.e2e.mjs)、[进程重启 E2E](tests/chrome-process-restart.e2e.mjs)、[容量 E2E](tests/operational-capacity.e2e.mjs) 覆盖选定 OPFS/IndexedDB 和 manifest/blob 操作。 | backend 是生产云存储；自然 eviction、跨设备冲突或无限容量已经解决。 |
+| Durable Workspace | Chrome Worker 已执行 + 同源 backend 提供 | [配额 E2E](tests/browser-quota-enforcement.e2e.mjs)、[进程重启 E2E](tests/chrome-process-restart.e2e.mjs)、[容量 E2E](tests/operational-capacity.e2e.mjs) 覆盖选定 OPFS/IndexedDB 和 manifest/blob 操作；[缓存清除 E2E](tests/durable-workspace-cache-reset.e2e.mjs)证明清除本地存储后可重建；[backend outage E2E](tests/workspace-cache-backend-unavailable.e2e.mjs)证明 manifest 503 时状态保持 `error`。 | backend 是生产云存储；自然 eviction、跨设备冲突或无限容量已经解决。503 场景由路由注入，不是停止真实 backend 进程。 |
 | lazy archive 首次加载、失败重试和成功缓存 | Chrome Worker 已执行 | [Lazy archive E2E](tests/lazy-archive-runtime.e2e.mjs) 让第一次归档请求连接失败、第二次成功、后续读取不再请求。运行时校验归档内容的登记路径和文件字节数。 | 所有懒加载 package 都能运行；归档文件具有已验证的密码学 checksum 或签名。 |
 | `tool-todo` | Chrome Worker 已执行（单次新增） | 真实模型 [默认 Web UI E2E](tests/browser-native-v2.e2e.mjs) 执行一次 `todo_write`，并核对 durable Session 中恰有一条 pending task。 | 所有 todo 修改操作、并发写入、取消或刷新中断都已验证。 |
-| `tool-ask-user` | 尚未验证（本批只核对 schema） | [默认能力 E2E](tests/default-profile-capabilities.e2e.mjs) 断言 schema 存在对应名称；本批没有走完问答交互。 | 出现在模型 schema 就表示 UI、取消、持久化和恢复闭环正确。 |
-| `working_directory`、`read_image` | 尚未验证（schema 可见） | 默认能力 E2E 的模型请求 schema 含这两个工具；本批没有执行它们。 | 文件工具中其他调用成功就代表目录切换或图像读取语义兼容。 |
+| `tool-ask-user` / `ask_user_question` | Chrome Worker 已执行（单条问答） | [交互工具 E2E](tests/default-interaction-tools.e2e.mjs)在真实 Web UI 中显示问题、提交用户选择、记录 DSH `tool/result` 并继续同一 Agent turn；使用 scripted LLM 固定调用。 | 取消、超时、晚到答案、刷新后恢复和真实模型选择均已验证。 |
+| `working_directory` | Chrome Worker 已执行（切换后相对写入） | 同一[交互工具 E2E](tests/default-interaction-tools.e2e.mjs)记录 `working-directory/change`，再用相对路径调用 `write`；远端 manifest 中的文件位于所选子目录。 | 任意工作目录、目录权限变化、刷新后 cwd 恢复和所有路径工具均已验证。 |
+| `read_image` | 明确排除于当前 Browser profile | [Browser profile](browser-native-profile.cordis.patch.yml)将 `tool-fs.readImage` 设为 `false`；Browser LLM adapter 的 `resolveModel()` 未声明 `inputModalities`，而正式工具拒绝未知 image input route；默认能力与[交互工具 E2E](tests/default-profile-capabilities.e2e.mjs)均断言 schema 不含 `read_image`。 | 该模型或其他 Browser profile 永远不支持图像；图像能力本身无法通过可信模型元数据启用。 |
+| Workspace writer lease 页面关闭后交接 | Chrome Worker 已执行（单 backend、短 lease） | [Worker handoff E2E](tests/workspace-worker-handoff.e2e.mjs)让两个真实预览 Worker 竞争；首个页面关闭后第二页取得更高 fencing token，在同一 Session 执行第二个 DSH `write`；旧 token renew/commit 返回 409。 | 多实例 backend、浏览器进程崩溃、生产 lease SLA 或长模型请求期间的续租策略均已验证。 |
 | Web search、web fetch | 明确排除 | [Browser profile](browser-native-profile.cordis.patch.yml) 不注册这些工具；默认能力 E2E 断言模型 schema 不含 `web_search` / `web_fetch`。 | Browser-Native 本身绝不可能通过经过设计和授权的 backend adapter 提供网络工具。 |
 | PowerShell、subagent、后台 jobs | 明确排除 | Browser profile 不注册这些工具；默认能力 E2E 检查 schema 中不存在对应工具名。 | 所有相近的业务协作或服务器任务能力都应该由 Worker 模拟。 |
 | Worker Node builtin shim 与动态模块解析 | 尚未验证（逐插件行为） | [Worker runtime Node 实现](../../../packages/experimental/webworker-runtime/src/node/)及 [module loader](../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts) 提供受限实现；本批 E2E 不逐项调用 builtin 或第三方依赖。 | Node API 完整兼容，或凡是 import 成功的 plugin 就可正确运行。 |
@@ -39,7 +41,7 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 ## 解释和复跑
 
-测试使用真实 Chrome，但除明确标记真实模型的 Session/LLM 路径外，能力和故障验收使用 scripted LLM。`default-profile-capabilities.e2e.mjs` 验证 Browser profile 的实际 schema 与受限 Bash 调用；`runtime-validation.e2e.mjs` 真实模型文件读写序列使用独立 Browser validation roster。因此，不要把两个测试合并表述成“真实模型已验证 Browser profile 中每个工具”。
+测试使用真实 Chrome，但除明确标记真实模型的 Session/LLM 路径外，能力和故障验收使用 scripted LLM。`default-profile-capabilities.e2e.mjs` 验证 Browser profile 的实际 schema 与受限 Bash 调用；`default-interaction-tools.e2e.mjs` 验证问答与工作目录闭环；`runtime-validation.e2e.mjs` 的真实模型文件读写序列使用独立 Browser validation roster。因此，不要把这些测试合并表述成“真实模型已验证 Browser profile 中每个工具”。
 
 运行命令、Chrome 版本、测试结果和未验证范围见[运行范围验证进度](operational-envelope-validation-progress.md)。矩阵针对本 PoC 当前 checkout，不能替代 DSH package README、runtime API 文档或生产兼容性承诺。
 

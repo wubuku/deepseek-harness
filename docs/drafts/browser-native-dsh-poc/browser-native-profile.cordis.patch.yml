@@ -32,10 +32,14 @@
         name: '@deepseek-ai/dsh-tool-bash'
       - id: tool-fs
         name: '@deepseek-ai/dsh-tool-fs'
+        config:
+          readImage: false
       - id: tool-fs-search
         name: '@deepseek-ai/dsh-tool-fs-search'
         config:
           sampleOverCapGlobResults: false
+      - id: tool-working-directory
+        name: '@deepseek-ai/dsh-tool-working-directory'
       - id: tool-ask-user
         name: '@deepseek-ai/dsh-tool-ask-user'
       - id: tool-todo

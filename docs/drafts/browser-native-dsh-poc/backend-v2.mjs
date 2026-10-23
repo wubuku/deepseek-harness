@@ -499,6 +499,81 @@ async function scriptedLlm(response, messages, tools) {
     return
   }
 
+  const interactionMarker = 'BROWSER_NATIVE_INTERACTION_TOOLS_E2E'
+  if (hasUserMarker(messages, interactionMarker)
+    && ['ask_user_question', 'working_directory', 'write'].every(name => hasTool(tools, name))) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(interactionMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const sequence = [
+      {
+        id: 'browser-native-interaction-ask-user',
+        name: 'ask_user_question',
+        arguments: {
+          questions: [{
+            id: 'continue',
+            question: 'May I continue with the file operation?',
+            header: 'Confirmation',
+            options: [{ label: 'Yes' }, { label: 'No' }],
+          }],
+        },
+      },
+      {
+        id: 'browser-native-interaction-working-directory',
+        name: 'working_directory',
+        arguments: { cd: '/dsh/home/workspace/interaction-dir' },
+      },
+      {
+        id: 'browser-native-interaction-write',
+        name: 'write',
+        arguments: { file_path: 'relative-result.txt', content: 'working-directory-relative-write-ok\n' },
+      },
+    ]
+    if (toolResults.length < sequence.length) {
+      await scriptedWorkspaceToolCall(response, sequence[toolResults.length])
+      return
+    }
+    const text = 'BROWSER_NATIVE_INTERACTION_TOOLS_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
+  const handoffPrompt = messages.findLast(message => message.role === 'user'
+    && typeof message.content === 'string'
+    && (message.content.includes('BROWSER_NATIVE_WRITER_HANDOFF_FIRST_E2E')
+      || message.content.includes('BROWSER_NATIVE_WRITER_HANDOFF_SECOND_E2E')))
+  const writerHandoffMarker = handoffPrompt?.content.includes('BROWSER_NATIVE_WRITER_HANDOFF_SECOND_E2E') === true
+    ? 'BROWSER_NATIVE_WRITER_HANDOFF_SECOND_E2E'
+    : handoffPrompt === undefined ? undefined : 'BROWSER_NATIVE_WRITER_HANDOFF_FIRST_E2E'
+  if (writerHandoffMarker !== undefined && hasTool(tools, 'write')) {
+    const first = writerHandoffMarker.endsWith('FIRST_E2E')
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(writerHandoffMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: first ? 'browser-native-writer-handoff-first-write' : 'browser-native-writer-handoff-second-write',
+        name: 'write',
+        arguments: {
+          file_path: `/dsh/home/workspace/${first ? 'writer-first.txt' : 'writer-second.txt'}`,
+          content: `${first ? 'first' : 'second'}-worker-write-ok\n`,
+        },
+      })
+      return
+    }
+    const text = first ? 'BROWSER_NATIVE_WRITER_HANDOFF_FIRST_DONE' : 'BROWSER_NATIVE_WRITER_HANDOFF_SECOND_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   const crashWindowMarker = textContent(messages).includes('BROWSER_NATIVE_WORKSPACE_CRASH_WINDOW_E2E')
   if (crashWindowMarker && hasTool(tools, 'write')) {
     await scriptedWorkspaceToolCall(response, {
