@@ -443,6 +443,19 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  const crashWindowMarker = textContent(messages).includes('BROWSER_NATIVE_WORKSPACE_CRASH_WINDOW_E2E')
+  if (crashWindowMarker && hasTool(tools, 'write')) {
+    await scriptedWorkspaceToolCall(response, {
+      id: 'browser-native-workspace-crash-window-write',
+      name: 'write',
+      arguments: {
+        file_path: '/dsh/home/workspace/crash-window.txt',
+        content: 'crash-window-payload\n',
+      },
+    })
+    return
+  }
+
   const durableEditMarker = [
     'BROWSER_NATIVE_DURABLE_EDIT_RETRY_E2E',
     'BROWSER_NATIVE_DURABLE_EDIT_FAILURE_E2E',

@@ -7,11 +7,12 @@ export interface BrowserNativeOwnerNotice {
 
 export interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
   readonly message?: string
+  readonly retryAfterMs?: number
 }
 
 export interface BrowserNativeWorkspaceLease {

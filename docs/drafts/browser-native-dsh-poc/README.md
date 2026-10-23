@@ -85,6 +85,19 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&b
 
 本地 durable 保存 pending 或失败时，存活 Worker 的 `MemoryVfs` 可能仍含有未确认修改，Browser-Native provider 会拒绝 Agent 后续的 `read`、`read_image`、`write`、`edit`、`grep` 和 `glob`。若保存自动恢复，保护会在最新快照 durable 后解除；持续故障时刷新 Worker 可恢复最后确认的状态。真实 Chrome E2E 单独验证 `edit → read/grep/glob/write → reload → same-Session retry`；条件注册的 `read_image` 只验证共用 provider guard，未单独调用。详细计划和进度见[易失文件状态隔离计划](volatile-workspace-isolation-plan.md)与[进度记录](volatile-workspace-isolation-progress.md)。
 
+本轮[恢复边界计划](recovery-boundary-validation-plan.md)与[实测进度](recovery-boundary-validation-progress.md)验证 mutation 到本地 snapshot 之间强制终止 Worker、损坏状态的本地导出和两个真实 preview 标签间的 writer lease 冲突。Chrome 结果确认：durable 前的写入刷新后丢失，但 Session 以 `TOOL_OUTCOME_UNKNOWN` 结算且同 Session 可继续；durable 后的 retry 刷新后只 commit 一次。`local-corrupt` 页面可下载含原始 IndexedDB metadata、可读 OPFS bytes、hash 校验和缺失清单的本地恢复包，不会上传、覆盖或清除数据。租约冲突页显示等待倒计时并提供显式重试；fencing 仍由 backend 决定。恢复包最大导出 64 MiB，已被浏览器清除/驱逐或不可读的 bytes 无法还原；本批未验证 Safari、真实模型、浏览器进程崩溃或生产级 backend。
+
+运行本批真实 Chrome 验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-corruption.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs
+```
+
 ```sh
 node --test docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs
 node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-failure-matrix.e2e.mjs

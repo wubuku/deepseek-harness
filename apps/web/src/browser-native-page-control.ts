@@ -1,4 +1,10 @@
-import { browserNativeWorkspaceStatusCopy } from './locales/browser-native-workspace.ts'
+import {
+  browserNativeWorkspaceRecoveryExportCopy,
+  browserNativeWorkspaceRecoveryResultCopy,
+  browserNativeWorkspaceRecoveryWarningCopy,
+  browserNativeWorkspaceRetryCopy,
+  browserNativeWorkspaceStatusCopy,
+} from './locales/browser-native-workspace.ts'
 
 const OWNER_STORAGE_PREFIX = 'dsh.browser-native.owner.'
 const WORKSPACE_LEASE_STORAGE_PREFIX = 'dsh.browser-native.workspace-lease.'
@@ -11,11 +17,12 @@ interface BrowserNativeOwnerNotice {
 
 interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
+  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
   readonly message?: string
+  readonly retryAfterMs?: number
 }
 
 interface BrowserNativeWorkspaceLease {
@@ -40,6 +47,128 @@ declare global {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+interface RecoveryBlob {
+  readonly name: string
+  readonly byteLength: number
+  readonly base64: string
+  readonly actualHash: string
+  readonly hashMatches: boolean
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const input = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(input).set(bytes)
+  const digest = await crypto.subtle.digest('SHA-256', input)
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function readLocalRecoveryData(workspaceId: string): Promise<Record<string, unknown>> {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    request.onsuccess = () => { resolve(request.result) }
+    request.onerror = () => { reject(request.error ?? new Error('IndexedDB open failed')) }
+    request.onblocked = () => { reject(new Error('IndexedDB open was blocked')) }
+  })
+  let metadata: unknown
+  try {
+    const transaction = database.transaction('workspace', 'readonly')
+    const read = new Promise<unknown>((resolve, reject) => {
+      const request = transaction.objectStore('workspace').get(workspaceId)
+      request.onsuccess = () => { resolve(request.result ?? null) }
+      request.onerror = () => { reject(request.error ?? new Error('Workspace metadata read failed')) }
+    })
+    const done = new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => { resolve() }
+      transaction.onerror = () => { reject(transaction.error ?? new Error('Workspace metadata transaction failed')) }
+      transaction.onabort = () => { reject(transaction.error ?? new Error('Workspace metadata transaction aborted')) }
+    })
+    metadata = await read
+    await done
+  } finally {
+    database.close()
+  }
+
+  const blobs: RecoveryBlob[] = []
+  const missingBlobs: string[] = []
+  const unreadableBlobs: { readonly name: string; readonly error: string }[] = []
+  let bytesRead = 0
+  const maxBytes = 64 * 1024 * 1024
+  const root = await navigator.storage.getDirectory()
+  let directory: FileSystemDirectoryHandle | undefined
+  try {
+    directory = await root.getDirectoryHandle(`dsh-workspace-blobs-${workspaceId}`)
+  } catch (error) {
+    if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error
+  }
+  if (directory !== undefined) {
+    for await (const [name, entry] of directory.entries()) {
+      if (entry.kind !== 'file') continue
+      let content: Uint8Array
+      try {
+        content = new Uint8Array(await (await entry.getFile()).arrayBuffer())
+      } catch (error) {
+        unreadableBlobs.push({ name, error: error instanceof Error ? error.message : String(error) })
+        continue
+      }
+      bytesRead += content.byteLength
+      if (bytesRead > maxBytes) throw new Error('Recovery bundle exceeds the 64 MiB export limit')
+      let binary = ''
+      for (let offset = 0; offset < content.length; offset += 0x8000) {
+        binary += String.fromCharCode(...content.subarray(offset, offset + 0x8000))
+      }
+      const actualHash = await sha256Hex(content)
+      blobs.push({ name, byteLength: content.byteLength, base64: btoa(binary), actualHash, hashMatches: actualHash === name })
+    }
+  }
+
+  const referencedHashes = new Set<string>()
+  if (isRecord(metadata)) {
+    const retryBatch = isRecord(metadata.retryBatch) ? metadata.retryBatch : undefined
+    for (const changes of [metadata.pending, retryBatch?.changes]) {
+      if (!Array.isArray(changes)) continue
+      for (const change of changes) {
+        if (isRecord(change) && 'contentHash' in change
+          && typeof change.contentHash === 'string' && /^[a-f0-9]{64}$/.test(change.contentHash)) {
+          referencedHashes.add(change.contentHash)
+        }
+      }
+    }
+  }
+  const available = new Set(blobs.map(blob => blob.name))
+  for (const hash of referencedHashes) if (!available.has(hash)) missingBlobs.push(hash)
+  return {
+    format: 'dsh-browser-native-workspace-recovery-v1',
+    exportedAt: new Date().toISOString(),
+    workspaceId,
+    metadata,
+    blobs,
+    corruptBlobs: blobs.filter(blob => !blob.hashMatches).map(blob => ({
+      name: blob.name,
+      actualHash: blob.actualHash,
+    })),
+    missingBlobs,
+    unreadableBlobs,
+  }
+}
+
+async function downloadLocalRecoveryBundle(workspaceId: string): Promise<void> {
+  const bundle = await readLocalRecoveryData(workspaceId)
+  const json = JSON.stringify(bundle, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
+  const objectUrl = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+  try {
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `dsh-workspace-recovery-${workspaceId}.json`
+    link.click()
+  } finally {
+    window.setTimeout(() => { URL.revokeObjectURL(objectUrl) }, 30_000)
+  }
+}
+
 /**
  * Keep the browser-native Session write lease across a normal page reload.
  * @param worker - Dedicated Worker receiving the Browser-Native DSH Host.
@@ -50,7 +179,14 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
   const owners = new Map<string, string>()
   const storageKey = (sessionId: string): string => `${OWNER_STORAGE_PREFIX}${encodeURIComponent(sessionId)}`
   let workspaceStatus: HTMLElement | undefined
+  let retryTimer: number | undefined
+  const clearRetryTimer = (): void => {
+    if (retryTimer === undefined) return
+    window.clearInterval(retryTimer)
+    retryTimer = undefined
+  }
   const showWorkspaceStatus = (notice: BrowserNativeWorkspaceStatus): void => {
+    clearRetryTimer()
     workspaceStatus ??= (() => {
       const element = document.createElement('output')
       element.setAttribute('aria-live', 'polite')
@@ -82,6 +218,72 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
     workspaceStatus.dataset.state = notice.state
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict' || notice.state === 'local-corrupt' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
+    if (notice.state === 'local-corrupt') {
+      const warning = document.createElement('span')
+      warning.textContent = browserNativeWorkspaceRecoveryWarningCopy(document.documentElement.lang)
+      warning.style.display = 'block'
+      warning.style.marginTop = '6px'
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.dataset.browserNativeRecoveryExport = ''
+      button.textContent = browserNativeWorkspaceRecoveryExportCopy(document.documentElement.lang)
+      Object.assign(button.style, {
+        display: 'block',
+        marginTop: '8px',
+        padding: '6px 10px',
+        border: '1px solid #8ab4f8',
+        borderRadius: '5px',
+        background: '#1d4ed8',
+        color: '#fff',
+        cursor: 'pointer',
+        font: '600 13px/1.3 system-ui, sans-serif',
+      })
+      button.addEventListener('click', () => {
+        void downloadLocalRecoveryBundle(notice.workspaceId ?? '').then(() => {
+          showRecoveryResult(true)
+        }).catch(() => {
+          showRecoveryResult(false)
+        })
+      })
+      workspaceStatus.append(warning, button)
+    }
+    if (notice.state === 'lease-conflict') {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.dataset.browserNativeWorkspaceRetry = ''
+      const retryAt = Date.now() + Math.max(0, notice.retryAfterMs ?? 0)
+      const updateRetry = (): void => {
+        const remainingMs = retryAt - Date.now()
+        button.disabled = remainingMs > 0
+        button.textContent = browserNativeWorkspaceRetryCopy(document.documentElement.lang, remainingMs)
+      }
+      updateRetry()
+      Object.assign(button.style, {
+        display: 'block',
+        marginTop: '8px',
+        padding: '6px 10px',
+        border: '1px solid #8ab4f8',
+        borderRadius: '5px',
+        background: '#1d4ed8',
+        color: '#fff',
+        cursor: 'pointer',
+        font: '600 13px/1.3 system-ui, sans-serif',
+      })
+      button.addEventListener('click', () => { window.location.reload() })
+      workspaceStatus.append(button)
+      if (button.disabled) retryTimer = window.setInterval(updateRetry, 250)
+    }
+  }
+  const showRecoveryResult = (success: boolean): void => {
+    if (workspaceStatus === undefined) return
+    workspaceStatus.querySelector('[data-browser-native-recovery-result]')?.remove()
+    const result = document.createElement('span')
+    result.dataset.browserNativeRecoveryResult = ''
+    result.setAttribute('role', 'status')
+    result.style.display = 'block'
+    result.style.marginTop = '6px'
+    result.textContent = browserNativeWorkspaceRecoveryResultCopy(document.documentElement.lang, success)
+    workspaceStatus.append(result)
   }
   channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativePageNotice>) => {
     const notice = event.data
@@ -189,6 +391,7 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
 
   return () => {
     window.removeEventListener('pagehide', handlePageHide)
+    clearRetryTimer()
     channel.port1.close()
     workspaceStatus?.remove()
   }

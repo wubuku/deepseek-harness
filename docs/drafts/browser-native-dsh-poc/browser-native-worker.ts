@@ -49,12 +49,16 @@ let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
+let localPersistBarrier: 'before' | 'after' | undefined
+let localPersistReached: 'before' | 'after' | undefined
+let releaseLocalPersist: (() => void) | undefined
 const pending: unknown[] = []
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
   readonly to?: string
@@ -71,7 +75,17 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.action === 'abort-metadata-transactions') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
-  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write'].includes(String(data.action))
+  if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
+  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save'].includes(String(data.action))
+}
+
+async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
+  if (localPersistBarrier !== stage) return
+  localPersistBarrier = undefined
+  localPersistReached = stage
+  await new Promise<void>(resolve => { releaseLocalPersist = resolve })
+  releaseLocalPersist = undefined
+  localPersistReached = undefined
 }
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
@@ -113,6 +127,23 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'quota-next-opfs-write') {
       quotaNextOpfsWrite = true
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'pause-local-save') {
+      if (localPersistBarrier !== undefined || localPersistReached !== undefined) {
+        throw new Error('browser-native workspace test: a local save barrier is already armed')
+      }
+      localPersistBarrier = request.stage
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'local-save-state') {
+      workspaceTestResponse(request.requestId, { ok: true, stage: localPersistReached ?? 'idle' })
+      return
+    }
+    if (request.action === 'release-local-save') {
+      releaseLocalPersist?.()
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
@@ -267,6 +298,8 @@ self.addEventListener('message', (event: MessageEvent) => {
             quotaNextOpfsWrite = false
             return true
           },
+          beforeLocalPersist: async () => await pauseLocalPersist('before'),
+          afterLocalPersist: async () => await pauseLocalPersist('after'),
         },
       }),
     })

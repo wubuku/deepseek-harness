@@ -84,7 +84,7 @@ export interface BrowserNativeWorkspaceWriterLease {
   readonly fencingToken: number
 }
 
-type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
+type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -140,6 +140,11 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
     throw Object.assign(new Error(typeof error.message === 'string' ? error.message : 'Workspace request failed'), {
       code: typeof error.code === 'string' ? error.code : 'WORKSPACE_REQUEST_FAILED',
       details: error.details,
+      retryAfterMs: typeof error.retryAfterMs === 'number' && Number.isSafeInteger(error.retryAfterMs)
+        ? error.retryAfterMs
+        : isRecord(error.details) && typeof error.details.retryAfterMs === 'number' && Number.isSafeInteger(error.details.retryAfterMs)
+          ? error.details.retryAfterMs
+          : undefined,
     })
   }
   return value
@@ -151,6 +156,7 @@ function statusMessage(
   revision: number | undefined,
   dirtyCount: number,
   message?: string,
+  retryAfterMs?: number,
 ): void {
   publishBrowserNativeWorkspaceStatus({
     type: 'workspace',
@@ -159,6 +165,7 @@ function statusMessage(
     ...(revision === undefined ? {} : { revision }),
     dirtyCount,
     ...(message === undefined ? {} : { message }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   })
 }
 
@@ -189,6 +196,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     private readonly onStatus = statusMessage,
     private readonly store: DurableWorkspaceStore | undefined,
     private readonly useWriterLease = false,
+    private readonly testHooks?: BrowserNativeWorkspaceRuntimeOptions['testHooks'],
   ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
@@ -255,8 +263,19 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       const state = error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
         ? 'local-corrupt'
         : 'error'
+      const retryAfterMs = isRecord(error) && error.code === 'WORKSPACE_ALREADY_OWNED'
+        && Number.isSafeInteger(error.retryAfterMs)
+        ? Number(error.retryAfterMs)
+        : undefined
       this.failure = { state: state === 'local-corrupt' ? 'error' : state, message }
-      this.onStatus(state, this.workspaceId, this.revision, this.pending.size, message)
+      this.onStatus(
+        retryAfterMs === undefined ? state : 'lease-conflict',
+        this.workspaceId,
+        this.revision,
+        this.pending.size,
+        message,
+        retryAfterMs,
+      )
       throw error
     }
   }
@@ -414,7 +433,9 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (snapshot === undefined) return
     const version = ++this.localPersistVersion
     this.localPersistChain = this.localPersistChain.then(async () => {
+      await this.testHooks?.beforeLocalPersist?.()
       await this.store?.save(snapshot)
+      await this.testHooks?.afterLocalPersist?.()
       this.localPersistedVersion = version
       if (version === this.localPersistVersion) this.localPersistFailure = undefined
     }).catch(error => {
@@ -825,6 +846,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly testHooks?: {
     readonly abortNextMetadataTransaction?: () => boolean
     readonly quotaNextOpfsWrite?: () => boolean
+    readonly beforeLocalPersist?: () => Promise<void>
+    readonly afterLocalPersist?: () => Promise<void>
   }
 }
 
@@ -837,7 +860,7 @@ export function createBrowserNativeWorkspaceRuntime(
 ): BrowserNativeWorkspaceRuntime {
   let vfs: MemoryVfs
   const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore(options.testHooks) : undefined)
-  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store, options.writerLease === true)
+  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store, options.writerLease === true, options.testHooks)
   vfs = new MemoryVfs({ sink: mirror })
   return {
     vfs,

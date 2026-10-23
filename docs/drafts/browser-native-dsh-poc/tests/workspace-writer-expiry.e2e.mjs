@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { waitFor } from './runtime-test-support.mjs'
+import { waitFor, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -18,7 +18,7 @@ const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
 const playwright = await import(playwrightModule)
 const { chromium } = playwright.default ?? playwright
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-browser-writer-expiry-')))
-const leaseDurationMs = 1_200
+const leaseDurationMs = 5_000
 
 async function leaseRequest(page, workspaceId, operation, lease) {
   return await page.evaluate(async ({ id, action, credentials, requestId }) => {
@@ -65,13 +65,14 @@ try {
     currentPage.on('request', request => {
       if (new URL(request.url()).origin !== new URL(origin).origin) nonLocalRequests.push(request.url())
       if (request.url().endsWith('/api/browser-native/workspace/lease')) {
-        leaseTraffic.push({ operation: request.postDataJSON()?.operation })
+        const body = request.postDataJSON()
+        leaseTraffic.push({ operation: body?.operation, workspaceId: body?.workspaceId, requestId: body?.requestId })
       }
     })
     currentPage.on('response', response => {
       if (response.url().endsWith('/api/browser-native/workspace/lease')) {
-        const request = response.request()
-        const item = leaseTraffic.findLast(entry => entry.operation === request.postDataJSON()?.operation && entry.status === undefined)
+        const requestId = response.request().postDataJSON()?.requestId
+        const item = leaseTraffic.find(entry => entry.requestId === requestId)
         if (item !== undefined) item.status = response.status()
       }
     })
@@ -94,24 +95,60 @@ try {
   assert.equal(savedLease.fencingToken, firstLease.fencingToken)
   assert.equal(typeof savedLease.resumeId, 'string')
 
-  await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' })
-  await secondPage.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' })
-  const claim = await waitFor(async () => {
-    const result = await leaseRequest(secondPage, workspaceId, 'claim')
-    if (result.status === 200) return result
-    assert.equal(result.status, 409, JSON.stringify(result))
-    assert.equal(result.body.error.code, 'WORKSPACE_ALREADY_OWNED')
-    return undefined
-  }, 'lease expiry and second-tab claim', 15_000)
-  const secondLease = claim.body
-  assert.equal(secondLease.fencingToken, 2)
-  assert.ok(secondLease.leaseDurationMs === leaseDurationMs)
+  const ownerRenew = await leaseRequest(page, workspaceId, 'renew', {
+    writerToken: firstLease.writerToken,
+    fencingToken: firstLease.fencingToken,
+  })
+  assert.equal(ownerRenew.status, 200, JSON.stringify(ownerRenew))
+  await secondPage.goto(previewUrl, { waitUntil: 'domcontentloaded' })
+  try {
+    await secondPage.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'lease-conflict', undefined, { timeout: 30_000 })
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({
+      status: await secondPage.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__),
+      firstWorkspaceId: workspaceId,
+      bodyText: (await secondPage.locator('body').innerText().catch(() => '')).slice(-2000),
+      leaseTraffic,
+      pageErrors,
+    })}\n`)
+    throw error
+  }
+  const retry = secondPage.locator('[data-browser-native-workspace-retry]')
+  assert.equal(await retry.isVisible(), true)
+  assert.equal(await retry.isDisabled(), true, 'the second tab must wait for the backend lease expiry estimate')
+  await waitFor(async () => /Retry in [12]s/.test(await retry.textContent() ?? ''),
+    'writer lease countdown nearing expiry', 10_000)
+  const renewedDuringWait = await leaseRequest(page, workspaceId, 'renew', {
+    writerToken: firstLease.writerToken,
+    fencingToken: firstLease.fencingToken,
+  })
+  assert.equal(renewedDuringWait.status, 200, JSON.stringify(renewedDuringWait))
+  await waitFor(async () => await retry.isEnabled(), 'first lease retry deadline', 10_000)
+  await retry.click()
+  await secondPage.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'lease-conflict', undefined, { timeout: 30_000 })
+  assert.equal(await retry.isDisabled(), true, 'the active first tab renews the lease and resets the retry delay')
+  const retryTraffic = leaseTraffic.filter(item => item.operation === 'claim' && item.status === 409)
+  assert.ok(retryTraffic.length >= 2, JSON.stringify(leaseTraffic))
 
-  await page.goto(previewUrl, { waitUntil: 'domcontentloaded' })
-  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'error', undefined, { timeout: 30_000 })
-  const staleResume = leaseTraffic.find(item => item.operation === 'resume' && item.status === 409)
+  const released = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'release-lease' }))
+  assert.equal(released?.ok, true, JSON.stringify(released))
+  await waitFor(async () => await retry.isEnabled(), 'released lease retry deadline', 10_000)
+  await retry.click()
+  await secondPage.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
+  await waitForPreview(secondPage)
+  const secondLease = await secondPage.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'lease-info' }))
+  assert.equal(secondLease?.ok, true, JSON.stringify(secondLease))
+  assert.equal(secondLease.fencingToken, 2)
+  assert.ok(secondLease.fencingToken > firstLease.fencingToken)
+
+  const staleResume = await leaseRequest(secondPage, workspaceId, 'resume', {
+    writerToken: firstLease.writerToken,
+    fencingToken: firstLease.fencingToken,
+    resumeId: savedLease.resumeId,
+  })
+  assert.equal(staleResume.status, 409)
+  assert.equal(staleResume.body.error.code, 'WORKSPACE_OWNERSHIP_LOST')
   const blockedOldTabClaim = leaseTraffic.find(item => item.operation === 'claim' && item.status === 409)
-  assert.ok(staleResume, JSON.stringify(leaseTraffic))
   assert.ok(blockedOldTabClaim, JSON.stringify(leaseTraffic))
   const clearedCredentials = await page.evaluate(id => sessionStorage.getItem(
     `dsh.browser-native.workspace-lease.${encodeURIComponent(id)}`,
@@ -150,20 +187,12 @@ try {
   assert.equal(staleCommit.status, 409, JSON.stringify(staleCommit))
   assert.equal(staleCommit.body.error.code, 'WORKSPACE_OWNERSHIP_LOST')
 
-  const released = await leaseRequest(secondPage, workspaceId, 'release', {
-    writerToken: secondLease.writerToken,
-    fencingToken: secondLease.fencingToken,
+  const staleRelease = await leaseRequest(page, workspaceId, 'release', {
+    writerToken: firstLease.writerToken,
+    fencingToken: firstLease.fencingToken,
   })
-  assert.equal(released.status, 200, JSON.stringify(released))
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
-  const reclaimed = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'lease-info' }))
-  assert.equal(reclaimed?.ok, true, JSON.stringify(reclaimed))
-  assert.equal(reclaimed.fencingToken, 3)
-  assert.ok(reclaimed.fencingToken > secondLease.fencingToken)
-  assert.deepEqual(pageErrors, [
-    'web-preview tunnel: boot payload failed with HTTP 503: Error: Workspace is already owned by another browser writer',
-  ])
+  assert.equal(staleRelease.status, 409, JSON.stringify(staleRelease))
+  assert.deepEqual(pageErrors, [])
   assert.deepEqual(nonLocalRequests, [])
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
@@ -173,12 +202,11 @@ try {
     leaseDurationMs,
     firstFencingToken: firstLease.fencingToken,
     secondFencingToken: secondLease.fencingToken,
-    reclaimedFencingToken: reclaimed.fencingToken,
     staleResumeRejected: true,
     staleRenewStatus: staleRenew.status,
     staleCommitStatus: staleCommit.status,
-    staleTabBootRejected: true,
-    expectedPageErrors: pageErrors,
+    visibleLeaseConflictAndRetry: true,
+    staleReleaseStatus: staleRelease.status,
     leaseOperations: leaseTraffic.map(({ operation, status }) => ({ operation, status })),
     pageErrors,
     nonLocalRequests,

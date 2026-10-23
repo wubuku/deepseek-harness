@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -86,6 +87,25 @@ async function corruptLocalBlob(page, workspaceId, hash) {
   }, { id: workspaceId, blobHash: hash })
 }
 
+async function downloadRecoveryBundle(page, workspaceId) {
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('[data-browser-native-recovery-export]').click(),
+  ])
+  assert.equal(download.suggestedFilename(), `dsh-workspace-recovery-${workspaceId}.json`)
+  const path = await download.path()
+  assert.ok(path, 'Chrome must materialize the user-requested recovery download')
+  return JSON.parse(await readFile(path, 'utf8'))
+}
+
+function decodeBlob(bundle, hash) {
+  const blob = bundle.blobs.find(candidate => candidate.name === hash)
+  assert.ok(blob, `recovery bundle must contain OPFS blob ${hash}`)
+  const bytes = Buffer.from(blob.base64, 'base64')
+  assert.equal(bytes.byteLength, blob.byteLength)
+  return bytes.toString('utf8')
+}
+
 async function openBlockedPage(context, origin) {
   const page = await context.newPage()
   const pageErrors = []
@@ -135,6 +155,17 @@ try {
   await invalid.page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'local-corrupt', undefined, { timeout: 30_000 })
   assert.equal(await invalid.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.state), 'local-corrupt')
   assert.equal(await invalid.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.message.includes('local durable snapshot is invalid')), true)
+  const invalidBundle = await downloadRecoveryBundle(invalid.page, invalid.workspaceId)
+  await invalid.page.waitForFunction(() => document.querySelector('[data-browser-native-recovery-result]')?.textContent?.includes('downloaded'))
+  assert.equal(invalidBundle.format, 'dsh-browser-native-workspace-recovery-v1')
+  assert.equal(invalidBundle.metadata.version, 999)
+  const invalidHash = invalidRecord.retryBatch.changes.find(change => change.path === 'invalid-snapshot.txt')?.contentHash
+  assert.equal(typeof invalidHash, 'string')
+  assert.equal(decodeBlob(invalidBundle, invalidHash), 'snapshot corruption\n')
+  assert.deepEqual(invalidBundle.corruptBlobs, [])
+  assert.deepEqual(invalidBundle.missingBlobs, [])
+  assert.equal((await readLocalRecord(invalid.page, invalid.workspaceId)).version, 999,
+    'export must not repair or clear invalid metadata')
 
   const blobContext = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
   const missingBlob = await openBlockedPage(blobContext, origin)
@@ -151,6 +182,11 @@ try {
   await missingBlob.page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'local-corrupt', undefined, { timeout: 30_000 })
   assert.equal(await missingBlob.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.state), 'local-corrupt')
   assert.equal(await missingBlob.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.message.includes('local blob is missing')), true)
+  const missingBundle = await downloadRecoveryBundle(missingBlob.page, missingBlob.workspaceId)
+  await missingBlob.page.waitForFunction(() => document.querySelector('[data-browser-native-recovery-result]')?.textContent?.includes('downloaded'))
+  assert.deepEqual(missingBundle.missingBlobs, [blobHash])
+  assert.deepEqual(missingBundle.corruptBlobs, [])
+  assert.equal(missingBundle.blobs.some(blob => blob.name === blobHash), false)
 
   const corruptContext = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
   const corruptBlob = await openBlockedPage(corruptContext, origin)
@@ -167,15 +203,30 @@ try {
   await corruptBlob.page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'local-corrupt', undefined, { timeout: 30_000 })
   assert.equal(await corruptBlob.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.state), 'local-corrupt')
   assert.equal(await corruptBlob.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.message.includes('hash mismatch')), true)
+  const corruptBundle = await downloadRecoveryBundle(corruptBlob.page, corruptBlob.workspaceId)
+  await corruptBlob.page.waitForFunction(() => document.querySelector('[data-browser-native-recovery-result]')?.textContent?.includes('downloaded'))
+  assert.equal(decodeBlob(corruptBundle, corruptHash), 'wrong bytes\n')
+  assert.deepEqual(corruptBundle.corruptBlobs.map(blob => blob.name), [corruptHash])
+  assert.deepEqual(corruptBundle.missingBlobs, [])
+
+  for (const testCase of cases) {
+    const manifest = await testCase.page.evaluate(async id => await (await fetch(
+      `/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`,
+    )).json(), testCase.workspaceId)
+    assert.equal(manifest.revision, 0, 'corrupt local state must not overwrite the remote Workspace')
+  }
 
   for (const page of pages) {
     assert.deepEqual(await page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__.state), 'local-corrupt')
   }
+  assert.deepEqual(cases.flatMap(testCase => testCase.pageErrors), [],
+    'fail-closed Workspace boot must leave a usable local recovery page without an uncaught bootstrap error')
+  assert.deepEqual(cases.flatMap(testCase => testCase.nonLocalRequests), [])
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: 'chrome',
     scope: 'Worker-OPFS-IndexedDB-local-corruption',
-    cases: ['invalid-snapshot', 'missing-blob', 'hash-mismatch'],
+    cases: ['invalid-snapshot-exported', 'missing-blob-exported', 'hash-mismatch-exported'],
     pageErrors: cases.flatMap(testCase => testCase.pageErrors),
     nonLocalRequests: cases.flatMap(testCase => testCase.nonLocalRequests),
   })}\n`)

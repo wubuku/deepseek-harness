@@ -64,6 +64,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 9. [Browser-Native 高价值验证计划](browser-native-dsh-poc/high-value-validation-plan.md)及[进度](browser-native-dsh-poc/high-value-validation-progress.md)：验证上传失败、commit unknown、Workspace writer lease/fencing、文件操作矩阵和 Session/Workspace receipt 协调；明确哪些仍未接入 Agent Loop。
 10. [Browser-Native 下一批 P0 验证计划](browser-native-dsh-poc/next-high-value-validation-plan.md)及[实施进度](browser-native-dsh-poc/next-high-value-validation-progress.md)：Chrome 已验证本地 snapshot/blob 损坏时 fail closed、真实 IndexedDB abort 的错误与 retry 保留、真实 DSH `write` 工具产生 PoC-only Session receipt，以及 receipt append 中断后杀 Worker、刷新并重开同一 Session 的恢复；quota/eviction、浏览器进程崩溃和带 Workspace lease 的完整页面生命周期仍未验证。
 11. [Browser-Native 下一批验证计划](browser-native-dsh-poc/next-round-validation-plan.md)及[进度](browser-native-dsh-poc/next-round-validation-progress.md)：三项真实 Chrome/Worker 验证均通过 scripted LLM，包括已提交 Workspace 缓存清除后重建、Agent `write → read → edit → write` 的 Session receipt 对账，以及同标签页刷新后含“resume 已成功但响应丢失”注入的 writer lease 恢复与旧 token fencing；真实模型、quota/eviction 和 OS 级浏览器进程崩溃未验证。
+12. [Browser-Native 恢复边界验证计划](browser-native-dsh-poc/recovery-boundary-validation-plan.md)及[实测进度](browser-native-dsh-poc/recovery-boundary-validation-progress.md)：真实 Chrome 验证 DSH `write` 在本地 durable 前/后的 Worker 强制终止及 `TOOL_OUTCOME_UNKNOWN` 恢复、本地损坏数据导出、双标签 writer lease 倒计时重试与 fencing；Safari、真实模型和 OS 级浏览器崩溃未验证。
 
 ### 需要实现或审查代码时
 
@@ -182,6 +183,9 @@ Agentic UI 事实核查
 11. [存储隔离与重启 E2E](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：查看 quota fault 注入与 durable retry、单 backend 重启后的 lease epoch，以及共享 origin 存储中的身份隔离结果。
 12. [Agent 文件工具 durable ack E2E](browser-native-dsh-poc/tests/agent-workspace-durable-ack.e2e.mjs)：复现并验证本地保存失败不再成为成功工具结果，随后同会话重试只提交一次。
 13. [Agent 易失文件状态隔离 E2E](browser-native-dsh-poc/tests/agent-workspace-volatile-failure.e2e.mjs)：验证失败的 `edit`、被阻止的 `read`/`grep`/`glob`/`write`、Worker 刷新恢复与同 Session 显式重试。
+14. [Agent Workspace 崩溃窗口 E2E](browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs)：真实 DSH `write` 在 OPFS/IndexedDB 保存前后终止 Worker，核对 Session recovery、远端 commit、禁止重放和同 Session 续聊。
+15. [本地 corruption 恢复包 Chrome E2E](browser-native-dsh-poc/tests/durable-workspace-corruption.e2e.mjs)：验证损坏 metadata、缺失 blob、hash mismatch 的本地导出保留与远端不变。
+16. [双标签 writer lease Chrome E2E](browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs)：验证冲突提示、倒计时重试、释放后接管和旧 fencing token 拒绝。
 
 ### 路径 D：Cloud Agent 和长期执行
 

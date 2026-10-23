@@ -1,4 +1,4 @@
-type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt'
+type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -9,6 +9,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     error: 'Workspace sync failed',
     conflict: 'Workspace revision conflict',
     'local-corrupt': 'Local Workspace state is corrupt',
+    'lease-conflict': 'Another tab currently owns Workspace write access',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -18,6 +19,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     error: '工作区同步失败',
     conflict: '工作区发生版本冲突',
     'local-corrupt': '本地工作区状态损坏',
+    'lease-conflict': '另一个标签页正在写入工作区',
   },
 }
 
@@ -42,4 +44,44 @@ export function browserNativeWorkspaceStatusCopy(
     ? ''
     : language.startsWith('zh') ? ` · ${String(dirtyCount)} 项待同步` : ` · ${String(dirtyCount)} pending`
   return `${dictionary[state]}${revisionLabel}${dirtyLabel}${message === undefined ? '' : ` — ${message}`}`
+}
+
+/** Format an explicit retry action for a Browser-Native writer lease conflict.
+ * @param language - Page language tag.
+ * @param remainingMs - Time until the backend lease was expected to expire.
+ * @returns Localized button label.
+ */
+export function browserNativeWorkspaceRetryCopy(language: string, remainingMs: number): string {
+  if (language.startsWith('zh')) {
+    return remainingMs > 0 ? `等待 ${String(Math.ceil(remainingMs / 1000))} 秒后重试` : '重新获取写权限'
+  }
+  return remainingMs > 0 ? `Retry in ${String(Math.ceil(remainingMs / 1000))}s` : 'Retry write access'
+}
+
+/** Format the warning shown before a local recovery bundle download.
+ * @param language - Page language tag.
+ * @returns Localized warning about sensitive local files.
+ */
+export function browserNativeWorkspaceRecoveryWarningCopy(language: string): string {
+  return language.startsWith('zh')
+    ? '恢复包可能包含敏感文件；请先下载并妥善保存。此操作不会上传或清除数据。'
+    : 'The bundle may contain sensitive files. Store it securely. This does not upload or clear data.'
+}
+
+/** Format the user-initiated local recovery bundle action.
+ * @param language - Page language tag.
+ * @returns Localized button label.
+ */
+export function browserNativeWorkspaceRecoveryExportCopy(language: string): string {
+  return language.startsWith('zh') ? '下载本地恢复包' : 'Download local recovery bundle'
+}
+
+/** Format the result of a local recovery bundle download.
+ * @param language - Page language tag.
+ * @param success - Whether the browser started the download.
+ * @returns Localized result text.
+ */
+export function browserNativeWorkspaceRecoveryResultCopy(language: string, success: boolean): string {
+  if (language.startsWith('zh')) return success ? '恢复包已下载，请妥善保管。' : '恢复包导出失败；本地数据未更改。'
+  return success ? 'Recovery bundle downloaded. Store it securely.' : 'Recovery export failed; local data was not changed.'
 }

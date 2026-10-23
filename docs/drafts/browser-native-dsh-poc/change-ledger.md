@@ -107,6 +107,23 @@ deleteCondition: 正式 Workspace capability 提供 receipt、outbox recovery �
 status: implemented-as-draft
 ```
 
+### BN-P0-002：恢复本地 corruption、工具崩溃窗口和 writer lease 冲突
+
+```text
+changeId: BN-P0-002
+upstreamBaseline: research checkout after BN-P0-001; 2026-10-23
+file: apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-workspace-corruption.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs; docs/drafts/browser-native-dsh-poc/recovery-boundary-validation-plan.md; docs/drafts/browser-native-dsh-poc/recovery-boundary-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 已有 E2E 证明 snapshot/blob 损坏时 fail closed，却没有保留可用本地 bytes 的用户导出；writer lease backend fencing 已通过，但冲突标签看到裸 boot 503；还未把真实 DSH 文件工具的 VFS mutation 与 OPFS/IndexedDB durable 保存之间的 Worker crash 作为单独故障点验收。
+existingExtensionPointsChecked: 复用 Workspace mirror 的 async local save、Worker test MessagePort、DSH Session `TOOL_OUTCOME_UNKNOWN` recovery、backend writer lease/CAS 和 preview page-control status channel；未改正式 MemoryVfs、Agent Loop、Session format、普通 Web profile 或 Workspace backend API。
+whyDraftOnlyWasInsufficient: VFS 单测不能证明实际 DSH tool/result 与 Session recovery 顺序；仅检查 IndexedDB 不能证明 OPFS bytes 能导出且导出不改变远端；协议 claim 测试不能证明第二个真实 preview 如何呈现 lease 冲突。
+behaviorChange: PoC Worker test seam 可在 VFS mutation 的本地 save 前或 metadata 写入后挂起，真实 Worker terminate/reload E2E 验证 before-save 文件丢失但 Session 明确记录 `TOOL_OUTCOME_UNKNOWN`、不自动重放且同 Session 可续聊；after-save pending retry 在刷新后只 commit 一次。`local-corrupt` 页面添加用户主动下载的 JSON 恢复包，包含原始 metadata、OPFS blobs 的 base64 和 SHA-256 校验、损坏/缺失/不可读清单；导出不上传、不清除、不修改本地或远端数据，原始 bytes 总量上限 64 MiB。Workspace lease 409 的 `retryAfterMs` 从 backend error details 解析并显示本地化倒计时重试；fencing 仍由 backend 决定。
+consumersUpdated: Browser-Native Worker/mirror、preview page-control/locales、三项真实 Chrome E2E、验证计划/进度、PoC README、docs/drafts 索引及本记录。
+tests: Preview build 通过。`agent-workspace-crash-window.e2e.mjs` 两个 crash point 通过：before-save 后 remote revision 0、无 commit；after-save 后 revision 1、唯一 commit；两者 Session recovery result 为 `TOOL_OUTCOME_UNKNOWN`，原 write call 不重放，同 Session turn 2 成功，0 page errors/跨源请求。`durable-workspace-corruption.e2e.mjs` 通过 invalid snapshot、missing blob、hash mismatch 三项下载；导出 hash/bytes/缺失清单正确、IndexedDB 保持原内容、remote revision 0、0 page errors/跨源请求。`workspace-writer-expiry.e2e.mjs` 通过：冲突 claim 返回 409 并显示倒计时，首标签续租期间显式重试再次被拒，释放后第二标签获得 fencing token 2，旧 resume/renew/commit/release 均返回 409，无 page errors/跨源请求。三项使用真实 Chrome Worker/DSH Host 与 scripted LLM；未用真实模型。
+syncReplaySteps: 上游同步时先核对 Session recovery 是否仍为 started call 缺 result 时生成 `TOOL_OUTCOME_UNKNOWN`；保留 before/after durable 两个 crash point 与禁止重复 LLM/tool/commit 断言。若正式页面已有导出/download API，将 64 MiB 限制和 hash 清单迁移到该 API；否则只迁移 opt-in preview helper，禁止生产默认 UI 暴露测试端口。租约冲突应读取 backend 的正式 retry hint 并保留每次重新 claim 的 fencing 检查。运行 preview build、三项 Chrome E2E、Web typecheck、相关 Workspace/backend tests 和 docs gates。
+deleteCondition: Browser-Native Workspace PoC 被移除；或正式 Browser Workspace 提供同等可审计本地恢复导出、真实 Session/Workspace crash recovery 和可恢复 lease-conflict UX，且三类 E2E 已迁移到正式接口。
+status: implemented-as-draft
+```
+
 ### BN-V2-002：backend close 释放 keep-alive 连接
 
 ```text
