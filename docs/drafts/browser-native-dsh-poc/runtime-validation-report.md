@@ -38,7 +38,7 @@ description: "Browser-Native DSH v2 下一轮运行时验证结果：记录真�
 
 `apps/web/src/preview.ts` 在 preview 页面实例化 docs-owned Worker，并沿用 `connectWorkerHost`、既有 Web Client 启动顺序和 VFS preview image。`browser-native=1` 才追加 Browser-Native overlay；overlay 切换模型和 Session provider，不替换 DSH Agent Loop。
 
-`browser-native-worker.ts` 通过 `createWorkerHost()` 加载实际 Cordis Host 和 Browser-specific static modules；`browser-native-providers.ts` 提供 DSH 正式 `LlmAdapter` 和 `SessionPersistence` 的远端实现。测试镜像由 `runtime-validation.mjs` 临时组装，Browser-specific roster 来自独立 `runtime-validation.cordis.patch.yml`，未修改默认 profile 或共享 VFS build output。
+`browser-native-worker.ts` 通过 `createWorkerHost()` 加载实际 Cordis Host 和 Browser-specific static modules；`browser-native-providers.ts` 提供 DSH 正式 `LlmAdapter` 和 `SessionPersistence` 的远端实现。真实文件读写测试镜像由 `runtime-validation.mjs` 临时组装，使用独立 `runtime-validation.cordis.patch.yml`；当前正式 PoC overlay 也已覆盖 `preset-standard`，实际 roster 和本批证据见[运行范围验证进度](operational-envelope-validation-progress.md)及[插件兼容矩阵](operational-compatibility-matrix.md)。测试不会修改共享 VFS build output。
 
 `backend-v2.mjs` 只在 Node 进程加载真实模型凭据，并将 Session JSON 的 `durableThroughSeq` 与真实文件内容作为 durability 证据。`append` 只表示当前 backend 内存接受事件；测试中显式验证文件 flush 与 backend 重启恢复。测试也发现 `listen(0)` 必须返回实际系统分配端口，backend 已修正为读取 `server.address().port`。
 
@@ -67,7 +67,7 @@ scripted 浏览器 E2E 走真实 DSH UI 和 Worker，但模型响应可控。每
 | 能力 | 状态 | 实际证据 |
 |---|---|---|
 | 真实 DSH Agent Loop 在浏览器 Worker 执行 | 已验证 | 真实 Chrome/WebKit 中实际产生模型请求、工具调用、工具结果、assistant 消息和 `turn/end`；测试路径未使用 PoC 自写 Agent Loop。 |
-| Browser-specific roster | 已验证 | 两个浏览器真实请求只见 `edit`、`glob`、`grep`、`read`、`read_image`、`todo_write`、`write`；没有 `bash`、`web_search`、`web_fetch`。 |
+| 历史 Browser-specific validation roster | 已验证（独立测试配置） | 先前 Chrome/WebKit 请求只见 `edit`、`glob`、`grep`、`read`、`read_image`、`todo_write`、`write`；没有 `bash`、`web_search`、`web_fetch`。当前 PoC 默认 profile 有另一份经 Chrome 验证的 roster，见[兼容矩阵](operational-compatibility-matrix.md)。 |
 | VFS 正向 read/write/read | 已验证 | Chrome 与 WebKit Session 均有匹配 call id 的成功工具结果；随机 token 和写入内容与断言相符。 |
 | 多轮 Session 窗口记忆 | 已验证 | 刷新前后同一个 Session 的第二轮在无新工具调用时回忆第一轮随机 token。 |
 | Session flush 与 backend 重启恢复 | 已验证（PoC backend 范围） | JSON 文件 `durableThroughSeq` 等于最终事件尾；scripted 生命周期在 backend 重启后继续同一 Session。 |

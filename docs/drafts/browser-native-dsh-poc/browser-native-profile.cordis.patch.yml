@@ -1,6 +1,6 @@
 # Profile overlay used only by the browser-native preview PoC.
-# The base Web roster remains intact; this replaces the local JSONL persistence
-# row, registers the two Worker-side remote providers, and selects their route.
+# This replaces local JSONL persistence and the standard Agent preset, registers
+# the Worker-side providers, and selects a browser-compatible tool roster.
 
 - id: session-persistence-jsonl
   disabled: true
@@ -9,6 +9,39 @@
   config:
     provider: browser-native
     model: browser-native
+
+- id: preset-standard
+  config:
+    id: standard
+    name: Browser-Native
+    order: 1
+    plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: >-
+            You are running in a browser Dedicated Worker, not on the user's host.
+            Files belong to the Worker virtual filesystem. The bash tool is a
+            restricted in-worker shell with a fixed command table; it cannot run
+            host binaries, Node scripts, or background processes. There is no web
+            search or web fetch tool in this profile. Never claim live web access.
+          suffix: Work only with files under the Worker virtual filesystem. Reply in the user's language.
+      - id: time-context
+        name: '@deepseek-ai/dsh-time-context'
+      - id: tool-bash
+        name: '@deepseek-ai/dsh-tool-bash'
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+      - id: tool-fs-search
+        name: '@deepseek-ai/dsh-tool-fs-search'
+        config:
+          sampleOverCapGlobResults: false
+      - id: tool-ask-user
+        name: '@deepseek-ai/dsh-tool-ask-user'
+      - id: tool-todo
+        name: '@deepseek-ai/dsh-tool-todo'
+        config:
+          allowParallelInProgress: true
 
 - insert:
     - id: session-persistence-browser-native

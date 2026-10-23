@@ -443,6 +443,62 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_SCRIPTED_E2E_OK')) {
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_QUOTA_GUARD_E2E') && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_QUOTA_GUARD_E2E'))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-quota-guard-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/quota-guard-attempt.txt',
+          content: 'this write must be blocked while local storage is unresolved\n',
+        },
+      })
+      return
+    }
+    const text = 'BROWSER_NATIVE_QUOTA_GUARD_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E'))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'bash')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-default-profile-bash',
+        name: 'bash',
+        arguments: { command: "printf 'BROWSER_NATIVE_WORKER_SHELL_OK\\n'", description: 'Verify the Worker shell command table' },
+      })
+      return
+    }
+    const text = toolResults.length === 0
+      ? 'BROWSER_NATIVE_DEFAULT_PROFILE_BASH_NOT_EXPOSED'
+      : 'BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_LOOP_OK'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   const crashWindowMarker = textContent(messages).includes('BROWSER_NATIVE_WORKSPACE_CRASH_WINDOW_E2E')
   if (crashWindowMarker && hasTool(tools, 'write')) {
     await scriptedWorkspaceToolCall(response, {

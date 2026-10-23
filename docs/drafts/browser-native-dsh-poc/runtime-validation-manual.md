@@ -151,6 +151,6 @@ Safari 26.6.2 真实 WebDriver 的旧记录完成工作区选择、真实 LLM �
 - Worker 不是页面关闭后继续运行的后台 Agent；in-flight 模型流、工具 Promise 和页面函数不能由 Session 日志自动迁移。
 - 当前 backend 是本地 JSON PoC，owner lease 只在 backend 进程内有效；没有通用 requestId 去重、结果重放、跨进程 owner epoch、复制、备份或 HA。
 - `append` 只表示当前 backend 接受事件；`flush`/`close` 才建立本地 durability receipt；未 flush 的尾部可能在重启后丢失。
-- Browser-specific profile 是 docs-local overlay，不是默认 Browser-Native profile；原始 roster 仍可能暴露不适用的主机工具。
+- `runtime-validation.cordis.patch.yml` 是独立的文件工具验证 roster，不等同于 `browser-native-profile.cordis.patch.yml` 的当前默认 Browser PoC roster；二者暴露的工具不同，见[兼容矩阵](operational-compatibility-matrix.md)。
 - Safari.app 工具输入、Safari 长回复流式表现、跨设备恢复、真实多租户授权、生产级配额治理和性能分布仍未验证；Chrome 长回复单次观测未发现 long task，不构成性能分布或 SLA；OPFS 仅完成能力探测，不能视为 DSH 持久化方案。
 - preview 附属路由仍有 404；本轮不把它们扩展成 Browser-Native 主线功能。

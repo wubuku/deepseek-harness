@@ -126,7 +126,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
 node docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs
 ```
 
-该测试只在 `browser-native-test=workspace-recovery` URL 下启用 PoC 专用 Worker MessagePort 接缝：在 Worker 共享 VFS 写入文件，第一次 Workspace commit 被注入 503，刷新后检查 IndexedDB retry、OPFS blob、同一 `operationId` 重试、远端 manifest/blob 和页面错误。它是模型无关的故障恢复证据，不是产品 API，也不替代真实 LLM 文件工具验收。损坏 snapshot/blob 的真实 Chrome 入口见 `tests/durable-workspace-corruption.e2e.mjs`；真实 IndexedDB transaction abort 见 `tests/durable-workspace-idb-abort.e2e.mjs`；Worker 终止后恢复入口见 `tests/worker-lifecycle-recovery.e2e.mjs`；真实 DSH 文件工具和同 Session receipt 崩溃恢复的 scripted 入口分别见 `tests/agent-workspace-receipt.e2e.mjs` 与 `tests/agent-workspace-receipt-recovery.e2e.mjs`。真实 Chrome 尚未覆盖 quota/eviction 或浏览器进程强制崩溃。
+该测试只在 `browser-native-test=workspace-recovery` URL 下启用 PoC 专用 Worker MessagePort seam：在 Worker 共享 VFS 写入文件，第一次 Workspace commit 被注入 503，刷新后检查 IndexedDB retry、OPFS blob、同一 `operationId` 重试、远端 manifest/blob 和页面错误。它是模型无关的故障恢复证据，不是产品 API，也不替代真实 LLM 文件工具验收。损坏 snapshot/blob 的真实 Chrome 入口见 `tests/durable-workspace-corruption.e2e.mjs`；真实 IndexedDB transaction abort 见 `tests/durable-workspace-idb-abort.e2e.mjs`；Worker 终止后恢复入口见 `tests/worker-lifecycle-recovery.e2e.mjs`；真实 DSH 文件工具和同 Session receipt 崩溃恢复的 scripted 入口分别见 `tests/agent-workspace-receipt.e2e.mjs` 与 `tests/agent-workspace-receipt-recovery.e2e.mjs`。这些早期 E2E 未覆盖 quota/eviction 或浏览器进程强制崩溃；较新的 CDP quota override、正常进程重启及其限制见[运行范围验证进度](operational-envelope-validation-progress.md)。
 
 真实 Chrome IndexedDB transaction abort 验收：test port 在 OPFS/IndexedDB durable store 的 metadata `put` 后调用 `IDBTransaction.abort()`。预期 Worker 明确返回本地持久化错误，retry batch 最终保留在 IndexedDB；测试阻断随后的 blob 上传，并确认 Workspace manifest 未提交该文件。
 
@@ -153,6 +153,25 @@ node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 ```
 
 该命令的真实 provider 可能因上游响应延迟失败；只有看到脚本自身输出成功 JSON，才能把该轮写成真实通过。`persisted=false` 也不表示 OPFS/IndexedDB 不可用，它只表示浏览器尚未授予持久化存储保证。
+
+## 运行范围与运营上限验证
+
+上游 `dsh-v0.2.1-rc.2` 合并后，本 PoC 在主工作区补做了 Browser preset 工具核对、lazy archive 重试、容量样本、Chrome storage quota override 和持久 profile/backend 正常重启恢复。验证只覆盖当前 checkout；不要从模块加载或 VFS image 文件数推断所有 DSH 插件可用。各模块的真实证据等级见[插件兼容矩阵](operational-compatibility-matrix.md)，命令、九组容量样本、失败记录与未验证范围见[实施进度](operational-envelope-validation-progress.md)，目标与验收边界见[验证计划](operational-envelope-validation-plan.md)。
+
+这批验证同时修复了 PoC 的 Session flush durability、prompt 变量、MessagePort 测试响应和 Workspace identity cookie 持久性。容量结果是单机 Chrome 微型负载基线，不是 SLA；quota 结果来自 Chrome CDP 配额覆写，不是自然 eviction；进程重启测试是正常关闭后重启，不是 OS 级 crash。
+
+复跑下列模型无关的 Chrome 验收前，先构建 preview；Playwright 必须已安装。真实模型命令读取 `docs/drafts/.env`，只有脚本输出完整成功 JSON 才算通过。真实默认 profile 的 `todo_write` 三轮闭环由 `browser-native-v2.e2e.mjs` 验证；`runtime-validation.e2e.mjs` 使用独立 validation roster 验证文件读写，不要混淆两者。
+
+```sh
+pnpm run build:artifacts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/lazy-archive-runtime.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/browser-quota-enforcement.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/chrome-process-restart.e2e.mjs
+DSH_POC_RESULT_FILE=docs/drafts/browser-native-dsh-poc/operational-capacity-chrome-results.json node docs/drafts/browser-native-dsh-poc/tests/operational-capacity.e2e.mjs
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_LLM_TIMEOUT_MS=600000 DSH_POC_TURN_TIMEOUT_MS=900000 node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
+```
 
 ## 当前实现快照
 
@@ -203,7 +222,7 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.
 
 该 v2 测试通过的是现有 DSH Web UI、Worker Host、正式 Session 事件、`todo_write` 工具和 `ctx.agentLoop` 的三轮真实交互；旧版测试不能替代它。real E2E 是一次真实 provider 闭环，不是可用性、吞吐量、SLA、灾备或生产安全性证明。
 
-真实 Chrome 复测记录了三个 `completed` turn、一个持久化 `todo_write`、40 个 Session events 和 `durableThroughSeq=39`。这条基础 E2E 使用当前 preview 默认工具 roster；Browser-specific 工具清单与 VFS 闭环以 `runtime-validation.e2e.mjs` 的独立 overlay 测试为准。
+真实 Chrome 复测记录了三个 `completed` turn、一个持久化 `todo_write`、40 个 Session events 和 `durableThroughSeq=39`。基础 E2E 使用当前 PoC Browser profile；`runtime-validation.e2e.mjs` 仍使用独立 validation overlay 验证 `read → write → read` 文件工具闭环，二者覆盖不同 roster。
 
 真实模型 Stop/恢复单独运行：
 
@@ -217,7 +236,7 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-real-lifec
 
 该脚本要求真实模型请求处于进行中时点击 Stop，随后在同一 Session 发送恢复消息；通过条件是最新 `turn/end` 为 `completed`，同一 Session 的 durable JSON 包含恢复 marker，且浏览器没有 page error。若 provider 返回无文本、无工具调用的空完成，backend 现在将它作为 `UPSTREAM_LLM_EMPTY` 错误记录，测试会在同一 Session 再试一次；空回复不会再伪装成成功。当前 Chrome 真实模型复测为 `aborted → completed`。该结果不代表取消延迟或稳定性统计。
 
-人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)；工具失败后为何继续尝试，以及哪些行为来自 LLM、DSH Loop 和 Worker 能力缺口，见[工具连续尝试事实核查](agent-loop-tool-attempt-analysis.md)。如果要理解为什么当前 overlay 仍会把主机工具带进 Browser Agent，以及如何用 profile/preset 配置裁剪，见[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)。
+人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)；历史天气问题中工具连续尝试的原因见[工具调用事实核查](agent-loop-tool-attempt-analysis.md)。Browser profile 的配置理由和本批后的实际 roster 见[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)及[兼容矩阵](operational-compatibility-matrix.md)。
 
 ## 历史协议实验：运行
 

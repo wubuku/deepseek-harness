@@ -284,6 +284,9 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [cloud-backed-workspace-sync-plan.md](browser-native-dsh-poc/cloud-backed-workspace-sync-plan.md) | 云端 Workspace 同步 PoC 的目标、协议、验收标准和仍未完成的浏览器压力/生产化工作。 |
 | [cloud-backed-workspace-sync-progress.md](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md) | 已执行的 Workspace 同步证据：真实 Chrome/LLM 四轮闭环、文件变更矩阵、OS backend 重启、8 客户端协议并发、失败观察和限制。 |
 | [durable-workspace-plan.md](browser-native-dsh-poc/durable-workspace-plan.md) / [durable-workspace-progress.md](browser-native-dsh-poc/durable-workspace-progress.md) | 浏览器本地 OPFS/IndexedDB durable Workspace 规划、实现进度、503 刷新恢复证据和未完成故障矩阵。 |
+| [operational-envelope-validation-plan.md](browser-native-dsh-poc/operational-envelope-validation-plan.md) / [进度](browser-native-dsh-poc/operational-envelope-validation-progress.md) | 上游 release merge 后的四个验证交付面：默认 Browser 工具清单、lazy archive 和插件兼容矩阵、Chrome 多负载容量基线、quota 与正常进程重启恢复；Safari、自然 eviction 和 OS crash 仍未验证。 |
+| [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
+| [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
 
 ### v2 实现和测试入口
 

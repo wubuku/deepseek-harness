@@ -293,6 +293,38 @@ describe('durable Browser-Native Workspace state', () => {
     expect(() => runtime.assertLocalWorkspaceUsable()).not.toThrow()
   })
 
+  it('waits for snapshots queued while a local durability wait is in flight', async () => {
+    vi.useFakeTimers()
+    stubRemoteManifest(0)
+    let releaseFirstSave: () => void = () => { throw new Error('first save was not started') }
+    let notifyFirstSaveStarted: () => void = () => { throw new Error('first save start was not observed') }
+    const firstSave = new Promise<void>(resolve => { releaseFirstSave = resolve })
+    const firstSaveStarted = new Promise<void>(resolve => { notifyFirstSaveStarted = resolve })
+    const snapshots: Array<{ pending: readonly { path: string }[] }> = []
+    const store = {
+      load: async () => undefined,
+      save: async (snapshot: { pending: readonly { path: string }[] }) => {
+        snapshots.push(snapshot)
+        if (snapshots.length === 1) {
+          notifyFirstSaveStarted()
+          await firstSave
+        }
+      },
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/first.txt', 'first')
+    const flush = runtime.flushLocalWorkspace()
+    await firstSaveStarted
+    runtime.vfs.writeFileSync('/dsh/home/workspace/second.txt', 'second')
+    releaseFirstSave()
+
+    await expect(flush).resolves.toBeUndefined()
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots.at(-1)?.pending.map(change => change.path).sort()).toEqual(['first.txt', 'second.txt'])
+  })
+
   it('rejects Agent Workspace access after local persistence fails', async () => {
     stubRemoteManifest(0)
     const store = {

@@ -3,6 +3,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { dirname, join } from 'node:path'
 
 const COOKIE_NAME = 'dsh-browser-native-principal'
+const COOKIE_MAX_AGE_SECONDS = 31_536_000
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
 const DEFAULT_WRITER_LEASE_MS = 30_000
@@ -225,7 +226,7 @@ export class WorkspaceStore {
     }
     const workspaceId = this.identities.get(principalId)
     if (workspaceId === undefined) throw new WorkspaceError('IDENTITY_NOT_FOUND', 'workspace identity does not exist', 401)
-    const cookie = `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
+    const cookie = `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
     return { workspaceId, cookie }
   }
 

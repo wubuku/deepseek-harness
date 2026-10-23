@@ -444,11 +444,15 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   private async awaitLocalPersist(): Promise<void> {
-    await this.localPersistChain
-    if (this.localPersistFailure !== undefined) throw this.localPersistFailure
-    if (this.localPersistedVersion < this.localPersistVersion) {
-      throw new Error('browser-native workspace: local persistence is still pending')
+    while (this.localPersistedVersion < this.localPersistVersion) {
+      const version = this.localPersistVersion
+      await this.localPersistChain
+      if (this.localPersistFailure !== undefined) throw this.localPersistFailure
+      if (this.localPersistedVersion < version && this.localPersistVersion === version) {
+        throw new Error('browser-native workspace: local persistence is still pending')
+      }
     }
+    if (this.localPersistFailure !== undefined) throw this.localPersistFailure
   }
 
   private setLocalPersistFailure(error: unknown): void {

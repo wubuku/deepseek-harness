@@ -57,7 +57,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -76,7 +76,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save'].includes(String(data.action))
+  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -89,7 +89,7 @@ async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
 }
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
-  workspaceTestPort?.postMessage({ requestId, ...response })
+  workspaceTestPort?.postMessage({ ...response, requestId })
 }
 
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
@@ -145,6 +145,20 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (request.action === 'release-local-save') {
       releaseLocalPersist?.()
       workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'load-lazy-client-chunk') {
+      const path = '/dsh/node_modules/@deepseek-ai/dsh-client-ui-sidebar-documentpreview/lib/client.pdf.js'
+      if (request.path !== path) throw new Error('browser-native workspace test: lazy path is not in the approved probe list')
+      const content = await workspaceRuntime.vfs.promises.readFile(path, 'utf8')
+      if (typeof content !== 'string') throw new Error('browser-native workspace test: lazy chunk did not decode as text')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        path,
+        bytes: new TextEncoder().encode(content).byteLength,
+        digest: await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content)).then(value =>
+          [...new Uint8Array(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')),
+      })
       return
     }
     if (request.action === 'rename') {

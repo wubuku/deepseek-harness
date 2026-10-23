@@ -24,7 +24,7 @@
             web search, or web fetch tool in this profile. Never claim to have
             fetched live information without a tool result. Report tool errors
             honestly; do not invent missing capabilities or loop on alternatives.
-          suffix: Your working directory is {{cwd}}. Reply in the user's language.
+          suffix: Reply in the user's language.
       - id: tool-fs
         name: '@deepseek-ai/dsh-tool-fs'
       - id: tool-fs-search

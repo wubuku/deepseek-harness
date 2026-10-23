@@ -44,6 +44,8 @@ Session JSON 是 DSH 执行事实的权威证据；真实 Chromium 读取同一 
 
 ## 二、实际调用序列
 
+本节记录 2026-10-17 指定 Session 的历史事实，不表示当前 Browser profile 仍暴露同一组工具。后续 PoC 验证已从标准 preset 中移除 web search/fetch、PowerShell、subagent 和 jobs，并保留经 Chrome scripted `printf` 验证的受限 Worker Bash；当前状态见[运行范围验证进度](operational-envelope-validation-progress.md)和[兼容矩阵](operational-compatibility-matrix.md)。
+
 天气问题进入 `turn=3`，每个模型工具调用都占用一个新的 step；本轮共有六个 step，其中前五个调用工具，第六个输出最终文本。
 
 | Step | assistant 事件 | tool 事件 | 工具 | 结果 | 解释 |

@@ -377,6 +377,7 @@ function createRemoteSessionPersistenceClass(
       })
       ctx.on('session/flush', async (session: Session) => {
         await this.persistWorkspaceReceipts(session)
+        await this.writers.get(session.id)?.flush()
       })
       ctx.on('session/disposed', (session: Session) => {
         const handle = this.writers.get(session.id)

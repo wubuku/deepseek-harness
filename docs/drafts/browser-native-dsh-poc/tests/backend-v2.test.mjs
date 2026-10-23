@@ -88,6 +88,7 @@ async function openWorkspaceIdentity(origin) {
   assert.equal(response.ok, true, JSON.stringify(body))
   const setCookie = response.headers.get('set-cookie')
   assert.equal(typeof setCookie, 'string')
+  assert.match(setCookie, /Max-Age=31536000/)
   return { workspaceId: body.workspaceId, cookie: setCookie.split(';', 1)[0] }
 }
 

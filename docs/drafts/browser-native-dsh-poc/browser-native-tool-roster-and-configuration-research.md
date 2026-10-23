@@ -10,9 +10,9 @@ description: "核查 Browser-Native DSH 是否可以通过 Cordis/profile/preset
 
 结论是：**可以通过配置避免当前 PoC 中大部分无意义的尝试，但不能只禁用 provider，也不能只在 UI 层补一段提示词。必须在 Agent 第一次模型请求之前，裁剪实际的 model-facing tool roster，并让 system prompt、Tool provider 和执行位置保持一致。**
 
-DSH 已经具备实现这一点所需的组合机制：Cordis profile patch 可以禁用或替换插件行；`@deepseek-ai/dsh-tool-web` 的 `search`/`fetch` 配置可以分别控制两个模型工具是否注册；Web profile 已经用 agent preset 把工具从 Host plane 移到 per-Agent scope。最适合 Browser-Native 的做法是新增一个 Browser-specific agent preset，而不是修改默认 Agent Loop，也不是仅在 Browser Worker 中让 `bash` 调用失败。
+DSH 已经具备实现这一点所需的组合机制：Cordis profile patch 可以禁用或替换插件行；`@deepseek-ai/dsh-tool-web` 的 `search`/`fetch` 配置可以分别控制两个模型工具是否注册；Web profile 已经用 agent preset 把工具从 Host plane 移到 per-Agent scope。一般而言，独立 Browser preset 比覆写标准 preset 更能隔离产品配置；当前 PoC 为限制实验改动范围而覆写 `preset-standard`，没有改正式 profile 或 Agent Loop。
 
-当前 Browser-Native PoC 尚未做这项裁剪。它的 overlay 只替换 Session persistence、选择 Browser-Native LLM route 并插入 Worker-side providers；它没有切换 `agent-preset-registry.default`，也没有声明 Browser-specific preset。因此实际 Session 仍可能继承标准 preset 的 `tool-bash`、`tool-web` 和其他常规主机工具，天气问题中的连续尝试正是这种 roster 与执行环境不一致的结果。
+研究最初进行时，Browser-Native PoC 尚未做这项裁剪；天气问题中的连续尝试来自当时模型可见 roster 与 Worker 能力不一致。当前 checkout 已由 PoC overlay 覆盖 `preset-standard`：保留 Worker 内固定命令表实现的受限 `bash`、文件工具、todo 和问答工具，不挂载 web search/fetch、PowerShell、subagent 或 job。当前实现和验证范围见[运行范围验证进度](operational-envelope-validation-progress.md)及[插件兼容矩阵](operational-compatibility-matrix.md)；这项更新没有改变 DSH 正式默认 profile。
 
 浏览器工具也不应被理解为“把 Node 工具搬进 Worker”。Browser Agent 应获得当前 SaaS 页面和业务 API 的类型化 capability，例如读取当前账户上下文、打开客户、筛选列表、生成草稿、请求审批和提交一个经过服务端授权的业务动作；它不应获得任意 shell、任意 URL 抓取、任意 DOM 点击、任意 JavaScript 执行或任意本机文件路径。
 
@@ -22,7 +22,7 @@ DSH 已经具备实现这一点所需的组合机制：Cordis profile patch 可�
 - [二、问题的精确定义](#二问题的精确定义)
 - [三、当前代码考古](#三当前代码考古)
 - [四、三种配置层次](#四三种配置层次)
-- [五、为什么当前 overlay 还不够](#五为什么当前-overlay-还不够)
+- [五、最初的 overlay 为什么不够](#五最初的-overlay-为什么不够)
 - [六、Browser-specific 工具清单](#六browser-specific-工具清单)
 - [七、工具设计原则](#七工具设计原则)
 - [八、Agent Loop 应如何表现](#八agent-loop-应如何表现)
@@ -139,13 +139,15 @@ DSH 默认 Agent Loop 的语义是：模型选择工具，Loop 执行并记录�
 
 这两个 API 都是有价值的运行时安全网，但有两个边界：当前没有看到 agent-preset YAML 直接声明 `allow`/`deny` 的现成字段；并且 restriction 明确针对 global tools，scoped registrations 不受其过滤。因此它们不能替代“不要在 Browser preset 中挂载不适用的 scoped plugin”。如果未来要提供声明式 allowlist，需要新增一个明确的 preset capability policy plugin，而不是把任意字符串列表塞进现有 Loop。
 
-## 五、为什么当前 overlay 还不够
+## 五、最初的 overlay 为什么不够
 
-当前天气问题的调用序列已经在[工具连续尝试事实核查](agent-loop-tool-attempt-analysis.md)中逐事件记录：`web_search`、`web_fetch` 和 `bash` 都进入了模型请求，并分别因 credential、Node DNS 和 Worker shell 能力缺口失败。
+本节描述天气问题发生时的 PoC overlay；其工具清单已经被后续验证批次更新。当前 checkout 状态以[运行范围验证进度](operational-envelope-validation-progress.md)和[插件兼容矩阵](operational-compatibility-matrix.md)为准。
+
+当时的天气问题调用序列在[工具连续尝试事实核查](agent-loop-tool-attempt-analysis.md)中逐事件记录：`web_search`、`web_fetch` 和 `bash` 都进入模型请求，并分别因 credential、Node DNS 和 Worker shell 能力缺口失败。该 Session 用来说明当时的失配，不代表当前 Browser profile 的工具清单。
 
 这个序列不是 DSH 预设的“失败后固定调用两次 web_fetch、三次 bash”。它是模型根据当时可见的工具 schema、system prompt 和前一步错误结果生成的后续选择；DSH Loop 负责把结果写入 Session、推进下一个 step 并再次调用模型。
 
-当前 overlay 的不足可以表示为：
+当时 overlay 的不足可以表示为：
 
 ```text
 Browser-Native overlay
@@ -284,9 +286,9 @@ MCP Apps 的模式说明了“工具可以关联一个交互式 UI resource，�
 
 纯配置不能凭空产生 Browser UI capability、backend authorization、幂等 receipt、跨页面恢复、跨重启 ownership 或 durable handoff。也不能保证模型永远不输出一个它不该输出的字符串；它只能把正常决策空间和执行注册表收敛到正确集合。
 
-### 3. 当前不应做的代码改动
+### 3. 后续仍需验证的实现
 
-本轮没有修改 `packages/`、`apps/` 或 PoC 运行时代码，也没有把 Browser-specific roster 假设写进默认 Agent Loop。下一步如果要实施，应先把独立 preset 和配置实验加入 PoC，并用 Session/header、LLM wire 和真实浏览器负向测试证明裁剪生效。
+本研究最初没有修改 `packages/`、`apps/` 或 PoC 运行时代码；后续验证已把工具裁剪加入 PoC overlay，并通过 Chrome scripted roster 检查与真实模型 todo/multi-turn 检查。仍需在真实 Browser profile 下验证完整文件工具序列、问答/HITL，以及逐插件的错误和恢复语义；证据见[运行范围进度](operational-envelope-validation-progress.md)和[兼容矩阵](operational-compatibility-matrix.md)。生产级能力声明仍需要独立 preset、应用 capability 和后端授权设计。
 
 ## Further Exploration
 
@@ -303,4 +305,4 @@ MCP Apps 的模式说明了“工具可以关联一个交互式 UI resource，�
 
 ## Dev Note
 
-本文是基于当前 checkout 的代码考古、一个临时配置实验、既有真实 Session 证据和官方 Browser tool 资料形成的调研草稿。本轮只落档和更新索引，没有修改运行时代码；报告中的 Browser-specific preset、capability manifest 和 backend capability 都是后续实施建议，不应写成当前 PoC 已具备的能力。
+本文记录了 Browser-specific roster 的设计依据；研究时提出的 overlay 裁剪建议已在当前 PoC 中实现，工具的实际验证范围和未通过项见[运行范围验证进度](operational-envelope-validation-progress.md)与[插件兼容矩阵](operational-compatibility-matrix.md)。本文讨论的 capability manifest 和生产 backend capability 仍是架构建议，不是当前 PoC 已具备的能力。

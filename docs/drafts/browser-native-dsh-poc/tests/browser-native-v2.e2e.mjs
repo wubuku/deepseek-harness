@@ -55,6 +55,13 @@ function requestJson(request) {
   try { return JSON.parse(body) } catch { return undefined }
 }
 
+function containsText(value, text) {
+  if (typeof value === 'string') return value.includes(text)
+  if (Array.isArray(value)) return value.some(entry => containsText(entry, text))
+  if (typeof value === 'object' && value !== null) return Object.values(value).some(entry => containsText(entry, text))
+  return false
+}
+
 async function clickPreviewNotice(page) {
   const button = page.getByRole('button', { name: /^(Continue|继续)$/ }).first()
   if (await button.count() > 0 && await button.isVisible()) await button.click()
@@ -204,10 +211,9 @@ try {
     assert.equal(eventTypes.includes('todo/write'), true, 'the real DSH Agent must execute the requested todo tool')
     const assistantTexts = session.events
       .filter(event => event.type === 'assistant/message')
-      .flatMap(event => event.data.message.content ?? [])
-      .filter(block => block.type === 'text')
-      .map(block => block.text.trim())
-    assert.equal(assistantTexts.includes(memoryToken), true, 'the second real model turn must recall the token from the first turn')
+      .map(event => (event.data.message.content ?? []).filter(block => block.type === 'text').map(block => block.text).join(''))
+    assert.equal(assistantTexts.some(text => text.includes(memoryToken)), true,
+      'the real model must recall the token from the first turn across streamed text blocks')
     assert.equal(assistantTexts.some(text => text.includes(followupMarker) && text.includes(memoryToken)
       && text.includes('Browser-native tool-call E2E proof')), true, 'the third turn must retain the prior token and task context')
     const todoEvents = session.events.filter(event => event.type === 'todo/write')
@@ -226,7 +232,20 @@ try {
     'the persisted Session must contain every submitted prompt as a user message')
   assert.equal(sessionText.includes(mode === 'real' ? 'BROWSER_NATIVE_MEMORY_READY' : 'BROWSER_NATIVE_SCRIPTED_E2E_OK'), true,
     'the persisted assistant response did not contain the provider marker')
-  assert.equal(requests.some(request => request.url.endsWith('/session/flush')), true)
+  const sessionFlushes = requests
+    .map((request, index) => ({ request, index }))
+    .filter(({ request }) => request.url.endsWith('/session/flush'))
+  assert.ok(sessionFlushes.length > 0, 'the checkpoint policy must flush the Session through the browser-native provider')
+  for (const currentPrompt of prompts) {
+    const userAppendIndex = requests.findIndex(request => request.url.endsWith('/session/append')
+      && containsText(request.body?.events, currentPrompt))
+    const llmRequestIndex = requests.findIndex(request => request.url.endsWith('/llm')
+      && containsText(request.body, currentPrompt))
+    assert.ok(userAppendIndex >= 0, `the Session append for ${JSON.stringify(currentPrompt)} must be observable`)
+    assert.ok(llmRequestIndex >= 0, `the LLM request for ${JSON.stringify(currentPrompt)} must be observable`)
+    assert.ok(sessionFlushes.some(({ index }) => userAppendIndex < index && index < llmRequestIndex),
+      `the user message must be durably flushed before its LLM request: ${JSON.stringify(currentPrompt)}`)
+  }
   assert.equal(requests.some(request => request.url.endsWith('/llm')), true)
   if (mode === 'real') assert.equal(llmStatuses.every(status => status === 200), true, JSON.stringify(llmStatuses))
   assert.deepEqual(pageErrors, [])

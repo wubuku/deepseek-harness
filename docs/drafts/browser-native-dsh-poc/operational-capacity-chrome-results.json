@@ -1,0 +1,986 @@
+{
+  "result": "passed",
+  "browser": "chrome",
+  "repetitions": 3,
+  "samples": [
+    {
+      "workload": "many-small",
+      "repetition": 1,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 64,
+      "bytes": 16384,
+      "startupToWorkspaceReadyMs": 7109,
+      "localVfsOpfsIndexedDbWriteMs": 6441.122832999999,
+      "workspaceCommitMs": 31.53754199999821,
+      "refreshHydrateMs": 1127.4673330000005,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737506006,
+        "usage": 87766,
+        "usageDetails": {
+          "fileSystem": 14038,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 20,
+      "workspaceCommitRequests": 20,
+      "workspaceCommits": [
+        {
+          "operationId": "ab9c8bb9-4f0d-4261-91b3-080bb1797fcc",
+          "baseRevision": 0,
+          "changeCount": 5,
+          "paths": [
+            "cap-many-small-1-000.bin",
+            "cap-many-small-1-001.bin",
+            "cap-many-small-1-002.bin",
+            "cap-many-small-1-003.bin",
+            "cap-many-small-1-004.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 65
+        },
+        {
+          "operationId": "119794da-1740-4da6-a997-09dbaabc4e91",
+          "baseRevision": 1,
+          "changeCount": 8,
+          "paths": [
+            "cap-many-small-1-005.bin",
+            "cap-many-small-1-006.bin",
+            "cap-many-small-1-007.bin",
+            "cap-many-small-1-008.bin",
+            "cap-many-small-1-009.bin",
+            "cap-many-small-1-010.bin",
+            "cap-many-small-1-011.bin",
+            "cap-many-small-1-012.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 46
+        },
+        {
+          "operationId": "3675587f-47df-4555-b754-af1dd9f7d06e",
+          "baseRevision": 2,
+          "changeCount": 10,
+          "paths": [
+            "cap-many-small-1-013.bin",
+            "cap-many-small-1-014.bin",
+            "cap-many-small-1-015.bin",
+            "cap-many-small-1-016.bin",
+            "cap-many-small-1-017.bin",
+            "cap-many-small-1-018.bin",
+            "cap-many-small-1-019.bin",
+            "cap-many-small-1-020.bin",
+            "cap-many-small-1-021.bin",
+            "cap-many-small-1-022.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 113
+        },
+        {
+          "operationId": "6b0150d8-de08-4178-b4f9-5658eb2d35b0",
+          "baseRevision": 3,
+          "changeCount": 14,
+          "paths": [
+            "cap-many-small-1-023.bin",
+            "cap-many-small-1-024.bin",
+            "cap-many-small-1-025.bin",
+            "cap-many-small-1-026.bin",
+            "cap-many-small-1-027.bin",
+            "cap-many-small-1-028.bin",
+            "cap-many-small-1-029.bin",
+            "cap-many-small-1-030.bin",
+            "cap-many-small-1-031.bin",
+            "cap-many-small-1-032.bin",
+            "cap-many-small-1-033.bin",
+            "cap-many-small-1-034.bin",
+            "cap-many-small-1-035.bin",
+            "cap-many-small-1-036.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 240
+        },
+        {
+          "operationId": "df7f188a-9151-47b9-a593-c78c93bbc108",
+          "baseRevision": 4,
+          "changeCount": 6,
+          "paths": [
+            "cap-many-small-1-037.bin",
+            "cap-many-small-1-038.bin",
+            "cap-many-small-1-039.bin",
+            "cap-many-small-1-040.bin",
+            "cap-many-small-1-041.bin",
+            "cap-many-small-1-042.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 28
+        },
+        {
+          "operationId": "3e71f0fe-8d72-4005-8cd5-604809bce3d5",
+          "baseRevision": 5,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-043.bin",
+            "cap-many-small-1-044.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 44
+        },
+        {
+          "operationId": "a0b8bb2b-c58b-4fad-9a90-0d2f54f92cbb",
+          "baseRevision": 6,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-045.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 73
+        },
+        {
+          "operationId": "842552bf-7d47-4245-a18b-a9c724b4ecd5",
+          "baseRevision": 7,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-046.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 43
+        },
+        {
+          "operationId": "9f4c1565-e13e-4e66-a30c-08766043b302",
+          "baseRevision": 8,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-047.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 41
+        },
+        {
+          "operationId": "bd5b3c75-ac29-4edf-a737-6a9740f8b1bf",
+          "baseRevision": 9,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-048.bin",
+            "cap-many-small-1-049.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 80
+        },
+        {
+          "operationId": "061e8c40-d01e-489a-8373-37dac21405d4",
+          "baseRevision": 10,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-050.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 42
+        },
+        {
+          "operationId": "90058e55-0910-45bc-bac2-805d08982848",
+          "baseRevision": 11,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-051.bin",
+            "cap-many-small-1-052.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 68
+        },
+        {
+          "operationId": "90130967-dbe5-43f5-9313-a6e467d8bab5",
+          "baseRevision": 12,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-053.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 67
+        },
+        {
+          "operationId": "e45a4485-7a59-4fd1-9909-8b3cbd1f80df",
+          "baseRevision": 13,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-054.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 107
+        },
+        {
+          "operationId": "09389633-0d8b-4c0c-bcdf-dc9153813c57",
+          "baseRevision": 14,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-055.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 38
+        },
+        {
+          "operationId": "2522547d-25e7-4182-be75-5c7cffdd09eb",
+          "baseRevision": 15,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-056.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 106
+        },
+        {
+          "operationId": "932193b8-35a5-4c4b-aae8-0bc4a76f0495",
+          "baseRevision": 16,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-057.bin",
+            "cap-many-small-1-058.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 43
+        },
+        {
+          "operationId": "71838d3a-af86-4944-8195-2c9c5b2525bb",
+          "baseRevision": 17,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-1-059.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 41
+        },
+        {
+          "operationId": "64d38edc-1b3e-4da7-a459-ae8fa701a66e",
+          "baseRevision": 18,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-060.bin",
+            "cap-many-small-1-061.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 39
+        },
+        {
+          "operationId": "c2edb233-c371-48bb-9d74-23229068dc62",
+          "baseRevision": 19,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-1-062.bin",
+            "cap-many-small-1-063.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 19
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 361,
+        "maxFrameMs": 533.3999999999996,
+        "p95FrameMs": 16.799999999999272
+      },
+      "restoredFiles": 64
+    },
+    {
+      "workload": "many-small",
+      "repetition": 2,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 64,
+      "bytes": 16384,
+      "startupToWorkspaceReadyMs": 3125,
+      "localVfsOpfsIndexedDbWriteMs": 2664.097834,
+      "workspaceCommitMs": 793.7146250000005,
+      "refreshHydrateMs": 684.7048329999998,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737506006,
+        "usage": 87766,
+        "usageDetails": {
+          "fileSystem": 14038,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 2,
+      "workspaceCommitRequests": 2,
+      "workspaceCommits": [
+        {
+          "operationId": "d6f515bb-9fb6-4158-9475-71bf4de61824",
+          "baseRevision": 0,
+          "changeCount": 53,
+          "paths": [
+            "cap-many-small-2-000.bin",
+            "cap-many-small-2-001.bin",
+            "cap-many-small-2-002.bin",
+            "cap-many-small-2-003.bin",
+            "cap-many-small-2-004.bin",
+            "cap-many-small-2-005.bin",
+            "cap-many-small-2-006.bin",
+            "cap-many-small-2-007.bin",
+            "cap-many-small-2-008.bin",
+            "cap-many-small-2-009.bin",
+            "cap-many-small-2-010.bin",
+            "cap-many-small-2-011.bin",
+            "cap-many-small-2-012.bin",
+            "cap-many-small-2-013.bin",
+            "cap-many-small-2-014.bin",
+            "cap-many-small-2-015.bin",
+            "cap-many-small-2-016.bin",
+            "cap-many-small-2-017.bin",
+            "cap-many-small-2-018.bin",
+            "cap-many-small-2-019.bin",
+            "cap-many-small-2-020.bin",
+            "cap-many-small-2-021.bin",
+            "cap-many-small-2-022.bin",
+            "cap-many-small-2-023.bin",
+            "cap-many-small-2-024.bin",
+            "cap-many-small-2-025.bin",
+            "cap-many-small-2-026.bin",
+            "cap-many-small-2-027.bin",
+            "cap-many-small-2-028.bin",
+            "cap-many-small-2-029.bin",
+            "cap-many-small-2-030.bin",
+            "cap-many-small-2-031.bin",
+            "cap-many-small-2-032.bin",
+            "cap-many-small-2-033.bin",
+            "cap-many-small-2-034.bin",
+            "cap-many-small-2-035.bin",
+            "cap-many-small-2-036.bin",
+            "cap-many-small-2-037.bin",
+            "cap-many-small-2-038.bin",
+            "cap-many-small-2-039.bin",
+            "cap-many-small-2-040.bin",
+            "cap-many-small-2-041.bin",
+            "cap-many-small-2-042.bin",
+            "cap-many-small-2-043.bin",
+            "cap-many-small-2-044.bin",
+            "cap-many-small-2-045.bin",
+            "cap-many-small-2-046.bin",
+            "cap-many-small-2-047.bin",
+            "cap-many-small-2-048.bin",
+            "cap-many-small-2-049.bin",
+            "cap-many-small-2-050.bin",
+            "cap-many-small-2-051.bin",
+            "cap-many-small-2-052.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 347
+        },
+        {
+          "operationId": "1024fc2b-3682-476d-8225-841219260487",
+          "baseRevision": 1,
+          "changeCount": 11,
+          "paths": [
+            "cap-many-small-2-053.bin",
+            "cap-many-small-2-054.bin",
+            "cap-many-small-2-055.bin",
+            "cap-many-small-2-056.bin",
+            "cap-many-small-2-057.bin",
+            "cap-many-small-2-058.bin",
+            "cap-many-small-2-059.bin",
+            "cap-many-small-2-060.bin",
+            "cap-many-small-2-061.bin",
+            "cap-many-small-2-062.bin",
+            "cap-many-small-2-063.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 61
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 209,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000728
+      },
+      "restoredFiles": 64
+    },
+    {
+      "workload": "many-small",
+      "repetition": 3,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 64,
+      "bytes": 16384,
+      "startupToWorkspaceReadyMs": 3070,
+      "localVfsOpfsIndexedDbWriteMs": 3475.7561669999996,
+      "workspaceCommitMs": 95.35041600000113,
+      "refreshHydrateMs": 1407.0120410000018,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737506006,
+        "usage": 87766,
+        "usageDetails": {
+          "fileSystem": 14038,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 17,
+      "workspaceCommitRequests": 17,
+      "workspaceCommits": [
+        {
+          "operationId": "cf59d905-ea10-4dad-add1-7c80715a0595",
+          "baseRevision": 0,
+          "changeCount": 3,
+          "paths": [
+            "cap-many-small-3-000.bin",
+            "cap-many-small-3-001.bin",
+            "cap-many-small-3-002.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 120
+        },
+        {
+          "operationId": "6d82977b-95eb-4ecd-be94-70657dcbabd3",
+          "baseRevision": 1,
+          "changeCount": 4,
+          "paths": [
+            "cap-many-small-3-003.bin",
+            "cap-many-small-3-004.bin",
+            "cap-many-small-3-005.bin",
+            "cap-many-small-3-006.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 43
+        },
+        {
+          "operationId": "3eeeab78-7ba0-4d55-a451-a370c37d61b3",
+          "baseRevision": 2,
+          "changeCount": 9,
+          "paths": [
+            "cap-many-small-3-007.bin",
+            "cap-many-small-3-008.bin",
+            "cap-many-small-3-009.bin",
+            "cap-many-small-3-010.bin",
+            "cap-many-small-3-011.bin",
+            "cap-many-small-3-012.bin",
+            "cap-many-small-3-013.bin",
+            "cap-many-small-3-014.bin",
+            "cap-many-small-3-015.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 18
+        },
+        {
+          "operationId": "a1196e5c-601b-4fed-bb82-64e2de3280e5",
+          "baseRevision": 3,
+          "changeCount": 9,
+          "paths": [
+            "cap-many-small-3-016.bin",
+            "cap-many-small-3-017.bin",
+            "cap-many-small-3-018.bin",
+            "cap-many-small-3-019.bin",
+            "cap-many-small-3-020.bin",
+            "cap-many-small-3-021.bin",
+            "cap-many-small-3-022.bin",
+            "cap-many-small-3-023.bin",
+            "cap-many-small-3-024.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 116
+        },
+        {
+          "operationId": "a739ce19-3bb6-421a-b9d0-ca5c275b9e57",
+          "baseRevision": 4,
+          "changeCount": 16,
+          "paths": [
+            "cap-many-small-3-025.bin",
+            "cap-many-small-3-026.bin",
+            "cap-many-small-3-027.bin",
+            "cap-many-small-3-028.bin",
+            "cap-many-small-3-029.bin",
+            "cap-many-small-3-030.bin",
+            "cap-many-small-3-031.bin",
+            "cap-many-small-3-032.bin",
+            "cap-many-small-3-033.bin",
+            "cap-many-small-3-034.bin",
+            "cap-many-small-3-035.bin",
+            "cap-many-small-3-036.bin",
+            "cap-many-small-3-037.bin",
+            "cap-many-small-3-038.bin",
+            "cap-many-small-3-039.bin",
+            "cap-many-small-3-040.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 110
+        },
+        {
+          "operationId": "676e2180-a223-449c-9355-e5469be6f902",
+          "baseRevision": 5,
+          "changeCount": 4,
+          "paths": [
+            "cap-many-small-3-041.bin",
+            "cap-many-small-3-042.bin",
+            "cap-many-small-3-043.bin",
+            "cap-many-small-3-044.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 41
+        },
+        {
+          "operationId": "a7b7ac3f-eea0-416e-9921-61ae9d0bba8a",
+          "baseRevision": 6,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-3-045.bin",
+            "cap-many-small-3-046.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 58
+        },
+        {
+          "operationId": "af4a964e-f936-4875-b9f7-995a4db8468e",
+          "baseRevision": 7,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-3-047.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 95
+        },
+        {
+          "operationId": "6fa747a3-e2ad-48a1-acaa-8fcd3573e15e",
+          "baseRevision": 8,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-3-048.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 30
+        },
+        {
+          "operationId": "e6fa1b09-5b6b-41a0-a41b-dba1618be8e5",
+          "baseRevision": 9,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-3-049.bin",
+            "cap-many-small-3-050.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 52
+        },
+        {
+          "operationId": "add87ca5-748a-4674-8216-e32051822716",
+          "baseRevision": 10,
+          "changeCount": 3,
+          "paths": [
+            "cap-many-small-3-051.bin",
+            "cap-many-small-3-052.bin",
+            "cap-many-small-3-053.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 80
+        },
+        {
+          "operationId": "4ee51873-dd20-4e09-b0e3-7f138831062c",
+          "baseRevision": 11,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-3-054.bin",
+            "cap-many-small-3-055.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 54
+        },
+        {
+          "operationId": "ed26737c-6049-453f-9d66-b8691100b8ef",
+          "baseRevision": 12,
+          "changeCount": 2,
+          "paths": [
+            "cap-many-small-3-056.bin",
+            "cap-many-small-3-057.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 64
+        },
+        {
+          "operationId": "c742824a-f3e8-4fb2-99fd-fa2ad99c90b4",
+          "baseRevision": 13,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-3-058.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 51
+        },
+        {
+          "operationId": "6247e92c-abb6-4589-9d9f-4b278ea18699",
+          "baseRevision": 14,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-3-059.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 64
+        },
+        {
+          "operationId": "993b3339-3b36-490d-88fc-b2188123e37b",
+          "baseRevision": 15,
+          "changeCount": 3,
+          "paths": [
+            "cap-many-small-3-060.bin",
+            "cap-many-small-3-061.bin",
+            "cap-many-small-3-062.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 60
+        },
+        {
+          "operationId": "b3ab243a-952b-4df5-9676-67b21bd92af1",
+          "baseRevision": 16,
+          "changeCount": 1,
+          "paths": [
+            "cap-many-small-3-063.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 26
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 217,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000728
+      },
+      "restoredFiles": 64
+    },
+    {
+      "workload": "multi-medium",
+      "repetition": 1,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 8,
+      "bytes": 131072,
+      "startupToWorkspaceReadyMs": 2158,
+      "localVfsOpfsIndexedDbWriteMs": 49.229833999997936,
+      "workspaceCommitMs": 615.7099999999991,
+      "refreshHydrateMs": 256.8225420000017,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737625490,
+        "usage": 207250,
+        "usageDetails": {
+          "fileSystem": 133522,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 1,
+      "workspaceCommitRequests": 1,
+      "workspaceCommits": [
+        {
+          "operationId": "7319d32c-8d45-4da1-9295-a657ea131092",
+          "baseRevision": 0,
+          "changeCount": 8,
+          "paths": [
+            "cap-multi-medium-1-000.bin",
+            "cap-multi-medium-1-001.bin",
+            "cap-multi-medium-1-002.bin",
+            "cap-multi-medium-1-003.bin",
+            "cap-multi-medium-1-004.bin",
+            "cap-multi-medium-1-005.bin",
+            "cap-multi-medium-1-006.bin",
+            "cap-multi-medium-1-007.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 33
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 40,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000273
+      },
+      "restoredFiles": 8
+    },
+    {
+      "workload": "multi-medium",
+      "repetition": 2,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 8,
+      "bytes": 131072,
+      "startupToWorkspaceReadyMs": 2228,
+      "localVfsOpfsIndexedDbWriteMs": 109.401374999994,
+      "workspaceCommitMs": 346.52970800000185,
+      "refreshHydrateMs": 212.30745799999568,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737625490,
+        "usage": 207250,
+        "usageDetails": {
+          "fileSystem": 133522,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 1,
+      "workspaceCommitRequests": 1,
+      "workspaceCommits": [
+        {
+          "operationId": "50c5a32b-b8ee-4c33-af0a-ffa8c5a3ca23",
+          "baseRevision": 0,
+          "changeCount": 8,
+          "paths": [
+            "cap-multi-medium-2-000.bin",
+            "cap-multi-medium-2-001.bin",
+            "cap-multi-medium-2-002.bin",
+            "cap-multi-medium-2-003.bin",
+            "cap-multi-medium-2-004.bin",
+            "cap-multi-medium-2-005.bin",
+            "cap-multi-medium-2-006.bin",
+            "cap-multi-medium-2-007.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 98
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 28,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000273
+      },
+      "restoredFiles": 8
+    },
+    {
+      "workload": "multi-medium",
+      "repetition": 3,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 8,
+      "bytes": 131072,
+      "startupToWorkspaceReadyMs": 2301,
+      "localVfsOpfsIndexedDbWriteMs": 74.52599999999802,
+      "workspaceCommitMs": 202.08483400000114,
+      "refreshHydrateMs": 240.51024999999936,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10737625490,
+        "usage": 207250,
+        "usageDetails": {
+          "fileSystem": 133522,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 1,
+      "workspaceCommitRequests": 1,
+      "workspaceCommits": [
+        {
+          "operationId": "0b3a81cf-e213-4d55-afa0-4ef5f5d311f2",
+          "baseRevision": 0,
+          "changeCount": 8,
+          "paths": [
+            "cap-multi-medium-3-000.bin",
+            "cap-multi-medium-3-001.bin",
+            "cap-multi-medium-3-002.bin",
+            "cap-multi-medium-3-003.bin",
+            "cap-multi-medium-3-004.bin",
+            "cap-multi-medium-3-005.bin",
+            "cap-multi-medium-3-006.bin",
+            "cap-multi-medium-3-007.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 18
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 17,
+        "maxFrameMs": 16.700000000000273,
+        "p95FrameMs": 16.700000000000273
+      },
+      "restoredFiles": 8
+    },
+    {
+      "workload": "few-large",
+      "repetition": 1,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 2,
+      "bytes": 1048576,
+      "startupToWorkspaceReadyMs": 2059,
+      "localVfsOpfsIndexedDbWriteMs": 49.99670799999876,
+      "workspaceCommitMs": 303.3706249999959,
+      "refreshHydrateMs": 205.7430830000012,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10738541350,
+        "usage": 1123110,
+        "usageDetails": {
+          "fileSystem": 1049382,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 1,
+      "workspaceCommitRequests": 1,
+      "workspaceCommits": [
+        {
+          "operationId": "947f54f1-c2f3-42de-953d-7b48f0a7d2cf",
+          "baseRevision": 0,
+          "changeCount": 2,
+          "paths": [
+            "cap-few-large-1-000.bin",
+            "cap-few-large-1-001.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 80
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 22,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000273
+      },
+      "restoredFiles": 2
+    },
+    {
+      "workload": "few-large",
+      "repetition": 2,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 2,
+      "bytes": 1048576,
+      "startupToWorkspaceReadyMs": 3269,
+      "localVfsOpfsIndexedDbWriteMs": 108.42920899999444,
+      "workspaceCommitMs": 100.59866699999839,
+      "refreshHydrateMs": 309.88820799999667,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10738541350,
+        "usage": 1123110,
+        "usageDetails": {
+          "fileSystem": 1049382,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 1,
+      "workspaceCommitRequests": 1,
+      "workspaceCommits": [
+        {
+          "operationId": "5e4b6585-30ce-4178-a404-18575036e098",
+          "baseRevision": 0,
+          "changeCount": 2,
+          "paths": [
+            "cap-few-large-2-000.bin",
+            "cap-few-large-2-001.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 16
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 14,
+        "maxFrameMs": 16.700000000000273,
+        "p95FrameMs": 16.700000000000273
+      },
+      "restoredFiles": 2
+    },
+    {
+      "workload": "few-large",
+      "repetition": 3,
+      "browserVersion": "155.0.8059.85",
+      "platform": "darwin",
+      "fileCount": 2,
+      "bytes": 1048576,
+      "startupToWorkspaceReadyMs": 3615,
+      "localVfsOpfsIndexedDbWriteMs": 450.9592080000002,
+      "workspaceCommitMs": 229.16645800000697,
+      "refreshHydrateMs": 551.1301660000026,
+      "durableStorageEstimateBefore": {
+        "quota": 10737492226,
+        "usage": 73986,
+        "usageDetails": {
+          "fileSystem": 258,
+          "indexedDB": 73728
+        }
+      },
+      "durableStorageEstimateAfter": {
+        "quota": 10738541350,
+        "usage": 1123110,
+        "usageDetails": {
+          "fileSystem": 1049382,
+          "indexedDB": 73728
+        }
+      },
+      "workspaceRevision": 2,
+      "workspaceCommitRequests": 2,
+      "workspaceCommits": [
+        {
+          "operationId": "a41d849f-16d8-4226-b80a-6fe3ce5b7bd0",
+          "baseRevision": 0,
+          "changeCount": 1,
+          "paths": [
+            "cap-few-large-3-000.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 36
+        },
+        {
+          "operationId": "d13641e3-ee97-469c-992a-842757bb2879",
+          "baseRevision": 1,
+          "changeCount": 1,
+          "paths": [
+            "cap-few-large-3-001.bin"
+          ],
+          "status": 200,
+          "elapsedMs": 115
+        }
+      ],
+      "frameMetrics": {
+        "frameCount": 46,
+        "maxFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000728
+      },
+      "restoredFiles": 2
+    }
+  ],
+  "pageErrors": []
+}
