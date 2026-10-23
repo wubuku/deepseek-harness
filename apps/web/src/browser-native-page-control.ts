@@ -17,7 +17,8 @@ interface BrowserNativeOwnerNotice {
 
 interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
+  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+    | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
@@ -68,26 +69,31 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 async function readLocalRecoveryData(workspaceId: string): Promise<Record<string, unknown>> {
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     request.onsuccess = () => { resolve(request.result) }
     request.onerror = () => { reject(request.error ?? new Error('IndexedDB open failed')) }
     request.onblocked = () => { reject(new Error('IndexedDB open was blocked')) }
   })
   let metadata: unknown
+  const objectStoreNames = Array.from(database.objectStoreNames)
   try {
-    const transaction = database.transaction('workspace', 'readonly')
-    const read = new Promise<unknown>((resolve, reject) => {
-      const request = transaction.objectStore('workspace').get(workspaceId)
-      request.onsuccess = () => { resolve(request.result ?? null) }
-      request.onerror = () => { reject(request.error ?? new Error('Workspace metadata read failed')) }
-    })
-    const done = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => { resolve() }
-      transaction.onerror = () => { reject(transaction.error ?? new Error('Workspace metadata transaction failed')) }
-      transaction.onabort = () => { reject(transaction.error ?? new Error('Workspace metadata transaction aborted')) }
-    })
-    metadata = await read
-    await done
+    if (database.objectStoreNames.contains('workspace')) {
+      const transaction = database.transaction('workspace', 'readonly')
+      const read = new Promise<unknown>((resolve, reject) => {
+        const request = transaction.objectStore('workspace').get(workspaceId)
+        request.onsuccess = () => { resolve(request.result ?? null) }
+        request.onerror = () => { reject(request.error ?? new Error('Workspace metadata read failed')) }
+      })
+      const done = new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => { resolve() }
+        transaction.onerror = () => { reject(transaction.error ?? new Error('Workspace metadata transaction failed')) }
+        transaction.onabort = () => { reject(transaction.error ?? new Error('Workspace metadata transaction aborted')) }
+      })
+      metadata = await read
+      await done
+    } else {
+      metadata = null
+    }
   } finally {
     database.close()
   }
@@ -144,6 +150,8 @@ async function readLocalRecoveryData(workspaceId: string): Promise<Record<string
     format: 'dsh-browser-native-workspace-recovery-v1',
     exportedAt: new Date().toISOString(),
     workspaceId,
+    indexedDbVersion: database.version,
+    objectStoreNames,
     metadata,
     blobs,
     corruptBlobs: blobs.filter(blob => !blob.hashMatches).map(blob => ({
@@ -216,9 +224,10 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
       notice.message,
     )
     workspaceStatus.dataset.state = notice.state
-    workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict' || notice.state === 'local-corrupt' ? '#f87171'
+    workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
+      || notice.state === 'local-corrupt' || notice.state === 'local-newer-version' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
-    if (notice.state === 'local-corrupt') {
+    if (notice.state === 'local-corrupt' || notice.state === 'local-newer-version') {
       const warning = document.createElement('span')
       warning.textContent = browserNativeWorkspaceRecoveryWarningCopy(document.documentElement.lang)
       warning.style.display = 'block'

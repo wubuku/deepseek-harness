@@ -166,6 +166,7 @@ Agentic UI 事实核查
 9. [存储隔离与重启验证计划](browser-native-dsh-poc/storage-isolation-and-restart-validation-plan.md)与[进度](browser-native-dsh-poc/storage-isolation-and-restart-validation-progress.md)：Chrome 验证 quota 类写失败、backend 重启租约 fencing 和同源多身份 Workspace 隔离。
 10. [文件工具持久化确认计划](browser-native-dsh-poc/durable-tool-ack-validation-plan.md)与[进度/经验教训](browser-native-dsh-poc/durable-tool-ack-validation-progress.md)：真实 DSH `write` 在 IndexedDB 保存失败时写入 Session 错误；同 Session 显式重试验证本地 durable 状态、Workspace commit 和 Session receipt 对齐。
 11. [易失文件状态隔离计划](browser-native-dsh-poc/volatile-workspace-isolation-plan.md)与[进度/经验教训](browser-native-dsh-poc/volatile-workspace-isolation-progress.md)：真实 Chrome 验证 IndexedDB 持久化失败后 Agent 不能读取、搜索或继续修改仅存在 Worker 内存的文件；刷新恢复 durable 基线，再由同 Session 新调用显式重试。
+12. [运行时完整性验证计划](browser-native-dsh-poc/next-runtime-integrity-validation-plan.md)与[进度](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：Chrome/scripted E2E 验证活动 Worker lease heartbeat 和续租故障恢复、Workspace 初始化失败停止续租、Agent 写入未知 commit 与 backend 重启、HITL 等待期间刷新后的诚实中断及同 Session 新 turn 续聊，以及 IndexedDB 前向版本 fail-closed 和恢复导出；原问答 Promise 不跨刷新恢复。
 
 ### 路径 C：直接复现 PoC
 
@@ -187,6 +188,7 @@ Agentic UI 事实核查
 14. [Agent Workspace 崩溃窗口 E2E](browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs)：真实 DSH `write` 在 OPFS/IndexedDB 保存前后终止 Worker，核对 Session recovery、远端 commit、禁止重放和同 Session 续聊。
 15. [本地 corruption 恢复包 Chrome E2E](browser-native-dsh-poc/tests/durable-workspace-corruption.e2e.mjs)：验证损坏 metadata、缺失 blob、hash mismatch 的本地导出保留与远端不变。
 16. [双标签 writer lease Chrome E2E](browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs)：验证冲突提示、倒计时重试、释放后接管和旧 fencing token 拒绝。
+17. [运行时完整性验证 E2E](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：包含五项新 Chrome E2E 与 lease 回归的实际命令、结果和限制。
 
 ### 路径 D：Cloud Agent 和长期执行
 

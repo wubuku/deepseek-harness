@@ -89,6 +89,25 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&b
 
 最新[交互与恢复验证计划](browser-runtime-integrity-validation-plan.md)补齐默认问答和工作目录工具的真实 Worker 闭环、清除 OPFS/IndexedDB 后 backend 不可用时的 fail-closed，以及两个真实标签页间的 Worker 写权交接；同时回归缓存清除后的成功重建和 mutation/snapshot 中断窗口。计划与实测进度分别见[验证计划](browser-runtime-integrity-validation-plan.md)和[进度记录](browser-runtime-integrity-validation-progress.md)，能力状态见[兼容矩阵](operational-compatibility-matrix.md)。E2E 使用 Chrome、真实 Dedicated Worker/DSH Host 和 scripted LLM；503 由 Playwright 路由注入，handoff 使用 10 秒测试 lease。自然 eviction、OS 级浏览器崩溃、Safari/WebKit、多实例 backend、生产 lease SLA 和真实模型工具选择仍未验证。
 
+最新[运行时完整性验证计划](next-runtime-integrity-validation-plan.md)与[进度记录](next-runtime-integrity-validation-progress.md)补齐活动 Worker 的 Workspace lease heartbeat、Agent `write` 的未知 commit/backend 重启恢复、HITL 等待中的刷新中断，以及 IndexedDB 前向版本下的本地恢复导出。真实 Chrome/scripted E2E 证明活动页面在一次 renew 503 后继续续租并完成同一 Agent turn；Workspace manifest 503 导致初始化失败时 Worker 停止续租，服务端租约到期后可被接管；已提交但响应丢失的文件只增加一个 Workspace revision；刷新中的 `ask_user_question` 被结算为 `TOOL_OUTCOME_UNKNOWN` 和 interrupted turn，不保留可回答的旧问题卡或自动续跑，之后用户可在同一 Session 显式开启新 turn；v2 IndexedDB 不被 v1 客户端降级，已识别的 metadata 与 OPFS bytes 可导出。刷新不会恢复原问答 Promise，新 turn 不是旧审批答案，未知 object store 的记录不会进入恢复包；本批不证明真实 LLM、多实例 backend、自然 eviction、OS crash 或后台 Agent。
+
+在 preview 构建后复跑本批 Chrome E2E：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-heartbeat.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-startup-failure.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-unknown-commit-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/ask-user-refresh-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/indexeddb-forward-version-export.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-lease.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-reload.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs
+```
+
+以上 E2E 使用 scripted backend/LLM、真实 Chrome Worker 和独立临时 data directory；测试 lease 使用缩短 TTL。它们验证的是本 PoC 当前 checkout 的协议与恢复行为，不是生产租约 SLA、HA 或自然浏览器崩溃语义。
+
 在 preview 构建后复跑本批 E2E：
 
 ```sh

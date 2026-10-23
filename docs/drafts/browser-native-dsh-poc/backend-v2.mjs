@@ -443,6 +443,16 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE')) {
+    const text = 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE_OK'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_SCRIPTED_E2E_OK')) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } })

@@ -30,7 +30,8 @@ export class DurableWorkspaceStoreError extends Error {
   override readonly name = 'DurableWorkspaceStoreError'
 
   constructor(
-    readonly code: 'LOCAL_STORE_UNAVAILABLE' | 'LOCAL_METADATA_INVALID' | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
+    readonly code: 'LOCAL_STORE_UNAVAILABLE' | 'LOCAL_STORE_NEWER_VERSION' | 'LOCAL_METADATA_INVALID'
+      | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -129,11 +130,23 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 async function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') throw new Error('browser-native workspace: IndexedDB is unavailable')
   return await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, STORE_VERSION)
+    const request = indexedDB.open(DATABASE_NAME)
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(METADATA_STORE)) request.result.createObjectStore(METADATA_STORE, { keyPath: 'workspaceId' })
     }
-    request.onsuccess = () => { resolve(request.result) }
+    request.onsuccess = () => {
+      const database = request.result
+      if (database.version > STORE_VERSION) {
+        const version = database.version
+        database.close()
+        reject(new DurableWorkspaceStoreError(
+          'LOCAL_STORE_NEWER_VERSION',
+          `browser-native workspace: local database version ${String(version)} is newer than supported version ${String(STORE_VERSION)}`,
+        ))
+        return
+      }
+      resolve(database)
+    }
     request.onerror = () => { reject(request.error ?? new Error('browser-native workspace: IndexedDB open failed')) }
     request.onblocked = () => { reject(new Error('browser-native workspace: IndexedDB open was blocked')) }
   })

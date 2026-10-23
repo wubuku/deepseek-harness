@@ -57,7 +57,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -76,7 +76,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
+  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -107,7 +107,16 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'lease-info') {
       const lease = workspaceRuntime.getWriterLease()
-      workspaceTestResponse(request.requestId, { ok: lease !== undefined, ...lease })
+      workspaceTestResponse(request.requestId, {
+        ok: lease !== undefined,
+        ...lease,
+        ...workspaceRuntime.getWriterLeaseTestState(),
+      })
+      return
+    }
+    if (request.action === 'lease-timer-probe') {
+      await new Promise(resolveTimer => { setTimeout(resolveTimer, 100) })
+      workspaceTestResponse(request.requestId, { ok: true })
       return
     }
     if (request.action === 'release-lease') {

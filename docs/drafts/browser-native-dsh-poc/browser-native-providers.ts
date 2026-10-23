@@ -400,6 +400,7 @@ function createRemoteSessionPersistenceClass(
       ctx.on('tools/execute', async (exec, next) => {
         if (!['read', 'read_image', 'write', 'edit', 'grep', 'glob'].includes(exec.name) || exec.agent === undefined) return await next()
         workspace.assertLocalWorkspaceUsable()
+        await workspace.ensureWriterLease()
         if (!['write', 'edit'].includes(exec.name)) return await next()
         const session = exec.agent.session
         const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)

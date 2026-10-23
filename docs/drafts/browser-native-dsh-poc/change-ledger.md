@@ -475,3 +475,21 @@ syncReplaySteps: 同步上游后确认 Workspace lease 默认仍为 30 秒，测
 deleteCondition: Browser-Native Workspace PoC 被移除，或正式 Workspace 实现与对应故障验收合并并且这些 PoC 专用 E2E 不再提供额外恢复证据。
 status: implemented
 ```
+
+### BN-P2-014：运行时完整性、前向版本恢复与活动写租约续期
+
+```text
+changeId: BN-P2-014
+upstreamBaseline: research checkout after BN-P2-013; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/workspace-writer-heartbeat.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-writer-startup-failure.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/agent-workspace-unknown-commit-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/ask-user-refresh-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/indexeddb-forward-version-export.e2e.mjs; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/next-runtime-integrity-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-runtime-integrity-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有 PoC 未验证活动 Worker 长时间等待时的 Workspace lease 续期、DSH 文件写工具遇到已提交但响应丢失并重启 backend 后的恢复、等待中的 ask-user 刷新语义，或较新 IndexedDB schema 对旧客户端和数据导出的影响。
+existingExtensionPointsChecked: 复用 PoC Workspace lease claim/renew/fencing、operationId 查询、Session tool recovery、OPFS/IndexedDB durable store、页面本地恢复导出按钮和已存在的 preview workspace status。未修改 Agent Loop、正式 Session format、默认 Web profile 或正式 package API。
+whyDraftOnlyWasInsufficient: Node 协议测试不能证明浏览器 timer、Dedicated Worker、真实 DSH tool dispatch、OPFS/IndexedDB 和同源 backend 在这些失败时序下共同工作；真实模型会将 provider 延迟混入恢复断言，因此本批使用 scripted LLM 与确定性故障注入。
+behaviorChange: Workspace writer 在首次 Workspace 文件工具前取得租约，backend 返回的 renewAfterMs 驱动 Worker heartbeat；短暂续租异常在服务端租约到期前重试，明确 ownership loss 后旧 writer fail closed。Workspace prepare 在已 claim lease 后失败时停止 heartbeat、清除本地 writer credentials，并使迟到的 renew 响应不能复活 lease；服务端 lease 到期前其他 writer 仍会被拒绝。IndexedDB 不再请求固定版本打开，检测到高于支持版本时拒绝写入并展示独立状态；恢复导出记录 database version 和 object store 名称，并导出已识别 metadata 与可读 Workspace OPFS bytes。页面刷新不会重建 ask_user_question 的 pending Promise，DSH 将其记录为 TOOL_OUTCOME_UNKNOWN 和 interrupted turn，不自动重跑；同一 Session 的新用户消息可开启独立 turn，测试 backend 以专用 scripted marker 返回确定回复，不模拟旧问答恢复。
+directoryOutChangeReason: apps/web 页面控制器负责通过现有下载入口导出前向版本数据库信息和 OPFS 内容；locale 文件为新增 local-newer-version 状态提供双语文案；preview bootstrap 必须将该明确的 fail-closed 状态作为 Workspace 无法启动的受控结果。修改只影响显式 Browser-Native preview，不改变普通 Web 页面。
+consumersUpdated: 新增五项模型无关的真实 Chrome E2E；更新 Browser-Native Workspace 兼容矩阵、PoC README、docs/drafts 导读、实施进度和本账本。
+tests: Chrome 155 `workspace-writer-heartbeat.e2e.mjs`、`workspace-writer-startup-failure.e2e.mjs`、`agent-workspace-unknown-commit-recovery.e2e.mjs`、`ask-user-refresh-recovery.e2e.mjs`、`indexeddb-forward-version-export.e2e.mjs` 均通过；本次还复跑 `workspace-writer-expiry.e2e.mjs`，此前 `workspace-writer-lease.e2e.mjs` 和 `workspace-writer-reload.e2e.mjs` 已通过。Heartbeat 在一次 renew 503 后跨两个 TTL 恢复；startup-failure 注入 manifest 503 后未观察到 renew，1.5 秒服务端 lease 于 1.57 秒后允许接管；未知 commit backend 重启后只产生一个 revision/receipt，HITL 刷新不重跑 LLM，IndexedDB v2 数据保持不变。Browser-Native Workspace Vitest、backend-v2 tests、preview build、typecheck 和 docs gates 的本轮命令与计数见进度记录。heartbeat 日志已去除 writer token。启动失败 E2E 首次因测试错误地在浏览器 page context 使用 Node assert 而失败；随后移除对失败 Worker MessagePort 的诊断依赖，改从 backend lease API 观测并通过。
+syncReplaySteps: 同步 upstream 后先检查 Workspace runtime 是否已有活动 writer heartbeat、prepare 失败后的 lease 清理、较新 IndexedDB 版本保护及 Worker resume/lease 状态服务；逐项比对本批测试。若没有等价功能，只重放 PoC Workspace runtime/store 和显式 preview 页面状态；保留 Chrome 故障 E2E 及 lease 回归。先构建 preview，再运行这些 E2E、Browser-Native Workspace Vitest、backend-v2 tests 与文档门禁。若 upstream 已有正式实现，迁移 E2E 至正式接口并删除重复 PoC 接线。
+deleteCondition: Browser-Native Workspace 正式实现提供活动租约续期和 fencing、未知 commit 查询恢复、前向 IndexedDB 保护与本地导出，且迁移后的浏览器 E2E 覆盖同一时序；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```

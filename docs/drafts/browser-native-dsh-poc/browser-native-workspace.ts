@@ -84,7 +84,8 @@ export interface BrowserNativeWorkspaceWriterLease {
   readonly fencingToken: number
 }
 
-type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
+type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -190,6 +191,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private localPersistFailure: Error | undefined
   private writerToken: string | undefined
   private fencingToken: number | undefined
+  private writerLeaseState: 'unclaimed' | 'active' | 'lost' | 'released' = 'unclaimed'
+  private writerLeaseFailure: Error | undefined
+  private writerRenewAfterMs: number | undefined
+  private writerLeaseRenewAt = 0
+  private writerLeaseDeadline = 0
+  private writerHeartbeatTimer: ReturnType<typeof setTimeout> | undefined
+  private writerRenewal: Promise<void> | undefined
+  private writerClaim: Promise<void> | undefined
   private activeOperation: WorkspaceToolOperation | undefined
 
   constructor(
@@ -260,14 +269,17 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (dirtyCount > 0) this.schedule()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const state = error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
-        ? 'local-corrupt'
-        : 'error'
+      this.abandonWriterLease()
+      const state = error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
+        ? 'local-newer-version'
+        : error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
+          ? 'local-corrupt'
+          : 'error'
       const retryAfterMs = isRecord(error) && error.code === 'WORKSPACE_ALREADY_OWNED'
         && Number.isSafeInteger(error.retryAfterMs)
         ? Number(error.retryAfterMs)
         : undefined
-      this.failure = { state: state === 'local-corrupt' ? 'error' : state, message }
+      this.failure = { state: state === 'local-corrupt' || state === 'local-newer-version' ? 'error' : state, message }
       this.onStatus(
         retryAfterMs === undefined ? state : 'lease-conflict',
         this.workspaceId,
@@ -365,10 +377,22 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         `browser-native local Workspace persistence is unresolved; reload before using Workspace files (${this.localPersistFailure?.message ?? 'save is pending'})`,
       )
     }
+    this.assertWriterLeaseUsable()
+  }
+
+  async ensureWriterLease(): Promise<void> {
+    if (!this.useWriterLease) return
+    if (this.writerLeaseState === 'unclaimed') await this.claimWriter()
+    this.assertWriterLeaseUsable()
+    if (performance.now() >= this.writerLeaseRenewAt) {
+      await this.renewWriter()
+    }
+    this.assertWriterLeaseUsable()
   }
 
   async runToolOperation<T>(operation: WorkspaceToolOperation, run: () => Promise<T>): Promise<T> {
     if (this.activeOperation !== undefined) throw new Error('browser-native workspace: overlapping file-tool operation context')
+    await this.ensureWriterLease()
     this.activeOperation = operation
     try {
       return await run()
@@ -394,8 +418,27 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     return { writerToken: this.writerToken, fencingToken: this.fencingToken }
   }
 
+  getWriterLeaseTestState(): {
+    readonly state: 'unclaimed' | 'active' | 'lost' | 'released'
+    readonly renewalScheduled: boolean
+    readonly renewalPending: boolean
+    readonly renewAfterMs?: number
+    readonly deadlineRemainingMs: number
+  } {
+    return {
+      state: this.writerLeaseState,
+      renewalScheduled: this.writerHeartbeatTimer !== undefined,
+      renewalPending: this.writerRenewal !== undefined,
+      ...(this.writerRenewAfterMs === undefined ? {} : { renewAfterMs: this.writerRenewAfterMs }),
+      deadlineRemainingMs: Math.max(0, this.writerLeaseDeadline - performance.now()),
+    }
+  }
+
   async releaseWriter(): Promise<void> {
     if (!this.useWriterLease || this.workspaceId === undefined || this.writerToken === undefined || this.fencingToken === undefined) return
+    this.clearWriterHeartbeat()
+    await this.writerRenewal?.catch(() => {})
+    if (this.writerToken === undefined || this.fencingToken === undefined) return
     const response = await fetch(`${WORKSPACE_API}/lease`, {
       method: 'POST',
       credentials: 'same-origin',
@@ -410,6 +453,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       }),
     })
     await readJson(response)
+    this.clearWriterHeartbeat()
+    this.writerLeaseState = 'released'
+    this.writerLeaseDeadline = 0
+    this.writerLeaseFailure = new Error('Workspace writer lease was released; reload before using Workspace files')
     this.writerToken = undefined
     this.fencingToken = undefined
     publishBrowserNativeWorkspaceLease({ type: 'workspace-lease-released', workspaceId: this.workspaceId })
@@ -603,7 +650,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.retryBatch = batch
         this.failure = { state: code === 'WORKSPACE_CONFLICT' ? 'conflict' : 'error', message }
         this.blocked = code === 'WORKSPACE_CONFLICT'
-        this.onStatus(this.failure.state, this.workspaceId, this.revision, this.pending.size + batch.changes.length, message)
+        const state = code === 'WORKSPACE_ALREADY_OWNED' ? 'lease-conflict' : this.failure.state
+        const retryAfterMs = isRecord(error) && Number.isSafeInteger(error.retryAfterMs)
+          ? Number(error.retryAfterMs)
+          : undefined
+        this.onStatus(state, this.workspaceId, this.revision, this.pending.size + batch.changes.length, message, retryAfterMs)
         return receipts
       }
     }
@@ -618,6 +669,27 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   private async claimWriter(): Promise<void> {
+    if (this.writerLeaseState === 'active') return
+    if (this.writerClaim !== undefined) return await this.writerClaim
+    const claim = this.acquireWriterLease()
+    this.writerClaim = claim
+    try {
+      await claim
+    } catch (error) {
+      const retryAfterMs = isRecord(error) && Number.isSafeInteger(error.retryAfterMs)
+        ? Number(error.retryAfterMs)
+        : undefined
+      if (isRecord(error) && error.code === 'WORKSPACE_ALREADY_OWNED') {
+        this.onStatus('lease-conflict', this.workspaceId, this.revision, this.pending.size, error.message,
+          retryAfterMs)
+      }
+      throw error
+    } finally {
+      if (this.writerClaim === claim) this.writerClaim = undefined
+    }
+  }
+
+  private async acquireWriterLease(): Promise<void> {
     if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot claim writer before identity')
     const resumeLease = takeBrowserNativeResumeWorkspaceLease(this.workspaceId)
     if (resumeLease !== undefined) {
@@ -665,36 +737,147 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   private async renewWriter(): Promise<void> {
     if (!this.useWriterLease || this.workspaceId === undefined) return
-    if (this.writerToken === undefined || this.fencingToken === undefined) return await this.claimWriter()
-    const response = await fetch(`${WORKSPACE_API}/lease`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        protocolVersion: PROTOCOL_VERSION,
-        requestId: crypto.randomUUID(),
-        workspaceId: this.workspaceId,
-        operation: 'renew',
-        writerToken: this.writerToken,
-        fencingToken: this.fencingToken,
-      }),
-    })
-    this.setWriterLease(await readJson(response))
+    if (this.writerLeaseState === 'unclaimed') {
+      await this.claimWriter()
+      return
+    }
+    this.assertWriterLeaseUsable()
+    if (this.writerRenewal !== undefined) return await this.writerRenewal
+    const writerToken = this.writerToken
+    const fencingToken = this.fencingToken
+    if (writerToken === undefined || fencingToken === undefined) {
+      throw this.writerLeaseFailure ?? new Error('browser-native workspace: writer lease is unavailable')
+    }
+    const renewal = (async (): Promise<void> => {
+      const response = await fetch(`${WORKSPACE_API}/lease`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: crypto.randomUUID(),
+          workspaceId: this.workspaceId,
+          operation: 'renew',
+          writerToken,
+          fencingToken,
+        }),
+      })
+      const lease = await readJson(response)
+      if (this.writerLeaseState !== 'active' || this.writerToken !== writerToken
+        || this.fencingToken !== fencingToken) return
+      this.setWriterLease(lease)
+    })()
+    this.writerRenewal = renewal
+    try {
+      await renewal
+    } catch (error) {
+      if (this.isOwnershipLost(error) || performance.now() >= this.writerLeaseDeadline) {
+        this.markWriterLeaseLost(error)
+      }
+      throw error
+    } finally {
+      if (this.writerRenewal === renewal) this.writerRenewal = undefined
+    }
   }
 
   private setWriterLease(value: Record<string, unknown>): void {
-    if (typeof value.writerToken !== 'string' || !Number.isSafeInteger(value.fencingToken)) {
+    if (typeof value.writerToken !== 'string' || !Number.isSafeInteger(value.fencingToken)
+      || !Number.isSafeInteger(value.leaseDurationMs) || Number(value.leaseDurationMs) < 300
+      || !Number.isSafeInteger(value.renewAfterMs) || Number(value.renewAfterMs) < 1
+      || Number(value.renewAfterMs) >= Number(value.leaseDurationMs)) {
       throw new Error('browser-native workspace: backend returned an invalid writer lease')
     }
+    const changed = this.writerToken !== value.writerToken || this.fencingToken !== value.fencingToken
     this.writerToken = value.writerToken
     this.fencingToken = value.fencingToken
-    if (this.workspaceId !== undefined) {
+    this.writerLeaseState = 'active'
+    this.writerLeaseFailure = undefined
+    this.writerRenewAfterMs = Number(value.renewAfterMs)
+    this.writerLeaseRenewAt = performance.now() + this.writerRenewAfterMs
+    this.writerLeaseDeadline = performance.now() + Number(value.leaseDurationMs)
+    this.scheduleWriterHeartbeat(this.writerRenewAfterMs)
+    if (changed && this.workspaceId !== undefined) {
       publishBrowserNativeWorkspaceLease({
         type: 'workspace-lease',
         workspaceId: this.workspaceId,
         writerToken: this.writerToken,
         fencingToken: this.fencingToken,
       })
+    }
+  }
+
+  private scheduleWriterHeartbeat(delayMs: number): void {
+    this.clearWriterHeartbeat()
+    if (!this.useWriterLease || this.writerLeaseState !== 'active') return
+    const remainingMs = this.writerLeaseDeadline - performance.now()
+    if (remainingMs <= 0) {
+      this.markWriterLeaseLost(new Error('Workspace writer lease expired before renewal'))
+      return
+    }
+    this.writerHeartbeatTimer = setTimeout(() => {
+      this.writerHeartbeatTimer = undefined
+      void this.renewWriterInBackground()
+    }, Math.max(1, Math.min(delayMs, remainingMs)))
+  }
+
+  private async renewWriterInBackground(): Promise<void> {
+    try {
+      await this.renewWriter()
+    } catch (error) {
+      if (this.writerLeaseState !== 'active') return
+      const remainingMs = this.writerLeaseDeadline - performance.now()
+      if (remainingMs <= 0) {
+        this.markWriterLeaseLost(error)
+        return
+      }
+      const retryDelay = Math.min(this.writerRenewAfterMs ?? remainingMs, Math.max(50, Math.floor(remainingMs / 3)))
+      this.scheduleWriterHeartbeat(retryDelay)
+    }
+  }
+
+  private clearWriterHeartbeat(): void {
+    if (this.writerHeartbeatTimer === undefined) return
+    clearTimeout(this.writerHeartbeatTimer)
+    this.writerHeartbeatTimer = undefined
+  }
+
+  private assertWriterLeaseUsable(): void {
+    if (!this.useWriterLease) return
+    if (this.writerLeaseState === 'unclaimed') return
+    if (this.writerLeaseState === 'active' && performance.now() < this.writerLeaseDeadline) return
+    const error = this.writerLeaseFailure ?? new Error('Workspace writer lease is unavailable; reload to reacquire write access')
+    if (this.writerLeaseState === 'active') this.markWriterLeaseLost(error)
+    throw this.writerLeaseFailure ?? error
+  }
+
+  private markWriterLeaseLost(cause: unknown): void {
+    if (this.writerLeaseState !== 'active') return
+    this.clearWriterHeartbeat()
+    this.writerLeaseState = 'lost'
+    const detail = cause instanceof Error ? cause.message : String(cause)
+    this.writerLeaseFailure = new Error(`Workspace writer lease was lost; reload before using Workspace files (${detail})`, { cause })
+    this.writerToken = undefined
+    this.fencingToken = undefined
+    this.failure = { state: 'error', message: this.writerLeaseFailure.message }
+    this.onStatus('error', this.workspaceId, this.revision, this.pending.size + (this.retryBatch?.changes.length ?? 0), this.writerLeaseFailure.message)
+    if (this.workspaceId !== undefined) {
+      publishBrowserNativeWorkspaceLease({ type: 'workspace-lease-released', workspaceId: this.workspaceId })
+    }
+  }
+
+  private isOwnershipLost(error: unknown): boolean {
+    return isRecord(error) && error.code === 'WORKSPACE_OWNERSHIP_LOST'
+  }
+
+  private abandonWriterLease(): void {
+    if (this.writerLeaseState !== 'active') return
+    this.clearWriterHeartbeat()
+    this.writerLeaseState = 'lost'
+    this.writerLeaseFailure = new Error('Workspace startup failed; reload before using Workspace files')
+    this.writerToken = undefined
+    this.fencingToken = undefined
+    if (this.workspaceId !== undefined) {
+      publishBrowserNativeWorkspaceLease({ type: 'workspace-lease-released', workspaceId: this.workspaceId })
     }
   }
 
@@ -830,8 +1013,18 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly flushLocalWorkspace: () => Promise<void>
   /** Reject Agent file tools while a local VFS mutation is not durably recorded. */
   readonly assertLocalWorkspaceUsable: () => void
+  /** Renew an enabled writer lease before a file tool starts. */
+  readonly ensureWriterLease: () => Promise<void>
   /** Return the PoC writer lease for model-independent browser tests. */
   readonly getWriterLease: () => BrowserNativeWorkspaceWriterLease | undefined
+  /** Return Worker-local lease timing for model-independent browser tests. */
+  readonly getWriterLeaseTestState: () => {
+    readonly state: 'unclaimed' | 'active' | 'lost' | 'released'
+    readonly renewalScheduled: boolean
+    readonly renewalPending: boolean
+    readonly renewAfterMs?: number
+    readonly deadlineRemainingMs: number
+  }
   /** Release the PoC writer lease for model-independent browser tests. */
   readonly releaseWriter: () => Promise<void>
 }
@@ -878,7 +1071,9 @@ export function createBrowserNativeWorkspaceRuntime(
     acknowledgeReceipt: async operationId => await mirror.acknowledgeReceipt(operationId),
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
     assertLocalWorkspaceUsable: () => mirror.assertLocalWorkspaceUsable(),
+    ensureWriterLease: async () => await mirror.ensureWriterLease(),
     getWriterLease: () => mirror.getWriterLease(),
+    getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),
   }
 }

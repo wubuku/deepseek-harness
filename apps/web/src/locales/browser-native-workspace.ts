@@ -1,4 +1,5 @@
-type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
+type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
+  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -9,6 +10,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     error: 'Workspace sync failed',
     conflict: 'Workspace revision conflict',
     'local-corrupt': 'Local Workspace state is corrupt',
+    'local-newer-version': 'Local Workspace uses a newer unsupported format',
     'lease-conflict': 'Another tab currently owns Workspace write access',
   },
   zh: {
@@ -19,6 +21,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     error: '工作区同步失败',
     conflict: '工作区发生版本冲突',
     'local-corrupt': '本地工作区状态损坏',
+    'local-newer-version': '本地工作区格式版本较新，当前版本无法读取',
     'lease-conflict': '另一个标签页正在写入工作区',
   },
 }

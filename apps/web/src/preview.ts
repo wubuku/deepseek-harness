@@ -20,7 +20,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -37,6 +37,11 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly error?: string
   readonly writerToken?: string
   readonly fencingToken?: number
+  readonly state?: 'unclaimed' | 'active' | 'lost' | 'released'
+  readonly renewalScheduled?: boolean
+  readonly renewalPending?: boolean
+  readonly renewAfterMs?: number
+  readonly deadlineRemainingMs?: number
   readonly from?: string
   readonly to?: string
   readonly entries?: readonly string[]
@@ -104,6 +109,7 @@ try {
   worker?.terminate()
   const message = error instanceof Error ? error.message : String(error)
   const workspaceStatus = window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state
-  const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt')
+  const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
+    || workspaceStatus === 'local-newer-version')
   if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
 }
