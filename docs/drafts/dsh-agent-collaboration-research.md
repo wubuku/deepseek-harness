@@ -861,7 +861,7 @@ Remote A2A agents ──A2A──▶ A2A gateway/sidecar ──ACP──▶ dsh 
 
 | 事实 | 等级 | 来源 |
 |---|---|---|
-| Agent Teams 的 peer 语义、跨进程排除、共享 checkout 边界 | L1/L2 | [agent-team README](../../packages/experimental/agent-team/README.zh.md)、[mailbox.ts](../../packages/experimental/agent-team/src/mailbox.ts)、[types.ts](../../packages/experimental/agent-team/src/types.ts) |
+| Agent Teams 的 peer 语义、跨进程排除、共享 checkout 边界 | L1/L2 | [agent-team README](../../packages/experimental/agent-team/README.zh.md)、[session-message.ts](../../packages/experimental/agent-team/src/session-message.ts)、[types.ts](../../packages/experimental/agent-team/src/types.ts) |
 | Team 持久类型、服务 API、投影 | L1/L2 | [agent-team subsystem](../subsystems/agent-team.zh.md) |
 | Team 身份、mailbox、任务事务、测试声明与拒绝的替代方案 | L1/L2 | [Agent Teams Agent Note](../../.agents/notes/implemented/feature/2026-08-05-agent-teams.zh.md) |
 | Team 工具与模型策略 | L1/L2 | [tool-agent-team README](../../packages/experimental/tool-agent-team/README.zh.md) |
@@ -872,9 +872,9 @@ Remote A2A agents ──A2A──▶ A2A gateway/sidecar ──ACP──▶ dsh 
 | DSH ACP 服务器协议方法与限制 | L1/L2 | [dsh-acp README](../../packages/acp/acp/README.zh.md)、[package.json](../../packages/acp/acp/package.json) |
 | ACP 仅自动化边界决策 | L1/L2 | [ACP 自动化协议 Agent Note](../../.agents/notes/implemented/simplification/2026-07-23-acp-automation-only-protocol.zh.md) |
 | SDK 协议方法与缺口 | L1/L2 | [SDK protocol README](../../packages/sdk/protocol/README.zh.md)、[SDK server README](../../packages/sdk/server/README.zh.md) |
-| 委派 seam 与 A2A 的未来方向 | L2 | [subagent capability seam Agent Note](../../.agents/notes/implemented/feature/2026-06-21-subagent-capability-seam.zh.md) |
+| DSH subagent 委派能力与提供方模型 | L1/L2 | [subagent README](../../packages/subagent/subagent/README.zh.md)、[subagent subsystem](../subsystems/subagent.zh.md) |
 | Web Remote 信任模型 | L1/L2 | [client connection README](../../packages/client/connection/README.zh.md) |
-| 已有外部事件入口 | L1/L2 | [webhook README](../../packages/webhook/webhook/README.zh.md)、[webhook-github README](../../packages/webhook/webhook-github/README.zh.md) |
+| 已有外部事件入口 | L1/L2 | [webhook README](../../packages/experimental/webhook/README.zh.md)、[webhook-github README](../../packages/experimental/webhook-github/README.zh.md) |
 
 ### 外部
 
