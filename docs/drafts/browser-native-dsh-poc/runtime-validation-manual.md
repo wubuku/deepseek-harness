@@ -134,6 +134,8 @@ node --test \
 
 真实模型输出不能单独证明工具执行成功。必须同时检查 `tool/call`、对应 `tool/result`、`assistant/message`、`turn/end` 和 durable Session 文件。请求中没有 provider secret，且 `/api/browser-native/llm` 是唯一的模型网络出口，才算通过安全检查。
 
+2026-10-24 Chrome 真实复测通过默认 Browser profile 三轮对话和 Browser-specific durable Workspace 的 `read → write → read`：前者执行一次 `todo_write` 并跨轮记住随机 token；后者有 59 个 Session events、`durableThroughSeq=58`、8 个 LLM HTTP 200、两次 Workspace commit HTTP 200，刷新后同一 Session 仍能回忆 token，且已提交文件可读。两项脚本都检查 provider secret 未出现在浏览器请求中。首次复测曾得到 HTTP 200 的空 assistant；修复 backend 对空 `[DONE]` 的处理后重跑才通过，首次 run 不计作通过。
+
 ## 当前结果
 
 2026 年 10 月 21 日的既有 Chrome/WebKit 对照已记录 Browser-specific VFS `read → write → read`、三轮记忆、刷新恢复与生命周期结果；之后按用户要求暂停 Safari/WebKit 新测试，只继续 Chrome。最新 Chrome Browser-specific 真实模型 run 完成三轮，执行 `read → write → read`，刷新后从 Session 回忆 token，并确认 Worker VFS 文件已不存在；Session 有 57 个事件、`durableThroughSeq=56`，8 个模型请求均为 HTTP 200。基础 Browser-Native E2E 另完成三轮、恰好一次 `todo_write`，Session 有 40 个事件、`durableThroughSeq=39`。Chrome scripted 生命周期覆盖刷新、停止、错误恢复、backend 重启、Worker terminate 和双标签写权冲突；真实 Stop/恢复最近一次 `turn/end` 为 `aborted → completed`，durable JSON 完整，page error 为空。

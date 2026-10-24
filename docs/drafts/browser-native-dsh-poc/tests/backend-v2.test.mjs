@@ -884,6 +884,19 @@ describe('browser-native DSH v2 backend', () => {
         ].join('\n'))
         return
       }
+      if (JSON.stringify(requestBody.messages).includes('EMPTY_DONE_CONTRACT_PROMPT')) {
+        response.end(['data: [DONE]', ''].join('\n'))
+        return
+      }
+      if (JSON.stringify(requestBody.messages).includes('DONE_WITH_CONTENT_CONTRACT_PROMPT')) {
+        response.end([
+          'data: {"choices":[{"delta":{"content":"DONE_WITH_CONTENT_OK"}}]}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\n'))
+        return
+      }
       response.end([
         'data: {"choices":[{"delta":{"content":"REAL_CONTRACT_OK"}}]}',
         '',
@@ -932,6 +945,30 @@ describe('browser-native DSH v2 backend', () => {
       assert.equal(emptyResponse.ok, true)
       assert.equal(emptyItems.at(-1).kind, 'error')
       assert.equal(emptyItems.at(-1).error.code, 'UPSTREAM_LLM_EMPTY')
+
+      const emptyDoneResponse = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-empty-done', {
+          messages: [{ role: 'user', content: 'EMPTY_DONE_CONTRACT_PROMPT' }],
+        })),
+      })
+      const emptyDoneItems = await readNdjson(emptyDoneResponse)
+      assert.equal(emptyDoneItems.at(-1).kind, 'error')
+      assert.equal(emptyDoneItems.at(-1).error.code, 'UPSTREAM_LLM_EMPTY')
+
+      const doneWithContentResponse = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-done-with-content', {
+          messages: [{ role: 'user', content: 'DONE_WITH_CONTENT_CONTRACT_PROMPT' }],
+        })),
+      })
+      const doneWithContentItems = await readNdjson(doneWithContentResponse)
+      assert.equal(doneWithContentItems.at(-1).kind, 'chunk')
+      assert.equal(doneWithContentItems.at(-1).chunk.type, 'finish')
+      assert.equal(doneWithContentItems.at(-1).chunk.reason.kind, 'stop')
+      assert.match(doneWithContentItems.map(item => item.chunk?.block?.text ?? item.chunk?.text ?? '').join(''), /DONE_WITH_CONTENT_OK/)
     } finally {
       await close(upstream)
     }

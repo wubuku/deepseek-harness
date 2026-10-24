@@ -71,12 +71,12 @@ scripted 浏览器 E2E 走真实 DSH UI 和 Worker，但模型响应可控。每
 | VFS 正向 read/write/read | 已验证 | Chrome 与 WebKit Session 均有匹配 call id 的成功工具结果；随机 token 和写入内容与断言相符。 |
 | 多轮 Session 窗口记忆 | 已验证 | 刷新前后同一个 Session 的第二轮在无新工具调用时回忆第一轮随机 token。 |
 | Session flush 与 backend 重启恢复 | 已验证（PoC backend 范围） | JSON 文件 `durableThroughSeq` 等于最终事件尾；scripted 生命周期在 backend 重启后继续同一 Session。 |
-| Worker VFS 跨刷新持久化 | 明确不支持（当前实现） | 刷新后同 Session 仍记住 token，但工具对之前创建的 VFS 文件返回 `FS_NOT_FOUND`；这是观察到的持久化分层，不是模型推断。 |
+| Worker VFS 跨刷新持久化 | 配置相关 | memory-only 模式刷新后文件返回 `FS_NOT_FOUND`；durable Workspace 模式中已提交的 `/dsh/home/workspace` 文件可从 OPFS/IndexedDB hydrate 并在刷新后读取。其他 VFS 路径不因此获得持久化保证。 |
 | Scripted 流式 UI | Chrome 已验证 | Chrome 动画帧采样观察到 8 次递增 assistant DOM 更新；脚本模型每个文本块延迟 120 毫秒，避免输出在 UI 首次刷新前结束。既有 WebKit 数据仅作对照。 |
 | 真实模型流式 | Chrome 已验证（长回复） | 真实 Chrome 生成 9,523 字符，观察到 84 次递增 assistant DOM 样本、约 15.8 秒流式跨度、输入草稿交互约 20 毫秒、滚动位置变化和空 long-task 记录；WebKit/Safari 流式表现未由本轮验证。 |
 | Stop、失败后继续、双标签写权冲突 | Chrome 已复测（scripted） | Chrome `turn/end` 记录 `aborted`、`error` 和后续 `completed`；竞争写入收到 `SESSION_ALREADY_OWNED`。WebKit 既有 scripted 结果仅作历史对照。 |
 | 真实模型 Stop 后恢复 | Chrome 已复测 | 最新 Chrome 独立 E2E 记录同一 Session 的 `aborted → completed`，`durableThroughSeq=25`、两个模型请求 HTTP 200、page error 为空。此前一次恢复请求产生空 assistant message，见下文；改动后的成功运行不代表稳定性分布。 |
-| Provider 空完成 | 已处理并覆盖代理 contract | 无文本、无工具调用的上游 `finish_reason=stop` 现在返回 `UPSTREAM_LLM_EMPTY`，不再被包装为空 assistant 成功；backend contract test 覆盖该分支。Chrome Stop/恢复脚本允许对此错误追加一次用户重试，但本轮真实 provider 未再次自然触发该重试分支。 |
+| Provider 空完成 | 已处理并覆盖代理 contract | 无文本、无工具调用的上游 `finish_reason=stop` 或空 `[DONE]` 现在返回 `UPSTREAM_LLM_EMPTY`，不再被包装为空 assistant 成功；backend contract test 覆盖两条终止路径。有内容但缺 finish event 的 `[DONE]` 会补发 finish chunk。 |
 | 强制 Worker terminate、lease reclaim | Chrome 已复测（scripted） | Chrome 强制 terminate 后等待 owner lease 到期、重新 claim 并继续同一 Session；WebKit 既有结果仅作历史对照。 |
 | provider secret 不进浏览器 | 已验证（单次 PoC E2E） | 脚本检查真实 provider 凭据是否出现在浏览器 request body；LLM traffic 只到同源 backend。不是通用安全审计。 |
 | Safari.app 聊天与刷新恢复 | 部分验证 | Safari 26.6.2 真实 WebDriver 完成三轮真实模型记忆对话和刷新恢复；Safari 工具长文本输入超时，工具闭环仍未验证。 |
@@ -86,6 +86,8 @@ scripted 浏览器 E2E 走真实 DSH UI 和 Worker，但模型响应可控。每
 2026-10-21 Chrome scripted lifecycle `turn/end` 顺序为 completed、completed、aborted、error、completed、completed、completed，最终 `durableThroughSeq=70`，无 page error；Chrome 新增的 scripted streaming 回归采到 8 次递增 DOM 更新。backend `close()` 主动释放 HTTP keep-alive connections，PoC E2E 正常退出。
 
 2026-10-21 最新 Chrome Browser-specific E2E 完成三轮任务、一次刷新、同 Session token 记忆和 VFS 文件易失性探测；工具调用严格为 `read → write → read`，第三轮 read 得到 missing，Session JSON 有 57 个事件、`durableThroughSeq=56`，8 个模型请求均为 HTTP 200，`pageErrors` 为空。基础 Browser-Native E2E 另完成三轮聊天和恰好一次 `todo_write`，Session 有 40 个事件、`durableThroughSeq=39`。模型工具 roster 中的 `read_image` 等暴露不代表那些工具已验证。
+
+2026-10-24 用户要求重新验证真实 LLM 闭环。第一次 Chrome run 中同源模型请求返回 HTTP 200，但默认 profile 和 Browser-specific 测试都观察到空 assistant 完成；源码检查发现代理在 `[DONE]` 时绕过空内容检查。backend contract test 新增空 `[DONE]` 与有内容 `[DONE]` 场景；修复后默认 Browser profile 的真实 E2E 完成三轮，Session 中恰有一个 `todo_write`，三轮 marker 和记忆断言通过，5 个 LLM 请求均为 HTTP 200。Browser-specific durable Workspace 真实 E2E 完成严格的 `read → write → read`，两次 Workspace commit 均为 HTTP 200，Session 有 59 个事件且 `durableThroughSeq=58`；刷新后同一 Session 回忆 token，并从 OPFS/IndexedDB 恢复已提交文件。该 run 的 8 个 LLM 请求均为 HTTP 200，模型凭据未出现在浏览器请求中，页面无 page error。首次真实响应的原始 SSE 未保存，因此空 `[DONE]` 是由源码路径和合同注入确认的缺陷，不是对首次上游帧的直接抓包证明。
 
 真实 Chrome 长回复实验生成 9,523 个字符，记录 84 次递增 assistant DOM 样本和约 15.8 秒增长跨度；输入草稿交互约 20 毫秒，滚动位置可变，long-task 列表为空，两个模型请求 HTTP 200、page error 为空、turn 为 completed。截图和摘要临时保存在 `/tmp/dsh-browser-native-streaming-evidence-20261021/`。
 
@@ -101,7 +103,7 @@ scripted 浏览器 E2E 走真实 DSH UI 和 Worker，但模型响应可控。每
 
 新增 `tests/browser-storage-boundary.e2e.mjs`，以真实 Preview 页面探测浏览器的 Storage API 和 OPFS 基本读写；OPFS 若不可用只报告 capability，不把缺失视为 DSH 运行失败。该脚本不会把 OPFS 文件写入 DSH VFS，也不改变 Session JSON 持久化路径。
 
-一次真实 Stop 后的恢复 turn 收到上游无文本、无工具调用的 `finish_reason=stop`，旧 backend 将其转换为空 assistant message，Session 却以 `completed` 结束。模型没有输出预期 marker，自动检查因此失败。backend 现在会把这类上游完成编码为 `UPSTREAM_LLM_EMPTY` 错误；proxy contract test 覆盖空响应映射，真实 Chrome Stop/恢复复测随后得到 `aborted → completed`。该真实复测没有自然触发空响应分支，脚本对该错误允许一次明确的用户重试。
+一次真实 Stop 后的恢复 turn 曾收到上游无文本、无工具调用的完成，旧 backend 将空流转换为空 assistant message，Session 却以 `completed` 结束。代码还存在另一条更早结束路径：收到 `[DONE]` 就正常结束，而没有验证此前是否有文本或工具调用。2026-10-24 两项真实 E2E 首次复测再次观察到 HTTP 200 的空 assistant；首次上游原始 SSE 未保存，不能把它认定为特定终止帧。contract test 复现了空 `[DONE]` 路径后，backend 将空 `finish_reason` 和空 `[DONE]` 归为 `UPSTREAM_LLM_EMPTY`，并为有内容的 `[DONE]` 输出 finish chunk。修复后的默认 profile 和 Browser-specific durable Workspace 真实 Chrome E2E 均通过；Stop/恢复原有复测仍记录 `aborted → completed`。这些是有限次闭环证据，不代表上游稳定性统计。
 
 一次 Browser-specific 真实 Chrome 多工具用例在 240 秒整轮预算到期时仍处于第四个模型步骤，Session 已记录三次成功 VFS 工具调用、没有 `turn/end`，模型 HTTP 响应均为 200。该次不应解读为 Agent Loop 失败。将脚本整轮预算提高到 600 秒后重跑完成，三个真实 turn 都有终态。真实模型延迟变化较大，时间预算不是产品 SLA。
 

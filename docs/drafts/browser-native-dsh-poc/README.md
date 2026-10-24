@@ -327,6 +327,8 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.
 
 真实 Chrome 复测记录了三个 `completed` turn、一个持久化 `todo_write`、40 个 Session events 和 `durableThroughSeq=39`。基础 E2E 使用当前 PoC Browser profile；`runtime-validation.e2e.mjs` 仍使用独立 validation overlay 验证 `read → write → read` 文件工具闭环，二者覆盖不同 roster。
 
+2026-10-24 真实 Chrome 复测再次通过默认 Browser profile 三轮对话、恰好一次 `todo_write` 和同 Session token 记忆；Browser-specific durable Workspace E2E 完成 `read → write → read`，8 个同源 LLM 请求和两次 Workspace commit 均为 HTTP 200，刷新后 token 与已提交文件仍可读。两次测试均确认 provider secret 未进入浏览器请求。首次复测发现空 assistant 被标为完成；backend 现在也会拒绝空 `[DONE]`，合同测试和真实重跑记录见[验证报告](runtime-validation-report.md)。
+
 真实模型 Stop/恢复单独运行：
 
 ```sh
@@ -337,7 +339,7 @@ DSH_POC_TURN_TIMEOUT_MS=600000 \
 node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs
 ```
 
-该脚本要求真实模型请求处于进行中时点击 Stop，随后在同一 Session 发送恢复消息；通过条件是最新 `turn/end` 为 `completed`，同一 Session 的 durable JSON 包含恢复 marker，且浏览器没有 page error。若 provider 返回无文本、无工具调用的空完成，backend 现在将它作为 `UPSTREAM_LLM_EMPTY` 错误记录，测试会在同一 Session 再试一次；空回复不会再伪装成成功。当前 Chrome 真实模型复测为 `aborted → completed`。该结果不代表取消延迟或稳定性统计。
+该脚本要求真实模型请求处于进行中时点击 Stop，随后在同一 Session 发送恢复消息；通过条件是最新 `turn/end` 为 `completed`，同一 Session 的 durable JSON 包含恢复 marker，且浏览器没有 page error。若 provider 以空 `finish_reason` 或没有内容的 `[DONE]` 结束，backend 返回 `UPSTREAM_LLM_EMPTY`；测试会在同一 Session 明确重试一次。当前 Chrome 真实模型复测为 `aborted → completed`。该结果不代表取消延迟或稳定性统计。
 
 人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)；历史天气问题中工具连续尝试的原因见[工具调用事实核查](agent-loop-tool-attempt-analysis.md)。Browser profile 的配置理由和本批后的实际 roster 见[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)及[兼容矩阵](operational-compatibility-matrix.md)。
 

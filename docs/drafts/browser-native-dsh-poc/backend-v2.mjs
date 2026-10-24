@@ -950,8 +950,20 @@ async function realLlm(response, request, config, body) {
     let nextIndex = 0
     let textIndex
     let finished = false
+    const finishStream = finishReason => {
+      if (toolCalls.size === 0 && textIndex === undefined) {
+        writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
+        finished = true
+        return true
+      }
+      if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
+      for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
+      writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finishReason === 'length' ? { kind: 'max-tokens' } : toolCalls.size > 0 ? { kind: 'tool-calls' } : { kind: 'stop' } } })
+      finished = true
+      return true
+    }
     const consume = data => {
-      if (data === '[DONE]') return true
+      if (data === '[DONE]') return finished || finishStream(toolCalls.size > 0 ? 'tool_calls' : 'stop')
       const item = JSON.parse(data)
       const delta = item.choices?.[0]?.delta
       if (typeof delta?.content === 'string' && delta.content.length > 0) {
@@ -979,16 +991,7 @@ async function realLlm(response, request, config, body) {
       }
       const finish = item.choices?.[0]?.finish_reason
       if (finish !== undefined && finish !== null) {
-        if (toolCalls.size === 0 && textIndex === undefined) {
-          writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
-          finished = true
-          return true
-        }
-        if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
-        for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
-        writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finish === 'length' ? { kind: 'max-tokens' } : toolCalls.size > 0 ? { kind: 'tool-calls' } : { kind: 'stop' } } })
-        finished = true
-        return true
+        return finishStream(finish)
       }
       return false
     }

@@ -39,6 +39,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-019：拒绝空 SSE `[DONE]` 并复验真实 LLM 闭环
+
+```text
+changeId: BN-P2-019
+upstreamBaseline: research checkout after BN-P2-018; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/runtime-validation-manual.md; docs/drafts/browser-native-dsh-poc/runtime-validation-report.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 真实 Chrome E2E 首次复验记录 HTTP 200、空 assistant 与 `completed` turn；代理的 `[DONE]` 快速路径会跳过空内容检查，使上游空流可能被呈现为成功。
+existingExtensionPointsChecked: 修复局限于 Browser-Native PoC 的 OpenAI-compatible SSE parser；继续使用现有 `LlmAdapter` error stream 和 `UPSTREAM_LLM_EMPTY` 错误，不修改 DSH Agent Loop、Session format、工具协议或正式 provider。
+whyDraftOnlyWasInsufficient: Node contract test 可确定性重现无内容 `[DONE]`；只有真实 Chrome、真实 Dedicated Worker/DSH Host、同源 backend 和真实模型 E2E 能检查实际 Agent Loop、工具、Session、刷新和 Workspace commit 是否仍闭环。
+behaviorChange: 上游 `finish_reason` 或 `[DONE]` 到达时统一结算流；没有文本或工具调用时返回 `UPSTREAM_LLM_EMPTY`，已有内容但缺少 finish event 时补发对应 block-end 与 finish chunk。
+directoryOutChangeReason: 无；backend、contract test 与运行报告均属于 Browser-Native PoC 目录。
+consumersUpdated: OpenAI-compatible SSE proxy、backend contract test、PoC README、运行时验收手册和真实运行报告。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 17 项通过，含空 `finish_reason`、空 `[DONE]` 和带文本 `[DONE]`。真实 Chrome 默认 Browser profile E2E 通过三轮、恰好一次 `todo_write`、同 Session 记忆、5 个 LLM HTTP 200 和凭据不出浏览器请求。真实 Chrome Browser-specific durable Workspace E2E 通过 `read → write → read`、刷新记忆/文件恢复、59 个 Session events、`durableThroughSeq=58`、8 个 LLM HTTP 200、两次 Workspace commit HTTP 200 和凭据不出浏览器请求。首次真实响应 SSE 未留档；空 `[DONE]` 路径由源码检查与合同注入复现，不宣称已直接抓到首次上游终止帧。
+syncReplaySteps: 上游更新后运行 backend contract test，确认空 `[DONE]` 返回 `UPSTREAM_LLM_EMPTY` 且带内容的 `[DONE]` 会终止文本或工具调用；再用本机 `docs/drafts/.env` 执行默认 profile 与 Browser-specific durable Workspace Chrome E2E。API key 只由 Node backend 读取，不复制到日志或浏览器。
+deleteCondition: PoC backend 被移除，或其 OpenAI-compatible stream parser 已迁移到正式 provider 并由正式测试覆盖空终止、内容终止和真实浏览器 Agent Loop。
+status: implemented
+```
+
 ### BN-P2-018：冷 hydrate 完整性、OPFS orphan 回收与 pagehide 本地屏障
 
 ```text
