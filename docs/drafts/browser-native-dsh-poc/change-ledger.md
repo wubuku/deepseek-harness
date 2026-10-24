@@ -30,6 +30,24 @@ deleteCondition: 正式 runtime 提供可审计的 profile/plugin capability pre
 status: implemented-as-draft
 ```
 
+### BN-P2-023：可写 chunk-backed 文件编辑与资源/恢复边界
+
+```text
+changeId: BN-P2-023
+upstreamBaseline: research checkout after BN-P2-022; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/browser-native-chunk-editor.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-chunk-editor.spec.ts; docs/drafts/browser-native-dsh-poc/tests/chunk-backed-edit.e2e.mjs; docs/drafts/browser-native-dsh-poc/chunk-backed-edit-validation-plan.md; docs/drafts/browser-native-dsh-poc/chunk-backed-edit-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已验证 Workspace blob 分块传输和冷 hydrate 的只读 OPFS range backing，但当前真实 DSH edit 会把外置大文件完整 materialize；正式产品前必须验证浏览器存储层是否能以有界 buffer 执行局部替换，并证明写入失败不会破坏已发布源文件。
+existingExtensionPointsChecked: 复用现有 Worker URL-gated Workspace test MessagePort、OPFS FileSystemSyncAccessHandle、PoC SHA-256、真实 DSH `read`/`grep`/`edit` E2E 和同源 backend；未修改正式 Agent Loop、Session format、MemoryVfs、Workspace mirror、默认 profile 或根级依赖。
+whyDraftOnlyWasInsufficient: 只读 range backing 和分块上传不能证明替换长度变化时的尾部搬移、临时文件发布和失败恢复；单元 fake 也不能证明真实 Dedicated Worker 中 OPFS sync handle 的资源和生命周期行为。
+behaviorChange: 新增 PoC-local `ChunkBackedFile`、跨 chunk UTF-8 marker 定位、copy-on-write 替换、增量 hash、取消和故障注入；Worker 测试端口新增 `chunk-edit-probe`，只在 Worker/OPFS 内生成和编辑大文件，页面只接收摘要。真实 DSH edit 路径不变，作为 materialize 对照。
+directoryOutChangeReason: 无；所有实现、测试和文档位于 `docs/drafts/`。
+consumersUpdated: Worker test port、chunk editor unit/E2E、PoC README、兼容矩阵、docs/drafts 导读和本账本。
+tests: chunk editor Vitest 7/7；preview build、webworker runtime typecheck、Node syntax check 和 diff check 通过。收尾修复验证了 hash helper 拒绝短读、Worker probe 的 256 KiB UTF-8 输入上限以及 marker-fit 失败时的 OPFS handle/临时目录清理。真实 Chrome 155 64 MiB/1 MiB probe 成功，`maxWorkingBytes=1,048,620`，六个故障点均保持源 hash；16 MiB scripted DSH `read → grep → edit → read` 对照通过并观察到 `residentBytes` 从 34,493,823 增至 51,276,228；真实 Chrome + `gpt-5.6-sol` 普通文件 runtime-validation 通过，59 个 Session events、两次 Workspace commit、刷新和流式输出通过。未验证 Safari、自然 eviction、OS crash、正式 VFS/Workspace 接入、零拷贝、RSS SLA、真实模型大型 tool args 和生产对象存储。
+syncReplaySteps: 上游同步后检查 MemoryVfs 是否已有 range mutation 或外部可写 backing；若有等价能力，迁移单测和 Chrome probe 到正式接口并保留 source-hash/failure assertions。若没有，先定义新的 mutation、工作副本引用和 Workspace 分块 upload contract，再接入正式工具；不得在现有完整 `VfsMutation.bytes` 上通过 `readFileSync()` 伪装成有界编辑。
+deleteCondition: 正式 Browser-Native VFS、Workspace mirror 和 Session receipt 提供等价的可写外部文件、崩溃恢复和 Chrome/生产存储验证，且本批测试迁移；或 Browser-Native Workspace PoC 被移除。
+status: implemented-as-draft
+```
+
 ### 2026-10-21：durable Workspace opt-in 接线
 
 - **文件**：`apps/web/src/preview.ts`、`docs/drafts/browser-native-dsh-poc/browser-native-worker.ts`。

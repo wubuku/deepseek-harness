@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## Summary
 
-本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)；随后离线 retry、CAS conflict 和过期 writer lease 的真实 Chrome 验证见[进阶恢复计划](advanced-recovery-validation-plan.md)及[进度记录](advanced-recovery-validation-progress.md)。再后的 OPFS quota 错误恢复、backend 重启租约 fencing 与同源身份存储隔离见[存储隔离计划](storage-isolation-and-restart-validation-plan.md)及[实测进度](storage-isolation-and-restart-validation-progress.md)。文件工具 durable 确认与易失状态隔离见[持久化确认计划](durable-tool-ack-validation-plan.md)、[持久化确认进度](durable-tool-ack-validation-progress.md)、[易失状态隔离计划](volatile-workspace-isolation-plan.md)和[隔离验证进度](volatile-workspace-isolation-progress.md)：本地保存失败会阻止 Agent 后续读写与搜索未确认的 Worker 内存文件，刷新后可在同 Session 显式重试。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
+本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)；随后离线 retry、CAS conflict 和过期 writer lease 的真实 Chrome 验证见[进阶恢复计划](advanced-recovery-validation-plan.md)及[进度记录](advanced-recovery-validation-progress.md)。再后的 OPFS quota 错误恢复、backend 重启租约 fencing 与同源身份存储隔离见[存储隔离计划](storage-isolation-and-restart-validation-plan.md)及[实测进度](storage-isolation-and-restart-validation-progress.md)。文件工具 durable 确认与易失状态隔离见[持久化确认计划](durable-tool-ack-validation-plan.md)、[持久化确认进度](durable-tool-ack-validation-progress.md)、[易失状态隔离计划](volatile-workspace-isolation-plan.md)和[隔离验证进度](volatile-workspace-isolation-progress.md)：本地保存失败会阻止 Agent 后续读写与搜索未确认的 Worker 内存文件，刷新后可在同 Session 显式重试。可写 chunk-backed 编辑原型、64 MiB OPFS 资源证据和当前 DSH `edit` materialize 对照见[验证计划](chunk-backed-edit-validation-plan.md)及[实施进度](chunk-backed-edit-validation-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
@@ -108,6 +108,24 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 ```
 
 `large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。分块只限制网络 body 和传输临时缓冲；`MemoryVfs` 仍持有完整 bytes，客户端下载也会组装完整文件，PoC backend 仍使用本地 `dataDir`，因此这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
+
+## 可写 chunk-backed 编辑验证
+
+[可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)验证了当前大文件路径的关键缺口：只读 OPFS range backing 已经可以降低冷 hydrate 后的 VFS 驻留，但当前 DSH `edit` 仍会完整 materialize 文件。PoC-local `ChunkBackedFile` 使用固定大小 buffer、跨 chunk UTF-8 定位和 copy-on-write 临时文件；真实 Chrome Worker/OPFS 对 64 MiB 文件完成替换，1 MiB chunk 下最大工作 buffer 为 `1,048,620` bytes，六个写入/校验/发布故障点均保持源文件 hash 不变。
+
+这只是存储层原型，不是正式 DSH 文件工具能力。16 MiB 真实 DSH `read → grep → edit → read` 对照仍观察到 `residentBytes` 从 `34,493,823` 增至 `51,276,228`；原型尚未接入 `MemoryVfs` mutation sink、Workspace outbox、manifest commit 或 Session receipt。下一步必须定义 range mutation 或外部工作副本引用，再验证刷新恢复和云端提交，不能在现有完整 `VfsMutation.bytes` 接口上偷偷重新读取整文件。
+
+复跑原型和对照：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-chunk-editor.spec.ts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_CHUNK_EDIT_BYTES=67108864 \
+  node docs/drafts/browser-native-dsh-poc/tests/chunk-backed-edit.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_OPFS_AGENT_FILE_BYTES=16777216 \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+```
 
 ## OPFS 外置大文件的 DSH 工具闭环
 

@@ -199,6 +199,7 @@ Agentic UI 事实核查
 16. [双标签 writer lease Chrome E2E](browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs)：验证冲突提示、倒计时重试、释放后接管和旧 fencing token 拒绝。
 17. [运行时完整性验证 E2E](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：包含五项新 Chrome E2E 与 lease 回归的实际命令、结果和限制。
 18. [故障边界验证 E2E](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：记录五类新验证的 Chrome/Node/MinIO 版本、命令、失败观察、恢复结果和明确限制。
+19. [可写分块编辑验证](browser-native-dsh-poc/chunk-backed-edit-validation-progress.md)：记录 64 MiB OPFS copy-on-write 原型、六个故障点、资源预算和当前 DSH `edit` 的 materialize 对照。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -312,6 +313,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [tests/opfs-agent-file-tools.e2e.mjs](browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs) | 真实 Chrome Worker 生成 12 MiB 文件，验收外置 backing 上的 DSH 工具、bounded payload、单次 edit commit 和刷新恢复。 |
 | [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
 | [browser-file-tools-next-validation-plan.md](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md) / [进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md) | 文件工具资源边界与文本语义的本批计划、实现证据、真实 Chrome/LLM 范围和未验证的 Shell/WASI 边界。 |
+| [chunk-backed-edit-validation-plan.md](browser-native-dsh-poc/chunk-backed-edit-validation-plan.md) / [进度](browser-native-dsh-poc/chunk-backed-edit-validation-progress.md) | 可写 chunk-backed 文件编辑原型、64 MiB OPFS bounded-memory 证据、故障注入和当前 DSH `edit` materialize 对照；明确尚未接入正式 VFS/Workspace。 |
 
 ### v2 实现和测试入口
 

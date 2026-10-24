@@ -27,6 +27,12 @@ import { installProcessGlobal } from '../../../packages/experimental/webworker-r
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
 import {
+  createSyncAccessChunkBackedFile,
+  hashChunkBackedFile,
+  replaceUniqueUtf8CopyOnWrite,
+  type ChunkEditStage,
+} from './browser-native-chunk-editor.ts'
+import {
   BROWSER_NATIVE_PROFILE_MANIFEST,
   evaluateBrowserNativeProfile,
   formatBrowserNativePreflightFailure,
@@ -65,7 +71,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -82,6 +88,10 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly mode?: number
   readonly count?: number
   readonly delayMs?: number
+  readonly chunkBytes?: number
+  readonly oldText?: string
+  readonly newText?: string
+  readonly failStage?: ChunkEditStage
 }
 
 function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspaceTestRequest {
@@ -97,6 +107,19 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.action === 'cancel-file-search') {
     return typeof data.path === 'string' && typeof data.marker === 'string'
       && Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
+  }
+  if (data.action === 'chunk-edit-probe') {
+    const oldTextBytes = typeof data.oldText === 'string' ? new TextEncoder().encode(data.oldText).byteLength : 0
+    const newTextBytes = typeof data.newText === 'string' ? new TextEncoder().encode(data.newText).byteLength : 0
+    return Number.isSafeInteger(data.byteLength) && Number(data.byteLength) >= 1024 * 1024
+      && Number(data.byteLength) <= 128 * 1024 * 1024
+      && Number.isSafeInteger(data.chunkBytes) && Number(data.chunkBytes) >= 1024
+      && Number(data.chunkBytes) <= 16 * 1024 * 1024
+      && typeof data.oldText === 'string' && data.oldText.length > 0
+      && oldTextBytes <= 256 * 1024
+      && typeof data.newText === 'string'
+      && newTextBytes <= 256 * 1024
+      && (data.failStage === undefined || ['copy-prefix', 'copy-suffix', 'write-replacement', 'truncate', 'hash', 'publish'].includes(String(data.failStage)))
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
   return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
@@ -123,9 +146,89 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+async function runChunkEditProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
+  if (request.byteLength === undefined || request.chunkBytes === undefined
+    || request.oldText === undefined || request.newText === undefined) {
+    throw new Error('browser-native chunk edit probe: byteLength, chunkBytes, oldText, and newText are required')
+  }
+  const storage = globalThis.navigator?.storage
+  if (storage === undefined || typeof storage.getDirectory !== 'function') {
+    throw new Error('browser-native chunk edit probe: OPFS is unavailable')
+  }
+  const root = await storage.getDirectory()
+  const directoryName = `dsh-chunk-edit-probe-${crypto.randomUUID()}`
+  const directory = await root.getDirectoryHandle(directoryName, { create: true })
+  const sourceHandle = await directory.getFileHandle('source', { create: true })
+  const targetHandle = await directory.getFileHandle('candidate', { create: true })
+  const sourceSync = await sourceHandle.createSyncAccessHandle()
+  const targetSync = await targetHandle.createSyncAccessHandle()
+  const source = createSyncAccessChunkBackedFile(sourceSync)
+  const target = createSyncAccessChunkBackedFile(targetSync)
+  try {
+    const sourceChunk = new Uint8Array(request.chunkBytes)
+    const markerOffset = Math.floor(request.byteLength / 2)
+    const markerBytes = new TextEncoder().encode(request.oldText)
+    if (markerOffset + markerBytes.byteLength > request.byteLength) {
+      throw new Error('browser-native chunk edit probe: marker does not fit in the source file')
+    }
+    source.truncate(request.byteLength)
+    for (let offset = 0; offset < request.byteLength; offset += request.chunkBytes) {
+      const length = Math.min(request.chunkBytes, request.byteLength - offset)
+      sourceChunk.fill(0x61, 0, length)
+      source.write(offset, sourceChunk.subarray(0, length))
+    }
+    source.write(markerOffset, markerBytes)
+    source.flush()
+    const sourceHash = hashChunkBackedFile(source, request.chunkBytes)
+    let metrics
+    try {
+      metrics = replaceUniqueUtf8CopyOnWrite(source, target, request.oldText, request.newText, {
+        chunkBytes: request.chunkBytes,
+        onStage: stage => {
+          if (request.failStage === stage) throw new Error(`injected ${stage} failure`)
+        },
+      })
+    } catch (error) {
+      const afterFailureHash = hashChunkBackedFile(source, request.chunkBytes)
+      return {
+        ok: false,
+        failure: error instanceof Error ? error.message : String(error),
+        sourceHash,
+        afterFailureHash,
+        sourceUnchanged: sourceHash === afterFailureHash,
+        targetBytes: target.size,
+        chunkBytes: request.chunkBytes,
+        failStage: request.failStage,
+      }
+    }
+    const verifiedHash = hashChunkBackedFile(target, request.chunkBytes)
+    const resultMarker = new TextEncoder().encode(request.newText)
+    const aroundMarker = target.read(markerOffset, Math.min(request.chunkBytes, resultMarker.byteLength + 32))
+    return {
+      ok: true,
+      sourceHash,
+      verifiedHash,
+      resultHash: metrics.resultHash,
+      resultBytes: metrics.resultBytes,
+      markerOffset,
+      markerBytes: resultMarker.byteLength,
+      markerPreview: encodeBase64(aroundMarker),
+      ...metrics,
+    }
+  } finally {
+    source.close()
+    target.close()
+    await root.removeEntry(directoryName, { recursive: true })
+  }
+}
+
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
+    if (request.action === 'chunk-edit-probe') {
+      workspaceTestResponse(request.requestId, await runChunkEditProbe(request))
+      return
+    }
     if (request.action === 'flush-local') {
       await workspaceRuntime.flushLocalWorkspace()
       workspaceTestResponse(request.requestId, { ok: true })
