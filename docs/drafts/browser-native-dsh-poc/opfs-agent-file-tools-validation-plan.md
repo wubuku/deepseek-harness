@@ -6,7 +6,7 @@ description: "规划通过真实 DSH 文件工具验证 OPFS 外置大文件的�
 
 ## 结论
 
-Browser-Native PoC 已分别验证 16/64 MiB Workspace 分块传输、OPFS sync-handle VFS backing、冷启动分块 hydrate，以及 DSH `read`/`grep`/`edit` 的普通文件操作。但这些证据尚未连成一条路径：真实 DSH 文件工具没有在冷 hydrate 后的 OPFS 外置大文件上运行，也没有证明模型只收到有界结果、编辑时完整文件被正确 materialize、atomic-write staging 不进入 Workspace manifest，且新版本可再次冷恢复。
+Browser-Native PoC 已分别验证 16/64 MiB Workspace 分块传输、OPFS sync-handle VFS backing、冷启动分块 hydrate，以及 DSH `read`/`grep`/`edit` 的普通文件操作。但这些证据尚未连成一条路径：真实 DSH 文件工具没有在冷 hydrate 后的 OPFS 外置大文件上运行，也没有证明模型只收到有界结果、编辑时完整文件被正确 materialize、atomic-write staging 不进入 Workspace manifest，且新版本可再次冷恢复。此前默认 `grep` 依赖 Worker 中不存在的 ripgrep 子进程；当前 checkout 已由后续文件工具批次提供有界 JavaScript fallback，具体上限和限制见 [Browser-native 文件工具验证](browser-file-tools-validation-plan.md)。
 
 本批在真实 Chrome、Dedicated Worker 和 DSH `ctx.agentLoop` 中验证一份 12 MiB UTF-8 多行文件的 `read → grep → edit → read`。用 scripted LLM 固定工具选择以隔离运行时和存储语义；它不代替真实模型验收。文件字节由 Worker test port 在浏览器本地生成，不经页面、模型请求或 Session 上传。
 
@@ -15,7 +15,7 @@ Browser-Native PoC 已分别验证 16/64 MiB Workspace 分块传输、OPFS sync-
 | 候选验证面 | 价值 | 当前证据 | 本批决定 |
 |---|---:|---|---|
 | 冷 hydrate 后，DSH `read` 是否从 OPFS backing 流式读取并限制输出 | P0 | `read` 源码对大文件使用 `ctx.fs.streamText`；OPFS E2E 只直接调用 VFS range API | 选择 |
-| 默认 `grep` 在 Worker 缺少 ripgrep 子进程时是否返回可见错误，且 Agent 能继续处理 | P0 | `dsh-tool-fs-search` 通过 `ctx.subprocess` 启动打包的 ripgrep；Worker runtime 将 `@vscode/ripgrep` 映射到不可执行 stub | 选择；验证并记录当前不支持，而非假定 grep 可用 |
+| Browser-native `grep` 在 Worker 缺少 ripgrep 子进程时是否仍能有界搜索，且 Agent 能继续处理 | P0 | 原 `dsh-tool-fs-search` 通过 `ctx.subprocess` 启动打包的 ripgrep；后续 provider fallback 使用 Worker VFS 和 JavaScript regex | 选择；验证 fallback 的标准 tool/result、上限、错误和恢复，不把它当作完整 ripgrep |
 | DSH `edit` 是否能把外置文件安全 materialize、原子替换并形成单一 Workspace mutation | P0 | VFS backing 单测和小文件 Agent edit receipt 各自通过，未验证两者组合和原子写 staging 过滤 | 选择 |
 | 修改后的大文件能否提交、刷新后重新 externalize，并由同一 Session 的 DSH 工具读到 | P0 | 大文件传输、OPFS 冷 hydrate、Agent Session 恢复分开验证 | 选择 |
 | 文件工具是否把完整大文件内容写进 LLM 请求或 Session | P0 | 大工具参数有 1 MiB 上限；`read` 有输出上限，尚无大文件实际调用记录 | 选择并设为安全验收 |
@@ -37,7 +37,7 @@ Browser-Native PoC 已分别验证 16/64 MiB Workspace 分块传输、OPFS sync-
 
 在真实 Worker VFS 中生成 12 MiB 文件，按 4 KiB 行分隔并把唯一 marker 放在第二行；commit Workspace 后刷新，使文件通过 OPFS sync backing 冷恢复。让真实 DSH `read` 请求第二行，并让默认 `grep` 搜索唯一 marker。
 
-通过条件：`read` 在 Session 中有真实 `tool/call`/`tool/result`，只返回第二行；默认 `grep` 明确返回 Worker ripgrep 子进程失败，而不是伪造匹配结果；该错误有匹配的 `tool/result`，之后同一 Agent turn 仍继续到 `edit` 和 `read`。VFS `residentBytes` 在冷读取/搜索前后不因文件大小增长；Agent 请求、工具结果和 Session 不包含大文件原文。该项同时记录 stock `grep` 尚不可用于 Browser Worker 的能力缺口。
+通过条件：`read` 在 Session 中有真实 `tool/call`/`tool/result`，只返回第二行；Browser-native `grep` 返回唯一 marker，且不启动 Worker 主机子进程；该结果有匹配的标准 `tool/result`，之后同一 Agent turn 继续到 `edit` 和 `read`。VFS `residentBytes` 在冷读取/搜索前后不因文件大小增长；Agent 请求、工具结果和 Session 不包含大文件原文。默认 profile 的有界 fallback 不等同完整 ripgrep 语法，超出扫描、匹配或行长限制时必须 fail closed。
 
 ### F2：在外置 backing 上运行 DSH `edit`
 
@@ -71,6 +71,6 @@ Browser-Native PoC 已分别验证 16/64 MiB Workspace 分块传输、OPFS sync-
 - 本批不将 scripted 工具选择写成真实 LLM 行为；既有真实 Chrome/LLM 三轮工具与记忆 E2E 继续作为独立证据。
 - `residentBytes` 是 VFS 节点统计，不是浏览器 heap 峰值或内存 SLA。
 - `edit` 需要完整 UTF-8 文件内容，预期会 materialize 整个外置文件；本批不宣称零拷贝编辑或任意大小编辑。对单条超长行的 edit，DSH diff/result metadata 可能随该行增长；该极端用例本批不验收，应单独设置行长度限制或验证结果裁剪策略。
-- 默认 Browser roster 暴露 `grep`，但 Worker 中打包 ripgrep 子进程当前不可执行。本批只验证错误可见和 Agent 在该工具失败后能继续，不宣称 Browser-native grep 已实现。
+- 默认 Browser roster 的 `grep`/`glob` 由 PoC provider 在 `tools/execute` 中切换到 Worker-native 有界实现，不再启动不可执行的 ripgrep 子进程。该实现使用 JavaScript regex/有限 glob 语义，设有文件数、扫描字节、匹配数、单行、参数和文件大小上限；不宣称完整 ripgrep 兼容、任意容量搜索或生产文件工具能力。
 - Workspace chunk API 限制单次传输大小，不证明文件编辑使用块级 delta；编辑后仍可能重传完整内容 blob。
 - 本机 PoC backend、OPFS、IndexedDB、单 Chrome 版本的结果不证明生产云存储、多设备协同、自然 eviction、OS crash 或所有浏览器兼容。

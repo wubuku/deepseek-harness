@@ -271,8 +271,8 @@ try {
     const result = results.get(call.data.callId)
     assert.ok(result, `missing tool result for ${call.data.name}/${call.data.callId}`)
     if (call.data.name === 'grep') {
-      assert.equal(result.data.message?.isError, true, 'the stock grep tool currently depends on unavailable Worker ripgrep subprocess')
-      assert.match(eventText(result), /grep subprocess failed/)
+      assert.notEqual(result.data.message?.isError, true, `browser-native grep failed: ${eventText(result)}`)
+      assert.match(eventText(result), new RegExp(targetBefore))
     } else {
       assert.notEqual(result.data.message?.isError, true, `${call.data.name} failed: ${eventText(result)}`)
     }

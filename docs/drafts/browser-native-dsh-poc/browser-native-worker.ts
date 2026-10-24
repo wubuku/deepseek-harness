@@ -25,6 +25,7 @@ import { isShellStartFrame } from '../../../packages/experimental/webworker-runt
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
+import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
 import {
   publishBrowserNativePagehideAck,
   setBrowserNativeControlPort,
@@ -50,6 +51,7 @@ let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
+let fileToolYieldDelayMs = 0
 let localPersistBarrier: 'before' | 'after' | undefined
 let localPersistReached: 'before' | 'after' | undefined
 let releaseLocalPersist: (() => void) | undefined
@@ -58,7 +60,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -74,6 +76,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly length?: number
   readonly mode?: number
   readonly count?: number
+  readonly delayMs?: number
 }
 
 function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspaceTestRequest {
@@ -82,6 +85,13 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.type !== 'browser-native-workspace-test-request' || typeof data.requestId !== 'string') return false
   if (data.action === 'abort-metadata-transactions') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
+  }
+  if (data.action === 'set-file-tool-delay') {
+    return Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
+  }
+  if (data.action === 'cancel-file-search') {
+    return typeof data.path === 'string' && typeof data.marker === 'string'
+      && Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
   return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
@@ -153,6 +163,24 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (request.action === 'quota-next-opfs-write') {
       quotaNextOpfsWrite = true
       workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'set-file-tool-delay') {
+      fileToolYieldDelayMs = request.delayMs ?? 0
+      workspaceTestResponse(request.requestId, { ok: true, delayMs: fileToolYieldDelayMs })
+      return
+    }
+    if (request.action === 'cancel-file-search') {
+      const controller = new AbortController()
+      const search = executeBrowserNativeGrep(
+        workspaceRuntime.vfs,
+        { pattern: request.marker, path: request.path },
+        controller.signal,
+        fileToolYieldDelayMs,
+      )
+      setTimeout(() => { controller.abort() }, request.delayMs ?? 0)
+      const result = await search
+      workspaceTestResponse(request.requestId, { ok: true, canceled: result.matches.length === 0 })
       return
     }
     if (request.action === 'pause-local-save') {
@@ -444,6 +472,7 @@ self.addEventListener('message', (event: MessageEvent) => {
           },
           beforeLocalPersist: async () => await pauseLocalPersist('before'),
           afterLocalPersist: async () => await pauseLocalPersist('after'),
+          fileToolYieldDelayMs: () => fileToolYieldDelayMs,
         },
       }),
     })

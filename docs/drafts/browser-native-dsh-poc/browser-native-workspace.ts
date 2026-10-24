@@ -1158,6 +1158,8 @@ export interface BrowserNativeWorkspaceRuntime {
   }
   /** Release the PoC writer lease for model-independent browser tests. */
   readonly releaseWriter: () => Promise<void>
+  /** Return the PoC-only delay inserted at cooperative file-search yields. */
+  readonly getFileToolYieldDelayMs: () => number
 }
 
 /** Optional local persistence for the Browser-Native Workspace PoC. */
@@ -1176,6 +1178,7 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
     readonly quotaNextOpfsWrite?: () => boolean
     readonly beforeLocalPersist?: () => Promise<void>
     readonly afterLocalPersist?: () => Promise<void>
+    readonly fileToolYieldDelayMs?: () => number
   }
 }
 
@@ -1206,5 +1209,6 @@ export function createBrowserNativeWorkspaceRuntime(
     getWriterLease: () => mirror.getWriterLease(),
     getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),
+    getFileToolYieldDelayMs: () => options.testHooks?.fileToolYieldDelayMs?.() ?? 0,
   }
 }

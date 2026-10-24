@@ -57,6 +57,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-020：Browser-native 文件搜索、编辑载荷与取消验证
+
+```text
+changeId: BN-P2-020
+upstreamBaseline: research checkout after BN-P2-014; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools-cancel.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-file-tools-validation-plan.md; docs/drafts/browser-native-dsh-poc/browser-file-tools-validation-progress.md; docs/drafts/browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md; docs/drafts/browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md
+reason: 默认 Browser profile 的 grep/glob 仍把主机 ripgrep 子进程能力带入 Worker；大文件 edit 还可能把超长行或大替换放大为不可持久化的 Session 载荷；长搜索的取消和后续 Worker 可用性缺少真实 Chrome 证据。
+existingExtensionPointsChecked: 复用 MemoryVfs、Worker Host boot 前 VFS、现有 `tools/execute` waterfall、DSH 工具 registry 的 canonical result/post-execute 流程和 preview 的 URL-gated Worker test port；未修改正式 Agent Loop、Session format、正式 filesystem package 或根级依赖。
+whyDraftOnlyWasInsufficient: Node helper test 不能证明真实 Dedicated Worker、DSH Host、OPFS-backed VFS 和同源 backend 共同工作；只验证 helper 也不能证明 fallback 返回值经过 DSH registry 的 schema、presentation、Session result 和 Workspace receipt。
+behaviorChange: Browser-native provider 在显式 Workspace runtime 中为 `grep`/`glob` 提供受限 JavaScript fallback，限制工作目录、文件数、扫描字节、匹配数、单行结果和搜索 yield；`edit` 在写入前拒绝过大的参数、文件或目标行。Worker test seam 可注入搜索 yield 延迟并取消 helper；正常 DSH dispatch 仍由 registry 根据 caller signal 结算 canonical aborted result。PoC 只实现 fallback，不宣称完整 ripgrep 或块级编辑。
+directoryOutChangeReason: none; all implementation, tests and documentation remain under docs/drafts.
+consumersUpdated: Browser-Native PoC README、插件兼容矩阵、OPFS 文件工具计划/进度、docs/drafts 导读和本账本。
+tests: `browser-native-file-tools.spec.ts` 4/4；`backend-v2.test.mjs` 17/17；Browser-Native Workspace/Durable Workspace Vitest 23/23；preview build 通过。真实 Chrome 的 `browser-native-file-tools.e2e.mjs`、`browser-native-file-tools-cancel.e2e.mjs` 和 `opfs-agent-file-tools.e2e.mjs` 均通过，分别验证搜索/编辑边界、取消后续 turn 和 12 MiB OPFS-backed `read → grep → edit → read`；均无 page error、Worker error 或跨源请求。scripted tool selection 不作为真实 LLM 自主选择证据。
+syncReplaySteps: 同步 upstream 后检查正式 `tools/execute`、Browser Workspace provider 和 `MemoryVfs` 是否提供等价的浏览器搜索能力；若没有，保留本目录 helper 与 browser-only provider 接线，重跑 helper、backend、preview 和 Chrome E2E。若正式工具提供结构化、可取消且有相同上限的 Worker provider，则迁移测试到正式接口并删除重复 fallback。
+deleteCondition: 正式 Browser-native 文件搜索和编辑能力提供等价的路径限制、载荷上限、取消语义和 tool/result 验收，且本批测试迁移后仍通过；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-019：拒绝空 SSE `[DONE]` 并复验真实 LLM 闭环
 
 ```text

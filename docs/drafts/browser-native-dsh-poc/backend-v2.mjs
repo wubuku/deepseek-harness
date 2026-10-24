@@ -513,6 +513,14 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
   response.end()
 }
 
+function scriptedText(response, text) {
+  writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+  writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+  writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+  writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+  response.end()
+}
+
 async function scriptedLlm(response, messages, tools) {
   const oversizedToolMarkers = [
     'BROWSER_NATIVE_TOOL_ARGS_768K_E2E',
@@ -624,6 +632,79 @@ async function scriptedLlm(response, messages, tools) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
     response.end()
+    return
+  }
+
+  const fileToolBoundaryMarker = 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_E2E'
+  if (textContent(messages).includes(fileToolBoundaryMarker) && hasTool(tools, 'grep')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(fileToolBoundaryMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-boundary-grep-many',
+        name: 'grep',
+        arguments: { pattern: 'BROWSER_NATIVE_BOUNDARY_MATCH', path: '/dsh/home/workspace', include: '*.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-boundary-grep-invalid',
+        name: 'grep',
+        arguments: { pattern: '[', path: '/dsh/home/workspace' },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_DONE')
+    return
+  }
+
+  const grepCancelMarker = 'BROWSER_NATIVE_GREP_CANCEL_E2E'
+  if (textContent(messages).includes(grepCancelMarker) && hasTool(tools, 'grep')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(grepCancelMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-grep-cancel',
+        name: 'grep',
+        arguments: { pattern: 'BROWSER_NATIVE_GREP_CANCEL_TARGET', path: '/dsh/home/workspace' },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_GREP_CANCEL_COMPLETED')
+    return
+  }
+
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_GREP_CANCEL_CONTINUE_E2E')) {
+    scriptedText(response, 'BROWSER_NATIVE_GREP_CANCEL_CONTINUE_OK')
+    return
+  }
+
+  const editBoundaryMarker = 'BROWSER_NATIVE_EDIT_BOUNDARY_E2E'
+  if (textContent(messages).includes(editBoundaryMarker) && hasTool(tools, 'edit')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(editBoundaryMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-boundary-edit-long-line',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/long-edit.txt',
+          old_string: 'BROWSER_NATIVE_LONG_EDIT_MARKER',
+          new_string: 'BROWSER_NATIVE_LONG_EDIT_REPLACED',
+        },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_EDIT_BOUNDARY_DONE')
+    return
+  }
+
+  if (hasUserMarker(messages, 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_CONTINUE_E2E')) {
+    scriptedText(response, 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_CONTINUE_OK')
     return
   }
 

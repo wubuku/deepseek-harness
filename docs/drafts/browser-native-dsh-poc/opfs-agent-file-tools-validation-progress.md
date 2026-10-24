@@ -10,7 +10,7 @@ description: "记录 OPFS 外置大文件经 DSH read、grep、edit、Workspace 
 
 | 验证面 | 状态 | 证据 | 限制 |
 |---|---|---|---|
-| 冷 hydrate 后由 DSH `read`、`grep` 访问大文件 | Chrome Worker 已执行（scripted 工具选择） | 真实 DSH Host 对 12 MiB 外置文件运行 `read → grep → edit → read`；`read` 仅返回目标行。`grep` 记录了真实失败结果，Agent Loop 继续完成后续工具。 | Worker 没有可执行 ripgrep 的子进程，`grep` 不可用；本次没有验证真实模型会自行选择该序列。 |
+| 冷 hydrate 后由 DSH `read`、`grep` 访问大文件 | Chrome Worker 已执行（scripted 工具选择） | 真实 DSH Host 对 12 MiB 外置文件运行 `read → grep → edit → read`；`read` 仅返回目标行，Browser-native `grep` fallback 返回唯一 marker，Agent Loop 继续完成后续工具。 | fallback 不是完整 ripgrep 语法或任意容量搜索；本次没有验证真实模型会自行选择该序列。 |
 | DSH `edit` materialize、Workspace commit 与 receipt | Chrome Worker 已执行（scripted 工具选择） | 编辑时 VFS `residentBytes` 从冷态约 34.5 MB 升至约 47.1 MB；仅有一个 edit receipt 和一次 Workspace commit，manifest 只包含目标文件，atomic-write staging 未进入 manifest。 | `edit` 会完整 materialize 文件，不是零拷贝或块级编辑。 |
 | 编辑后刷新、cold hydrate 与同 Session 读取 | Chrome Worker 已执行（scripted 工具选择） | 刷新后 `residentBytes` 回到约 34.5 MB；相同 Session 的 DSH `read` 读到新 marker，未重放 edit、未增加 Workspace revision。manifest blob 的 SHA-256 与字节数一致。 | 仅验证单 Chrome、单文件和该 PoC backend。 |
 | 文件内容不进入模型请求或 Session | Chrome Worker 已执行（scripted 工具选择） | 12 MiB 内容只经 Workspace blob 路径传输；最大观测 LLM request 约 13.1 KB、Session append 约 33.6 KB，Session 和模型请求不含文件重复内容。 | 这些值是本样本的观测值，不是协议上限或容量承诺。 |
@@ -56,11 +56,11 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation
 
 ## 发现与未完成项
 
-- Browser profile 暴露的 `grep` 在当前 Worker 中依赖不可执行的 ripgrep 子进程。本次确认它返回可见的失败 `tool/result`，并未错误报告匹配；Agent Loop 之后继续完成 edit 和 read。可见失败与搜索能力可用是两件事，Browser Worker 的搜索实现仍待处理。
+- Browser profile 原先暴露的 `grep` 依赖不可执行的 ripgrep 子进程；本批在 PoC provider 的 `tools/execute` 中加入有界 JavaScript fallback，并用真实 Chrome Worker 验证标准 `tool/call`/`tool/result`、匹配结果和失败后继续。它只覆盖 `/dsh/home/workspace`，使用 JavaScript regex 和有限 glob 语义，仍受扫描字节、文件数、匹配数和行长限制。
 - `edit` 必须把外置文件完整读入 VFS。一个 10 MiB 单行文件的 edit 曾导致 Session 请求体超过 backend 上限，工具结果无法结算；当前通过 4 KiB 行限制结果大小，并未修复任意超长行的结果膨胀。不能据 12 MiB 多行样本宣称超大单行可编辑。
 - 本批的 12 MiB 文件由 scripted LLM 固定工具选择；真实模型 E2E 使用普通大小文件。没有真实模型选择 `grep`、对超大文件自主编辑或生成大型 tool arguments 的证据。
-- 不覆盖多文件工作集、heap 峰值 SLA、二进制/非法 UTF-8、CRLF、自然 eviction、浏览器进程崩溃、Safari/WebKit、生产对象存储或多实例 backend。
+- 不覆盖真实模型自主选择 Browser-native 搜索、多文件工作集的 heap 峰值 SLA、二进制/非法 UTF-8/CRLF 的完整工具语义、自然 eviction、浏览器进程崩溃、Safari/WebKit、生产对象存储或多实例 backend。
 
 ## 下一步
 
-优先评估 Browser Worker 可用的文件搜索实现，并为大文件 `edit` 定义可执行的行长、diff/result 和 Session 载荷上限；再决定是否需要逐块编辑协议。保持“真实 LLM 一般工具闭环”和“scripted 大文件运行时语义”两类证据分开报告。
+下一步优先评估 Browser-native 搜索 fallback 的性能、Unicode/二进制语义和真实模型工具选择，再为大文件 `edit` 决定是否需要逐块编辑协议。保持“真实 LLM 一般工具闭环”和“scripted 大文件运行时语义”两类证据分开报告。

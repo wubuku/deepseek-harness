@@ -111,7 +111,7 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 ## OPFS 外置大文件的 DSH 工具闭环
 
-[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep(error) → edit → read` 中，grep 返回可见错误后 Agent Loop 继续，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 Browser Worker 的 `grep` 因 ripgrep 子进程不可执行而不可用；`edit` 会完整 materialize 文件。10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限，因此结果只适用于有界 4 KiB 行样本。
+[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep → edit → read` 中，Browser-native `grep` fallback 返回唯一 marker，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 checkout 新增的 fallback 不依赖不存在的 ripgrep 子进程；它不是完整 ripgrep 语法，也不是任意容量的搜索实现。`edit` 会完整 materialize 文件。10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限，因此结果只适用于有界 4 KiB 行样本。
 
 在 preview 构建后运行模型无关的大文件验收：
 
@@ -121,7 +121,25 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
   node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
 ```
 
-本批另以真实 Chrome 和真实 LLM 运行 `runtime-validation.e2e.mjs`，通过普通大小文件的 `read → write → read`、同 Session 刷新恢复与同源凭据隔离。真实模型结果不覆盖 12 MiB scripted 场景，也不证明模型能稳定调用不可用的 `grep`。结果、实际命令及限制见[进度记录](opfs-agent-file-tools-validation-progress.md)。
+本批另以真实 Chrome 和真实 LLM 运行 `runtime-validation.e2e.mjs`，通过普通大小文件的 `read → write → read`、同 Session 刷新恢复与同源凭据隔离。真实模型结果不覆盖 12 MiB scripted 场景，也不证明模型会主动选择本批 Browser-native `grep`/`glob` fallback。结果、实际命令及限制见[进度记录](opfs-agent-file-tools-validation-progress.md)。
+
+## Browser-native 文件搜索与载荷安全
+
+[本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、匹配数、单行、参数和文件大小上限，超限 fail closed。
+
+在 preview 构建后运行模型无关验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.spec.ts
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools-cancel.e2e.mjs
+```
+
+`browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、超长编辑目标和失败后继续；`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型仍只证明普通大小文件的独立闭环；本批没有宣称真实模型会主动选择 Browser-native `grep`/`glob`。
 
 ## 故障边界与 S3 blob 验证
 

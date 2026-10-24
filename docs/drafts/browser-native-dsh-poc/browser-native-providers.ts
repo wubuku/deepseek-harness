@@ -9,6 +9,7 @@
 import { requireActiveModuleLoader, type StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import './browser-native-session-events.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type {
   GenerateOptions,
   LlmAdapter,
@@ -43,6 +44,12 @@ import type {
   SessionPersistenceStatOptions,
 } from '@deepseek-ai/dsh-session-persistence'
 import { publishBrowserNativeOwner, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
+import {
+  assertBrowserNativeEditSafe,
+  executeBrowserNativeGlob,
+  executeBrowserNativeGrep,
+  isBrowserWorkspacePath,
+} from './browser-native-file-tools.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -402,6 +409,17 @@ function createRemoteSessionPersistenceClass(
         if (!['read', 'read_image', 'write', 'edit', 'grep', 'glob'].includes(exec.name) || exec.agent === undefined) return await next()
         workspace.assertLocalWorkspaceUsable()
         await workspace.ensureWriterLease()
+        if (exec.name === 'grep') {
+          const value = await executeBrowserNativeGrep(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
+          return { isError: false, value } as ToolExecutionResult
+        }
+        if (exec.name === 'glob') {
+          const value = await executeBrowserNativeGlob(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
+          return { isError: false, value } as ToolExecutionResult
+        }
+        if (exec.name === 'edit' && isBrowserWorkspacePath(String((exec.arguments as Record<string, unknown>).file_path ?? ''))) {
+          assertBrowserNativeEditSafe(workspace.vfs, exec.arguments, exec.signal)
+        }
         if (!['write', 'edit'].includes(exec.name)) return await next()
         const session = exec.agent.session
         const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)
