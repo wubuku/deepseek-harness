@@ -79,7 +79,7 @@ if (browserNative) {
   window.addEventListener('pagehide', (event) => {
     if (event.persisted) return
     pageLifecycle.unloading = true
-    worker?.terminate()
+    if (!browserNativeDurable) worker?.terminate()
   })
 }
 const image = `preview/${IMAGE_FILE_NAME}`
@@ -105,7 +105,7 @@ try {
     }
     if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
     if (browserNativeWorkspaceLease) currentWorker.postMessage({ type: 'browser-native-workspace-lease-init' })
-    if (browserNative) connectBrowserNativePageControl(currentWorker)
+    if (browserNative) connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
     await connectWorkerHost(currentWorker, {
       image,
       overlays: browserNative

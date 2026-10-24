@@ -26,6 +26,7 @@ import { runShellProcess } from '../../../packages/experimental/webworker-runtim
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import {
+  publishBrowserNativePagehideAck,
   setBrowserNativeControlPort,
   setBrowserNativeResumeOwner,
   setBrowserNativeResumeWorkspaceLease,
@@ -57,7 +58,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -80,7 +81,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
+  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -165,6 +166,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'release-local-save') {
       releaseLocalPersist?.()
+      workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'close-vfs') {
+      workspaceRuntime.vfs.close()
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
@@ -354,6 +360,35 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type === 'browser-native-workspace-lease-init') {
     if (host !== undefined) throw new Error('browser-native worker: Workspace lease must be selected before Host init')
     workspaceWriterLease = true
+    return
+  }
+  if (data?.type === 'browser-native-pagehide') {
+    if (typeof data.requestId !== 'string') throw new Error('browser-native worker: pagehide request id is required')
+    void (async () => {
+      let localPersisted = false
+      let writerReleased = false
+      let error: string | undefined
+      try {
+        if (workspaceRuntime !== undefined) {
+          await workspaceRuntime.flushLocalWorkspace()
+          localPersisted = true
+          await workspaceRuntime.releaseWriter()
+          writerReleased = true
+        } else {
+          localPersisted = true
+          writerReleased = true
+        }
+      } catch (reason) {
+        error = reason instanceof Error ? reason.message : String(reason)
+      }
+      publishBrowserNativePagehideAck({
+        type: 'pagehide-ack',
+        requestId: data.requestId,
+        localPersisted,
+        writerReleased,
+        ...(error === undefined ? {} : { error }),
+      })
+    })()
     return
   }
   if (host === undefined && isShellStartFrame(data)) {

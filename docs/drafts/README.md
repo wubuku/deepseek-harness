@@ -66,6 +66,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 11. [Browser-Native 下一批验证计划](browser-native-dsh-poc/next-round-validation-plan.md)及[进度](browser-native-dsh-poc/next-round-validation-progress.md)：三项真实 Chrome/Worker 验证均通过 scripted LLM，包括已提交 Workspace 缓存清除后重建、Agent `write → read → edit → write` 的 Session receipt 对账，以及同标签页刷新后含“resume 已成功但响应丢失”注入的 writer lease 恢复与旧 token fencing；真实模型、quota/eviction 和 OS 级浏览器进程崩溃未验证。
 12. [Browser-Native 恢复边界验证计划](browser-native-dsh-poc/recovery-boundary-validation-plan.md)及[实测进度](browser-native-dsh-poc/recovery-boundary-validation-progress.md)：真实 Chrome 验证 DSH `write` 在本地 durable 前/后的 Worker 强制终止及 `TOOL_OUTCOME_UNKNOWN` 恢复、本地损坏数据导出、双标签 writer lease 倒计时重试与 fencing；Safari、真实模型和 OS 级浏览器崩溃未验证。
 13. [Browser-Native 交互与恢复验证计划](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md)及[实测进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md)：Chrome/scripted LLM 验证默认问答与工作目录工具、清除浏览器缓存后 backend 503 时 fail-closed、真实 Worker 写权交接，并回归缓存重建和 mutation/snapshot crash window；自然 eviction、OS crash、Safari、多实例 backend 和真实模型工具选择未验证。
+14. [Browser-Native 完整性与生命周期验证计划](browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md)及[进度](browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md)：真实 Chrome 验证冷 hydrate 分块 hash、OPFS orphan 保守回收、durable pagehide 本地屏障，以及 Session receipt、Workspace commit unknown 与 writer fencing 的组合恢复；不把结果外推为块级 delta、后台 Agent 或跨存储原子事务。
 
 ### 需要实现或审查代码时
 
@@ -296,9 +297,13 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [mock-and-crash-boundary-validation-plan.md](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md) / [进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md) | 局部浏览器存储丢失、Chrome `SIGKILL`、多 backend 竞争、大型工具参数和 MinIO blob 验证；记录身份恢复与共享 `dataDir` 限制，不把故障注入外推为自然 eviction、OS crash 或生产对象存储。 |
 | [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
 | [browser-runtime-integrity-validation-plan.md](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md) / [进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md) | 默认交互工具闭环、本地缓存清除后的 backend outage fail-closed、双标签 Worker 写权交接及既有恢复路径回归；脚本使用 scripted LLM，真实模型和生产级故障仍未验证。 |
+| [next-integrity-and-lifecycle-plan.md](browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md) / [进度](browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md) | 冷 hydrate 分块与增量 hash、OPFS orphan 回收、pagehide 本地 durable barrier、Session/Workspace/lease 组合恢复；包含真实 Chrome 命令和未覆盖边界。 |
 | [tests/default-interaction-tools.e2e.mjs](browser-native-dsh-poc/tests/default-interaction-tools.e2e.mjs) | Chrome 中验证用户问答、工作目录切换和相对路径文件写入进入同一 DSH turn 与 Workspace。 |
 | [tests/workspace-cache-backend-unavailable.e2e.mjs](browser-native-dsh-poc/tests/workspace-cache-backend-unavailable.e2e.mjs) | 清除 OPFS/IndexedDB 后注入 manifest 503，验证页面与 Worker 不把空 Workspace 标成已同步。 |
 | [tests/workspace-worker-handoff.e2e.mjs](browser-native-dsh-poc/tests/workspace-worker-handoff.e2e.mjs) | 两个真实 preview Worker 交接 Workspace lease，验证 fencing token 递增、旧 token 被拒和同 Session 文件工具续接。 |
+| [tests/cold-hydrate-integrity.e2e.mjs](browser-native-dsh-poc/tests/cold-hydrate-integrity.e2e.mjs) | 真实 Chrome 验证远端 Workspace 文件冷启动按 1 MiB chunk 写入 OPFS、range backing、hash 错误 fail-closed 和低 VFS 驻留。 |
+| [tests/orphan-blob-reconciliation.e2e.mjs](browser-native-dsh-poc/tests/orphan-blob-reconciliation.e2e.mjs) | 真实 Chrome 验证 metadata transaction abort 后只回收无引用 OPFS blob，metadata 缺失时保留并报告 corruption。 |
+| [tests/pagehide-local-barrier.e2e.mjs](browser-native-dsh-poc/tests/pagehide-local-barrier.e2e.mjs) | 真实 Chrome 验证 durable pagehide 的 Worker 本地 flush、ack/终止和 BFCache 保留语义。 |
 | [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
 
 ### v2 实现和测试入口

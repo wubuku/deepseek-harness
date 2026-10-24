@@ -29,6 +29,15 @@ export type BrowserNativeWorkspaceLeaseNotice =
   | ({ readonly type: 'workspace-lease' } & BrowserNativeWorkspaceLease)
   | { readonly type: 'workspace-lease-released'; readonly workspaceId: string }
 
+/** Result sent after the Worker handles a page-leave local persistence request. */
+export interface BrowserNativePagehideAck {
+  readonly type: 'pagehide-ack'
+  readonly requestId: string
+  readonly localPersisted: boolean
+  readonly writerReleased: boolean
+  readonly error?: string
+}
+
 let controlPort: MessagePort | undefined
 const resumeOwnerTokens = new Map<string, string>()
 const resumeWorkspaceLeases = new Map<string, BrowserNativeWorkspaceLeaseResume>()
@@ -79,5 +88,13 @@ export function publishBrowserNativeWorkspaceStatus(notice: BrowserNativeWorkspa
 
 /** Send the current or released Workspace lease to the owning page. */
 export function publishBrowserNativeWorkspaceLease(notice: BrowserNativeWorkspaceLeaseNotice): void {
+  controlPort?.postMessage(notice)
+}
+
+/**
+ * Report the result of the page-leave local persistence barrier.
+ * @param notice - Persistence and lease-release result sent to the page.
+ */
+export function publishBrowserNativePagehideAck(notice: BrowserNativePagehideAck): void {
   controlPort?.postMessage(notice)
 }

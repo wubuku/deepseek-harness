@@ -255,16 +255,33 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         if (backing !== undefined) {
           vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
         } else {
-          const bytes = await this.downloadBlob(entry.hash, entry.bytes)
-          await this.store?.cacheBlob(this.workspaceId, entry.hash, bytes)
-          const cached = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
-          if (cached === undefined) vfs.seed(`${WORKSPACE_ROOT}/${path}`, bytes, { mode: entry.mode })
-          else vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, cached, { mode: entry.mode })
+          const streamed = this.store !== undefined && typeof this.store.cacheBlobFromChunks === 'function'
+            ? await this.store.cacheBlobFromChunks(
+              this.workspaceId,
+              entry.hash,
+              entry.bytes,
+              async (offset, length) => await this.downloadBlobChunk(entry.hash!, entry.bytes!, offset, length),
+            )
+            : false
+          if (streamed === true) {
+            const cached = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
+            if (cached === undefined) throw new Error(`browser-native workspace: streamed blob was not available for ${path}`)
+            vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, cached, { mode: entry.mode })
+          } else {
+            const bytes = await this.downloadBlob(entry.hash, entry.bytes)
+            await this.store?.cacheBlob(this.workspaceId, entry.hash, bytes)
+            const cached = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
+            if (cached === undefined) vfs.seed(`${WORKSPACE_ROOT}/${path}`, bytes, { mode: entry.mode })
+            else vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, cached, { mode: entry.mode })
+          }
         }
         this.knownBlobHashes.add(entry.hash)
       }
       this.revision = manifest.revision
       const localSnapshot = await this.store?.load(this.workspaceId)
+      if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
+        await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
+      }
       if (localSnapshot !== undefined) this.restoreLocalSnapshot(vfs, localSnapshot)
       this.ready = true
       const dirtyCount = this.pending.size + (this.retryBatch?.changes.length ?? 0)
@@ -1069,23 +1086,34 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (completed.complete !== true) throw new Error('browser-native workspace: backend did not complete blob upload')
   }
 
+  private async downloadBlobChunk(hash: string, totalBytes: number, offset: number, length: number): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0
+      || offset + length > totalBytes) throw new RangeError('browser-native workspace: invalid blob chunk range')
+    const index = Math.floor(offset / WORKSPACE_BLOB_CHUNK_BYTES)
+    const response = await fetch(
+      `${WORKSPACE_API}/blob/${hash}/chunk/${String(index)}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId ?? '')}`,
+      { credentials: 'same-origin' },
+    )
+    if (!response.ok) throw new Error(`browser-native workspace: blob chunk download failed with HTTP ${String(response.status)}`)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    const expectedBytes = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - index * WORKSPACE_BLOB_CHUNK_BYTES)
+    if (bytes.byteLength !== expectedBytes || response.headers.get('x-chunk-index') !== String(index)
+      || response.headers.get('x-chunk-count') !== String(Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES))
+      || response.headers.get('x-total-bytes') !== String(totalBytes)
+      || response.headers.get('x-content-sha256') !== await sha256(bytes)) {
+      throw new Error(`browser-native workspace: blob chunk verification failed for index ${String(index)}`)
+    }
+    const chunkOffset = offset - index * WORKSPACE_BLOB_CHUNK_BYTES
+    return bytes.subarray(chunkOffset, chunkOffset + length)
+  }
+
   private async downloadBlob(hash: string, totalBytes: number): Promise<Uint8Array> {
     const output = new Uint8Array(totalBytes)
     const chunkCount = Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
     for (let index = 0; index < chunkCount; index += 1) {
-      const response = await fetch(
-        `${WORKSPACE_API}/blob/${hash}/chunk/${String(index)}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId ?? '')}`,
-        { credentials: 'same-origin' },
-      )
-      if (!response.ok) throw new Error(`browser-native workspace: blob chunk download failed with HTTP ${String(response.status)}`)
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      const expectedBytes = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - index * WORKSPACE_BLOB_CHUNK_BYTES)
-      if (bytes.byteLength !== expectedBytes || response.headers.get('x-chunk-index') !== String(index)
-        || response.headers.get('x-chunk-count') !== String(chunkCount)
-        || response.headers.get('x-total-bytes') !== String(totalBytes)
-        || response.headers.get('x-content-sha256') !== await sha256(bytes)) {
-        throw new Error(`browser-native workspace: blob chunk verification failed for index ${String(index)}`)
-      }
+      const offset = index * WORKSPACE_BLOB_CHUNK_BYTES
+      const length = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)
+      const bytes = await this.downloadBlobChunk(hash, totalBytes, offset, length)
       output.set(bytes, index * WORKSPACE_BLOB_CHUNK_BYTES)
     }
     if (await sha256(output) !== hash) throw new Error('browser-native workspace: downloaded blob failed full SHA-256 verification')

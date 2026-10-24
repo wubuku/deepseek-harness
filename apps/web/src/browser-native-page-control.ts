@@ -39,8 +39,16 @@ interface BrowserNativeWorkspaceLeaseReleased {
   readonly workspaceId: string
 }
 
+interface BrowserNativePagehideAck {
+  readonly type: 'pagehide-ack'
+  readonly requestId: string
+  readonly localPersisted: boolean
+  readonly writerReleased: boolean
+  readonly error?: string
+}
+
 type BrowserNativePageNotice = BrowserNativeOwnerNotice | BrowserNativeWorkspaceStatus
-  | BrowserNativeWorkspaceLease | BrowserNativeWorkspaceLeaseReleased
+  | BrowserNativeWorkspaceLease | BrowserNativeWorkspaceLeaseReleased | BrowserNativePagehideAck
 
 declare global {
   interface Window {
@@ -180,14 +188,16 @@ async function downloadLocalRecoveryBundle(workspaceId: string): Promise<void> {
 /**
  * Keep the browser-native Session write lease across a normal page reload.
  * @param worker - Dedicated Worker receiving the Browser-Native DSH Host.
+ * @param options - Lifecycle options for the page-owned Worker.
  * @returns A function that detaches page listeners and closes the page-side port.
  */
-export function connectBrowserNativePageControl(worker: Worker): () => void {
+export function connectBrowserNativePageControl(worker: Worker, options: { readonly durable?: boolean } = {}): () => void {
   const channel = new MessageChannel()
   const owners = new Map<string, string>()
   const storageKey = (sessionId: string): string => `${OWNER_STORAGE_PREFIX}${encodeURIComponent(sessionId)}`
   let workspaceStatus: HTMLElement | undefined
   let retryTimer: number | undefined
+  const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
   const clearRetryTimer = (): void => {
     if (retryTimer === undefined) return
     window.clearInterval(retryTimer)
@@ -296,6 +306,11 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
   }
   channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativePageNotice>) => {
     const notice = event.data
+    if (notice.type === 'pagehide-ack') {
+      pagehideWaiters.get(notice.requestId)?.(notice)
+      pagehideWaiters.delete(notice.requestId)
+      return
+    }
     if (notice.type === 'workspace') {
       window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ = notice
       showWorkspaceStatus(notice)
@@ -379,6 +394,26 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
 
   const handlePageHide = (event: PageTransitionEvent): void => {
     if (event.persisted) return
+    if (options.durable === true) {
+      const requestId = globalThis.crypto.randomUUID()
+      const settled = new Promise<BrowserNativePagehideAck>((resolve) => { pagehideWaiters.set(requestId, resolve) })
+      worker.postMessage({ type: 'browser-native-pagehide', requestId })
+      void Promise.race([
+        settled,
+        new Promise<BrowserNativePagehideAck>((resolve) => {
+          window.setTimeout(() => resolve({
+            type: 'pagehide-ack',
+            requestId,
+            localPersisted: false,
+            writerReleased: false,
+            error: 'pagehide local persistence barrier timed out',
+          }), 1_500)
+        }),
+      ]).then(() => {
+        pagehideWaiters.delete(requestId)
+        worker.terminate()
+      })
+    }
     for (const [sessionId, ownerToken] of owners) {
       const body = JSON.stringify({
         protocolVersion: 1,
@@ -401,6 +436,7 @@ export function connectBrowserNativePageControl(worker: Worker): () => void {
   return () => {
     window.removeEventListener('pagehide', handlePageHide)
     clearRetryTimer()
+    pagehideWaiters.clear()
     channel.port1.close()
     workspaceStatus?.remove()
   }

@@ -1,5 +1,6 @@
 import type { PendingBatch, WorkspaceChange, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
 import type { VfsFileBacking } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
+import { Sha256 } from './browser-native-sha256.ts'
 
 const STORE_VERSION = 1
 const DATABASE_NAME = 'dsh-browser-native-workspace-v1'
@@ -29,6 +30,23 @@ export interface DurableWorkspaceStore {
   cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void>
   /** Open a verified immutable blob as a synchronous range backing when supported. */
   openBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined>
+  /** Stream a remote blob into local durable storage without assembling the whole file in JS memory. */
+  cacheBlobFromChunks(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readChunk: (offset: number, length: number) => Promise<Uint8Array>,
+  ): Promise<boolean>
+  /** Remove local blobs that are not referenced by the remote manifest or pending metadata. */
+  reconcileBlobs(workspaceId: string, retainedHashes: readonly string[]): Promise<BlobReconciliation>
+}
+
+/** Result of conservative local content-addressed blob reconciliation. */
+export interface BlobReconciliation {
+  readonly removedFiles: number
+  readonly removedBytes: number
+  readonly retainedFiles: number
+  readonly skipped?: 'metadata-missing'
 }
 
 /** Failure raised when local durable Workspace state cannot be trusted. */
@@ -134,6 +152,19 @@ export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
   async openBlob(_workspaceId: string, _hash: string, _bytes: number): Promise<VfsFileBacking | undefined> {
     return undefined
   }
+
+  async cacheBlobFromChunks(
+    _workspaceId: string,
+    _hash: string,
+    _bytes: number,
+    _readChunk: (offset: number, length: number) => Promise<Uint8Array>,
+  ): Promise<boolean> {
+    return false
+  }
+
+  async reconcileBlobs(_workspaceId: string, _retainedHashes: readonly string[]): Promise<BlobReconciliation> {
+    return { removedFiles: 0, removedBytes: 0, retainedFiles: 0 }
+  }
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -179,10 +210,16 @@ async function openDatabase(): Promise<IDBDatabase> {
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const input = new ArrayBuffer(bytes.byteLength)
-  new Uint8Array(input).set(bytes)
-  const digest = await crypto.subtle.digest('SHA-256', input)
-  return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
+  return new Sha256().update(bytes).digestHex()
+}
+
+async function sha256File(file: File): Promise<string> {
+  const digest = new Sha256()
+  for (let offset = 0; offset < file.size; offset += BLOB_IO_CHUNK_BYTES) {
+    const bytes = new Uint8Array(await file.slice(offset, Math.min(offset + BLOB_IO_CHUNK_BYTES, file.size)).arrayBuffer())
+    digest.update(bytes)
+  }
+  return digest.digestHex()
 }
 
 function storedChange(change: WorkspaceChange, contentHash?: string): StoredChange {
@@ -501,8 +538,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     if (file.size !== bytes) {
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: local blob size mismatch (${hash})`)
     }
-    const content = new Uint8Array(await file.arrayBuffer())
-    if (await sha256(content) !== hash) {
+    if (await sha256File(file) !== hash) {
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local blob hash mismatch (${hash})`)
     }
     const sync = await handle.createSyncAccessHandle()
@@ -522,6 +558,76 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       },
       close: () => { sync.close() },
     }
+  }
+
+  async cacheBlobFromChunks(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readChunk: (offset: number, length: number) => Promise<Uint8Array>,
+  ): Promise<boolean> {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('browser-native workspace: invalid blob byte length')
+    const { blobDirectory } = await this.resources(workspaceId)
+    const handle = await blobDirectory.getFileHandle(hash, { create: true })
+    try {
+      const existing = await handle.getFile()
+      if (existing.size === bytes && await sha256File(existing) === hash) return true
+    } catch (error) {
+      void error
+    }
+    if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
+      throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
+    }
+    const writable = await handle.createWritable()
+    const digest = new Sha256()
+    let offset = 0
+    try {
+      while (offset < bytes) {
+        const length = Math.min(BLOB_IO_CHUNK_BYTES, bytes - offset)
+        const chunk = await readChunk(offset, length)
+        if (chunk.byteLength !== length) throw new Error('browser-native workspace: remote blob chunk has an unexpected size')
+        digest.update(chunk)
+        await writable.write({ type: 'write', position: offset, data: toArrayBuffer(chunk) })
+        offset += chunk.byteLength
+      }
+      if (digest.digestHex() !== hash) throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: downloaded blob hash mismatch (${hash})`)
+      await writable.close()
+      return true
+    } catch (error) {
+      try {
+        await writable.abort()
+      } catch (abortError) {
+        void abortError
+      }
+      throw error
+    }
+  }
+
+  async reconcileBlobs(workspaceId: string, retainedHashes: readonly string[]): Promise<BlobReconciliation> {
+    const { blobDirectory } = await this.resources(workspaceId)
+    const record = await this.readRecord(workspaceId)
+    if (record === undefined) return { removedFiles: 0, removedBytes: 0, retainedFiles: 0, skipped: 'metadata-missing' }
+    const retained = new Set(retainedHashes)
+    const retainChange = (change: StoredChange): void => {
+      if (change.contentHash !== undefined) retained.add(change.contentHash)
+    }
+    for (const change of record.pending) retainChange(change)
+    for (const change of record.retryBatch?.changes ?? []) retainChange(change)
+    let removedFiles = 0
+    let removedBytes = 0
+    let retainedFiles = 0
+    for await (const entry of blobDirectory.values()) {
+      if (entry.kind !== 'file' || !/^[a-f0-9]{64}$/.test(entry.name)) continue
+      const file = await entry.getFile()
+      if (retained.has(entry.name)) {
+        retainedFiles += 1
+        continue
+      }
+      removedFiles += 1
+      removedBytes += file.size
+      await blobDirectory.removeEntry(entry.name)
+    }
+    return { removedFiles, removedBytes, retainedFiles }
   }
 }
 

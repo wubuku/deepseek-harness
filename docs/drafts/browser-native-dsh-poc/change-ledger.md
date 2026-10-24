@@ -39,6 +39,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-018：冷 hydrate 完整性、OPFS orphan 回收与 pagehide 本地屏障
+
+```text
+changeId: BN-P2-018
+upstreamBaseline: research checkout after BN-P2-014; 2026-10-24
+file: apps/web/src/preview.ts; apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-sha256.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-sha256.spec.ts; docs/drafts/browser-native-dsh-poc/tests/cold-hydrate-integrity.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/orphan-blob-reconciliation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/pagehide-local-barrier.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md; docs/drafts/browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md
+reason: Browser Durable Workspace 的冷 hydrate、OPFS orphan 生命周期和页面离开前的本地持久化屏障仍缺少真实浏览器证据；Session receipt、Workspace outbox、commit unknown 和 writer fencing 也只分别验证，缺少同一恢复矩阵的证据整理。
+existingExtensionPointsChecked: 复用 MemoryVfs 的 VfsFileBacking、Workspace durable store、IndexedDB snapshot、OPFS blob、现有 Worker test MessagePort、page control MessagePort、Workspace operationId/CAS/lease 和 Session receipt recovery。未修改 Agent Loop、Session format、默认 profile 或正式 Workspace package。
+whyDraftOnlyWasInsufficient: 单测不能证明 OPFS SyncAccessHandle、真实 Dedicated Worker、IndexedDB transaction abort、页面 pagehide/BFCache 和同源 backend 的联合时序；真实 LLM 会把存储故障与上游模型延迟混在一起，因此 I1-I4 使用 scripted backend/LLM，保留真实 DSH Host/Worker。
+behaviorChange: Durable store 增加增量 SHA-256、按 chunk 写入 OPFS 的 `cacheBlobFromChunks()` 和保守 `reconcileBlobs()`；metadata 不可信时不回收。durable pagehide 向 Worker 请求本地 flush，ack 或 1.5 秒超时后终止 Worker；BFCache 不终止。仅 URL-gated test port 增加 `close-vfs`，用于在浏览器中释放 SyncAccessHandle 后注入本地 blob 丢失。
+directoryOutChangeReason: apps/web/src/preview.ts 必须停止在 durable pagehide 中提前终止 Worker；apps/web/src/browser-native-page-control.ts 必须持有页面生命周期 listener、发送 barrier 请求并处理 ack；这两个文件无法由 docs/drafts 内部独立接线。packages/experimental/webworker-runtime 未修改源码，仅复用既有 backing capability。
+consumersUpdated: Browser-Native Worker/control、preview page control、Workspace store/mirror、三项新增 Chrome E2E、I4 既有 receipt/unknown/lease E2E、PoC README、兼容矩阵、docs/drafts 索引和本账本。
+tests: `browser-native-sha256.spec.ts`、Workspace 三组 Vitest 共 25 项通过；webworker-runtime 与 apps/web TypeScript 检查通过；preview build 通过。Chrome 真实 Worker/OPFS/IndexedDB E2E：冷 hydrate 3,145,765 字节文件分 5 块、最大响应 1 MiB、篡改块进入 error；metadata abort 形成的 orphan 被删除而 manifest blob 保留，metadata 缺失为 local-corrupt 且不清理；pagehide barrier 保留本地 snapshot，BFCache 保留 Worker。复跑 receipt recovery、unknown commit/backend restart 和 writer expiry 均通过，分别观察到 receipt 一条、manifest revision 一次和旧 fencing token 全部拒绝。
+syncReplaySteps: upstream 更新后先检查 MemoryVfs backing、Workspace durable store 和 page lifecycle hook 是否已有等价能力；若有，迁移 E2E 到正式接口并删除重复 PoC seam。否则按 `browser-native-sha256.ts`、store/mirror、Worker ack、page control、E2E 顺序重放；重新运行 focused tests、preview build、六项 Chrome E2E 和 docs gates。不得把 chunk hydrate 宣称为 chunk-level delta、把 pagehide barrier 宣称为后台 Agent，或把 I4 三格分别通过宣称为跨存储事务。
+deleteCondition: 正式 Browser-Native Workspace 提供等价的分块校验/持久化、保守 blob GC 和页面生命周期 barrier，并由正式测试覆盖相同时序；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-017：OPFS 外部 VFS backing 与 backend `dataDir` 单写者恢复
 
 ```text

@@ -48,6 +48,28 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。
 
+## 完整性与生命周期验证
+
+[下一批完整性与生命周期计划](next-integrity-and-lifecycle-plan.md)选择四个正式产品前仍有直接风险的验证面：冷 hydrate 分块写入和增量 SHA-256、OPFS orphan blob 的保守回收、页面离开前的本地 durable barrier，以及 Session receipt、Workspace outbox、云端 commit unknown 和 writer fencing 的组合恢复。实际证据和限制见[进度记录](next-integrity-and-lifecycle-progress.md)。
+
+当前实现新增 `DurableWorkspaceStore.cacheBlobFromChunks()` 和 `reconcileBlobs()`；Browser Durable Store 的冷 hydrate 逐块下载并写入 OPFS，已提交文件通过外部 range backing 注入 VFS。回收只在 IndexedDB metadata 可验证时执行，metadata 缺失或版本不可信时保持 `local-corrupt`。durable `pagehide` 由页面向 Worker 请求本地 flush，收到 ack 或 1.5 秒超时后终止 Worker；它不等待云端 commit、Session flush 或模型，也不提供后台 Agent。
+
+真实 Chrome 复跑命令：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/cold-hydrate-integrity.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/orphan-blob-reconciliation.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/pagehide-local-barrier.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-receipt-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-unknown-commit-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs
+```
+
+上述命令使用 scripted backend/LLM，不替代真实模型或生产存储验证；I1 的 `residentBytes` 只反映 PoC VFS backing 观测，不是浏览器 heap SLA。
+
 ## 缓存重建、Agent edit receipt 与 lease 刷新验证
 
 本批次的[计划](next-round-validation-plan.md)与[进度记录](next-round-validation-progress.md)覆盖三项真实 Chrome 验证：清除 OPFS/IndexedDB 后从 backend 重建已提交 Workspace；真实 DSH Loop 执行 `write → read → edit → write` 并关联 Session receipt；同一标签页刷新后恢复 Workspace writer lease，同时 fencing 旧 token，并注入一次“backend 已完成 resume、响应被丢弃”的故障。三项 E2E 均使用真实 Chrome、真实 Dedicated Worker/DSH Host 和 scripted LLM，不依赖真实模型。
