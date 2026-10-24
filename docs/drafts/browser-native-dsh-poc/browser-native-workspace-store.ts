@@ -32,7 +32,7 @@ export class DurableWorkspaceStoreError extends Error {
 
   constructor(
     readonly code: 'LOCAL_STORE_UNAVAILABLE' | 'LOCAL_STORE_NEWER_VERSION' | 'LOCAL_METADATA_INVALID'
-      | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
+      | 'LOCAL_METADATA_MISSING' | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -395,7 +395,17 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   async load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
     const { blobDirectory } = await this.resources(workspaceId)
     const record = await this.readRecord(workspaceId)
-    if (record === undefined) return undefined
+    if (record === undefined) {
+      for await (const entry of blobDirectory.values()) {
+        if (entry.kind === 'file') {
+          throw new DurableWorkspaceStoreError(
+            'LOCAL_METADATA_MISSING',
+            'browser-native workspace: local OPFS blobs exist without IndexedDB metadata',
+          )
+        }
+      }
+      return undefined
+    }
     const pending: WorkspaceChange[] = []
     for (const change of record.pending) pending.push(await this.decodeChange(blobDirectory, change))
     const retryBatch = record.retryBatch === undefined ? undefined : {

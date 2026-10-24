@@ -169,6 +169,7 @@ Agentic UI 事实核查
 12. [运行时完整性验证计划](browser-native-dsh-poc/next-runtime-integrity-validation-plan.md)与[进度](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：Chrome/scripted E2E 验证活动 Worker lease heartbeat 和续租故障恢复、Workspace 初始化失败停止续租、Agent 写入未知 commit 与 backend 重启、HITL 等待期间刷新后的诚实中断及同 Session 新 turn 续聊，以及 IndexedDB 前向版本 fail-closed 和恢复导出；原问答 Promise 不跨刷新恢复。
 
 13. [文件规模与分块传输验证计划](browser-native-dsh-poc/large-file-scale-validation-plan.md)与[进度](browser-native-dsh-poc/large-file-scale-validation-progress.md)：验证 1 MiB Workspace chunk staging、缺块续传、hash/size 校验、backend 重启、OPFS 分块写入、16/64 MiB Chrome 文件和 1,000 小文件；明确仍有完整 `MemoryVfs` bytes、完整下载组装、独立 Session JSON 上限和 PoC 本地 backend 限制。
+14. [故障边界与存储后端验证计划](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md)与[实测进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：真实 Chrome 验证 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL` 后身份缺口、双 backend 共用 `dataDir` 的数据覆盖、大型 tool args 安全拒绝，以及 MinIO blob 上传、Range 读取、outage、对象丢失恢复和 backend 重启；自然 eviction、OS/磁盘 crash、真实模型大参数和生产云存储未验证。
 
 ### 路径 C：直接复现 PoC
 
@@ -191,6 +192,7 @@ Agentic UI 事实核查
 15. [本地 corruption 恢复包 Chrome E2E](browser-native-dsh-poc/tests/durable-workspace-corruption.e2e.mjs)：验证损坏 metadata、缺失 blob、hash mismatch 的本地导出保留与远端不变。
 16. [双标签 writer lease Chrome E2E](browser-native-dsh-poc/tests/workspace-writer-expiry.e2e.mjs)：验证冲突提示、倒计时重试、释放后接管和旧 fencing token 拒绝。
 17. [运行时完整性验证 E2E](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：包含五项新 Chrome E2E 与 lease 回归的实际命令、结果和限制。
+18. [故障边界验证 E2E](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：记录五类新验证的 Chrome/Node/MinIO 版本、命令、失败观察、恢复结果和明确限制。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -290,6 +292,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [cloud-backed-workspace-sync-progress.md](browser-native-dsh-poc/cloud-backed-workspace-sync-progress.md) | 已执行的 Workspace 同步证据：真实 Chrome/LLM 四轮闭环、文件变更矩阵、OS backend 重启、8 客户端协议并发、失败观察和限制。 |
 | [durable-workspace-plan.md](browser-native-dsh-poc/durable-workspace-plan.md) / [durable-workspace-progress.md](browser-native-dsh-poc/durable-workspace-progress.md) | 浏览器本地 OPFS/IndexedDB durable Workspace 规划、实现进度、503 刷新恢复证据和未完成故障矩阵。 |
 | [operational-envelope-validation-plan.md](browser-native-dsh-poc/operational-envelope-validation-plan.md) / [进度](browser-native-dsh-poc/operational-envelope-validation-progress.md) | 上游 release merge 后的四个验证交付面：默认 Browser 工具清单、lazy archive 和插件兼容矩阵、Chrome 多负载容量基线、quota 与正常进程重启恢复；Safari、自然 eviction 和 OS crash 仍未验证。 |
+| [mock-and-crash-boundary-validation-plan.md](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md) / [进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md) | 局部浏览器存储丢失、Chrome `SIGKILL`、多 backend 竞争、大型工具参数和 MinIO blob 验证；记录身份恢复与共享 `dataDir` 限制，不把故障注入外推为自然 eviction、OS crash 或生产对象存储。 |
 | [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
 | [browser-runtime-integrity-validation-plan.md](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md) / [进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md) | 默认交互工具闭环、本地缓存清除后的 backend outage fail-closed、双标签 Worker 写权交接及既有恢复路径回归；脚本使用 scripted LLM，真实模型和生产级故障仍未验证。 |
 | [tests/default-interaction-tools.e2e.mjs](browser-native-dsh-poc/tests/default-interaction-tools.e2e.mjs) | Chrome 中验证用户问答、工作目录切换和相对路径文件写入进入同一 DSH turn 与 Workspace。 |

@@ -87,6 +87,33 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 `large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。分块只限制网络 body 和传输临时缓冲；`MemoryVfs` 仍持有完整 bytes，客户端下载也会组装完整文件，PoC backend 仍使用本地 `dataDir`，因此这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
 
+## 故障边界与 S3 blob 验证
+
+[故障边界计划](mock-and-crash-boundary-validation-plan.md)与[实测进度](mock-and-crash-boundary-validation-progress.md)记录 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL`、共享 `dataDir` 的双 backend、超大工具参数和 MinIO S3-compatible blob store。Chrome 155 实测表明：本地元数据缺失时孤儿 OPFS bytes 会 fail closed 并可按 hash 导出；Chrome 强杀后匿名身份 cookie 未自动恢复；两个 backend 都接受同一 seq/revision 写入，冷启动只留下其中一个结果。
+
+本轮还修复了工具参数过大导致 Session append 反复超过 8 MiB backend body 上限的问题：Browser LLM adapter 将一次响应累计 tool arguments 限制为 1 MiB，超限时中止流，避免写入或执行不完整调用。真实 Chrome/scripted LLM E2E 接受 768 KiB 文件写入，拒绝 6/9 MiB 参数并确认同 Session 后续 turn 可继续。该 1 MiB 限制是 PoC 的保守硬上限，不是 DSH Session 的正式容量承诺。
+
+PoC backend 可在测试启动时注入 S3 blob adapter；默认 `run-v2.mjs` 仍使用本地文件 blob store。真实 Chrome Worker + MinIO 验证了 2,097,189-byte staging 文件流式上传、Range 下载、503 outage、刷新后补传先前丢失的已上传对象和 backend 重启读回。adapter 流式校验 SHA-256；关闭 AWS SDK 的可选 request checksum 后兼容所测 MinIO 版本。Session、manifest、identity、writer lease 与 operation ledger 仍驻留单机 JSON `dataDir`；结果不证明真实 AWS/GCS/Azure、生产权限模型或多实例安全。
+
+复跑需要 Docker、固定 MinIO 镜像、Node、已构建 preview 和 Playwright。S3 adapter 的 AWS SDK 依赖固定在目录私有 package 中，不修改根依赖：
+
+```sh
+npm ci --prefix docs/drafts/browser-native-dsh-poc
+docker image inspect --format '{{.Id}}' minio/minio:RELEASE.2023-03-20T20-16-18Z
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/workspace-partial-storage-loss.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/chrome-process-crash-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-backend-multi-instance-characterization.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/large-tool-arguments.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-s3-minio.e2e.mjs
+```
+
+Chrome 强杀脚本使用 POSIX `ps` 与 `SIGKILL`，不能在 Windows 运行；它不是 OS/磁盘 crash。单侧存储删除不是自然 eviction；双 backend 结果是当前 PoC 的 unsafe characterization，不是 HA 测试。MinIO outage/对象丢失是本地故障注入，真实云对象存储、Safari 和真实模型生成大型工具参数仍未验证。
+
 ## 高价值验证批次
 
 本批次围绕 Browser-Native DSH 的运行时正确性，不扩展 SaaS 或聊天 UI。计划和退出条件见[验证计划](high-value-validation-plan.md)，实际证据和限制见[验证进度](high-value-validation-progress.md)。
@@ -235,7 +262,7 @@ Workspace mirror 仍默认使用内存模式；`browser-native-durable=1` 才启
 
 若需要验证第三方聊天层，可以阅读同级的[assistant-ui + Browser-Native DSH 增量 PoC](../assistant-ui-browser-native-dsh-poc/README.md)。该 PoC 复用本目录的 Worker、profile overlay、backend 和 Session protocol，但自行启动 DSH Client 并只挂载 assistant-ui 聊天层；它不改变本目录的现有页面或实现文件。
 
-同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
+同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。Workspace manifest、身份、lease 和 operation receipt 也存于本地 JSON `dataDir`；默认 blob store 使用本地文件，测试可注入 PoC-only S3 adapter。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
 
 `session/list` 同时返回 Session Persistence 使用的 `snapshots` 和 Client Session Controller 使用的 `items`；新增 `items` 不替换原有持久化字段。`items` 是 PoC 用于恢复的最小目录投影：`updatedAt` 暂用 header 的 `createdAt`，`agentAvailable` 和 `running` 固定为 `false`，`blank` 由事件数计算，不代表真实活动状态。Session Controller 用该列表判断已保存的 Session 是否可 retain。assistant-ui PoC 和原生 preview 都在页面刷新时重连同一 Session；前者由 `dsh-client.ts` 负责 owner 通知和卸载处理，后者由 [`browser-native-page-control.ts`](../../../apps/web/src/browser-native-page-control.ts) 通过 Worker `MessagePort` 收取 owner token、保存在 tab-scoped `sessionStorage`，并在 `pagehide` 发送 close beacon、终止页面拥有的 Worker。真实 Chrome 与 Playwright WebKit 验证同一 Session 刷新后可以继续；浏览器不保证在强制关闭或崩溃时完成卸载请求。
 
@@ -355,7 +382,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；backend 重启只读取已 flush 事件。owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
 
-这个本地 JSON store 不是 PostgreSQL、S3、HA 或生产多租户实现；它不提供跨进程 owner lease、跨重启 mutation replay、跨主机复制、备份保证或灾备 RPO/RTO。当前 browser-native E2E 只证明一次 Worker、同源 backend、正式 Session provider、真实 `ctx.agentLoop` 和 scripted/real LLM route 的闭环。
+Session 与 Workspace metadata 的本地 JSON store 不是 PostgreSQL、HA 或生产多租户实现；它不提供跨进程 owner lease、跨重启 mutation replay、跨主机复制、备份保证或灾备 RPO/RTO。MinIO E2E 只验证 S3-compatible blob 操作，不把 metadata、Session 或 lease 迁移到对象存储。当前 browser-native E2E 只证明一次 Worker、单个同源 backend、正式 Session provider、真实 `ctx.agentLoop` 和 scripted/real LLM route 的闭环。
 
 本目录没有加入根级 npm script、package manifest、Web profile、Desktop profile 或正式 DSH package。旧版命令和测试不证明 v2 的 DSH Host、正式 Session provider 或真实 `ctx.agentLoop`。若后续证明必须修改目录外代码，先按 [change-ledger.md](change-ledger.md) 登记原因、扩展点、测试和 upstream 重放步骤。
 

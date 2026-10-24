@@ -49,6 +49,7 @@ const SESSION_ROUTE = '/api/browser-native/session'
 const LLM_ROUTE = '/api/browser-native/llm'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
+const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
 const activeSessionOwners = new Map<string, string>()
 
 interface ErrorPayload {
@@ -682,6 +683,19 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
       }
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      const toolArgumentEncoder = new TextEncoder()
+      let toolArgumentBytes = 0
+      const checkToolArgumentLimit = async (argumentsDelta: string): Promise<void> => {
+        toolArgumentBytes += toolArgumentEncoder.encode(argumentsDelta).byteLength
+        if (toolArgumentBytes > MAX_TOOL_ARGUMENT_BYTES) {
+          await reader.cancel()
+          const { LlmError } = runtimeLlm()
+          throw new LlmError(
+            `browser-native tool arguments exceed ${MAX_TOOL_ARGUMENT_BYTES} bytes`,
+            'TOOL_ARGUMENT_TOO_LARGE',
+          )
+        }
+      }
       let buffer = ''
       while (true) {
         const part = await reader.read()
@@ -696,7 +710,10 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
               const { LlmError } = runtimeLlm()
               throw new LlmError(item.error?.message ?? 'browser-native LLM stream failed', item.error?.code ?? 'REMOTE_LLM')
             }
-            if (item.kind === 'chunk' && item.chunk !== undefined) yield item.chunk
+            if (item.kind === 'chunk' && item.chunk !== undefined) {
+              if (item.chunk.type === 'tool-call-delta') await checkToolArgumentLimit(item.chunk.argumentsDelta)
+              yield item.chunk
+            }
           }
           newline = buffer.indexOf('\n')
         }
@@ -705,7 +722,10 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
       const tail = buffer.trim()
       if (tail.length > 0) {
         const item = JSON.parse(tail) as LlmStreamResponse
-        if (item.kind === 'chunk' && item.chunk !== undefined) yield item.chunk
+        if (item.kind === 'chunk' && item.chunk !== undefined) {
+          if (item.chunk.type === 'tool-call-delta') await checkToolArgumentLimit(item.chunk.argumentsDelta)
+          yield item.chunk
+        }
       }
     }
   }

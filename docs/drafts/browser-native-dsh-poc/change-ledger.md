@@ -39,6 +39,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-016：浏览器存储丢失、工具参数上限与 S3 blob 故障验证
+
+```text
+changeId: BN-P2-016
+upstreamBaseline: research checkout after dsh-v0.2.1-rc.2 merge; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/s3-blob-store.mjs; docs/drafts/browser-native-dsh-poc/package.json; docs/drafts/browser-native-dsh-poc/package-lock.json; docs/drafts/browser-native-dsh-poc/tests/chrome-process-crash-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/workspace-backend-instance.mjs; docs/drafts/browser-native-dsh-poc/tests/large-tool-arguments.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-backend-multi-instance-characterization.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-partial-storage-loss.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-s3-minio.e2e.mjs; docs/drafts/browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md; docs/drafts/browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已有测试只覆盖清缓存、正常 Chrome restart、单 backend 与 Workspace 大文件分块；没有证明 OPFS/IndexedDB 单侧丢失、浏览器进程强杀后的身份恢复、共享 dataDir 多进程竞争、超大 DSH tool-call 参数拒绝或对象 blob 存储故障恢复。
+existingExtensionPointsChecked: 复用 PoC durable store、Browser LLM adapter、WorkspaceStore 的 blob 操作、同源 Workspace API、现有 Worker test MessagePort 和临时 backend dataDir。未修改 Agent Loop、正式 Session format、正式 packages、根依赖或普通 profile。
+whyDraftOnlyWasInsufficient: Node 协议测试不能证明 OPFS/IndexedDB、Dedicated Worker、真实 Chrome profile、Session append 和对象存储共同工作的恢复时序；scripted LLM 与本机 MinIO 使这些边界可重复注入，不把自然 eviction、生产云服务或真实模型行为混入结论。
+behaviorChange: Durable Workspace 检测到没有 IndexedDB metadata 但仍有 OPFS blob 时 fail closed 并允许按 hash 导出孤儿 bytes。Browser LLM adapter 在一次响应累计 tool-call 参数超过 1 MiB 时取消响应流并返回 TOOL_ARGUMENT_TOO_LARGE，防止大参数进入 Session append 或工具派发。WorkspaceStore 增加 PoC-only blob-store 注入，默认仍使用本地文件；分块 staging 文件流式上传到 S3-compatible store，远端对象以流式 SHA-256 校验，并支持完整及 Range 读取。为兼容所测 MinIO 版本，SDK 可选 request checksum 设为 WHEN_REQUIRED，内容完整性仍由应用层 hash 验证。startBlobUpload 遇到已登记但对象缺失的 hash 时清除过期 uploadedHashes 标记，使刷新后的本地 retry 可重新上传。目录内独立 package 固定 AWS SDK，不改变根依赖。
+directoryOutChangeReason: none
+consumersUpdated: 新增局部存储丢失、Chrome SIGKILL、双 backend characterization、大工具参数和 MinIO E2E；更新故障计划/进度、PoC README、兼容矩阵、docs/drafts 索引和本账本。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 17/17；Browser-Native Workspace Vitest 11/11。Chrome 155 的局部存储 E2E 证明 OPFS 缺失报告 local-corrupt，IndexedDB metadata 缺失时孤儿 bytes 不被误报 synced 且可导出；Chrome SIGKILL 7 个唯一 profile PID 后 OPFS/IndexedDB retry 保留但身份 cookie 未恢复，测试桩注入旧 cookie 后仅提交一次；两个 Node backend 都接受相同 Session seq 和 Workspace baseRevision，第三实例冷启动只保留 backend B 的写入。大型参数 E2E 通过 768 KiB 写入，拒绝 6/9 MiB 参数，无工具副作用，同 Session 后续 turn 成功；最大实测 append body 3,147,323 bytes。MinIO E2E 使用 image sha256:fb4e814a3183f5f7b193377fccda08504f3d9284466d6f5a41c84cfd031637f7，验证 2,097,189-byte 上传、1 MiB Range read、outage 503、对象删除后刷新重传、最终 manifest revision 3 及 backend 重启读回；无 page error，浏览器只请求同源 API。
+syncReplaySteps: 上游同步后先检查 Worker/VFS 是否已有受支持的持久化和远程 blob provider，再核对 Session JSON body limit 与模型流取消语义。PoC-only 的 1 MiB 上限不能直接推广为产品限制；正式设计应评估事件分块或内容引用。若采用对象存储，单独评估对象存在校验、写入并发、权限、生命周期和 backend 多实例事务，不复制 MinIO-only 设置到正式 packages。保留对应 Chrome E2E 作为迁移验收；重跑 preview build、backend-v2 tests、Workspace Vitest、五个 E2E 和 docs gates。
+deleteCondition: Browser-Native Workspace PoC 被移除，或正式 runtime 提供受支持的工具参数持久化限制、云 blob provider、缺失对象重传和多实例协调；迁移后的 E2E 使用正式接口通过后，删除重复 PoC adapter 与测试依赖。
+status: implemented
+```
+
 ### BN-P2-011：quota 错误恢复、backend 重启 fencing 与身份存储隔离
 
 ```text

@@ -445,6 +445,52 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
 }
 
 async function scriptedLlm(response, messages, tools) {
+  const oversizedToolMarkers = [
+    'BROWSER_NATIVE_TOOL_ARGS_768K_E2E',
+    'BROWSER_NATIVE_TOOL_ARGS_1M_E2E',
+    'BROWSER_NATIVE_TOOL_ARGS_6M_E2E',
+    'BROWSER_NATIVE_TOOL_ARGS_9M_E2E',
+  ]
+  const continueAfterOversizedMarker = 'BROWSER_NATIVE_AFTER_OVERSIZE_TOOL_CALL_CONTINUE'
+  const latestLargeArgumentPrompt = textContent(messages)
+  const oversizedToolMarker = oversizedToolMarkers.find(marker => latestLargeArgumentPrompt.includes(marker))
+  if (oversizedToolMarker !== undefined && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(oversizedToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      const byteLength = oversizedToolMarker.includes('_768K_') ? 768 * 1024
+        : (oversizedToolMarker.includes('_1M_') ? 1
+          : oversizedToolMarker.includes('_6M_') ? 6 : 9) * 1024 * 1024
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-${byteLength}-byte-write`,
+        name: 'write',
+        arguments: {
+          file_path: `/dsh/home/workspace/${String(byteLength)}-byte-tool-argument.txt`,
+          content: 'x'.repeat(byteLength),
+        },
+      })
+      return
+    }
+    const text = 'BROWSER_NATIVE_TOOL_ARGS_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
+  if (latestLargeArgumentPrompt.includes(continueAfterOversizedMarker)) {
+    const text = 'BROWSER_NATIVE_AFTER_OVERSIZE_TOOL_CALL_CONTINUE_OK'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE')) {
     const text = 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE_OK'
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
@@ -950,6 +996,7 @@ export async function createBrowserNativeV2Server(options) {
   await store.load()
   const workspaces = new WorkspaceStore(options.dataDir, {
     writerLeaseMs: options.testHooks?.workspaceWriterLeaseMs,
+    blobStore: options.workspaceBlobStore,
   })
   await workspaces.load()
   const llm = await createLlmConfig(options)

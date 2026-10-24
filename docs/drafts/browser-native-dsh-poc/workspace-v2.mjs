@@ -22,6 +22,79 @@ export class WorkspaceError extends Error {
   }
 }
 
+class FileWorkspaceBlobStore {
+  constructor(root) {
+    this.root = root
+  }
+
+  async initialize() {
+    await mkdir(this.root, { recursive: true })
+  }
+
+  path(hash) {
+    return join(this.root, hash.slice(0, 2), hash)
+  }
+
+  async stat(hash) {
+    try {
+      const info = await stat(this.path(hash))
+      return { size: info.size }
+    } catch (error) {
+      if (error?.code === 'ENOENT') return undefined
+      throw error
+    }
+  }
+
+  async get(hash) {
+    return await readFile(this.path(hash))
+  }
+
+  async verify(hash, expectedBytes) {
+    const info = await this.stat(hash)
+    return info !== undefined && info.size === expectedBytes && await hashFile(this.path(hash)) === hash
+  }
+
+  async getRange(hash, offset, length) {
+    const buffer = Buffer.alloc(length)
+    const handle = await open(this.path(hash), 'r')
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, length, offset)
+      return buffer.subarray(0, bytesRead)
+    } finally {
+      await handle.close()
+    }
+  }
+
+  async put(hash, bytes) {
+    const existing = await this.stat(hash)
+    if (existing !== undefined) {
+      const stored = await this.get(hash)
+      if (existing.size !== bytes.byteLength || !stored.equals(bytes) || hashBytes(stored) !== hash) {
+        throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed size or SHA-256 verification', 500)
+      }
+      return { reused: true }
+    }
+    await atomicWrite(this.path(hash), bytes)
+    return { reused: false }
+  }
+
+  async putFile(hash, sourcePath, byteLength) {
+    const existing = await this.stat(hash)
+    if (existing !== undefined) {
+      if (existing.size !== byteLength || !await this.verify(hash, byteLength)) {
+        throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed size or SHA-256 verification', 500)
+      }
+      return { reused: true }
+    }
+    const target = this.path(hash)
+    await mkdir(dirname(target), { recursive: true })
+    await rename(sourcePath, target)
+    const directory = await open(dirname(target), 'r')
+    try { await directory.sync() } finally { await directory.close() }
+    return { reused: false }
+  }
+}
+
 function assertRecord(value, label) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new WorkspaceError('INVALID_REQUEST', `${label} must be an object`)
@@ -136,6 +209,7 @@ export class WorkspaceStore {
     this.blobsDir = join(this.root, 'blobs')
     this.workspacesDir = join(this.root, 'workspaces')
     this.uploadsDir = join(this.root, 'uploads')
+    this.blobStore = options.blobStore ?? new FileWorkspaceBlobStore(this.blobsDir)
     this.identitiesPath = join(this.root, 'identities.json')
     this.identities = new Map()
     this.workspaces = new Map()
@@ -148,9 +222,9 @@ export class WorkspaceStore {
 
   async load() {
     await Promise.all([
-      mkdir(this.blobsDir, { recursive: true }),
       mkdir(this.workspacesDir, { recursive: true }),
       mkdir(this.uploadsDir, { recursive: true }),
+      this.blobStore.initialize(),
     ])
     await this.removeExpiredUploads()
     try {
@@ -293,23 +367,13 @@ export class WorkspaceStore {
     }
     return await this.exclusive(workspaceId, async () => {
       const workspace = this.requireWorkspace(principalId, workspaceId)
-      const path = join(this.blobsDir, hash.slice(0, 2), hash)
-      let reused = false
-      try {
-        const info = await stat(path)
-        if (info.size !== bytes.byteLength) throw new WorkspaceError('BLOB_HASH_COLLISION', 'stored blob size differs for this hash', 500)
-        if (hashBytes(await readFile(path)) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
-        reused = true
-      } catch (error) {
-        if (error instanceof WorkspaceError || error?.code !== 'ENOENT') throw error
-      }
-      if (!reused) await atomicWrite(path, bytes)
+      const stored = await this.blobStore.put(hash, bytes)
       if (!workspace.uploadedHashes.has(hash)) {
         const next = { ...workspace, uploadedHashes: new Set(workspace.uploadedHashes).add(hash) }
         await this.persistWorkspace(next)
         this.workspaces.set(workspaceId, next)
       }
-      return { hash, bytes: bytes.byteLength, reused }
+      return { hash, bytes: bytes.byteLength, reused: stored.reused }
     })
   }
 
@@ -373,9 +437,16 @@ export class WorkspaceStore {
       })
     }
     return await this.exclusive(workspaceId, async () => {
-      const workspace = this.requireWorkspace(principalId, workspaceId)
+      let workspace = this.requireWorkspace(principalId, workspaceId)
       if (workspace.uploadedHashes.has(hash)) {
-        return { workspaceId, operationId, hash, complete: true, missing: [] }
+        if (await this.blobStore.stat(hash) !== undefined) {
+          return { workspaceId, operationId, hash, complete: true, missing: [] }
+        }
+        const uploadedHashes = new Set(workspace.uploadedHashes)
+        uploadedHashes.delete(hash)
+        workspace = { ...workspace, uploadedHashes }
+        await this.persistWorkspace(workspace)
+        this.workspaces.set(workspaceId, workspace)
       }
       const metadataPath = this.uploadMetadataPath(workspaceId, operationId, hash)
       const chunkCount = Math.ceil(input.totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
@@ -490,18 +561,15 @@ export class WorkspaceStore {
       if (metadata.chunks.length !== metadata.chunkCount || metadata.chunks.some(chunk => typeof chunk !== 'string')) {
         throw new WorkspaceError('UPLOAD_INCOMPLETE', 'blob upload is missing one or more chunks', 409)
       }
-      const target = join(this.blobsDir, hash.slice(0, 2), hash)
       let reused = false
-      try {
-        const existing = await stat(target)
-        if (existing.size !== metadata.totalBytes || await hashFile(target) !== hash) {
+      const existing = await this.blobStore.stat(hash)
+      if (existing !== undefined) {
+        if (existing.size !== metadata.totalBytes || !await this.blobStore.verify(hash, metadata.totalBytes)) {
           throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed size or SHA-256 verification', 500)
         }
         reused = true
-      } catch (error) {
-        if (error instanceof WorkspaceError || error?.code !== 'ENOENT') throw error
-        const temporary = `${target}.${randomUUID()}.upload`
-        await mkdir(dirname(target), { recursive: true })
+      } else {
+        const temporary = join(this.uploadDirectory(workspaceId, operationId, hash), 'assembled.upload')
         const output = await open(temporary, 'wx', 0o600)
         const digest = createHash('sha256')
         let totalBytes = 0
@@ -527,9 +595,12 @@ export class WorkspaceStore {
           await rm(temporary, { force: true })
           throw new WorkspaceError('UPLOAD_BLOB_HASH_MISMATCH', 'assembled blob does not match its declared size or SHA-256 hash', 409)
         }
-        await rename(temporary, target)
-        const directory = await open(dirname(target), 'r')
-        try { await directory.sync() } finally { await directory.close() }
+        try {
+          const stored = await this.blobStore.putFile(hash, temporary, totalBytes)
+          reused = stored.reused
+        } finally {
+          await rm(temporary, { force: true })
+        }
       }
       const next = { ...workspace, uploadedHashes: new Set(workspace.uploadedHashes).add(hash) }
       await this.persistWorkspace(next)
@@ -545,18 +616,12 @@ export class WorkspaceStore {
     const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
     if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
-    const path = join(this.blobsDir, hash.slice(0, 2), hash)
-    const info = await stat(path)
+    const info = await this.blobStore.stat(hash)
+    if (info === undefined) throw new WorkspaceError('BLOB_NOT_FOUND', 'workspace blob is missing', 404)
     const chunkCount = Math.ceil(info.size / WORKSPACE_BLOB_CHUNK_BYTES)
     const bytesInChunk = expectedChunkBytes(info.size, chunkIndex, chunkCount)
-    const buffer = Buffer.alloc(bytesInChunk)
-    const handle = await open(path, 'r')
-    try {
-      const { bytesRead } = await handle.read(buffer, 0, bytesInChunk, chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES)
-      if (bytesRead !== bytesInChunk) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob chunk is truncated', 500)
-    } finally {
-      await handle.close()
-    }
+    const buffer = await this.blobStore.getRange(hash, chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES, bytesInChunk)
+    if (buffer.byteLength !== bytesInChunk) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob chunk is truncated', 500)
     return { bytes: buffer, chunkHash: hashBytes(buffer), chunkIndex, chunkCount, totalBytes: info.size }
   }
 
@@ -663,7 +728,7 @@ export class WorkspaceStore {
     const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
     if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
-    const bytes = await readFile(join(this.blobsDir, hash.slice(0, 2), hash))
+    const bytes = await this.blobStore.get(hash)
     if (hashBytes(bytes) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
     return bytes
   }
@@ -720,12 +785,9 @@ export class WorkspaceStore {
         if (!referenced && !workspace.uploadedHashes.has(change.hash)) {
           throw new WorkspaceError('BLOB_FORBIDDEN', 'blob must be uploaded by this Workspace before commit', 403)
         }
-        const blobPath = join(this.blobsDir, change.hash.slice(0, 2), change.hash)
-        const blobInfo = await stat(blobPath).catch(error => {
-          if (error?.code === 'ENOENT') throw new WorkspaceError('BLOB_MISSING', `blob ${change.hash} must be uploaded before commit`, 409)
-          throw error
-        })
-        if (blobInfo.size !== change.bytes || await hashFile(blobPath) !== change.hash) {
+        const blobInfo = await this.blobStore.stat(change.hash)
+        if (blobInfo === undefined) throw new WorkspaceError('BLOB_MISSING', `blob ${change.hash} must be uploaded before commit`, 409)
+        if (blobInfo.size !== change.bytes || !await this.blobStore.verify(change.hash, change.bytes)) {
           throw new WorkspaceError('BLOB_CORRUPT', `blob ${change.hash} failed size or hash verification`, 409)
         }
       }
