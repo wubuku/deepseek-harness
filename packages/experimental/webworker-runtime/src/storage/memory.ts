@@ -9,7 +9,7 @@ import { IMAGE_OVERLAY_DIRECTORIES } from '../image-layout.ts'
 import { parseTar } from './tar.ts'
 import type {
   Vfs, VfsBigIntStats, VfsDeferredArchive, VfsDir, VfsDirent, VfsEncoding, VfsError, VfsFileHandle, VfsMutation,
-  VfsOpenFile, VfsMutationListener, VfsMutationSink, VfsReadOptions, VfsSeedOptions, VfsStatOptions, VfsStats,
+  VfsFileBacking, VfsOpenFile, VfsMutationListener, VfsMutationSink, VfsReadOptions, VfsSeedOptions, VfsStatOptions, VfsStats,
   VfsWriteOptions,
 } from './types.ts'
 
@@ -17,7 +17,8 @@ const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 
 interface FileNode {
-  bytes: Uint8Array
+  bytes?: Uint8Array
+  backing?: VfsFileBacking | undefined
   mtimeMs: number
   /** Permission bits (`0o777` mask), set at creation and changed only by `chmod`. */
   mode: number
@@ -208,6 +209,7 @@ export class MemoryVfs implements Vfs {
   private readonly directoryMtimes = new Map<string, number>()
   private readonly mutationListeners = new Set<VfsMutationListener>()
   private readonly sink: VfsMutationSink | undefined
+  private closed = false
   private temporaries = 0
   // Directories retain path identities. File identities live on FileNode so
   // descriptors, renames, and hard links continue to address the same file.
@@ -253,6 +255,36 @@ export class MemoryVfs implements Vfs {
         console.error('webworker vfs: mutation observer failed', error)
       }
     }
+  }
+
+  /** Close external file handles owned by this VFS. */
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    for (const node of this.files.values()) node.backing?.close()
+  }
+
+  private bytesOf(node: FileNode): Uint8Array {
+    if (node.bytes !== undefined) return node.bytes
+    const backing = node.backing
+    if (backing === undefined) throw new Error('webworker vfs: file has no byte source')
+    const bytes = backing.read(0, backing.size)
+    if (bytes.byteLength !== backing.size) throw new Error('webworker vfs: external file backing returned a short read')
+    backing.close()
+    node.backing = undefined
+    node.bytes = bytes
+    return bytes
+  }
+
+  private readNode(node: FileNode, position: number, length: number): Uint8Array {
+    if (node.bytes !== undefined) return node.bytes.subarray(position, position + length)
+    const backing = node.backing
+    if (backing === undefined) throw new Error('webworker vfs: file has no byte source')
+    return backing.read(position, length)
+  }
+
+  private sizeOf(node: FileNode): number {
+    return node.bytes?.byteLength ?? node.backing?.size ?? 0
   }
 
   /** Promise face mirroring `node:fs/promises` for the methods the roster uses. */
@@ -407,7 +439,8 @@ export class MemoryVfs implements Vfs {
       if (this.directories.has(target)) fail('EISDIR', 'read', target)
       fail('ENOENT', 'open', target)
     }
-    return encodingOf(options) === undefined ? node.bytes : decoder.decode(node.bytes)
+    const bytes = this.bytesOf(node)
+    return encodingOf(options) === undefined ? bytes : decoder.decode(bytes)
   }
 
   /**
@@ -431,7 +464,7 @@ export class MemoryVfs implements Vfs {
     const node = this.files.get(target)
     const deferred = this.deferred.get(target)
     const [size, mtimeMs, directory, mode] = node !== undefined
-      ? [node.bytes.length, node.mtimeMs, false, node.mode] as const
+      ? [this.sizeOf(node), node.mtimeMs, false, node.mode] as const
       : deferred !== undefined
         ? [deferred.size, deferred.mtimeMs, false, deferred.mode] as const
         : this.directories.has(target)
@@ -499,7 +532,10 @@ export class MemoryVfs implements Vfs {
   private setFile(path: string, node: FileNode): void {
     const previous = this.files.get(path)
     if (previous === node) return
-    if (previous !== undefined) this.removeFilePath(previous, path)
+    if (previous !== undefined) {
+      this.removeFilePath(previous, path)
+      if (previous.paths === undefined) this.bytesOf(previous)
+    }
     this.files.set(path, node)
     this.addFilePath(node, path)
   }
@@ -508,6 +544,7 @@ export class MemoryVfs implements Vfs {
   private deleteFile(path: string): FileNode | undefined {
     const node = this.files.get(path)
     if (node === undefined) return undefined
+    if (node.paths === path || node.paths === undefined) this.bytesOf(node)
     this.files.delete(path)
     this.removeFilePath(node, path)
     return node
@@ -516,7 +553,7 @@ export class MemoryVfs implements Vfs {
   /** Publish one linked name after a content or metadata write. */
   private publishFilePath(node: FileNode, path: string, appendedFrom?: number): void {
     this.publish({
-      kind: 'write', path, bytes: node.bytes, mode: node.mode, entryChanged: false,
+      kind: 'write', path, bytes: this.bytesOf(node), mode: node.mode, entryChanged: false,
       ...appendedFrom === undefined ? {} : { appendedFrom },
     })
   }
@@ -533,6 +570,8 @@ export class MemoryVfs implements Vfs {
 
   /** Replace bytes on one file identity and notify all linked paths. */
   private replaceFile(node: FileNode, bytes: Uint8Array, appendedFrom?: number): void {
+    node.backing?.close()
+    node.backing = undefined
     node.bytes = bytes
     node.mtimeMs = this.touchNode(node)
     this.publishFile(node, appendedFrom)
@@ -541,9 +580,10 @@ export class MemoryVfs implements Vfs {
   /** Write at one offset, zero-filling any gap. */
   private writeFileNode(node: FileNode, position: number, data: Uint8Array): number {
     const offset = Math.max(0, position)
-    const previousLength = node.bytes.length
+    const previous = this.bytesOf(node)
+    const previousLength = previous.length
     const bytes = new Uint8Array(Math.max(previousLength, offset + data.length))
-    bytes.set(node.bytes)
+    bytes.set(previous)
     bytes.set(data, offset)
     this.replaceFile(node, bytes, offset === previousLength ? previousLength : undefined)
     return data.length
@@ -551,7 +591,7 @@ export class MemoryVfs implements Vfs {
 
   /** Resize one file identity and notify all linked paths. */
   private truncateFile(node: FileNode, length: number): void {
-    this.replaceFile(node, resize(node.bytes, length))
+    this.replaceFile(node, resize(this.bytesOf(node), length))
   }
 
   /** Change one file identity's permission bits and notify every linked path. */
@@ -566,13 +606,13 @@ export class MemoryVfs implements Vfs {
 
   /** @returns Plain stats for an open file, including after its last name is removed. */
   private fileStats(node: FileNode): VfsStats {
-    return statsOf(node.bytes.length, node.mtimeMs, false, this.identityOfFile(node), node.mode)
+    return statsOf(this.sizeOf(node), node.mtimeMs, false, this.identityOfFile(node), node.mode)
   }
 
   /** @returns BigInt stats for an open file, including its device and inode identity. */
   private fileBigIntStats(node: FileNode): VfsBigIntStats {
     return bigIntStatsOf(
-      node.bytes.length,
+      this.sizeOf(node),
       node.mtimeMs,
       false,
       this.identityOfFile(node),
@@ -836,11 +876,11 @@ export class MemoryVfs implements Vfs {
       append: access.append,
       read: (position, length) => {
         if (!access.readable) fail('EBADF', 'read', target)
-        return node.bytes.subarray(position, position + length)
+        return this.readNode(node, position, length)
       },
       write: (position, data) => {
         if (!access.writable) fail('EBADF', 'write', target)
-        return this.writeFileNode(node, access.append ? node.bytes.length : position, data)
+        return this.writeFileNode(node, access.append ? this.sizeOf(node) : position, data)
       },
       truncate: (length) => {
         if (!access.writable) fail('EINVAL', 'ftruncate', target)
@@ -880,7 +920,7 @@ export class MemoryVfs implements Vfs {
     const existing = this.files.get(target)
     const addition = typeof data === 'string' ? encoder.encode(data) : data
     if (existing === undefined) {  this.writeFileSync(target, addition); return }
-    this.writeFileNode(existing, existing.bytes.length, addition)
+    this.writeFileNode(existing, this.sizeOf(existing), addition)
   }
 
   /**
@@ -906,7 +946,7 @@ export class MemoryVfs implements Vfs {
       this.touchDirectory(dirname(source))
       this.touchDirectory(dirname(destination))
       this.publish({ kind: 'remove', path: source })
-      this.publish({ kind: 'write', path: destination, bytes: node.bytes, mode: node.mode, entryChanged: true })
+      this.publish({ kind: 'write', path: destination, bytes: this.bytesOf(node), mode: node.mode, entryChanged: true })
       return
     }
     if (!this.directories.has(source)) fail('ENOENT', 'rename', source)
@@ -929,7 +969,7 @@ export class MemoryVfs implements Vfs {
       this.deleteFile(candidate)
       const target = join(destination, candidate.slice(prefix.length))
       this.setFile(target, value)
-      movedFiles.push({ path: target, bytes: value.bytes, mode: value.mode })
+      movedFiles.push({ path: target, bytes: this.bytesOf(value), mode: value.mode })
     }
     const movedDirectories: Array<{ path: string; mode: number }> = []
     for (const candidate of [...this.directories]) {
@@ -978,7 +1018,7 @@ export class MemoryVfs implements Vfs {
     if (!this.directories.has(dirname(target))) fail('ENOENT', 'link', target)
     this.setFile(target, node)
     this.touchDirectory(dirname(target))
-    this.publish({ kind: 'write', path: target, bytes: node.bytes, mode: node.mode, entryChanged: true })
+    this.publish({ kind: 'write', path: target, bytes: this.bytesOf(node), mode: node.mode, entryChanged: true })
   }
 
   /**
@@ -1096,6 +1136,29 @@ export class MemoryVfs implements Vfs {
   }
 
   /**
+   * Seed a clean file whose bytes remain in an external synchronous backing.
+   * @param path - File path.
+   * @param backing - Synchronous backing that owns the clean file bytes.
+   * @param options - Permission bits and modification time supplied by the image or durable store.
+   */
+  seedExternal(path: string, backing: VfsFileBacking, options: VfsSeedOptions = {}): void {
+    if (!Number.isSafeInteger(backing.size) || backing.size < 0) {
+      backing.close()
+      throw new Error('webworker vfs: external file backing has an invalid size')
+    }
+    const target = this.key(path)
+    this.seedDirectory(dirname(target))
+    this.deferred.delete(target)
+    this.setFile(target, {
+      backing,
+      mtimeMs: options.mtimeMs ?? this.touch(target),
+      mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
+      paths: undefined,
+    })
+    this.touchDirectory(dirname(target))
+  }
+
+  /**
    * Create a directory and its parents.
    * @param path - Directory path.
    * @param options - Permission bits and modification time supplied by the image or durable store.
@@ -1116,12 +1179,16 @@ export class MemoryVfs implements Vfs {
 
   /**
    * Report what this filesystem holds, for the host's boot diagnostics.
-   * @returns File count, directory count, and total byte size.
+   * @returns Entry counts, logical file bytes, and bytes resident in JS memory.
    */
-  usage(): { files: number; directories: number; bytes: number } {
+  usage(): { files: number; directories: number; bytes: number; residentBytes: number } {
     let bytes = 0
-    for (const node of this.files.values()) bytes += node.bytes.length
-    return { files: this.files.size, directories: this.directories.size, bytes }
+    let residentBytes = 0
+    for (const node of this.files.values()) {
+      bytes += this.sizeOf(node)
+      residentBytes += node.bytes?.byteLength ?? 0
+    }
+    return { files: this.files.size, directories: this.directories.size, bytes, residentBytes }
   }
 }
 

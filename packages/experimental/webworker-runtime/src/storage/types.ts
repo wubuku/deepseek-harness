@@ -238,6 +238,16 @@ export interface VfsMutationSink {
   flush(): Promise<void>
 }
 
+/** Synchronous range reader for a file whose bytes are owned outside the VFS heap. */
+export interface VfsFileBacking {
+  /** Total byte length of the external file. */
+  readonly size: number
+  /** Read a bounded range and return exactly the available bytes. */
+  read(position: number, length: number): Uint8Array
+  /** Release the underlying file handle. */
+  close(): void
+}
+
 /** Synchronous filesystem used by the worker's Node compatibility modules. */
 export interface Vfs {
   readonly promises: {
@@ -279,7 +289,8 @@ export interface Vfs {
   openFileSync(path: string, flags?: string, mode?: number): VfsOpenFile
   seed(path: string, data: string | Uint8Array, options?: VfsSeedOptions): void
   seedDirectory(path: string, options?: VfsSeedOptions): void
-  usage(): { files: number; directories: number; bytes: number }
+  /** Report logical file bytes and bytes currently resident in JavaScript memory. */
+  usage(): { files: number; directories: number; bytes: number; residentBytes: number }
   /** Register one observer and return its synchronous disposer. */
   subscribe(listener: VfsMutationListener): () => void
   /** Settle the attached durable mutation sink, if any. */

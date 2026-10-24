@@ -319,6 +319,28 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-real-lifec
 
 人工验收步骤、两个 UI 入口、对话脚本、Session 文件核对和常见故障排查见[手动验收说明](manual-acceptance.md)；历史天气问题中工具连续尝试的原因见[工具调用事实核查](agent-loop-tool-attempt-analysis.md)。Browser profile 的配置理由和本批后的实际 roster 见[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)及[兼容矩阵](operational-compatibility-matrix.md)。
 
+## 容量与进程安全验证
+
+[容量与进程安全验证计划](next-capacity-and-process-safety-plan.md)及[进度记录](next-capacity-and-process-safety-progress.md)新增了两个高风险验证面。真实 Chrome 155 的 [OPFS VFS 驻留 E2E](tests/opfs-vfs-residency.e2e.mjs) 写入 8 MiB Workspace 文件、提交后刷新，并在真实 Dedicated Worker 中从 OPFS `FileSystemSyncAccessHandle` 做 64-byte range read。刷新后的 `logicalBytes=42,882,431` 而 `residentBytes=34,493,823`；range read 后仍保持同一量级，追加写才将该文件 materialize 回 VFS 内存，随后再次刷新又回到外部 backing。该结果证明了 opt-in 的外部同步 range backing 和生命周期关闭路径，不证明零拷贝、峰值内存 SLA、完整 OPFS 文件系统或生产容量保证。
+
+当前 hydrate 为确认 content-addressed blob 的完整 SHA-256，会先进行一次临时完整读取；稳定状态下文件节点不持有该 `Uint8Array`。因此本 PoC 已验证“文件驻留位置”和同步 Node-style range read，尚未验证“首次 hydrate 无完整临时副本”；后续若需要更低峰值，应引入可增量更新的 hash 校验实现并单独测量。
+
+同一 `dataDir` 的 [backend 单写者与强杀恢复 E2E](tests/workspace-backend-multi-instance-characterization.e2e.mjs) 启动两个独立 Node PID，第二进程在 `listen()` 前以 `BACKEND_ALREADY_RUNNING` 失败；第一进程写入并提交 Session/Workspace 后被 `SIGKILL`，新进程冷启动读回 1 条 Session event、Workspace revision 1 和文件 hash，使用新的 fencing token 重放原 `operationId` 只返回同一 receipt，不增加 revision。该锁只支持同一主机、同一 `dataDir` 的单 backend writer；它不是跨主机 HA、共享数据库事务、OS/磁盘 crash durability 或生产对象存储协调器。
+
+复跑本批模型无关验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec vitest run packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts --coverage=false
+pnpm exec tsc --noEmit -p packages/experimental/webworker-runtime/tsconfig.json
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-vfs-residency.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/workspace-backend-multi-instance-characterization.e2e.mjs
+```
+
+这批验证仍不覆盖自然 storage eviction、OS/磁盘崩溃、Safari/WebKit、多设备 merge、跨主机 backend、多实例 metadata store、真实云对象存储或真实 LLM 生成大型文件参数。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

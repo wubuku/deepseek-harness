@@ -20,7 +20,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -29,6 +29,8 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly base64?: string
   readonly byteLength?: number
   readonly byteValue?: number
+  readonly offset?: number
+  readonly length?: number
   readonly mode?: number
 }
 
@@ -51,6 +53,9 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly mode?: number
   readonly bytes?: number
   readonly digest?: string
+  readonly base64?: string
+  readonly logicalBytes?: number
+  readonly residentBytes?: number
   readonly receipts?: readonly Record<string, unknown>[]
 }
 

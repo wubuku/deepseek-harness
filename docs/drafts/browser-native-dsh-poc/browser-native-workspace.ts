@@ -251,8 +251,16 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       for (const entry of files) {
         const path = assertWorkspacePath(entry.path)
         if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
-        const bytes = await this.downloadBlob(entry.hash, entry.bytes)
-        vfs.seed(`${WORKSPACE_ROOT}/${path}`, bytes, { mode: entry.mode })
+        const backing = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
+        if (backing !== undefined) {
+          vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
+        } else {
+          const bytes = await this.downloadBlob(entry.hash, entry.bytes)
+          await this.store?.cacheBlob(this.workspaceId, entry.hash, bytes)
+          const cached = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
+          if (cached === undefined) vfs.seed(`${WORKSPACE_ROOT}/${path}`, bytes, { mode: entry.mode })
+          else vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, cached, { mode: entry.mode })
+        }
         this.knownBlobHashes.add(entry.hash)
       }
       this.revision = manifest.revision

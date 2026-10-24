@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryVfs } from '../../src/storage/memory.ts'
-import type { VfsBigIntStats, VfsMutation, VfsMutationSink, VfsStats } from '../../src/storage/types.ts'
+import type { VfsBigIntStats, VfsFileBacking, VfsMutation, VfsMutationSink, VfsStats } from '../../src/storage/types.ts'
 
 const identity = (vfs: MemoryVfs, path: string): bigint =>
   (vfs.statSync(path, { bigint: true }) as VfsBigIntStats).ino
@@ -233,6 +233,39 @@ describe('mutation publication', () => {
     ])
     expect(recorded[3]).toMatchObject({ kind: 'write', mode: 0o600, entryChanged: true })
     expect(recorded[3]?.kind === 'write' && new TextDecoder().decode(recorded[3].bytes)).toBe('value')
+  })
+})
+
+describe('external file backing', () => {
+  it('reads clean bytes by range and materializes only when a write needs them', () => {
+    const source = new TextEncoder().encode('external bytes')
+    let closed = false
+    const backing: VfsFileBacking = {
+      size: source.byteLength,
+      read: (position, length) => source.subarray(position, position + length),
+      close: () => { closed = true },
+    }
+    const vfs = new MemoryVfs()
+    vfs.seedExternal('/dsh/external', backing)
+    const descriptor = vfs.openFileSync('/dsh/external', 'r+')
+    expect(new TextDecoder().decode(descriptor.read(2, 4))).toBe('tern')
+    expect(closed).toBe(false)
+    descriptor.write(0, new TextEncoder().encode('local'))
+    expect(vfs.readFileSync('/dsh/external', 'utf8')).toBe('localnal bytes')
+    expect(closed).toBe(true)
+  })
+
+  it('closes an unmaterialized backing when the VFS is disposed', () => {
+    let closed = false
+    const vfs = new MemoryVfs()
+    vfs.seedExternal('/dsh/external', {
+      size: 3,
+      read: () => new Uint8Array([1, 2, 3]),
+      close: () => { closed = true },
+    })
+    vfs.close()
+    vfs.close()
+    expect(closed).toBe(true)
   })
 })
 

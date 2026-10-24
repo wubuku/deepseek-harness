@@ -20,6 +20,7 @@ const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_EVENTS = 100_000
 const DEFAULT_OWNER_LEASE_MS = 30_000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
+const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
 
 class BackendError extends Error {
   constructor(code, message, status = 400, retryAfterMs) {
@@ -128,6 +129,74 @@ function sendError(response, error) {
 
 function revisionOf(session) {
   return `remote-${digest(`${session.id}:${session.events.length}:${session.durableThroughSeq}`)}`
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false
+    if (error?.code === 'EPERM') return true
+    throw error
+  }
+}
+
+async function acquireDataDirLock(dataDir) {
+  const root = resolve(dataDir)
+  await mkdir(root, { recursive: true })
+  const lockPath = join(root, DATA_DIR_LOCK_NAME)
+  const token = randomUUID()
+  for (;;) {
+    try {
+      const handle = await open(lockPath, 'wx', 0o600)
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, token, createdAt: Date.now() }))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      let released = false
+      return {
+        release: async () => {
+          if (released) return
+          released = true
+          try {
+            const current = JSON.parse(await readFile(lockPath, 'utf8'))
+            if (current.pid === process.pid && current.token === token) await rm(lockPath)
+          } catch (error) {
+            if (error?.code !== 'ENOENT') throw error
+          }
+        },
+      }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      let owner
+      try {
+        owner = JSON.parse(await readFile(lockPath, 'utf8'))
+      } catch (readError) {
+        throw new BackendError(
+          'BACKEND_LOCK_UNREADABLE',
+          'browser-native backend dataDir lock is unreadable; refusing startup',
+          409,
+          undefined,
+        )
+      }
+      if (!Number.isSafeInteger(owner?.pid) || typeof owner.token !== 'string' || owner.token.length === 0) {
+        throw new BackendError('BACKEND_LOCK_INVALID', 'browser-native backend dataDir lock is invalid; refusing startup', 409)
+      }
+      if (isProcessAlive(owner.pid)) {
+        throw new BackendError('BACKEND_ALREADY_RUNNING', 'browser-native backend dataDir is owned by a live process', 409)
+      }
+      const stalePath = `${lockPath}.stale-${randomUUID()}`
+      try {
+        await rename(lockPath, stalePath)
+        await rm(stalePath, { force: true })
+      } catch (renameError) {
+        if (renameError?.code !== 'ENOENT') throw renameError
+      }
+    }
+  }
 }
 
 class FormalSessionStore {
@@ -989,6 +1058,14 @@ async function serveStatic(response, root, pathname) {
 }
 
 export async function createBrowserNativeV2Server(options) {
+  const dataDirLock = await acquireDataDirLock(options.dataDir)
+  let released = false
+  const releaseDataDirLock = async () => {
+    if (released) return
+    released = true
+    await dataDirLock.release()
+  }
+  try {
   const store = new FormalSessionStore(options.dataDir, {
     ownerLeaseMs: options.ownerLeaseMs,
     now: options.testHooks?.now,
@@ -1174,18 +1251,30 @@ export async function createBrowserNativeV2Server(options) {
     workspaces,
     llm,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
-      server.once('error', reject)
+      const onError = async error => {
+        await releaseDataDirLock().catch(() => {})
+        reject(error)
+      }
+      server.once('error', onError)
       server.listen(port, host, () => {
-        server.off('error', reject)
+        server.off('error', onError)
         const address = server.address()
         resolveListen(`http://${host}:${address.port}`)
       })
     }),
     close: async () => {
-      await new Promise((resolveClose, reject) => {
-        server.closeAllConnections()
-        server.close(error => error ? reject(error) : resolveClose())
-      })
+      try {
+        await new Promise((resolveClose, reject) => {
+          server.closeAllConnections()
+          server.close(error => error ? reject(error) : resolveClose())
+        })
+      } finally {
+        await releaseDataDirLock()
+      }
     },
+  }
+  } catch (error) {
+    await releaseDataDirLock().catch(() => {})
+    throw error
   }
 }

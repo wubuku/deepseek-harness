@@ -207,9 +207,9 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       for (const directory of IMAGE_EMPTY_DIRECTORIES) {
         mounted.seedDirectory(join(root, directory.replace(/\/$/, '')))
       }
+      vfs = mounted
       await options.prepareVfs?.(mounted)
       setActiveVfs(mounted)
-      vfs = mounted
 
       const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
       const manifest = readImageManifest(mounted, manifestPath)
@@ -290,6 +290,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       started.resolve()
     } catch (reason) {
       tunnel.fail(reason)
+      vfs?.close()
       throw reason
     }
   }
@@ -299,7 +300,11 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     start,
     stop: async (): Promise<void> => {
       tunnel.fail(new Error('webworker host: the tree was disposed'))
-      await context?.fiber.dispose()
+      try {
+        await context?.fiber.dispose()
+      } finally {
+        vfs?.close()
+      }
     },
     get vfs(): MemoryVfs | undefined {
       return vfs

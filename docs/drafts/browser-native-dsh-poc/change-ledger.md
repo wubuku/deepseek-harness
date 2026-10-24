@@ -39,6 +39,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-017：OPFS 外部 VFS backing 与 backend `dataDir` 单写者恢复
+
+```text
+changeId: BN-P2-017
+upstreamBaseline: research checkout after BN-P2-014; 2026-10-24
+file: packages/experimental/webworker-runtime/src/storage/types.ts; packages/experimental/webworker-runtime/src/storage/memory.ts; packages/experimental/webworker-runtime/src/worker-host.ts; packages/experimental/webworker-runtime/src/index.ts; packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/opfs-vfs-residency.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-backend-multi-instance-characterization.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-capacity-and-process-safety-plan.md; docs/drafts/browser-native-dsh-poc/next-capacity-and-process-safety-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md
+reason: 上一批证明 Worker MemoryVfs 会让已保存文件长期驻留 JavaScript heap，且两个 backend 进程共用一个 dataDir 会接受冲突写入并丢失事实；需要验证浏览器内文件驻留和本机 backend 的安全部署边界。
+existingExtensionPointsChecked: 复用 MemoryVfs 的 seed/VFS descriptor、Worker Host 的外部 VFS 与 prepareVfs、Durable Workspace Store 的 OPFS blob cache、Workspace manifest/operation receipt 和已有 URL-gated Worker test MessagePort；未修改 Agent Loop、Session format、默认 profile 或正式 Workspace package。
+whyDraftOnlyWasInsufficient: VFS 单测不能证明真实 OPFS sync handle 在 Dedicated Worker 中可用，单进程 backend 测试也不能证明跨 PID 锁竞争、SIGKILL stale lock 回收和冷启动 operation replay。
+behaviorChange: `MemoryVfs` 增加可选只读 `VfsFileBacking`，clean file 的同步 descriptor 可做外部 range read，写入时 materialize；`usage()` 报告 logical bytes 与 resident JS bytes；Worker test port 增加 usage/range probe。Browser Durable Workspace Store 在验证并缓存 blob 后用 OPFS `FileSystemSyncAccessHandle` externalize 远端文件，Worker Host 启动失败或停止时关闭 backing。backend 在打开 dataDir 时原子取得 `.browser-native-backend.lock`，活 owner 存在时第二实例 fail-closed，owner PID 退出后才回收 stale lock。
+directoryOutChangeReason: `packages/experimental/webworker-runtime` 是共享 experimental package，MemoryVfs/Worker Host 的 capability 必须从 package source 暴露给 PoC；`apps/web/src/preview.ts` 需要同步扩展 PoC-only test port 的 request/response 类型。两处变化仅增加通用 backing capability 和测试观测，不启用默认 OPFS 或改变普通 preview。
+consumersUpdated: `VfsFileBacking` exports、MemoryVfs unit tests、Browser-Native Worker/Workspace store、backend multi-instance E2E、PoC README、兼容矩阵、进度、docs/drafts 索引。
+tests: `pnpm exec vitest run packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts --coverage=false` 22/22；Browser-Native Workspace Vitest 23/23；`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 17/17；preview build、定向 TypeScript 检查和 Node syntax checks 通过。Chrome 155 的 `opfs-vfs-residency.e2e.mjs` 通过 8 MiB hydrate、64-byte range read、写入 materialize、刷新恢复；`workspace-backend-multi-instance-characterization.e2e.mjs` 通过第二 backend 启动拒绝、第一 backend SIGKILL、Session/Workspace cold recovery 和同 operation replay。
+syncReplaySteps: 同步 upstream 后先检查 webworker-runtime 是否已有 durable file backing、usage telemetry 或 Worker disposal hook；若有等价 capability，迁移 PoC 到上游接口并删除重复类型。否则按 package source、Worker/preview test seam、Workspace store、backend lock 顺序重放；重新运行 MemoryVfs/Workspace/backend tests、preview build 和两项 Chrome E2E。若正式 backend 迁移到共享 metadata store，应删除本地 dataDir lock，而不是将它当作 HA 实现保留。
+deleteCondition: 正式 Browser-Native VFS 提供可验证的 external range backing 和生命周期释放，且 backend 使用共享 metadata store/分布式单写者语义；或者 Browser-Native Workspace PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-016：浏览器存储丢失、工具参数上限与 S3 blob 故障验证
 
 ```text

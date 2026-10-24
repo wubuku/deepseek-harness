@@ -57,7 +57,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -66,6 +66,8 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly base64?: string
   readonly byteLength?: number
   readonly byteValue?: number
+  readonly offset?: number
+  readonly length?: number
   readonly mode?: number
   readonly count?: number
 }
@@ -78,7 +80,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
+  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -92,6 +94,14 @@ async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
   workspaceTestPort?.postMessage({ ...response, requestId })
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.byteLength)))
+  }
+  return btoa(binary)
 }
 
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
@@ -156,6 +166,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (request.action === 'release-local-save') {
       releaseLocalPersist?.()
       workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'usage') {
+      const usage = workspaceRuntime.vfs.usage()
+      workspaceTestResponse(request.requestId, { ok: true, ...usage, logicalBytes: usage.bytes })
       return
     }
     if (request.action === 'load-lazy-client-chunk') {
@@ -226,6 +241,22 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         bytes: bytes.byteLength,
         digest: await crypto.subtle.digest('SHA-256', bytes).then(value =>
           [...new Uint8Array(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')),
+      })
+      return
+    }
+    if (request.action === 'read-range') {
+      if (!Number.isSafeInteger(request.offset) || request.offset < 0
+        || !Number.isSafeInteger(request.length) || request.length < 0) {
+        throw new Error('browser-native workspace test: range offset and length are required')
+      }
+      const descriptor = workspaceRuntime.vfs.openFileSync(request.path, 'r')
+      const bytes = descriptor.read(request.offset, request.length)
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        path: request.path,
+        offset: request.offset,
+        length: bytes.byteLength,
+        base64: encodeBase64(bytes),
       })
       return
     }

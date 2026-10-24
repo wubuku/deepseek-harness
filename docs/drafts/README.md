@@ -170,6 +170,7 @@ Agentic UI 事实核查
 
 13. [文件规模与分块传输验证计划](browser-native-dsh-poc/large-file-scale-validation-plan.md)与[进度](browser-native-dsh-poc/large-file-scale-validation-progress.md)：验证 1 MiB Workspace chunk staging、缺块续传、hash/size 校验、backend 重启、OPFS 分块写入、16/64 MiB Chrome 文件和 1,000 小文件；明确仍有完整 `MemoryVfs` bytes、完整下载组装、独立 Session JSON 上限和 PoC 本地 backend 限制。
 14. [故障边界与存储后端验证计划](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md)与[实测进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：真实 Chrome 验证 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL` 后身份缺口、双 backend 共用 `dataDir` 的数据覆盖、大型 tool args 安全拒绝，以及 MinIO blob 上传、Range 读取、outage、对象丢失恢复和 backend 重启；自然 eviction、OS/磁盘 crash、真实模型大参数和生产云存储未验证。
+15. [容量与进程安全验证计划](browser-native-dsh-poc/next-capacity-and-process-safety-plan.md)与[进度](browser-native-dsh-poc/next-capacity-and-process-safety-progress.md)：真实 Chrome 已验证 OPFS sync-handle range backing 让已提交 Workspace 文件在刷新后不驻留 VFS heap，并验证 `dataDir` 单写者、第二实例 fail-closed、`SIGKILL` 后冷启动恢复和 operation replay；不将本机单写者锁说成 HA，也明确 hydrate 的临时完整校验读取。
 
 ### 路径 C：直接复现 PoC
 
