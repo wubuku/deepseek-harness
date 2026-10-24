@@ -51,7 +51,7 @@ export { packTar, parseTar, type TarEntry } from './storage/tar.ts'
 export { requireActiveVfs, setActiveVfs } from './storage/active.ts'
 export {
   type VfsDeferredArchive, type VfsDeferredFile, type VfsDir, type VfsDirent, type VfsEncoding, type VfsError,
-  type VfsFileBacking,
+  type VfsFileBacking, type VfsFileReference,
   type VfsFileHandle, type VfsMutation, type VfsMutationListener, type VfsMutationSink, type VfsReadOptions,
   type VfsSeedOptions, type VfsStats, type VfsWriteOptions,
 } from './storage/types.ts'

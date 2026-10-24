@@ -9,7 +9,8 @@ import { IMAGE_OVERLAY_DIRECTORIES } from '../image-layout.ts'
 import { parseTar } from './tar.ts'
 import type {
   Vfs, VfsBigIntStats, VfsDeferredArchive, VfsDir, VfsDirent, VfsEncoding, VfsError, VfsFileHandle, VfsMutation,
-  VfsFileBacking, VfsOpenFile, VfsMutationListener, VfsMutationSink, VfsReadOptions, VfsSeedOptions, VfsStatOptions, VfsStats,
+  VfsFileBacking, VfsFileReference, VfsOpenFile, VfsMutationListener, VfsMutationSink, VfsReadOptions, VfsSeedOptions,
+  VfsStatOptions, VfsStats,
   VfsWriteOptions,
 } from './types.ts'
 
@@ -444,6 +445,27 @@ export class MemoryVfs implements Vfs {
   }
 
   /**
+   * Read a bounded range without materializing an external file.
+   * @param path - File path to read.
+   * @param position - Zero-based byte offset.
+   * @param length - Maximum number of bytes to return.
+   * @returns The bytes available in the requested range.
+   */
+  readFileRangeSync(path: string, position: number, length: number): Uint8Array {
+    const target = this.key(path)
+    if (!Number.isSafeInteger(position) || !Number.isSafeInteger(length) || position < 0 || length < 0) {
+      throw new RangeError('webworker vfs: invalid file range')
+    }
+    this.requireArrived('read', target)
+    const node = this.files.get(target)
+    if (node === undefined) {
+      if (this.directories.has(target)) fail('EISDIR', 'read', target)
+      fail('ENOENT', 'read', target)
+    }
+    return this.readNode(node, position, Math.min(length, Math.max(0, this.sizeOf(node) - position)))
+  }
+
+  /**
    * Report whether a path exists.
    * @param path - Path to test.
    * @returns True for files and directories.
@@ -535,6 +557,17 @@ export class MemoryVfs implements Vfs {
     if (previous !== undefined) {
       this.removeFilePath(previous, path)
       if (previous.paths === undefined) this.bytesOf(previous)
+    }
+    this.files.set(path, node)
+    this.addFilePath(node, path)
+  }
+
+  /** Replace a clean seeded entry without materializing the previous external bytes. */
+  private setSeedFile(path: string, node: FileNode): void {
+    const previous = this.files.get(path)
+    if (previous !== undefined) {
+      this.removeFilePath(previous, path)
+      if (previous.paths === undefined) previous.backing?.close()
     }
     this.files.set(path, node)
     this.addFilePath(node, path)
@@ -1126,7 +1159,7 @@ export class MemoryVfs implements Vfs {
     this.seedDirectory(dirname(target))
     // Seeded bytes supersede a lazy registration for the same path.
     this.deferred.delete(target)
-    this.setFile(target, {
+    this.setSeedFile(target, {
       bytes: typeof data === 'string' ? encoder.encode(data) : data,
       mtimeMs: options.mtimeMs ?? this.touch(target),
       mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
@@ -1149,13 +1182,54 @@ export class MemoryVfs implements Vfs {
     const target = this.key(path)
     this.seedDirectory(dirname(target))
     this.deferred.delete(target)
-    this.setFile(target, {
+    this.setSeedFile(target, {
       backing,
       mtimeMs: options.mtimeMs ?? this.touch(target),
       mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
       paths: undefined,
     })
     this.touchDirectory(dirname(target))
+  }
+
+  /**
+   * Publish a clean external replacement without copying its bytes into the VFS heap.
+   * @param path - File path to replace.
+   * @param backing - Synchronous backing that contains the replacement bytes.
+   * @param reference - Hash and byte length that identify the replacement.
+   * @param options - Optional file metadata for a new path.
+   */
+  replaceExternalSync(
+    path: string,
+    backing: VfsFileBacking,
+    reference: VfsFileReference,
+    options: VfsSeedOptions = {},
+  ): void {
+    if (!Number.isSafeInteger(backing.size) || backing.size < 0 || backing.size !== reference.bytes
+      || !/^[a-f0-9]{64}$/.test(reference.hash)) {
+      backing.close()
+      throw new Error('webworker vfs: external file reference does not match its backing')
+    }
+    const target = this.key(path)
+    if (this.directories.has(target)) fail('EISDIR', 'open', target)
+    if (!this.directories.has(dirname(target))) fail('ENOENT', 'open', target)
+    this.deferred.delete(target)
+    const previous = this.files.get(target)
+    const mode = previous?.mode ?? (options.mode ?? DEFAULT_FILE_MODE)
+    this.setSeedFile(target, {
+      backing,
+      mtimeMs: options.mtimeMs ?? this.touch(target),
+      mode: mode & 0o777,
+      paths: undefined,
+    })
+    this.touchDirectory(dirname(target))
+    this.publish({
+      kind: 'write-reference',
+      path: target,
+      hash: reference.hash,
+      bytes: reference.bytes,
+      mode: mode & 0o777,
+      entryChanged: previous === undefined,
+    })
   }
 
   /**

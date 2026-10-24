@@ -114,7 +114,7 @@ export class FSWatcher extends EventEmitter {
     if (listener !== undefined) this.on('change', listener as (...args: unknown[]) => void)
     this.disposeMutation = requireActiveVfs().subscribe((mutation) => {
       if (!this.matches(mutation)) return
-      const eventType = mutation.kind === 'write' && !mutation.entryChanged || mutation.kind === 'chmod'
+      const eventType = (mutation.kind === 'write' || mutation.kind === 'write-reference') && !mutation.entryChanged || mutation.kind === 'chmod'
         ? 'change'
         : 'rename'
       const filename = this.filename(mutation.path)

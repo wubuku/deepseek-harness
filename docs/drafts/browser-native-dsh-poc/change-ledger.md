@@ -48,6 +48,24 @@ deleteCondition: 正式 Browser-Native VFS、Workspace mirror 和 Session receip
 status: implemented-as-draft
 ```
 
+### BN-P2-024：external reference 编辑接入 VFS、Workspace 和刷新恢复
+
+```text
+changeId: BN-P2-024
+upstreamBaseline: research checkout after BN-P2-023; 2026-10-25
+file: packages/experimental/webworker-runtime/src/storage/types.ts; packages/experimental/webworker-runtime/src/storage/memory.ts; packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/fs-watch.ts; packages/experimental/webworker-runtime/src/index.ts; packages/experimental/webworker-runtime/tests/storage/memory-vfs.spec.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs; docs/drafts/browser-native-dsh-poc/reference-backed-edit-validation-plan.md; docs/drafts/browser-native-dsh-poc/reference-backed-edit-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; packages/experimental/webworker-runtime/README.md; packages/experimental/webworker-runtime/README.zh.md
+reason: 上一批只验证了 OPFS range backing 和 chunk-backed copy-on-write 原型；没有证明 external file reference 能经过 VFS mutation、Workspace durable cache、分块上传、manifest CAS 和刷新 hydrate。若重新 materialize 完整文件，浏览器内存和 Session/tool result 仍会成为大文件瓶颈。
+existingExtensionPointsChecked: 复用 MemoryVfs 的 VfsFileBacking、VfsMutationSink、Worker Host 的注入和 boot 前 prepareVfs、Browser Workspace mirror 的 snapshot/outbox/CAS、现有 URL-gated Worker test port 和同源 backend；未修改正式 Agent Loop、Session event schema、标准 edit 工具、默认 profile 或根级依赖。
+whyDraftOnlyWasInsufficient: VFS 单测不能证明真实 OPFS SyncAccessHandle、IndexedDB metadata、Dedicated Worker 刷新和同源 CAS 一起工作；独立 chunk editor 也不能证明 mutation 和 Workspace commit 不重新读取完整文件。
+behaviorChange: experimental runtime 增加 `VfsFileReference`、`write-reference` mutation、bounded range read 和 external replacement；PoC Workspace 能从 range reader 写 durable blob、按固定 chunk 上传并恢复 external backing。Worker 新增 `reference-edit-probe`，返回 compact hash/bytes/替换摘要/operationId/receipt，不注册为标准 DSH 工具或正式 Session event。
+directoryOutChangeReason: packages/experimental/webworker-runtime 是 PoC 所依赖的实际 VFS owner；不修改该包就无法让同一个 Host VFS 观察 external reference mutation。README 中同步说明该 experimental API 的限制和非正式协议地位。
+consumersUpdated: MemoryVfs storage tests、Browser Workspace tests、真实 Chrome reference-backed edit E2E、PoC README、兼容矩阵、docs/drafts 导读和中英文 runtime README。
+tests: webworker-runtime typecheck 通过；VFS/Workspace Vitest 12/12 通过；preview build、Node syntax check 和真实 Chrome 4 MiB 故障矩阵、16 MiB 正常闭环通过。正常样本覆盖 17 个 1 MiB 上传块、manifest CAS、compact result、刷新 hydrate、range digest 和无 page errors；失败样本保持源 hash、不产生失败 revision，随后成功只产生一次 revision。真实 Chrome + `gpt-5.6-sol` 普通文件真实 LLM 回归通过，8 个 LLM HTTP 200、59 个 Session events、两个 Workspace commit HTTP 200、刷新和流式输出通过；一次使用未监听本地代理的尝试得到 502，清除代理后直连通过。未验证自然 eviction、OS/磁盘 crash、Safari、生产对象存储、多实例 backend 和真实模型大型 external-reference args。
+syncReplaySteps: 上游同步后检查 MemoryVfs 是否已有正式 external backing/range mutation；若有等价接口，迁移本批测试并删除重复 PoC 类型。若没有，先重新核对 VfsFileReference、replacement 的 descriptor 语义和 Session/Workspace receipt 设计，再重跑 runtime typecheck、VFS/Workspace tests、preview build、4/16 MiB Chrome E2E 和文档门禁。不得把本批 test action 升级为标准 edit 或把固定 chunk 上传写成 byte-level delta。
+deleteCondition: 正式 Browser-Native VFS、Workspace provider 和 Session receipt 提供等价的 external reference、range persistence、CAS recovery 和 Chrome E2E，且测试已迁移；或 Browser-Native Workspace PoC 被移除。
+status: implemented-as-draft
+```
+
 ### 2026-10-21：durable Workspace opt-in 接线
 
 - **文件**：`apps/web/src/preview.ts`、`docs/drafts/browser-native-dsh-poc/browser-native-worker.ts`。

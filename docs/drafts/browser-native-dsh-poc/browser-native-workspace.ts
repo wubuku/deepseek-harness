@@ -47,6 +47,7 @@ export interface WorkspaceChange {
   readonly hash?: string
   readonly bytes?: number
   readonly content?: Uint8Array
+  readonly contentReference?: { readonly hash: string; readonly bytes: number }
   readonly operation?: WorkspaceToolOperation
 }
 
@@ -282,7 +283,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
         await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
       }
-      if (localSnapshot !== undefined) this.restoreLocalSnapshot(vfs, localSnapshot)
+      if (localSnapshot !== undefined) await this.restoreLocalSnapshot(vfs, localSnapshot)
       this.ready = true
       const dirtyCount = this.pending.size + (this.retryBatch?.changes.length ?? 0)
       this.onStatus(dirtyCount === 0 ? 'synced' : 'dirty', this.workspaceId, this.revision, dirtyCount)
@@ -514,6 +515,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.latestLocalSnapshot = undefined
         try {
           await this.testHooks?.beforeLocalPersist?.()
+          await this.persistReferencedBlobs(snapshot)
           await this.store?.save(snapshot)
           await this.testHooks?.afterLocalPersist?.()
           this.localPersistedVersion = version
@@ -545,6 +547,26 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (this.localPersistFailure !== undefined) throw this.localPersistFailure
   }
 
+  private async persistReferencedBlobs(snapshot: DurableWorkspaceSnapshot): Promise<void> {
+    if (this.store === undefined || this.vfs === undefined || this.workspaceId === undefined) return
+    const references = [...snapshot.pending, ...(snapshot.retryBatch?.changes ?? [])]
+      .flatMap(change => change.contentReference === undefined ? [] : [{ change, reference: change.contentReference }])
+    const cached = new Set<string>()
+    for (const { change, reference } of references) {
+      if (cached.has(reference.hash)) continue
+      if (typeof this.store.cacheBlobFromRanges !== 'function') {
+        throw new Error('browser-native workspace: durable store does not support external range references')
+      }
+      await this.store.cacheBlobFromRanges(
+        this.workspaceId,
+        reference.hash,
+        reference.bytes,
+        (offset, length) => this.vfs!.readFileRangeSync(`${WORKSPACE_ROOT}/${change.path}`, offset, length),
+      )
+      cached.add(reference.hash)
+    }
+  }
+
   private setLocalPersistFailure(error: unknown): void {
     const failure = error instanceof Error ? error : new Error(String(error))
     this.localPersistFailure = failure
@@ -552,10 +574,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.onStatus('error', this.workspaceId, this.revision, this.pending.size + (this.retryBatch?.changes.length ?? 0), failure.message)
   }
 
-  private restoreLocalSnapshot(vfs: MemoryVfs, snapshot: DurableWorkspaceSnapshot): void {
+  private async restoreLocalSnapshot(vfs: MemoryVfs, snapshot: DurableWorkspaceSnapshot): Promise<void> {
     if (snapshot.workspaceId !== this.workspaceId) throw new Error('browser-native workspace: local snapshot workspace mismatch')
     const retryChanges = snapshot.retryBatch?.changes ?? []
-    this.replayChanges(vfs, [...retryChanges, ...snapshot.pending])
+    await this.replayChanges(vfs, [...retryChanges, ...snapshot.pending])
     this.retryBatch = snapshot.retryBatch
     this.receiptOutbox.splice(0, this.receiptOutbox.length, ...(snapshot.receipts ?? []))
     for (const change of snapshot.pending) this.pending.set(change.path, change)
@@ -563,7 +585,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     else if (snapshot.pending.length > 0) this.revision = snapshot.revision
   }
 
-  private replayChanges(vfs: MemoryVfs, changes: readonly WorkspaceChange[]): void {
+  private async replayChanges(vfs: MemoryVfs, changes: readonly WorkspaceChange[]): Promise<void> {
     const ordered = [...changes].sort((left, right) => {
       const leftDeleted = left.deleted === true
       const rightDeleted = right.deleted === true
@@ -574,10 +596,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1
       return left.path.localeCompare(right.path)
     })
-    for (const change of ordered) this.applyChange(vfs, change)
+    for (const change of ordered) await this.applyChange(vfs, change)
   }
 
-  private applyChange(vfs: MemoryVfs, change: WorkspaceChange): void {
+  private async applyChange(vfs: MemoryVfs, change: WorkspaceChange): Promise<void> {
     const target = `${WORKSPACE_ROOT}/${change.path}`
     if (change.deleted === true) {
       vfs.rmSync(target, { recursive: true, force: true })
@@ -587,9 +609,16 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       vfs.seedDirectory(target, { mode: change.mode })
       return
     }
-    if (change.kind !== 'file' || change.content === undefined) {
+    if (change.kind !== 'file') {
       throw new Error(`browser-native workspace: local file change is incomplete for ${change.path}`)
     }
+    if (change.contentReference !== undefined) {
+      const backing = await this.store?.openBlob(this.workspaceId!, change.contentReference.hash, change.contentReference.bytes)
+      if (backing === undefined) throw new Error(`browser-native workspace: local reference blob is missing for ${change.path}`)
+      vfs.seedExternal(target, backing, { mode: change.mode })
+      return
+    }
+    if (change.content === undefined) throw new Error(`browser-native workspace: local file change is incomplete for ${change.path}`)
     vfs.seed(target, change.content, { mode: change.mode })
   }
 
@@ -619,6 +648,16 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         mode: mutation.mode,
         bytes: mutation.bytes.byteLength,
         content: mutation.bytes.slice(),
+      }
+    }
+    if (mutation.kind === 'write-reference') {
+      return {
+        path,
+        kind: 'file',
+        mode: mutation.mode,
+        bytes: mutation.bytes,
+        hash: mutation.hash,
+        contentReference: { hash: mutation.hash, bytes: mutation.bytes },
       }
     }
     const stats = this.vfs?.statSync(mutation.path)
@@ -1008,6 +1047,22 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         output.push({ path: change.path, kind: 'directory', mode: change.mode })
         continue
       }
+      if (change.contentReference !== undefined) {
+        const reference = change.contentReference
+        if (reference.bytes !== change.bytes) throw new Error(`browser-native workspace: reference size mismatch for ${change.path}`)
+        if (!this.knownBlobHashes.has(reference.hash) && !uploadedHashes.has(reference.hash)) {
+          await this.uploadBlobFromRanges(
+            operationId,
+            reference.hash,
+            reference.bytes,
+            (offset, length) => this.vfs!.readFileRangeSync(`${WORKSPACE_ROOT}/${change.path}`, offset, length),
+          )
+          this.knownBlobHashes.add(reference.hash)
+          uploadedHashes.add(reference.hash)
+        }
+        output.push({ path: change.path, kind: 'file', hash: reference.hash, bytes: reference.bytes, mode: change.mode })
+        continue
+      }
       const content = change.content
       if (content === undefined) throw new Error(`browser-native workspace: pending file ${change.path} has no content`)
       const hash = await sha256(content)
@@ -1022,6 +1077,16 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   private async uploadBlob(operationId: string, hash: string, content: Uint8Array): Promise<void> {
+    await this.uploadBlobFromRanges(operationId, hash, content.byteLength,
+      (offset, length) => content.subarray(offset, offset + length))
+  }
+
+  private async uploadBlobFromRanges(
+    operationId: string,
+    hash: string,
+    totalBytes: number,
+    readRange: (offset: number, length: number) => Uint8Array,
+  ): Promise<void> {
     if (this.workspaceId === undefined) {
       throw new Error('browser-native workspace: blob upload has no durable operation identity')
     }
@@ -1037,7 +1102,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         workspaceId: this.workspaceId,
         operationId,
         hash,
-        totalBytes: content.byteLength,
+        totalBytes,
         chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
       }),
     })
@@ -1055,7 +1120,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
     for (const index of status.missing) {
       const offset = index * WORKSPACE_BLOB_CHUNK_BYTES
-      const chunk = content.subarray(offset, Math.min(offset + WORKSPACE_BLOB_CHUNK_BYTES, content.byteLength))
+      const chunk = readRange(offset, Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset))
       if (chunk.byteLength === 0) throw new Error('browser-native workspace: backend requested an empty upload chunk')
       const chunkHash = await sha256(chunk)
       const response = await fetch(`${uploadPath}/${String(index)}`, {

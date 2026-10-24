@@ -30,8 +30,10 @@ import {
   createSyncAccessChunkBackedFile,
   hashChunkBackedFile,
   replaceUniqueUtf8CopyOnWrite,
+  type ChunkBackedFile,
   type ChunkEditStage,
 } from './browser-native-chunk-editor.ts'
+import { Sha256 } from './browser-native-sha256.ts'
 import {
   BROWSER_NATIVE_PROFILE_MANIFEST,
   evaluateBrowserNativeProfile,
@@ -71,7 +73,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -108,7 +110,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return typeof data.path === 'string' && typeof data.marker === 'string'
       && Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
   }
-  if (data.action === 'chunk-edit-probe') {
+  if (data.action === 'chunk-edit-probe' || data.action === 'reference-edit-probe') {
     const oldTextBytes = typeof data.oldText === 'string' ? new TextEncoder().encode(data.oldText).byteLength : 0
     const newTextBytes = typeof data.newText === 'string' ? new TextEncoder().encode(data.newText).byteLength : 0
     return Number.isSafeInteger(data.byteLength) && Number(data.byteLength) >= 1024 * 1024
@@ -144,6 +146,19 @@ function encodeBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.byteLength)))
   }
   return btoa(binary)
+}
+
+function hashWorkspacePath(path: string): { readonly bytes: number; readonly digest: string } {
+  if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
+  const bytes = workspaceRuntime.vfs.statSync(path).size
+  const digest = new Sha256()
+  for (let offset = 0; offset < bytes; offset += 1024 * 1024) {
+    const chunk = workspaceRuntime.vfs.readFileRangeSync(path, offset, Math.min(1024 * 1024, bytes - offset))
+    const expected = Math.min(1024 * 1024, bytes - offset)
+    if (chunk.byteLength !== expected) throw new Error('browser-native workspace test: digest range returned a short read')
+    digest.update(chunk)
+  }
+  return { bytes, digest: digest.digestHex() }
 }
 
 async function runChunkEditProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
@@ -222,11 +237,136 @@ async function runChunkEditProbe(request: BrowserNativeWorkspaceTestRequest): Pr
   }
 }
 
+function createWorkspaceRangeFile(path: string): ChunkBackedFile {
+  if (workspaceRuntime === undefined) throw new Error('browser-native reference edit probe: runtime is not ready')
+  const vfs = workspaceRuntime.vfs
+  return {
+    get size(): number { return (vfs.statSync(path) as { size: number }).size },
+    read: (position, length) => vfs.readFileRangeSync(path, position, length),
+    write: () => { throw new Error('browser-native reference edit probe: source is read-only') },
+    truncate: () => { throw new Error('browser-native reference edit probe: source is read-only') },
+    flush: () => {},
+    close: () => {},
+  }
+}
+
+async function runReferenceEditProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
+  if (workspaceRuntime === undefined || request.byteLength === undefined || request.chunkBytes === undefined
+    || request.oldText === undefined || request.newText === undefined) {
+    throw new Error('browser-native reference edit probe: runtime, byteLength, chunkBytes, oldText, and newText are required')
+  }
+  const storage = globalThis.navigator?.storage
+  if (storage === undefined || typeof storage.getDirectory !== 'function') {
+    throw new Error('browser-native reference edit probe: OPFS is unavailable')
+  }
+  const path = request.path ?? '/dsh/home/workspace/reference-edit.bin'
+  if (!path.startsWith('/dsh/home/workspace/')) throw new Error('browser-native reference edit probe: path must be in Workspace')
+  const root = await storage.getDirectory()
+  const directoryName = `dsh-reference-edit-probe-${crypto.randomUUID()}`
+  const directory = await root.getDirectoryHandle(directoryName, { create: true })
+  const sourceHandle = await directory.getFileHandle('source', { create: true })
+  const targetHandle = await directory.getFileHandle('target', { create: true })
+  const sourceSync = await sourceHandle.createSyncAccessHandle()
+  const targetSync = await targetHandle.createSyncAccessHandle()
+  const sourceChunk = createSyncAccessChunkBackedFile(sourceSync)
+  const targetChunk = createSyncAccessChunkBackedFile(targetSync)
+  let published = false
+  try {
+    const markerBytes = new TextEncoder().encode(request.oldText)
+    const markerOffset = Math.floor(request.byteLength / 2)
+    if (markerOffset + markerBytes.byteLength > request.byteLength) throw new Error('browser-native reference edit probe: marker does not fit')
+    sourceChunk.truncate(request.byteLength)
+    const fill = new Uint8Array(request.chunkBytes)
+    fill.fill(0x61)
+    for (let offset = 0; offset < request.byteLength; offset += request.chunkBytes) {
+      sourceChunk.write(offset, fill.subarray(0, Math.min(request.chunkBytes, request.byteLength - offset)))
+    }
+    sourceChunk.write(markerOffset, markerBytes)
+    sourceChunk.flush()
+    workspaceRuntime.vfs.seedExternal(path, {
+      size: request.byteLength,
+      read: (position, length) => sourceChunk.read(position, length),
+      close: () => { sourceChunk.close() },
+    })
+    const source = createWorkspaceRangeFile(path)
+    const sourceHash = hashChunkBackedFile(source, request.chunkBytes)
+    let metrics
+    try {
+      metrics = replaceUniqueUtf8CopyOnWrite(source, targetChunk, request.oldText, request.newText, {
+        chunkBytes: request.chunkBytes,
+        onStage: stage => {
+          if (request.failStage === stage) throw new Error(`injected ${stage} failure`)
+        },
+      })
+    } catch (error) {
+      const afterFailureHash = hashChunkBackedFile(source, request.chunkBytes)
+      return {
+        ok: false,
+        failure: error instanceof Error ? error.message : String(error),
+        sourceHash,
+        afterFailureHash,
+        sourceUnchanged: sourceHash === afterFailureHash,
+        failStage: request.failStage,
+      }
+    }
+    const targetBacking = {
+      get size(): number { return targetChunk.size },
+      read: (position: number, length: number): Uint8Array => targetChunk.read(position, length),
+      close: (): void => { targetChunk.close() },
+    }
+    const reference = { hash: metrics.resultHash, bytes: metrics.resultBytes }
+    const receipts = await workspaceRuntime.runToolOperation({
+      sessionId: 'browser-native-reference-edit-probe',
+      turn: 1,
+      step: 1,
+      callId: `reference-edit-${crypto.randomUUID()}`,
+      toolName: 'browser_edit_ref',
+      toolCallSeq: 1,
+    }, async () => {
+      workspaceRuntime!.vfs.replaceExternalSync(path, targetBacking, reference)
+      published = true
+      await workspaceRuntime!.flushLocalWorkspace()
+      return await workspaceRuntime!.flushWorkspace()
+    })
+    const afterHash = hashChunkBackedFile(createWorkspaceRangeFile(path), request.chunkBytes)
+    const usage = workspaceRuntime.vfs.usage()
+    const receipt = receipts[0]
+    return {
+      ok: true,
+      result: {
+        path,
+        beforeHash: sourceHash,
+        afterHash,
+        beforeBytes: request.byteLength,
+        afterBytes: metrics.resultBytes,
+        replacedBytes: markerBytes.byteLength,
+        replacementBytes: new TextEncoder().encode(request.newText).byteLength,
+        operationId: receipt?.operationId,
+        revision: receipt?.revision,
+      },
+      metrics,
+      usage,
+      receipt,
+    }
+  } finally {
+    workspaceRuntime.vfs.close()
+    if (!published) {
+      sourceChunk.close()
+      targetChunk.close()
+    }
+    await root.removeEntry(directoryName, { recursive: true })
+  }
+}
+
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
     if (request.action === 'chunk-edit-probe') {
       workspaceTestResponse(request.requestId, await runChunkEditProbe(request))
+      return
+    }
+    if (request.action === 'reference-edit-probe') {
+      workspaceTestResponse(request.requestId, await runReferenceEditProbe(request))
       return
     }
     if (request.action === 'flush-local') {
@@ -398,14 +538,12 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       return
     }
     if (request.action === 'read-digest') {
-      const bytes = workspaceRuntime.vfs.readFileSync(request.path)
-      if (!(bytes instanceof Uint8Array)) throw new Error('browser-native workspace test: file content is not bytes')
+      const digest = hashWorkspacePath(request.path)
       workspaceTestResponse(request.requestId, {
         ok: true,
         path: request.path,
-        bytes: bytes.byteLength,
-        digest: await crypto.subtle.digest('SHA-256', bytes).then(value =>
-          [...new Uint8Array(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')),
+        bytes: digest.bytes,
+        digest: digest.digest,
       })
       return
     }

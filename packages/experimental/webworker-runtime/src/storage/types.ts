@@ -176,6 +176,12 @@ export interface VfsOpenFile {
  * destination mkdir/write records, so a sink never receives a path without the
  * state needed to materialize it.
  */
+export interface VfsFileReference {
+  readonly hash: string
+  readonly bytes: number
+}
+
+/** A committed VFS change delivered to mutation listeners and durable sinks. */
 export type VfsMutation =
   | {
     readonly kind: 'write'
@@ -185,6 +191,7 @@ export type VfsMutation =
     readonly entryChanged: boolean
     readonly appendedFrom?: number
   }
+  | { readonly kind: 'write-reference'; readonly path: string; readonly hash: string; readonly bytes: number; readonly mode: number; readonly entryChanged: boolean }
   | { readonly kind: 'mkdir'; readonly path: string; readonly mode: number }
   | { readonly kind: 'remove'; readonly path: string }
   | { readonly kind: 'chmod'; readonly path: string; readonly mode: number }

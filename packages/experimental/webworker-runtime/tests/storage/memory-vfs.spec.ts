@@ -237,6 +237,41 @@ describe('mutation publication', () => {
 })
 
 describe('external file backing', () => {
+  it('publishes a reference replacement without carrying file bytes in the mutation', () => {
+    let sourceClosed = false
+    let targetClosed = false
+    const source = new TextEncoder().encode('old external bytes')
+    const target = new TextEncoder().encode('new external bytes')
+    const mutations: VfsMutation[] = []
+    const vfs = new MemoryVfs()
+    vfs.seedExternal('/dsh/external', {
+      size: source.byteLength,
+      read: (position, length) => source.subarray(position, position + length),
+      close: () => { sourceClosed = true },
+    })
+    vfs.subscribe((mutation) => { mutations.push(mutation) })
+    vfs.replaceExternalSync('/dsh/external', {
+      size: target.byteLength,
+      read: (position, length) => target.subarray(position, position + length),
+      close: () => { targetClosed = true },
+    }, { hash: 'a'.repeat(64), bytes: target.byteLength })
+
+    expect(vfs.usage().residentBytes).toBe(0)
+    expect(vfs.readFileRangeSync('/dsh/external', 4, 8)).toEqual(target.subarray(4, 12))
+    expect(mutations).toEqual([{
+      kind: 'write-reference',
+      path: '/dsh/external',
+      hash: 'a'.repeat(64),
+      bytes: target.byteLength,
+      mode: 0o644,
+      entryChanged: false,
+    }])
+    expect(mutations[0]).not.toHaveProperty('content')
+    expect(sourceClosed).toBe(true)
+    vfs.close()
+    expect(targetClosed).toBe(true)
+  })
+
   it('reads clean bytes by range and materializes only when a write needs them', () => {
     const source = new TextEncoder().encode('external bytes')
     let closed = false

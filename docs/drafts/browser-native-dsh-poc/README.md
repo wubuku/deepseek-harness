@@ -113,7 +113,7 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 [可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)验证了当前大文件路径的关键缺口：只读 OPFS range backing 已经可以降低冷 hydrate 后的 VFS 驻留，但当前 DSH `edit` 仍会完整 materialize 文件。PoC-local `ChunkBackedFile` 使用固定大小 buffer、跨 chunk UTF-8 定位和 copy-on-write 临时文件；真实 Chrome Worker/OPFS 对 64 MiB 文件完成替换，1 MiB chunk 下最大工作 buffer 为 `1,048,620` bytes，六个写入/校验/发布故障点均保持源文件 hash 不变。
 
-这只是存储层原型，不是正式 DSH 文件工具能力。16 MiB 真实 DSH `read → grep → edit → read` 对照仍观察到 `residentBytes` 从 `34,493,823` 增至 `51,276,228`；原型尚未接入 `MemoryVfs` mutation sink、Workspace outbox、manifest commit 或 Session receipt。下一步必须定义 range mutation 或外部工作副本引用，再验证刷新恢复和云端提交，不能在现有完整 `VfsMutation.bytes` 接口上偷偷重新读取整文件。
+这只是存储层原型，不是正式 DSH 文件工具能力。16 MiB 真实 DSH `read → grep → edit → read` 对照仍观察到 `residentBytes` 从 `34,493,823` 增至 `51,276,228`；本批已把 external reference 接入 experimental `MemoryVfs` mutation sink、Workspace 本地缓存、分块上传、manifest CAS 和 Session 外的 compact receipt，但还没有接入标准 `edit` 工具、正式 Session event schema 或生产 Workspace API。不能把这条测试路径称为块级 delta、零拷贝或正式工具能力。
 
 复跑原型和对照：
 
@@ -126,6 +126,24 @@ DSH_POC_BROWSER=chrome DSH_POC_CHUNK_EDIT_BYTES=67108864 \
 DSH_POC_BROWSER=chrome DSH_POC_OPFS_AGENT_FILE_BYTES=16777216 \
   node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
 ```
+
+## External reference 编辑与刷新恢复验证
+
+[计划](reference-backed-edit-validation-plan.md)和[进度](reference-backed-edit-validation-progress.md)验证了上一批 chunk-backed 编辑原型接入 VFS、Workspace 和刷新恢复所需的接口。Worker 在 OPFS 临时文件中执行 copy-on-write，向 `MemoryVfs` 发布只含 hash/bytes 的 `write-reference` mutation；Workspace 从 range backing 计算 hash、写入本地 durable blob、按 1 MiB 分块上传并以 `baseRevision` CAS 提交。工具/Session 只保留 compact metadata，不把大文件 `before`/`after` 文本写入结果。
+
+当前 checkout 的真实 Chrome 证据包括 16 MiB 正常闭环和 4 MiB 的 `copy-prefix`、`copy-suffix`、replacement、truncate、hash、publish 故障矩阵。失败时源文件 hash 不变、没有 Workspace commit，重试沿用同一操作语义并只产生一个 revision；刷新后从 OPFS/IndexedDB hydrate external backing，range read 和 digest 仍通过。该 test action 由 URL-gated Worker test port 驱动，不代表真实模型会自主选择它。
+
+复跑本批模型无关验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_REFERENCE_EDIT_BYTES=16777216 \
+  node docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_REFERENCE_EDIT_BYTES=4194304 \
+  node docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs
+```
+
+本批没有把该测试端口注册成标准 Agent 工具。真实 LLM 仅需按既有运行时命令回归普通文件闭环，不能据此宣称模型已验证大型 external-reference tool arguments。
 
 ## OPFS 外置大文件的 DSH 工具闭环
 

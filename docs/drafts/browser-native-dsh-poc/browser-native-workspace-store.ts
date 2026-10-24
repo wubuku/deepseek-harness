@@ -28,6 +28,13 @@ export interface DurableWorkspaceStore {
   clear(workspaceId: string): Promise<void>
   /** Cache a verified immutable blob without changing the workspace snapshot. */
   cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void>
+  /** Cache bytes from a synchronous range source without assembling the file in JS memory. */
+  cacheBlobFromRanges(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readRange: (offset: number, length: number) => Uint8Array,
+  ): Promise<void>
   /** Open a verified immutable blob as a synchronous range backing when supported. */
   openBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined>
   /** Stream a remote blob into local durable storage without assembling the whole file in JS memory. */
@@ -63,8 +70,9 @@ export class DurableWorkspaceStoreError extends Error {
   }
 }
 
-interface StoredChange extends Omit<WorkspaceChange, 'content'> {
+interface StoredChange extends Omit<WorkspaceChange, 'content' | 'contentReference'> {
   readonly contentHash?: string
+  readonly externalContent?: boolean
 }
 
 interface StoredBatch {
@@ -133,6 +141,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 /** In-memory implementation used by deterministic unit tests. */
 export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
   private readonly snapshots = new Map<string, DurableWorkspaceSnapshot>()
+  private readonly blobs = new Map<string, Uint8Array>()
 
   async load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
     const snapshot = this.snapshots.get(workspaceId)
@@ -145,12 +154,42 @@ export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
 
   async clear(workspaceId: string): Promise<void> {
     this.snapshots.delete(workspaceId)
+    for (const key of this.blobs.keys()) if (key.startsWith(`${workspaceId}:`)) this.blobs.delete(key)
   }
 
-  async cacheBlob(_workspaceId: string, _hash: string, _content: Uint8Array): Promise<void> {}
+  async cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void> {
+    if (await sha256(content) !== hash) throw new Error(`browser-native workspace: memory blob hash mismatch (${hash})`)
+    this.blobs.set(`${workspaceId}:${hash}`, content.slice())
+  }
 
-  async openBlob(_workspaceId: string, _hash: string, _bytes: number): Promise<VfsFileBacking | undefined> {
-    return undefined
+  async cacheBlobFromRanges(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readRange: (offset: number, length: number) => Uint8Array,
+  ): Promise<void> {
+    const output = new Uint8Array(bytes)
+    for (let offset = 0; offset < bytes; offset += BLOB_IO_CHUNK_BYTES) {
+      const length = Math.min(BLOB_IO_CHUNK_BYTES, bytes - offset)
+      const chunk = readRange(offset, length)
+      if (chunk.byteLength !== length) throw new Error(`browser-native workspace: range source returned a short chunk for ${hash}`)
+      output.set(chunk, offset)
+    }
+    await this.cacheBlob(workspaceId, hash, output)
+  }
+
+  async openBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined> {
+    const content = this.blobs.get(`${workspaceId}:${hash}`)
+    if (content === undefined || content.byteLength !== bytes) return undefined
+    let closed = false
+    return {
+      size: bytes,
+      read: (position, length) => {
+        if (closed) throw new Error('browser-native workspace: memory blob is closed')
+        return content.slice(position, Math.min(position + length, bytes))
+      },
+      close: () => { closed = true },
+    }
   }
 
   async cacheBlobFromChunks(
@@ -222,8 +261,8 @@ async function sha256File(file: File): Promise<string> {
   return digest.digestHex()
 }
 
-function storedChange(change: WorkspaceChange, contentHash?: string): StoredChange {
-  const metadata: Omit<WorkspaceChange, 'content'> = {
+function storedChange(change: WorkspaceChange, contentHash?: string, externalContent = false): StoredChange {
+  const metadata: Omit<WorkspaceChange, 'content' | 'contentReference'> = {
     path: change.path,
     ...(change.deleted === true ? { deleted: true } : {}),
     ...(change.kind === undefined ? {} : { kind: change.kind }),
@@ -235,6 +274,7 @@ function storedChange(change: WorkspaceChange, contentHash?: string): StoredChan
   return {
     ...metadata,
     ...(contentHash === undefined ? {} : { contentHash }),
+    ...(externalContent ? { externalContent: true } : {}),
   }
 }
 
@@ -249,6 +289,12 @@ function restoreChange(change: StoredChange, content: Uint8Array | undefined): W
     ...(change.operation === undefined ? {} : { operation: change.operation }),
   }
   if (change.deleted === true || change.kind === 'directory') return metadata
+  if (change.externalContent === true) {
+    if (change.contentHash === undefined || change.bytes === undefined) {
+      throw new Error(`browser-native workspace: external local blob metadata is incomplete for ${change.path}`)
+    }
+    return { ...metadata, contentReference: { hash: change.contentHash, bytes: change.bytes } }
+  }
   if (change.contentHash === undefined || content === undefined) throw new Error(`browser-native workspace: local blob is missing for ${change.path}`)
   if (change.bytes !== undefined && change.bytes !== content.byteLength) throw new Error(`browser-native workspace: local blob size mismatch for ${change.path}`)
   return { ...metadata, content }
@@ -270,6 +316,9 @@ function assertStoredChange(value: unknown): asserts value is StoredChange {
     || !Number.isSafeInteger(value.mode) || typeof value.bytes !== 'number'
     || !Number.isSafeInteger(value.bytes) || value.bytes < 0) {
     throw new Error(`browser-native workspace: local file change is invalid for ${value.path}`)
+  }
+  if (value.externalContent !== undefined && value.externalContent !== true) {
+    throw new Error(`browser-native workspace: local external content flag is invalid for ${value.path}`)
   }
 }
 
@@ -428,6 +477,9 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   private async encodeChange(directory: FileSystemDirectoryHandle, change: WorkspaceChange): Promise<StoredChange> {
+    if (change.contentReference !== undefined) {
+      return storedChange(change, change.contentReference.hash, true)
+    }
     if (change.content === undefined) return storedChange(change)
     const contentHash = await sha256(change.content)
     await this.writeBlob(directory, contentHash, change.content)
@@ -435,6 +487,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   private async decodeChange(directory: FileSystemDirectoryHandle, change: StoredChange): Promise<WorkspaceChange> {
+    if (change.externalContent === true) return restoreChange(change, undefined)
     if (change.contentHash === undefined) return restoreChange(change, undefined)
     const content = await this.readBlob(directory, change.contentHash)
     if (change.bytes !== undefined && change.bytes !== content.byteLength) {
@@ -523,6 +576,44 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: blob hash mismatch (${hash})`)
     }
     await this.writeBlob(blobDirectory, hash, content)
+  }
+
+  async cacheBlobFromRanges(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readRange: (offset: number, length: number) => Uint8Array,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('browser-native workspace: invalid blob byte length')
+    const { blobDirectory } = await this.resources(workspaceId)
+    const handle = await blobDirectory.getFileHandle(hash, { create: true })
+    const existing = await handle.getFile()
+    if (existing.size === bytes && await sha256File(existing) === hash) return
+    if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
+      throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
+    }
+    const writable = await handle.createWritable()
+    const digest = new Sha256()
+    try {
+      for (let offset = 0; offset < bytes; offset += BLOB_IO_CHUNK_BYTES) {
+        const length = Math.min(BLOB_IO_CHUNK_BYTES, bytes - offset)
+        const chunk = readRange(offset, length)
+        if (chunk.byteLength !== length) throw new Error('browser-native workspace: local range source returned an unexpected size')
+        digest.update(chunk)
+        await writable.write({ type: 'write', position: offset, data: toArrayBuffer(chunk) })
+      }
+      if (digest.digestHex() !== hash) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local range blob hash mismatch (${hash})`)
+      }
+      await writable.close()
+    } catch (error) {
+      try {
+        await writable.abort()
+      } catch (abortError) {
+        void abortError
+      }
+      throw error
+    }
   }
 
   async openBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined> {

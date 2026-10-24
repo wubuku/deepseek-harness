@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createBrowserNativeWorkspaceRuntime } from '../browser-native-workspace.ts'
+import { MemoryDurableWorkspaceStore } from '../browser-native-workspace-store.ts'
 import { createWorkspaceBlobProtocolMock } from './workspace-blob-protocol-mock.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
@@ -148,6 +149,66 @@ describe('browser-native Workspace VFS sync', () => {
     runtime.vfs.writeFileSync('/dsh/home/workspace/second.txt', 'same bytes')
     await vi.waitFor(() => { expect(committed).toBe(true) })
     expect(protocol.readonlyUploads).toHaveLength(1)
+  })
+
+  it('uploads and restores an external reference without a content field', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    const protocol = createWorkspaceBlobProtocolMock()
+    const source = new TextEncoder().encode('before\n' + 'x'.repeat(4096) + '\n')
+    const target = new TextEncoder().encode('after\n' + 'x'.repeat(4096) + '\n')
+    const hash = createHash('sha256').update(target).digest('hex')
+    let manifest: { revision: number; entries: Array<Record<string, unknown>> } = { revision: 0, entries: [] }
+    const commits: Array<Record<string, unknown>> = []
+    stubWorkspaceFetch(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, ...manifest, digest: '' })
+      if (url.endsWith('/commit')) {
+        const body = JSON.parse(String(init?.body)) as { changes: Array<Record<string, unknown>> }
+        commits.push(body)
+        manifest = { revision: 1, entries: body.changes }
+        return jsonResponse({ workspaceId, revision: 1 })
+      }
+      throw new Error(`unexpected request ${url}`)
+    }, protocol)
+
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.seedExternal('/dsh/home/workspace/reference.txt', {
+      size: source.byteLength,
+      read: (position, length) => source.subarray(position, position + length),
+      close: () => {},
+    })
+    await runtime.runToolOperation({
+      sessionId: 'session-reference', turn: 1, step: 1, callId: 'call-reference', toolName: 'browser_edit_ref', toolCallSeq: 1,
+    }, async () => {
+      runtime.vfs.replaceExternalSync('/dsh/home/workspace/reference.txt', {
+        size: target.byteLength,
+        read: (position, length) => target.subarray(position, position + length),
+        close: () => {},
+      }, { hash, bytes: target.byteLength })
+    })
+    await runtime.flushLocalWorkspace()
+    const receipts = await runtime.flushWorkspace()
+    protocol.registerBlob(hash, target)
+
+    expect(receipts).toHaveLength(1)
+    expect(commits).toHaveLength(1)
+    expect(commits[0]?.changes).toEqual([{
+      path: 'reference.txt', kind: 'file', hash, bytes: target.byteLength, mode: 0o644,
+    }])
+    expect(JSON.stringify(commits[0])).not.toContain('after')
+    const cached = await store.openBlob(workspaceId, hash, target.byteLength)
+    expect(cached?.read(0, 6)).toEqual(target.subarray(0, 6))
+    cached?.close()
+
+    const restored = createBrowserNativeWorkspaceRuntime({ store })
+    restored.vfs.seedDirectory('/dsh/home/workspace')
+    await restored.prepareVfs(restored.vfs)
+    expect(restored.vfs.usage().residentBytes).toBe(0)
+    expect(restored.vfs.readFileRangeSync('/dsh/home/workspace/reference.txt', 0, 6)).toEqual(target.subarray(0, 6))
+    restored.vfs.close()
   })
 
   it('synchronizes append, rename, remove, chmod, empty, binary, and Unicode paths', async () => {
