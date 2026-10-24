@@ -168,6 +168,8 @@ Agentic UI 事实核查
 11. [易失文件状态隔离计划](browser-native-dsh-poc/volatile-workspace-isolation-plan.md)与[进度/经验教训](browser-native-dsh-poc/volatile-workspace-isolation-progress.md)：真实 Chrome 验证 IndexedDB 持久化失败后 Agent 不能读取、搜索或继续修改仅存在 Worker 内存的文件；刷新恢复 durable 基线，再由同 Session 新调用显式重试。
 12. [运行时完整性验证计划](browser-native-dsh-poc/next-runtime-integrity-validation-plan.md)与[进度](browser-native-dsh-poc/next-runtime-integrity-validation-progress.md)：Chrome/scripted E2E 验证活动 Worker lease heartbeat 和续租故障恢复、Workspace 初始化失败停止续租、Agent 写入未知 commit 与 backend 重启、HITL 等待期间刷新后的诚实中断及同 Session 新 turn 续聊，以及 IndexedDB 前向版本 fail-closed 和恢复导出；原问答 Promise 不跨刷新恢复。
 
+13. [文件规模与分块传输验证计划](browser-native-dsh-poc/large-file-scale-validation-plan.md)与[进度](browser-native-dsh-poc/large-file-scale-validation-progress.md)：验证 1 MiB Workspace chunk staging、缺块续传、hash/size 校验、backend 重启、OPFS 分块写入、16/64 MiB Chrome 文件和 1,000 小文件；明确仍有完整 `MemoryVfs` bytes、完整下载组装、独立 Session JSON 上限和 PoC 本地 backend 限制。
+
 ### 路径 C：直接复现 PoC
 
 适合需要运行、修改或审查现有实验代码的开发者。

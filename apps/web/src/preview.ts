@@ -20,13 +20,15 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
   readonly to?: string
   readonly content?: string
   readonly base64?: string
+  readonly byteLength?: number
+  readonly byteValue?: number
   readonly mode?: number
 }
 
@@ -48,6 +50,7 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly kind?: 'directory' | 'file'
   readonly mode?: number
   readonly bytes?: number
+  readonly digest?: string
   readonly receipts?: readonly Record<string, unknown>[]
 }
 

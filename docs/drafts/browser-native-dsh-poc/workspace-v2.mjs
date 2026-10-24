@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -7,6 +8,9 @@ const COOKIE_MAX_AGE_SECONDS = 31_536_000
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
 const DEFAULT_WRITER_LEASE_MS = 30_000
+export const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024
+const MAX_WORKSPACE_BLOB_BYTES = 64 * 1024 * 1024
+const UPLOAD_EXPIRY_MS = 24 * 60 * 60 * 1000
 
 export class WorkspaceError extends Error {
   constructor(code, message, status = 400, details) {
@@ -42,6 +46,27 @@ function assertProtocol(body) {
 
 function hashBytes(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+async function hashFile(path) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest('hex')
+}
+
+function assertUploadIdentity(operationId, hash) {
+  assertId(operationId, 'operationId')
+  if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) {
+    throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
+  }
+}
+
+function expectedChunkBytes(totalBytes, chunkIndex, chunkCount) {
+  if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= chunkCount) {
+    throw new WorkspaceError('INVALID_REQUEST', 'chunk index is invalid')
+  }
+  const start = chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES
+  return Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - start)
 }
 
 function parseCookies(header) {
@@ -110,6 +135,7 @@ export class WorkspaceStore {
     this.root = join(dataDir, 'workspace-v2')
     this.blobsDir = join(this.root, 'blobs')
     this.workspacesDir = join(this.root, 'workspaces')
+    this.uploadsDir = join(this.root, 'uploads')
     this.identitiesPath = join(this.root, 'identities.json')
     this.identities = new Map()
     this.workspaces = new Map()
@@ -124,7 +150,9 @@ export class WorkspaceStore {
     await Promise.all([
       mkdir(this.blobsDir, { recursive: true }),
       mkdir(this.workspacesDir, { recursive: true }),
+      mkdir(this.uploadsDir, { recursive: true }),
     ])
+    await this.removeExpiredUploads()
     try {
       const raw = JSON.parse(await readFile(this.identitiesPath, 'utf8'))
       if (Array.isArray(raw.identities)) {
@@ -283,6 +311,253 @@ export class WorkspaceStore {
       }
       return { hash, bytes: bytes.byteLength, reused }
     })
+  }
+
+  uploadDirectory(workspaceId, operationId, hash) {
+    return join(this.uploadsDir, workspaceId, `${operationId}-${hash}`)
+  }
+
+  uploadMetadataPath(workspaceId, operationId, hash) {
+    return join(this.uploadDirectory(workspaceId, operationId, hash), 'upload.json')
+  }
+
+  async removeExpiredUploads() {
+    for (const workspace of await readdir(this.uploadsDir, { withFileTypes: true })) {
+      if (!workspace.isDirectory() || !/^[0-9a-f-]{36}$/i.test(workspace.name)) continue
+      const workspaceDirectory = join(this.uploadsDir, workspace.name)
+      for (const upload of await readdir(workspaceDirectory, { withFileTypes: true })) {
+        if (!upload.isDirectory()) continue
+        const directory = join(workspaceDirectory, upload.name)
+        try {
+          const metadata = JSON.parse(await readFile(join(directory, 'upload.json'), 'utf8'))
+          if (!Number.isSafeInteger(metadata.updatedAt) || Date.now() - metadata.updatedAt > UPLOAD_EXPIRY_MS) {
+            await rm(directory, { recursive: true, force: true })
+          }
+        } catch (error) {
+          if (error?.code === 'ENOENT' || error instanceof SyntaxError) {
+            await rm(directory, { recursive: true, force: true })
+            continue
+          }
+          throw error
+        }
+      }
+    }
+  }
+
+  async readUploadMetadata(workspaceId, operationId, hash) {
+    try {
+      const metadata = JSON.parse(await readFile(this.uploadMetadataPath(workspaceId, operationId, hash), 'utf8'))
+      if (metadata.version !== 1 || metadata.workspaceId !== workspaceId || metadata.operationId !== operationId
+        || metadata.hash !== hash || !Number.isSafeInteger(metadata.totalBytes)
+        || !Number.isSafeInteger(metadata.chunkCount) || !Array.isArray(metadata.chunks)) {
+        throw new WorkspaceError('UPLOAD_METADATA_INVALID', 'upload metadata is invalid', 500)
+      }
+      return metadata
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw new WorkspaceError('UPLOAD_NOT_FOUND', 'blob upload does not exist', 404)
+      throw error
+    }
+  }
+
+  async startBlobUpload(request, input) {
+    const principalId = this.principalFromRequest(request)
+    const workspaceId = assertId(input.workspaceId, 'workspaceId')
+    const operationId = input.operationId
+    const hash = input.hash
+    assertUploadIdentity(operationId, hash)
+    if (!Number.isSafeInteger(input.totalBytes) || input.totalBytes < 0 || input.totalBytes > MAX_WORKSPACE_BLOB_BYTES
+      || input.chunkBytes !== WORKSPACE_BLOB_CHUNK_BYTES) {
+      throw new WorkspaceError('UPLOAD_SIZE_UNSUPPORTED', 'blob size or chunk size is unsupported', 413, {
+        maxBytes: MAX_WORKSPACE_BLOB_BYTES,
+        chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+      })
+    }
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      if (workspace.uploadedHashes.has(hash)) {
+        return { workspaceId, operationId, hash, complete: true, missing: [] }
+      }
+      const metadataPath = this.uploadMetadataPath(workspaceId, operationId, hash)
+      const chunkCount = Math.ceil(input.totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
+      let metadata
+      try {
+        metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+      } catch (error) {
+        if (!(error instanceof WorkspaceError) || error.code !== 'UPLOAD_NOT_FOUND') throw error
+      }
+      if (metadata !== undefined && (metadata.totalBytes !== input.totalBytes || metadata.chunkBytes !== input.chunkBytes
+        || metadata.chunkCount !== chunkCount)) {
+        throw new WorkspaceError('UPLOAD_ID_CONFLICT', 'upload id was reused with different blob metadata', 409)
+      }
+      if (metadata === undefined) {
+        metadata = {
+          version: 1,
+          workspaceId,
+          operationId,
+          hash,
+          totalBytes: input.totalBytes,
+          chunkBytes: input.chunkBytes,
+          chunkCount,
+          chunks: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+        await atomicWrite(metadataPath, JSON.stringify(metadata))
+      }
+      const missing = []
+      for (let index = 0; index < chunkCount; index += 1) {
+        if (metadata.chunks[index] === undefined) missing.push(index)
+      }
+      return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount, missing }
+    })
+  }
+
+  async blobUploadStatus(request, workspaceId, operationId, hash) {
+    const principalId = this.principalFromRequest(request)
+    workspaceId = assertId(workspaceId, 'workspaceId')
+    assertUploadIdentity(operationId, hash)
+    const workspace = this.requireWorkspace(principalId, workspaceId)
+    if (workspace.uploadedHashes.has(hash)) return { workspaceId, operationId, hash, complete: true, missing: [] }
+    const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+    const missing = []
+    for (let index = 0; index < metadata.chunkCount; index += 1) {
+      const expectedDigest = metadata.chunks[index]
+      if (expectedDigest === undefined) {
+        missing.push(index)
+        continue
+      }
+      const path = join(this.uploadDirectory(workspaceId, operationId, hash), `${String(index)}.part`)
+      try {
+        const info = await stat(path)
+        if (info.size !== expectedChunkBytes(metadata.totalBytes, index, metadata.chunkCount)
+          || await hashFile(path) !== expectedDigest) missing.push(index)
+      } catch (error) {
+        if (error?.code === 'ENOENT') missing.push(index)
+        else throw error
+      }
+    }
+    return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount: metadata.chunkCount, missing }
+  }
+
+  async putBlobChunk(request, workspaceId, operationId, hash, chunkIndex, bytes, chunkHash) {
+    const principalId = this.principalFromRequest(request)
+    workspaceId = assertId(workspaceId, 'workspaceId')
+    assertUploadIdentity(operationId, hash)
+    if (typeof chunkHash !== 'string' || !/^[a-f0-9]{64}$/.test(chunkHash) || hashBytes(bytes) !== chunkHash) {
+      throw new WorkspaceError('UPLOAD_CHUNK_HASH_MISMATCH', 'uploaded chunk does not match its SHA-256 hash')
+    }
+    return await this.exclusive(workspaceId, async () => {
+      this.requireWorkspace(principalId, workspaceId)
+      const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+      const expectedBytes = expectedChunkBytes(metadata.totalBytes, chunkIndex, metadata.chunkCount)
+      if (bytes.byteLength !== expectedBytes) throw new WorkspaceError('UPLOAD_CHUNK_SIZE_MISMATCH', 'uploaded chunk has an invalid byte length')
+      const directory = this.uploadDirectory(workspaceId, operationId, hash)
+      const path = join(directory, `${String(chunkIndex)}.part`)
+      const previousHash = metadata.chunks[chunkIndex]
+      if (previousHash !== undefined) {
+        if (previousHash !== chunkHash) {
+          throw new WorkspaceError('UPLOAD_CHUNK_CONFLICT', 'chunk index was already stored with different content', 409)
+        }
+        try {
+          const previous = await readFile(path)
+          if (previous.equals(bytes)) {
+            return { workspaceId, operationId, hash, chunkIndex, chunkHash, replayed: true }
+          }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error
+        }
+      }
+      await atomicWrite(path, bytes)
+      const chunks = [...metadata.chunks]
+      chunks[chunkIndex] = chunkHash
+      await atomicWrite(this.uploadMetadataPath(workspaceId, operationId, hash), JSON.stringify({
+        ...metadata,
+        chunks,
+        updatedAt: Date.now(),
+      }))
+      return { workspaceId, operationId, hash, chunkIndex, chunkHash, replayed: false }
+    })
+  }
+
+  async completeBlobUpload(request, workspaceId, operationId, hash) {
+    const principalId = this.principalFromRequest(request)
+    workspaceId = assertId(workspaceId, 'workspaceId')
+    assertUploadIdentity(operationId, hash)
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      if (workspace.uploadedHashes.has(hash)) return { workspaceId, operationId, hash, complete: true, replayed: true }
+      const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+      if (metadata.chunks.length !== metadata.chunkCount || metadata.chunks.some(chunk => typeof chunk !== 'string')) {
+        throw new WorkspaceError('UPLOAD_INCOMPLETE', 'blob upload is missing one or more chunks', 409)
+      }
+      const target = join(this.blobsDir, hash.slice(0, 2), hash)
+      let reused = false
+      try {
+        const existing = await stat(target)
+        if (existing.size !== metadata.totalBytes || await hashFile(target) !== hash) {
+          throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed size or SHA-256 verification', 500)
+        }
+        reused = true
+      } catch (error) {
+        if (error instanceof WorkspaceError || error?.code !== 'ENOENT') throw error
+        const temporary = `${target}.${randomUUID()}.upload`
+        await mkdir(dirname(target), { recursive: true })
+        const output = await open(temporary, 'wx', 0o600)
+        const digest = createHash('sha256')
+        let totalBytes = 0
+        try {
+          for (let index = 0; index < metadata.chunkCount; index += 1) {
+            const chunk = await readFile(join(this.uploadDirectory(workspaceId, operationId, hash), `${String(index)}.part`))
+            const expectedBytes = expectedChunkBytes(metadata.totalBytes, index, metadata.chunkCount)
+            if (chunk.byteLength !== expectedBytes || hashBytes(chunk) !== metadata.chunks[index]) {
+              throw new WorkspaceError('UPLOAD_CHUNK_CORRUPT', `stored chunk ${String(index)} failed validation`, 409)
+            }
+            digest.update(chunk)
+            totalBytes += chunk.byteLength
+            await output.writeFile(chunk)
+          }
+          await output.sync()
+        } catch (error) {
+          await output.close()
+          await rm(temporary, { force: true })
+          throw error
+        }
+        await output.close()
+        if (totalBytes !== metadata.totalBytes || digest.digest('hex') !== hash) {
+          await rm(temporary, { force: true })
+          throw new WorkspaceError('UPLOAD_BLOB_HASH_MISMATCH', 'assembled blob does not match its declared size or SHA-256 hash', 409)
+        }
+        await rename(temporary, target)
+        const directory = await open(dirname(target), 'r')
+        try { await directory.sync() } finally { await directory.close() }
+      }
+      const next = { ...workspace, uploadedHashes: new Set(workspace.uploadedHashes).add(hash) }
+      await this.persistWorkspace(next)
+      this.workspaces.set(workspaceId, next)
+      await rm(this.uploadDirectory(workspaceId, operationId, hash), { recursive: true, force: true })
+      return { workspaceId, operationId, hash, complete: true, reused, replayed: false }
+    })
+  }
+
+  async getBlobChunk(request, workspaceId, hash, chunkIndex) {
+    const principalId = this.principalFromRequest(request)
+    const workspace = this.requireWorkspace(principalId, workspaceId)
+    const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
+    if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
+    const path = join(this.blobsDir, hash.slice(0, 2), hash)
+    const info = await stat(path)
+    const chunkCount = Math.ceil(info.size / WORKSPACE_BLOB_CHUNK_BYTES)
+    const bytesInChunk = expectedChunkBytes(info.size, chunkIndex, chunkCount)
+    const buffer = Buffer.alloc(bytesInChunk)
+    const handle = await open(path, 'r')
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, bytesInChunk, chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES)
+      if (bytesRead !== bytesInChunk) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob chunk is truncated', 500)
+    } finally {
+      await handle.close()
+    }
+    return { bytes: buffer, chunkHash: hashBytes(buffer), chunkIndex, chunkCount, totalBytes: info.size }
   }
 
   async lease(request, body) {
@@ -446,11 +721,11 @@ export class WorkspaceStore {
           throw new WorkspaceError('BLOB_FORBIDDEN', 'blob must be uploaded by this Workspace before commit', 403)
         }
         const blobPath = join(this.blobsDir, change.hash.slice(0, 2), change.hash)
-        const blob = await readFile(blobPath).catch(error => {
+        const blobInfo = await stat(blobPath).catch(error => {
           if (error?.code === 'ENOENT') throw new WorkspaceError('BLOB_MISSING', `blob ${change.hash} must be uploaded before commit`, 409)
           throw error
         })
-        if (blob.byteLength !== change.bytes || hashBytes(blob) !== change.hash) {
+        if (blobInfo.size !== change.bytes || await hashFile(blobPath) !== change.hash) {
           throw new WorkspaceError('BLOB_CORRUPT', `blob ${change.hash} failed size or hash verification`, 409)
         }
       }

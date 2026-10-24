@@ -7,6 +7,7 @@ import {
   MemoryDurableWorkspaceStore,
 } from '../browser-native-workspace-store.ts'
 import { DurableWorkspaceStoreError } from '../browser-native-workspace-store.ts'
+import { createWorkspaceBlobProtocolMock } from './workspace-blob-protocol-mock.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
 const remoteBytes = new TextEncoder().encode('remote value')
@@ -16,14 +17,23 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
+function stubWorkspaceFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): void {
+  const protocol = createWorkspaceBlobProtocolMock()
+  protocol.registerBlob(remoteHash, remoteBytes)
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const transferResponse = protocol.respond(input, init)
+    if (transferResponse !== undefined) return transferResponse
+    return await handler(input, init)
+  }))
+}
+
 function stubRemoteManifest(revision: number, entries: readonly Record<string, unknown>[] = []): void {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+  stubWorkspaceFetch(async input => {
     const url = String(input)
     if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
     if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision, entries })
-    if (url.includes('/blob/') && url.includes(remoteHash)) return new Response(remoteBytes)
     throw new Error(`unexpected request ${url}`)
-  }))
+  })
 }
 
 afterEach(() => {
@@ -78,19 +88,18 @@ describe('durable Browser-Native Workspace state', () => {
     vi.useFakeTimers()
     const store = new MemoryDurableWorkspaceStore()
     const commits: Array<{ operationId: string; baseRevision: number }> = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 2, entries: [] })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number }
         commits.push(body)
         return jsonResponse({ error: { code: 'TEMPORARY', message: 'commit unavailable' } }, 503)
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
 
     const first = createBrowserNativeWorkspaceRuntime({ store })
     await first.prepareVfs(first.vfs)
@@ -131,13 +140,12 @@ describe('durable Browser-Native Workspace state', () => {
     vi.useFakeTimers()
     const store = new MemoryDurableWorkspaceStore()
     const requests: string[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       requests.push(`${method} ${url}`)
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number; changes: Array<{ path: string }> }
         return jsonResponse({
@@ -150,7 +158,7 @@ describe('durable Browser-Native Workspace state', () => {
         })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
 
     const runtime = createBrowserNativeWorkspaceRuntime({ store })
     await runtime.prepareVfs(runtime.vfs)
@@ -182,12 +190,11 @@ describe('durable Browser-Native Workspace state', () => {
     }
     const commits: Array<{ operationId: string; baseRevision: number }> = []
     let failFirstCommit = true
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number; changes: Array<{ path: string }> }
         commits.push({ operationId: body.operationId, baseRevision: body.baseRevision })
@@ -206,7 +213,7 @@ describe('durable Browser-Native Workspace state', () => {
       }
       if (url.includes('/operation/')) return jsonResponse({ found: false })
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
 
     const first = createBrowserNativeWorkspaceRuntime({ store })
     await first.prepareVfs(first.vfs)
@@ -323,6 +330,28 @@ describe('durable Browser-Native Workspace state', () => {
     await expect(flush).resolves.toBeUndefined()
     expect(snapshots).toHaveLength(2)
     expect(snapshots.at(-1)?.pending.map(change => change.path).sort()).toEqual(['first.txt', 'second.txt'])
+  })
+
+  it('coalesces a burst of Workspace mutations into one latest durable snapshot', async () => {
+    stubRemoteManifest(0)
+    const snapshots: Array<{ pending: readonly { path: string }[] }> = []
+    const store = {
+      load: async () => undefined,
+      save: async (snapshot: { pending: readonly { path: string }[] }) => { snapshots.push(snapshot) },
+      clear: async () => {},
+    }
+    const runtime = createBrowserNativeWorkspaceRuntime({ store })
+    await runtime.prepareVfs(runtime.vfs)
+    for (let index = 0; index < 1_000; index += 1) {
+      runtime.vfs.writeFileSync(`/dsh/home/workspace/burst-${String(index).padStart(4, '0')}.txt`, 'small file')
+    }
+
+    await runtime.flushLocalWorkspace()
+
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]?.pending).toHaveLength(1_000)
+    expect(snapshots[0]?.pending[0]?.path).toBe('burst-0000.txt')
+    expect(snapshots[0]?.pending.at(-1)?.path).toBe('burst-0999.txt')
   })
 
   it('rejects Agent Workspace access after local persistence fails', async () => {

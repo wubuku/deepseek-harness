@@ -209,6 +209,23 @@ deleteCondition: SessionPersistence 和 Session Controller 不再共用本地 Po
 status: implemented
 ```
 
+### BN-P2-015：Worker 内生成文件规模测试负载与分块 Workspace 传输
+
+```text
+changeId: BN-P2-015
+upstreamBaseline: dsh-v0.2.1-rc.2 / research checkout on 2026-10-24
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/large-file-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-blob-protocol-mock.ts; docs/drafts/browser-native-dsh-poc/large-file-scale-validation-plan.md; docs/drafts/browser-native-dsh-poc/large-file-scale-validation-progress.md
+reason: 当前 Workspace blob API 以单个 HTTP body 上传，8 MiB 以上请求被拒；大文件 Chrome E2E 还需要从真实 Worker 内部生成 VFS bytes，避免通过页面消息复制大对象。千文件 workload 还暴露出每次 mutation 排队完整 snapshot 的写放大。
+existingExtensionPointsChecked: preview.ts 已有仅由 `browser-native=1&browser-native-test=workspace-recovery` 开启的 MessagePort；Worker test handler 可直接访问同一 Workspace runtime.vfs。Workspace backend 的 `dataDir`、manifest CAS 和 operation receipt 可承载 PoC staging；durable store 已有 OPFS blob 与 IndexedDB metadata 发布点。不需要新增生产文件 API 或修改 MemoryVfs、Agent Loop、Session format。
+whyDraftOnlyWasInsufficient: 纯 Node VFS 单测无法涵盖真实 Chrome Dedicated Worker、OPFS、IndexedDB、backend 重启和页面刷新；一次性 blob API 也无法验证缺块续传、幂等块重放或 finalize 的完整 hash/size 校验。
+behaviorChange: PoC test MessagePort 增加受限的 `write-pattern` 操作，文件由 Worker 内部生成；Workspace 增加 1 MiB chunk 的 upload start/status/put/complete 和 download chunk 路径。上传以 `operationId + blob hash` 标识，块 hash、最终 file hash 和 byte length 均校验；相同块重放幂等，损坏 staging 可重新补传。durable OPFS blob 按 1 MiB 写入；本地 snapshot 调度合并突发 mutation，只保存最新快照。默认 preview 和普通 browser-native 页面不暴露测试操作。
+consumersUpdated: preview.ts、browser-native-worker.ts、Workspace backend/client/store、相关单测和 mock、两项真实 Chrome scale E2E、large-file-scale-validation-plan.md/progress.md、PoC README、docs/drafts 导读和本账本。
+tests: backend contract tests 17/17；Workspace/durable Workspace focused Vitest 23/23；preview build 和新增 E2E `node --check` 通过。真实 Chrome 155 通过 16 MiB、64 MiB 和 1,000 个 256-byte 文件：覆盖 staging 损坏后补传、已写入块但响应丢失后的不重复上传、backend 重启、刷新 hydrate、bytes/hash、单次 commit 和无 pageerror。Chrome 负载由 Worker test port 生成；真实 LLM、Safari/WebKit、自然 eviction、OS crash、多实例 backend 和大型 tool args 未验证。
+syncReplaySteps: 上游同步后确认 preview MessagePort 测试 seam、Workspace manifest/operation API 和 durable store 发布顺序仍一致；保留 URL opt-in、Worker 内分配和输入上限，禁止把该 seam 接入普通 Web 或公开 API。运行 preview build、backend-v2 tests、Workspace Vitest、large-file-scale.e2e.mjs 和 many-small-files-scale.e2e.mjs；若正式 runtime 提供等价的可注入 VFS fixture 或分块对象存储接口，则迁移 E2E 并删除重复 PoC 接线。
+deleteCondition: 正式 Browser Workspace 有等价的 Worker 内文件 fixture/受控测试 API，且 E2E 已迁移到该 API；或 Browser-Native Workspace PoC 被删除。
+status: implemented
+```
+
 ## 当前登记
 
 ### BN-P1-001：preview 使用 docs-owned browser-native Worker entry

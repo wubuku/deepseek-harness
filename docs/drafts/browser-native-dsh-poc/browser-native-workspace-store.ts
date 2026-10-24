@@ -4,6 +4,7 @@ const STORE_VERSION = 1
 const DATABASE_NAME = 'dsh-browser-native-workspace-v1'
 const METADATA_STORE = 'workspace'
 const BLOB_DIRECTORY_PREFIX = 'dsh-workspace-blobs-'
+const BLOB_IO_CHUNK_BYTES = 1024 * 1024
 
 /** Snapshot persisted locally while a Browser-Native Workspace operation is pending. */
 export interface DurableWorkspaceSnapshot {
@@ -90,6 +91,14 @@ function cloneSnapshot(snapshot: DurableWorkspaceSnapshot): DurableWorkspaceSnap
     }),
     ...(snapshot.receipts === undefined ? {} : { receipts: snapshot.receipts.map(receipt => ({ ...receipt, paths: [...receipt.paths] })) }),
   }
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
 }
 
 /** In-memory implementation used by deterministic unit tests. */
@@ -303,7 +312,18 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     const handle = await directory.getFileHandle(hash, { create: true })
     try {
       const existing = await handle.getFile()
-      if (existing.size === content.byteLength && await sha256(new Uint8Array(await existing.arrayBuffer())) === hash) return
+      if (existing.size === content.byteLength) {
+        let matches = true
+        for (let offset = 0; offset < content.byteLength; offset += BLOB_IO_CHUNK_BYTES) {
+          const end = Math.min(offset + BLOB_IO_CHUNK_BYTES, content.byteLength)
+          const stored = new Uint8Array(await existing.slice(offset, end).arrayBuffer())
+          if (!equalBytes(stored, content.subarray(offset, end))) {
+            matches = false
+            break
+          }
+        }
+        if (matches) return
+      }
     } catch (error) {
       // Rewrite a missing or unreadable local blob below.
       void error
@@ -313,7 +333,13 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     }
     const writable = await handle.createWritable()
     try {
-      await writable.write(toArrayBuffer(content))
+      for (let offset = 0; offset < content.byteLength; offset += BLOB_IO_CHUNK_BYTES) {
+        await writable.write({
+          type: 'write',
+          position: offset,
+          data: content.subarray(offset, Math.min(offset + BLOB_IO_CHUNK_BYTES, content.byteLength)),
+        })
+      }
       await writable.close()
     } catch (error) {
       try {
@@ -370,11 +396,12 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     const { blobDirectory } = await this.resources(workspaceId)
     const record = await this.readRecord(workspaceId)
     if (record === undefined) return undefined
-    const pending = await Promise.all(record.pending.map(change => this.decodeChange(blobDirectory, change)))
+    const pending: WorkspaceChange[] = []
+    for (const change of record.pending) pending.push(await this.decodeChange(blobDirectory, change))
     const retryBatch = record.retryBatch === undefined ? undefined : {
       operationId: record.retryBatch.operationId,
       baseRevision: record.retryBatch.baseRevision,
-      changes: await Promise.all(record.retryBatch.changes.map(change => this.decodeChange(blobDirectory, change))),
+      changes: await this.decodeChanges(blobDirectory, record.retryBatch.changes),
       ...(record.retryBatch.operation === undefined ? {} : { operation: record.retryBatch.operation }),
     }
     return {
@@ -385,6 +412,12 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       ...(retryBatch === undefined ? {} : { retryBatch }),
       ...(record.receipts === undefined ? {} : { receipts: record.receipts }),
     }
+  }
+
+  private async decodeChanges(directory: FileSystemDirectoryHandle, changes: readonly StoredChange[]): Promise<WorkspaceChange[]> {
+    const decoded: WorkspaceChange[] = []
+    for (const change of changes) decoded.push(await this.decodeChange(directory, change))
+    return decoded
   }
 
   async save(snapshot: DurableWorkspaceSnapshot): Promise<void> {
@@ -419,12 +452,6 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     transaction.objectStore(METADATA_STORE).delete(workspaceId)
     await transactionDone(transaction)
   }
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const output = new ArrayBuffer(bytes.byteLength)
-  new Uint8Array(output).set(bytes)
-  return output
 }
 
 /**

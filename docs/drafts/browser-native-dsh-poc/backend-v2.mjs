@@ -11,11 +11,12 @@ import { createServer } from 'node:http'
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
+import { WORKSPACE_BLOB_CHUNK_BYTES, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
+const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_EVENTS = 100_000
 const DEFAULT_OWNER_LEASE_MS = 30_000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
@@ -89,12 +90,13 @@ function sendJson(response, status, body, headers = {}) {
   response.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...body }))
 }
 
-function sendBytes(response, bytes) {
+function sendBytes(response, bytes, headers = {}) {
   response.writeHead(200, {
     'content-type': 'application/octet-stream',
     'content-length': String(bytes.byteLength),
     'cache-control': 'no-store',
     'x-browser-native-protocol': String(PROTOCOL_VERSION),
+    ...headers,
   })
   response.end(bytes)
 }
@@ -969,6 +971,78 @@ export async function createBrowserNativeV2Server(options) {
           throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
         }
         sendJson(response, 200, workspaces.manifest(request, url.searchParams.get('workspaceId')))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/blob-upload/start') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.startBlobUpload(request, body))
+        return
+      }
+      const uploadStatus = url.pathname.match(/^\/api\/browser-native\/workspace\/blob-upload\/([0-9a-f-]{36})-([a-f0-9]{64})$/i)
+      if (request.method === 'GET' && uploadStatus !== null) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        sendJson(response, 200, await workspaces.blobUploadStatus(
+          request,
+          url.searchParams.get('workspaceId'),
+          uploadStatus[1],
+          uploadStatus[2],
+        ))
+        return
+      }
+      const uploadChunk = url.pathname.match(/^\/api\/browser-native\/workspace\/blob-upload\/([0-9a-f-]{36})-([a-f0-9]{64})\/([0-9]+)$/i)
+      if (request.method === 'PUT' && uploadChunk !== null) {
+        if (request.headers['x-browser-native-protocol'] !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const workspaceId = request.headers['x-workspace-id']
+        const requestId = request.headers['x-request-id']
+        const chunkHash = request.headers['x-chunk-sha256']
+        if (typeof requestId !== 'string' || requestId.length === 0) throw new WorkspaceError('INVALID_REQUEST', 'requestId is required')
+        if (typeof chunkHash !== 'string') throw new WorkspaceError('INVALID_REQUEST', 'chunk SHA-256 is required')
+        const bytes = await readRawBody(request, MAX_WORKSPACE_CHUNK_BODY_BYTES)
+        sendJson(response, 200, await workspaces.putBlobChunk(
+          request,
+          workspaceId,
+          uploadChunk[1],
+          uploadChunk[2],
+          Number(uploadChunk[3]),
+          bytes,
+          chunkHash,
+        ))
+        return
+      }
+      const uploadComplete = url.pathname.match(/^\/api\/browser-native\/workspace\/blob-upload\/([0-9a-f-]{36})-([a-f0-9]{64})\/complete$/i)
+      if (request.method === 'POST' && uploadComplete !== null) {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.completeBlobUpload(
+          request,
+          body.workspaceId,
+          uploadComplete[1],
+          uploadComplete[2],
+        ))
+        return
+      }
+      const blobChunk = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})\/chunk\/([0-9]+)$/i)
+      if (request.method === 'GET' && blobChunk !== null) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const result = await workspaces.getBlobChunk(
+          request,
+          url.searchParams.get('workspaceId'),
+          blobChunk[1],
+          Number(blobChunk[2]),
+        )
+        sendBytes(response, result.bytes, {
+          'x-content-sha256': result.chunkHash,
+          'x-chunk-index': String(result.chunkIndex),
+          'x-chunk-count': String(result.chunkCount),
+          'x-total-bytes': String(result.totalBytes),
+        })
         return
       }
       if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/blob\/[a-f0-9]{64}$/.test(url.pathname)) {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createBrowserNativeWorkspaceRuntime } from '../browser-native-workspace.ts'
+import { createWorkspaceBlobProtocolMock } from './workspace-blob-protocol-mock.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
 const manifestBytes = new TextEncoder().encode('restored from cloud\n')
@@ -10,12 +11,26 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
+function stubWorkspaceFetch(
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  protocol = createWorkspaceBlobProtocolMock(),
+  beforeChunk?: (bytes: Uint8Array, index: number, hash: string) => Response | undefined,
+): void {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const transferResponse = protocol.respond(input, init, beforeChunk)
+    if (transferResponse !== undefined) return transferResponse
+    return await handler(input, init)
+  }))
+}
+
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('browser-native Workspace VFS sync', () => {
   it('restores before runtime writes, uploads changed content, and commits a revision', async () => {
     const requests: Array<{ url: string; method: string; body?: string }> = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const protocol = createWorkspaceBlobProtocolMock()
+    protocol.registerBlob(manifestHash, manifestBytes)
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       requests.push({ url, method, ...(typeof init?.body === 'string' ? { body: init.body } : {}) })
@@ -31,13 +46,9 @@ describe('browser-native Workspace VFS sync', () => {
           ],
         })
       }
-      if (url.includes('/blob/') && method === 'GET') return new Response(manifestBytes)
-      if (url.includes('/blob/') && method === 'PUT') {
-        return jsonResponse({ hash: url.split('/').at(-1), bytes: (init?.body as Uint8Array).byteLength, reused: false })
-      }
       if (url.endsWith('/commit')) return jsonResponse({ workspaceId, revision: 5, operationId: JSON.parse(String(init?.body)).operationId })
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    }, protocol)
 
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
@@ -55,18 +66,16 @@ describe('browser-native Workspace VFS sync', () => {
     expect(payload.baseRevision).toBe(4)
     expect(payload.changes).toMatchObject([{ path: 'notes/new.txt', hash: expect.any(String) }])
     expect(requests.find(request => request.url.includes('/manifest?'))?.method).toBe('GET')
-    expect(requests.some(request => request.url.includes(manifestHash) && request.method === 'GET')).toBe(true)
   })
 
   it('retains a stable operation id after an ambiguous commit failure and does not claim durability', async () => {
     const commits: Array<{ operationId: string; baseRevision: number }> = []
     let failCommit = true
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 2, entries: [], digest: '' })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number }
         commits.push(body)
@@ -74,7 +83,7 @@ describe('browser-native Workspace VFS sync', () => {
         return jsonResponse({ workspaceId, revision: 3, operationId: body.operationId })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
 
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
@@ -92,12 +101,11 @@ describe('browser-native Workspace VFS sync', () => {
 
   it('does not auto-rebase a stale writer after a CAS conflict', async () => {
     const commits: unknown[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 8, entries: [], digest: '' })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         commits.push(JSON.parse(String(init?.body)))
         return jsonResponse({
@@ -105,7 +113,7 @@ describe('browser-native Workspace VFS sync', () => {
         }, 409)
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)
@@ -117,17 +125,13 @@ describe('browser-native Workspace VFS sync', () => {
   })
 
   it('uploads identical content only once per synchronization batch', async () => {
-    const uploads: string[] = []
     let committed = false
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const protocol = createWorkspaceBlobProtocolMock()
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [], digest: '' })
-      if (url.includes('/blob/') && method === 'PUT') {
-        uploads.push(url.split('/').at(-1) ?? '')
-        return jsonResponse({ ok: true })
-      }
       if (url.endsWith('/commit')) {
         committed = true
         const body = JSON.parse(String(init?.body)) as { changes: Array<{ path: string; hash: string }> }
@@ -136,22 +140,23 @@ describe('browser-native Workspace VFS sync', () => {
         return jsonResponse({ workspaceId, revision: 1 })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    }, protocol)
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)
     runtime.vfs.writeFileSync('/dsh/home/workspace/first.txt', 'same bytes')
     runtime.vfs.writeFileSync('/dsh/home/workspace/second.txt', 'same bytes')
     await vi.waitFor(() => { expect(committed).toBe(true) })
-    expect(uploads).toHaveLength(1)
+    expect(protocol.readonlyUploads).toHaveLength(1)
   })
 
   it('synchronizes append, rename, remove, chmod, empty, binary, and Unicode paths', async () => {
     const removedBytes = new TextEncoder().encode('remove from cloud')
     const removedHash = createHash('sha256').update(removedBytes).digest('hex')
-    const uploads = new Map<string, Uint8Array>()
+    const protocol = createWorkspaceBlobProtocolMock()
+    protocol.registerBlob(removedHash, removedBytes)
     let committed: { baseRevision: number; changes: Array<Record<string, unknown>> } | undefined
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
@@ -164,20 +169,12 @@ describe('browser-native Workspace VFS sync', () => {
           ],
         })
       }
-      if (url.includes(`/blob/${removedHash}`) && method === 'GET') return new Response(removedBytes)
-      if (url.includes('/blob/') && method === 'PUT') {
-        const hash = url.split('/').at(-1) ?? ''
-        const body = init?.body
-        if (!(body instanceof Uint8Array)) throw new Error('expected byte-array blob upload')
-        uploads.set(hash, body.slice())
-        return jsonResponse({ hash, bytes: body.byteLength, reused: false })
-      }
       if (url.endsWith('/commit')) {
         committed = JSON.parse(String(init?.body)) as typeof committed
         return jsonResponse({ workspaceId, revision: 4 })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    }, protocol)
 
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
@@ -218,21 +215,20 @@ describe('browser-native Workspace VFS sync', () => {
     const emptyHash = changes.get('empty.bin')?.hash as string
     const binaryHash = changes.get('binary.dat')?.hash as string
     const renamedHash = changes.get('目录/合并.txt')?.hash as string
-    expect(uploads.get(emptyHash)).toEqual(new Uint8Array())
-    expect(uploads.get(binaryHash)).toEqual(new Uint8Array([0, 255, 1, 128, 254]))
-    expect(uploads.get(renamedHash)).toEqual(new TextEncoder().encode('alpha\nbeta\n'))
+    expect(protocol.completedBlobs.get(emptyHash)).toEqual(new Uint8Array())
+    expect(protocol.completedBlobs.get(binaryHash)).toEqual(new Uint8Array([0, 255, 1, 128, 254]))
+    expect(protocol.completedBlobs.get(renamedHash)).toEqual(new TextEncoder().encode('alpha\nbeta\n'))
   })
 
   it('preserves a deletion recorded while the same file is being committed', async () => {
     const commits: Array<{ baseRevision: number; changes: Array<Record<string, unknown>> }> = []
     let releaseCommit: (() => void) | undefined
     const firstCommit = new Promise<void>(resolve => { releaseCommit = resolve })
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         commits.push(JSON.parse(String(init?.body)) as typeof commits[number])
         const revision = commits.length
@@ -240,7 +236,7 @@ describe('browser-native Workspace VFS sync', () => {
         return jsonResponse({ workspaceId, revision })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)
@@ -262,7 +258,9 @@ describe('browser-native Workspace VFS sync', () => {
 
   it('does not restore removed descendants when a directory is recreated before synchronization', async () => {
     let changes: Array<Record<string, unknown>> = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const protocol = createWorkspaceBlobProtocolMock()
+    protocol.registerBlob(manifestHash, manifestBytes)
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
@@ -270,13 +268,12 @@ describe('browser-native Workspace VFS sync', () => {
         { path: 'folder', kind: 'directory', mode: 0o755 },
         { path: 'folder/old.txt', kind: 'file', hash: manifestHash, bytes: manifestBytes.byteLength, mode: 0o600 },
       ] })
-      if (url.includes('/blob/') && method === 'GET') return new Response(manifestBytes)
       if (url.endsWith('/commit')) {
         changes = (JSON.parse(String(init?.body)) as { changes: typeof changes }).changes
         return jsonResponse({ workspaceId, revision: 2 })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    }, protocol)
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)
@@ -294,24 +291,23 @@ describe('browser-native Workspace VFS sync', () => {
     let uploadAttempts = 0
     const contents: string[] = []
     const commits: Array<{ baseRevision: number; operationId: string; changes: Array<{ hash: string }> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const protocol = createWorkspaceBlobProtocolMock()
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
-      if (url.includes('/blob/') && method === 'PUT') {
-        uploadAttempts += 1
-        if (failUpload) return jsonResponse({ error: { code: 'UPLOAD_FAILED', message: 'upload unavailable' } }, 503)
-        if (!(init?.body instanceof Uint8Array)) throw new Error('expected byte-array blob upload')
-        contents.push(new TextDecoder().decode(init.body))
-        return jsonResponse({ ok: true })
-      }
       if (url.endsWith('/commit')) {
         commits.push(JSON.parse(String(init?.body)) as typeof commits[number])
         return jsonResponse({ workspaceId, revision: commits.length })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    }, protocol, bytes => {
+      uploadAttempts += 1
+      if (failUpload) return jsonResponse({ error: { code: 'UPLOAD_FAILED', message: 'upload unavailable' } }, 503)
+      contents.push(new TextDecoder().decode(bytes))
+      return undefined
+    })
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)
@@ -332,16 +328,16 @@ describe('browser-native Workspace VFS sync', () => {
     { label: 'path traversal', entries: [{ path: '../outside', kind: 'directory', mode: 0o755 }], corruptBlob: false },
     { label: 'corrupt blob', entries: [{ path: 'bad.txt', kind: 'file', hash: manifestHash, bytes: manifestBytes.byteLength, mode: 0o600 }], corruptBlob: true },
   ])('refuses to boot from a manifest with $label', async ({ entries, corruptBlob }) => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+    stubWorkspaceFetch(async input => {
       const url = String(input)
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 1, entries })
       if (url.includes('/blob/') && corruptBlob) return new Response('corrupt payload')
       throw new Error(`unexpected request ${url}`)
-    }))
+    })
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
-    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow(/invalid manifest path|blob verification failed/)
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow(/invalid manifest path|blob chunk verification failed/)
     expect(runtime.vfs.existsSync('/dsh/home/outside')).toBe(false)
     expect(runtime.vfs.existsSync('/dsh/home/workspace/bad.txt')).toBe(false)
   })
@@ -349,12 +345,11 @@ describe('browser-native Workspace VFS sync', () => {
   it('syncs the final file, not DSH atomic-write staging artifacts', async () => {
     const committedChanges: Array<{ path: string; deleted?: boolean }> = []
     const commits: unknown[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    stubWorkspaceFetch(async (input, init) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [], digest: '' })
-      if (url.includes('/blob/') && method === 'PUT') return jsonResponse({ ok: true })
       if (url.endsWith('/commit')) {
         commits.push(JSON.parse(String(init?.body)))
         const body = JSON.parse(String(init?.body)) as { changes: Array<{ path: string; deleted?: boolean }> }
@@ -362,7 +357,7 @@ describe('browser-native Workspace VFS sync', () => {
         return jsonResponse({ workspaceId, revision: 1 })
       }
       throw new Error(`unexpected request ${method} ${url}`)
-    }))
+    })
     const runtime = createBrowserNativeWorkspaceRuntime()
     runtime.vfs.seedDirectory('/dsh/home/workspace')
     await runtime.prepareVfs(runtime.vfs)

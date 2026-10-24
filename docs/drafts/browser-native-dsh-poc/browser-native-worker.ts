@@ -57,13 +57,15 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'append' | 'mkdir' | 'read' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
   readonly to?: string
   readonly content?: string
   readonly base64?: string
+  readonly byteLength?: number
+  readonly byteValue?: number
   readonly mode?: number
   readonly count?: number
 }
@@ -76,7 +78,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'append', 'mkdir', 'read', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
+  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -195,6 +197,36 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceRuntime.vfs.writeFileSync(request.path, bytes)
       await workspaceRuntime.flushLocalWorkspace()
       workspaceTestResponse(request.requestId, { ok: true, path: request.path, bytes: bytes.byteLength })
+      return
+    }
+    if (request.action === 'write-pattern') {
+      if (!Number.isSafeInteger(request.byteLength) || request.byteLength < 0 || request.byteLength > 64 * 1024 * 1024
+        || !Number.isSafeInteger(request.byteValue) || request.byteValue < 0 || request.byteValue > 255) {
+        throw new Error('browser-native workspace test: byteLength or byteValue is invalid')
+      }
+      const bytes = new Uint8Array(request.byteLength)
+      bytes.fill(request.byteValue)
+      workspaceRuntime.vfs.writeFileSync(request.path, bytes)
+      await workspaceRuntime.flushLocalWorkspace()
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        path: request.path,
+        bytes: bytes.byteLength,
+        digest: await crypto.subtle.digest('SHA-256', bytes).then(value =>
+          [...new Uint8Array(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')),
+      })
+      return
+    }
+    if (request.action === 'read-digest') {
+      const bytes = workspaceRuntime.vfs.readFileSync(request.path)
+      if (!(bytes instanceof Uint8Array)) throw new Error('browser-native workspace test: file content is not bytes')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        path: request.path,
+        bytes: bytes.byteLength,
+        digest: await crypto.subtle.digest('SHA-256', bytes).then(value =>
+          [...new Uint8Array(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')),
+      })
       return
     }
     if (request.action === 'append') {

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
+import { WORKSPACE_BLOB_CHUNK_BYTES } from '../workspace-v2.mjs'
 
 const liveApps = new Set()
 const temporaryDirectories = new Set()
@@ -102,6 +103,22 @@ async function postWorkspace(origin, identity, operation, body) {
   return { response, value }
 }
 
+async function postAuthenticatedWorkspace(origin, identity, path, body) {
+  const response = await fetch(`${origin}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: identity.cookie },
+    body: JSON.stringify(body),
+  })
+  const value = await response.json()
+  if (!response.ok) {
+    const error = new Error(value.error?.message ?? `HTTP ${response.status}`)
+    error.code = value.error?.code
+    error.status = response.status
+    throw error
+  }
+  return value
+}
+
 async function uploadWorkspaceBlob(origin, identity, bytes) {
   const hash = createHash('sha256').update(bytes).digest('hex')
   const response = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
@@ -118,6 +135,22 @@ async function uploadWorkspaceBlob(origin, identity, bytes) {
   const value = await response.json()
   assert.equal(response.ok, true, JSON.stringify(value))
   return { hash, bytes: bytes.byteLength, reused: value.reused }
+}
+
+async function uploadWorkspaceChunk(origin, identity, operationId, hash, index, bytes, chunkHash = createHash('sha256').update(bytes).digest('hex')) {
+  const response = await fetch(`${origin}/api/browser-native/workspace/blob-upload/${operationId}-${hash}/${String(index)}`, {
+    method: 'PUT',
+    headers: {
+      cookie: identity.cookie,
+      'content-type': 'application/octet-stream',
+      'x-browser-native-protocol': '1',
+      'x-request-id': randomUUID(),
+      'x-workspace-id': identity.workspaceId,
+      'x-chunk-sha256': chunkHash,
+    },
+    body: bytes,
+  })
+  return { response, value: await response.json() }
 }
 
 afterEach(async () => {
@@ -260,6 +293,131 @@ describe('browser-native DSH v2 backend', () => {
       headers: { cookie: identity.cookie },
     })
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes)
+  })
+
+  it('resumes chunk uploads after backend restart and fences conflicting or incomplete chunks', async () => {
+    const dataDir = await temporaryDirectory()
+    const first = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(first.origin)
+    const bytes = Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES * 2 + 37)
+    for (let index = 0; index < bytes.byteLength; index += 1) bytes[index] = (index * 31 + 7) % 251
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const operationId = randomUUID()
+    const uploadPath = `/api/browser-native/workspace/blob-upload/${operationId}-${hash}`
+    const started = await postAuthenticatedWorkspace(first.origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('chunk-start', {
+      workspaceId: identity.workspaceId,
+      operationId,
+      hash,
+      totalBytes: bytes.byteLength,
+      chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    assert.equal(started.complete, false)
+    assert.equal(started.chunkCount, 3)
+    assert.deepEqual(started.missing, [0, 1, 2])
+
+    const firstChunk = bytes.subarray(0, WORKSPACE_BLOB_CHUNK_BYTES)
+    const firstWrite = await uploadWorkspaceChunk(first.origin, identity, operationId, hash, 0, firstChunk)
+    assert.equal(firstWrite.response.status, 200)
+    assert.equal(firstWrite.value.replayed, false)
+    const duplicate = await uploadWorkspaceChunk(first.origin, identity, operationId, hash, 0, firstChunk)
+    assert.equal(duplicate.response.status, 200)
+    assert.equal(duplicate.value.replayed, true)
+
+    const conflictingBytes = Buffer.from(firstChunk)
+    conflictingBytes[0] ^= 0xff
+    const conflicting = await uploadWorkspaceChunk(first.origin, identity, operationId, hash, 0, conflictingBytes)
+    assert.equal(conflicting.response.status, 409)
+    assert.equal(conflicting.value.error.code, 'UPLOAD_CHUNK_CONFLICT')
+    const invalidHash = await uploadWorkspaceChunk(first.origin, identity, operationId, hash, 1,
+      bytes.subarray(WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_BLOB_CHUNK_BYTES * 2), '0'.repeat(64))
+    assert.equal(invalidHash.response.status, 400)
+
+    const incomplete = await postAuthenticatedWorkspace(first.origin, identity, `${uploadPath}/complete`, envelope('chunk-incomplete', {
+      workspaceId: identity.workspaceId,
+    })).catch(error => error)
+    assert.equal(incomplete.code, 'UPLOAD_INCOMPLETE')
+    await first.app.close()
+    liveApps.delete(first.app)
+
+    const second = await start({ dataDir, llmMode: 'scripted' })
+    const resumed = await fetch(`${second.origin}${uploadPath}?protocolVersion=1&workspaceId=${encodeURIComponent(identity.workspaceId)}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const resumeState = await resumed.json()
+    assert.equal(resumed.status, 200)
+    assert.deepEqual(resumeState.missing, [1, 2])
+    const secondChunk = bytes.subarray(WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_BLOB_CHUNK_BYTES * 2)
+    const finalChunk = bytes.subarray(WORKSPACE_BLOB_CHUNK_BYTES * 2)
+    assert.equal((await uploadWorkspaceChunk(second.origin, identity, operationId, hash, 1, secondChunk)).response.status, 200)
+    assert.equal((await uploadWorkspaceChunk(second.origin, identity, operationId, hash, 2, finalChunk)).response.status, 200)
+    const completed = await postAuthenticatedWorkspace(second.origin, identity, `${uploadPath}/complete`, envelope('chunk-complete', {
+      workspaceId: identity.workspaceId,
+    }))
+    assert.equal(completed.complete, true)
+    const replayedComplete = await postAuthenticatedWorkspace(second.origin, identity, `${uploadPath}/complete`, envelope('chunk-complete-replay', {
+      workspaceId: identity.workspaceId,
+    }))
+    assert.equal(replayedComplete.replayed, true)
+
+    const committed = await postWorkspace(second.origin, identity, 'commit', {
+      operationId,
+      baseRevision: 0,
+      changes: [{ path: 'large.bin', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }],
+    })
+    assert.equal(committed.response.status, 200)
+    assert.equal(committed.value.revision, 1)
+    const chunkResponse = await fetch(`${second.origin}/api/browser-native/workspace/blob/${hash}/chunk/2?protocolVersion=1&workspaceId=${encodeURIComponent(identity.workspaceId)}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const downloadedChunk = new Uint8Array(await chunkResponse.arrayBuffer())
+    assert.equal(chunkResponse.status, 200)
+    assert.equal(chunkResponse.headers.get('x-chunk-count'), '3')
+    assert.deepEqual(downloadedChunk, new Uint8Array(finalChunk))
+    assert.equal(chunkResponse.headers.get('x-content-sha256'), createHash('sha256').update(finalChunk).digest('hex'))
+  })
+
+  it('reports a corrupted staged chunk as missing and accepts its verified replacement', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const bytes = Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES + 19, 0x5a)
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const operationId = randomUUID()
+    const uploadPath = `/api/browser-native/workspace/blob-upload/${operationId}-${hash}`
+    const started = await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('corrupt-start', {
+      workspaceId: identity.workspaceId,
+      operationId,
+      hash,
+      totalBytes: bytes.byteLength,
+      chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    assert.equal(started.complete, false)
+    const firstChunk = bytes.subarray(0, WORKSPACE_BLOB_CHUNK_BYTES)
+    assert.equal((await uploadWorkspaceChunk(origin, identity, operationId, hash, 0, firstChunk)).response.status, 200)
+    const stagingDirectory = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${operationId}-${hash}`)
+    await writeFile(join(stagingDirectory, '0.part'), Buffer.from('corrupt'))
+
+    const statusResponse = await fetch(`${origin}${uploadPath}?protocolVersion=1&workspaceId=${encodeURIComponent(identity.workspaceId)}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const status = await statusResponse.json()
+    assert.equal(statusResponse.status, 200)
+    assert.deepEqual(status.missing, [0, 1])
+
+    const restoredFirst = await uploadWorkspaceChunk(origin, identity, operationId, hash, 0, firstChunk)
+    assert.equal(restoredFirst.response.status, 200)
+    assert.equal(restoredFirst.value.replayed, false)
+    const lastChunk = bytes.subarray(WORKSPACE_BLOB_CHUNK_BYTES)
+    assert.equal((await uploadWorkspaceChunk(origin, identity, operationId, hash, 1, lastChunk)).response.status, 200)
+    const completed = await postAuthenticatedWorkspace(origin, identity, `${uploadPath}/complete`, envelope('corrupt-complete', {
+      workspaceId: identity.workspaceId,
+    }))
+    assert.equal(completed.complete, true)
+
+    const unreferenced = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}/chunk/0?protocolVersion=1&workspaceId=${encodeURIComponent(identity.workspaceId)}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(unreferenced.status, 404)
   })
 
   it('isolates workspace identity and restores it after backend restart', async () => {

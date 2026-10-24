@@ -22,6 +22,7 @@ const PROTOCOL_VERSION = 1
 const WORKSPACE_ROOT = '/dsh/home/workspace'
 const WORKSPACE_API = '/api/browser-native/workspace'
 const SYNC_DEBOUNCE_MS = 100
+const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024
 
 interface WorkspaceEntry {
   readonly path: string
@@ -186,6 +187,8 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private running: Promise<readonly WorkspaceReceipt[]> | undefined
   private scheduleTimer: ReturnType<typeof setTimeout> | undefined
   private localPersistChain: Promise<void> = Promise.resolve()
+  private localPersistScheduled = false
+  private latestLocalSnapshot: DurableWorkspaceSnapshot | undefined
   private localPersistVersion = 0
   private localPersistedVersion = 0
   private localPersistFailure: Error | undefined
@@ -248,15 +251,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       for (const entry of files) {
         const path = assertWorkspacePath(entry.path)
         if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
-        const response = await fetch(
-          `${WORKSPACE_API}/blob/${entry.hash}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
-          { credentials: 'same-origin' },
-        )
-        if (!response.ok) throw new Error(`browser-native workspace: blob download failed with HTTP ${String(response.status)}`)
-        const bytes = new Uint8Array(await response.arrayBuffer())
-        if (bytes.byteLength !== entry.bytes || await sha256(bytes) !== entry.hash) {
-          throw new Error(`browser-native workspace: blob verification failed for ${path}`)
-        }
+        const bytes = await this.downloadBlob(entry.hash, entry.bytes)
         vfs.seed(`${WORKSPACE_ROOT}/${path}`, bytes, { mode: entry.mode })
         this.knownBlobHashes.add(entry.hash)
       }
@@ -478,15 +473,38 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (this.store === undefined) return
     const snapshot = this.snapshot()
     if (snapshot === undefined) return
-    const version = ++this.localPersistVersion
+    this.localPersistVersion += 1
+    this.latestLocalSnapshot = snapshot
+    this.scheduleLocalPersist()
+  }
+
+  private scheduleLocalPersist(): void {
+    if (this.localPersistScheduled) return
+    this.localPersistScheduled = true
     this.localPersistChain = this.localPersistChain.then(async () => {
-      await this.testHooks?.beforeLocalPersist?.()
-      await this.store?.save(snapshot)
-      await this.testHooks?.afterLocalPersist?.()
-      this.localPersistedVersion = version
-      if (version === this.localPersistVersion) this.localPersistFailure = undefined
+      while (this.localPersistedVersion < this.localPersistVersion) {
+        const version = this.localPersistVersion
+        const snapshot = this.latestLocalSnapshot
+        if (snapshot === undefined) throw new Error('browser-native workspace: pending local snapshot is missing')
+        this.latestLocalSnapshot = undefined
+        try {
+          await this.testHooks?.beforeLocalPersist?.()
+          await this.store?.save(snapshot)
+          await this.testHooks?.afterLocalPersist?.()
+          this.localPersistedVersion = version
+          if (version === this.localPersistVersion) this.localPersistFailure = undefined
+        } catch (error) {
+          this.setLocalPersistFailure(error)
+          if (version === this.localPersistVersion) return
+        }
+      }
     }).catch(error => {
       this.setLocalPersistFailure(error)
+    }).finally(() => {
+      this.localPersistScheduled = false
+      if (this.localPersistedVersion < this.localPersistVersion && this.latestLocalSnapshot !== undefined) {
+        this.scheduleLocalPersist()
+      }
     })
   }
 
@@ -620,7 +638,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       }
       this.onStatus('syncing', this.workspaceId, this.revision, this.pending.size + batch.changes.length)
       try {
-        const changes = await this.uploadChanges(batch.changes)
+        const changes = await this.uploadChanges(batch.operationId, batch.changes)
         if (this.useWriterLease) await this.renewWriter()
         const response = await fetch(`${WORKSPACE_API}/commit`, {
           method: 'POST',
@@ -953,7 +971,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
   }
 
-  private async uploadChanges(changes: readonly WorkspaceChange[]): Promise<readonly Record<string, unknown>[]> {
+  private async uploadChanges(operationId: string, changes: readonly WorkspaceChange[]): Promise<readonly Record<string, unknown>[]> {
     const output: Record<string, unknown>[] = []
     const uploadedHashes = new Set<string>()
     for (const change of changes) {
@@ -969,23 +987,100 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (content === undefined) throw new Error(`browser-native workspace: pending file ${change.path} has no content`)
       const hash = await sha256(content)
       if (!this.knownBlobHashes.has(hash) && !uploadedHashes.has(hash)) {
-        const response = await fetch(`${WORKSPACE_API}/blob/${hash}`, {
-          method: 'PUT',
-          credentials: 'same-origin',
-          headers: {
-            'content-type': 'application/octet-stream',
-            'x-browser-native-protocol': String(PROTOCOL_VERSION),
-            'x-request-id': crypto.randomUUID(),
-            'x-workspace-id': this.workspaceId ?? '',
-          },
-          body: new Uint8Array(toArrayBuffer(content)),
-        })
-        await readJson(response)
+        await this.uploadBlob(operationId, hash, content)
         this.knownBlobHashes.add(hash)
         uploadedHashes.add(hash)
       }
       output.push({ path: change.path, kind: 'file', hash, bytes: content.byteLength, mode: change.mode })
     }
+    return output
+  }
+
+  private async uploadBlob(operationId: string, hash: string, content: Uint8Array): Promise<void> {
+    if (this.workspaceId === undefined) {
+      throw new Error('browser-native workspace: blob upload has no durable operation identity')
+    }
+    const uploadId = `${operationId}-${hash}`
+    const uploadPath = `${WORKSPACE_API}/blob-upload/${uploadId}`
+    const startResponse = await fetch(`${WORKSPACE_API}/blob-upload/start`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId: this.workspaceId,
+        operationId,
+        hash,
+        totalBytes: content.byteLength,
+        chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+      }),
+    })
+    const started = await readJson(startResponse)
+    if (started.complete === true) return
+
+    const statusResponse = await fetch(
+      `${uploadPath}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
+      { credentials: 'same-origin' },
+    )
+    const status = await readJson(statusResponse)
+    if (status.complete === true) return
+    if (!Array.isArray(status.missing) || status.missing.some(index => !Number.isSafeInteger(index))) {
+      throw new Error('browser-native workspace: backend returned an invalid blob upload status')
+    }
+    for (const index of status.missing) {
+      const offset = index * WORKSPACE_BLOB_CHUNK_BYTES
+      const chunk = content.subarray(offset, Math.min(offset + WORKSPACE_BLOB_CHUNK_BYTES, content.byteLength))
+      if (chunk.byteLength === 0) throw new Error('browser-native workspace: backend requested an empty upload chunk')
+      const chunkHash = await sha256(chunk)
+      const response = await fetch(`${uploadPath}/${String(index)}`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'x-browser-native-protocol': String(PROTOCOL_VERSION),
+          'x-request-id': crypto.randomUUID(),
+          'x-workspace-id': this.workspaceId,
+          'x-chunk-sha256': chunkHash,
+        },
+        body: toArrayBuffer(chunk),
+      })
+      await readJson(response)
+    }
+    const completeResponse = await fetch(`${uploadPath}/complete`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId: this.workspaceId,
+      }),
+    })
+    const completed = await readJson(completeResponse)
+    if (completed.complete !== true) throw new Error('browser-native workspace: backend did not complete blob upload')
+  }
+
+  private async downloadBlob(hash: string, totalBytes: number): Promise<Uint8Array> {
+    const output = new Uint8Array(totalBytes)
+    const chunkCount = Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
+    for (let index = 0; index < chunkCount; index += 1) {
+      const response = await fetch(
+        `${WORKSPACE_API}/blob/${hash}/chunk/${String(index)}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId ?? '')}`,
+        { credentials: 'same-origin' },
+      )
+      if (!response.ok) throw new Error(`browser-native workspace: blob chunk download failed with HTTP ${String(response.status)}`)
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      const expectedBytes = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - index * WORKSPACE_BLOB_CHUNK_BYTES)
+      if (bytes.byteLength !== expectedBytes || response.headers.get('x-chunk-index') !== String(index)
+        || response.headers.get('x-chunk-count') !== String(chunkCount)
+        || response.headers.get('x-total-bytes') !== String(totalBytes)
+        || response.headers.get('x-content-sha256') !== await sha256(bytes)) {
+        throw new Error(`browser-native workspace: blob chunk verification failed for index ${String(index)}`)
+      }
+      output.set(bytes, index * WORKSPACE_BLOB_CHUNK_BYTES)
+    }
+    if (await sha256(output) !== hash) throw new Error('browser-native workspace: downloaded blob failed full SHA-256 verification')
     return output
   }
 }

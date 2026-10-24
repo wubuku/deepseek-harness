@@ -67,6 +67,26 @@ node docs/drafts/browser-native-dsh-poc/tests/workspace-writer-reload.e2e.mjs
 
 若 Playwright 安装位置不同，请把 `DSH_POC_PLAYWRIGHT_MODULE` 改为当前环境中 `playwright` 的入口文件。刷新恢复仅适用于原标签页的 `sessionStorage` 凭据；旧凭据缺少 `resumeId` 时页面会先生成并保存一个稳定 ID。该 ID 使当前 backend 进程可以重放已成功但响应丢失的 resume，而 `requestId` 仍是每次 HTTP 请求各自的诊断标识。backend 必须轮换 writer token 并提升 fencing token。完全清除本地存储后，只能重建已提交到 backend 的文件；本地唯一持有的 dirty bytes、真实 quota/eviction、浏览器进程崩溃和生产级多租户授权不在本批验证范围内。
 
+## 大文件与分块 Workspace 传输验证
+
+[文件规模与传输验证计划](large-file-scale-validation-plan.md)和[实施进度](large-file-scale-validation-progress.md)记录了本批高价值验证：旧单请求 blob API 的 8 MiB 边界、1 MiB chunk staging/status/finalize、缺块续传、hash/size 校验、backend 重启、刷新 hydrate、OPFS 分块写入，以及 1,000 个小文件的 snapshot coalescing。真实 Chrome E2E 通过 16 MiB、64 MiB 和 1,000 个 256-byte 文件；测试负载由 Worker test port 生成，不是模型生成的大型 tool args。
+
+在 preview 构建后复跑本批模型无关验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/large-file-scale.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
+```
+
+`large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。分块只限制网络 body 和传输临时缓冲；`MemoryVfs` 仍持有完整 bytes，客户端下载也会组装完整文件，PoC backend 仍使用本地 `dataDir`，因此这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
+
 ## 高价值验证批次
 
 本批次围绕 Browser-Native DSH 的运行时正确性，不扩展 SaaS 或聊天 UI。计划和退出条件见[验证计划](high-value-validation-plan.md)，实际证据和限制见[验证进度](high-value-validation-progress.md)。
