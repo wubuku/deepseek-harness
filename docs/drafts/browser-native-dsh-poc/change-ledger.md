@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-022：Browser-Native capability manifest、boot 预检与受限 Shell 语义
+
+```text
+changeId: BN-P2-022
+upstreamBaseline: research checkout after BN-P2-021; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/browser-native-capabilities.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts; docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-capability-preflight-plan.md; docs/drafts/browser-native-dsh-poc/browser-capability-preflight-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 模块可加载、工具出现在模型 schema 和插件实际可执行是三个不同事实；此前 PoC 只有文件工具名称表，没有在 Worker Host boot 前识别主机子进程、watch、原生 addon 或后台进程等缺失能力，也没有把受限 Shell 的实际语义写入回归证据。
+existingExtensionPointsChecked: 复用 Worker `createWorkerHost()` 初始化入口、现有 Browser profile overlay、Worker VFS、固定 Shell command table、DSH tools/execute waterfall、Session persistence 和已有真实 Chrome E2E；未修改正式 Agent Loop、Session format、正式 package capability seam 或默认 Web profile。
+whyDraftOnlyWasInsufficient: 只有文档清单无法阻止 profile 在首次工具调用时才暴露不支持依赖；只有静态单测不能证明真实 Worker、DSH Host、tool/result 和 Session checkpoint 一起通过；只运行 `printf` 不能证明管道、重定向和不支持命令不会回退到宿主机。
+behaviorChange: 新增 PoC capability manifest、插件/工具 required capability 表和 boot 前 fail-closed 预检。预检失败包含插件 ID、能力 ID和可用适配器，并在创建 Workspace/Host 前拒绝启动。真实 Chrome scripted 回归新增 `printf | tr`、输出重定向、`cat` 和不存在主机命令；默认 Worker 仍只提供固定命令表。真实 LLM 仅复跑独立 browser validation roster，不改变其 profile。
+directoryOutChangeReason: 无；所有实现、测试和文档位于 docs/drafts。
+consumersUpdated: Browser-Native Worker、capability helper、backend scripted handler、默认 profile Chrome E2E、PoC README、兼容矩阵、docs/drafts 导读和本账本。
+tests: capability Vitest 与既有文件/Workspace Vitest 合计 21/21；backend-v2 17/17；根级 typecheck 5/5；preview build 通过。真实 Chrome 默认 profile E2E 通过受限 Shell 管道、重定向、读回和不支持命令失败，0 page error、0 跨源请求。真实 Chrome + `gpt-5.6-sol` runtime-validation E2E 通过，8 个 LLM HTTP 200、57 个 Session events、普通文件 `read → write → read`、刷新恢复和可观察流式响应通过。未验证任意 profile 动态扫描、所有插件运行路径、WASI、自然 eviction、OS crash、生产对象存储、多实例 HA、Safari、完整 ReDoS 和正式 capability service。
+syncReplaySteps: 上游同步后检查 Worker Host 是否已提供 profile capability preflight；若已有等价接口，迁移本批测试并删除重复静态清单。否则保留 docs-owned manifest，仅在 Browser-Native opt-in Worker 中执行；重新运行 capability/file/backend tests、preview build、默认 profile Chrome E2E、真实 LLM runtime-validation 和文档门禁。
+deleteCondition: 正式 runtime 提供可审计的 profile/plugin capability preflight，且本批测试迁移到正式 Service Definition/Provider/Consumer；或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### 2026-10-21：durable Workspace opt-in 接线
 
 - **文件**：`apps/web/src/preview.ts`、`docs/drafts/browser-native-dsh-poc/browser-native-worker.ts`。

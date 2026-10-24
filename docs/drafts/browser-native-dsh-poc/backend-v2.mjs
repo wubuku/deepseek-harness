@@ -726,6 +726,46 @@ async function scriptedLlm(response, messages, tools) {
     return
   }
 
+  const shellSemanticsMarker = 'BROWSER_NATIVE_SHELL_SEMANTICS_E2E'
+  if (hasUserMarker(messages, shellSemanticsMarker) && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(shellSemanticsMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const sequence = [
+      {
+        id: 'browser-native-shell-pipeline',
+        command: "printf 'BROWSER_NATIVE_PIPE_x\\n' | tr x X",
+        description: 'Verify the Worker shell pipeline',
+      },
+      {
+        id: 'browser-native-shell-redirect',
+        command: "printf 'BROWSER_NATIVE_REDIRECT_OK\\n' > /dsh/home/workspace/shell-redirect.txt",
+        description: 'Verify the Worker shell file redirection',
+      },
+      {
+        id: 'browser-native-shell-read-redirect',
+        command: 'cat /dsh/home/workspace/shell-redirect.txt',
+        description: 'Verify the redirected file can be read in the Worker',
+      },
+      {
+        id: 'browser-native-shell-unsupported',
+        command: 'browser-native-host-command-does-not-exist',
+        description: 'Verify unsupported host commands fail closed',
+      },
+    ]
+    if (toolResults.length < sequence.length) {
+      const next = sequence[toolResults.length]
+      await scriptedWorkspaceToolCall(response, {
+        id: next.id,
+        name: 'bash',
+        arguments: { command: next.command, description: next.description },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_SHELL_SEMANTICS_DONE')
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_SCRIPTED_E2E_OK')) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } })

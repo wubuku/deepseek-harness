@@ -147,6 +147,12 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 本批仍不把 JavaScript 正则启发式检查当作完整 ReDoS 解决方案，也不把分块读取当作块级同步或块级编辑。正式产品仍应单独验证 RE2/WASM 或独立搜索 Worker、任意容量 edit、Browser capability manifest 及正式 profile 的插件兼容性。
 
+## 能力预检与默认插件兼容性
+
+[能力预检计划](browser-capability-preflight-plan.md)和[实施进度](browser-capability-preflight-progress.md)记录本批对 Browser-Native profile 的系统性验证：PoC capability manifest 现在集中描述 Worker VFS、结构化文件工具、受限 Shell、同源 Session/LLM backend、问答、todo、工作目录，以及主机子进程、`fs.watch`、原生 addon 和后台进程等明确不支持的能力。Worker 在创建 Workspace 和 Worker Host 前执行 fail-closed 预检；缺少 capability 时，诊断包含具体插件和能力，不留下半启动 Host。
+
+真实 Chrome 默认 profile E2E 验证了受限 Shell 的 `printf | tr`、文件重定向、重定向文件读取和不支持命令的失败结果，并核对 DSH tool/result、Session checkpoint、无跨源请求和无页面异常。真实 `gpt-5.6-sol` 回归验证的是独立 browser validation roster 的普通文件多轮和刷新恢复，不应外推为模型已经选择默认 profile 的每个工具。该 manifest 仍是 docs-owned 静态清单，不是任意 Cordis profile 的动态插件扫描，也不是正式 package capability service。
+
 ## 故障边界与 S3 blob 验证
 
 [故障边界计划](mock-and-crash-boundary-validation-plan.md)与[实测进度](mock-and-crash-boundary-validation-progress.md)记录 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL`、共享 `dataDir` 的双 backend、超大工具参数和 MinIO S3-compatible blob store。Chrome 155 实测表明：本地元数据缺失时孤儿 OPFS bytes 会 fail closed 并可按 hash 导出；Chrome 强杀后匿名身份 cookie 未自动恢复；两个 backend 都接受同一 seq/revision 写入，冷启动只留下其中一个结果。

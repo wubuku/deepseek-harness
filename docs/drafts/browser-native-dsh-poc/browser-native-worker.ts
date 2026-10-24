@@ -27,6 +27,11 @@ import { installProcessGlobal } from '../../../packages/experimental/webworker-r
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
 import {
+  BROWSER_NATIVE_PROFILE_MANIFEST,
+  evaluateBrowserNativeProfile,
+  formatBrowserNativePreflightFailure,
+} from './browser-native-capabilities.ts'
+import {
   publishBrowserNativePagehideAck,
   setBrowserNativeControlPort,
   setBrowserNativeResumeOwner,
@@ -455,6 +460,8 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
     }
+    const preflight = evaluateBrowserNativeProfile(BROWSER_NATIVE_PROFILE_MANIFEST)
+    if (!preflight.ok) throw new Error(formatBrowserNativePreflightFailure(preflight))
     const workspace = createBrowserNativeWorkspaceRuntime({
       durable: durableWorkspace,
       writerLease: workspaceWriterLease,

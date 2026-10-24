@@ -99,6 +99,28 @@ try {
   assert.ok(callCheckpointIndex > callAppendIndex, 'the tool/call must be durably checkpointed before the tool result exists')
   assert.ok(resultAppendIndex > callCheckpointIndex, 'the DSH tool result must follow the pre-dispatch checkpoint')
   assert.match(assistantText(result.session, result.turn), /BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_LOOP_OK/)
+
+  const shellSemantics = await sendTurn({
+    page,
+    origin,
+    requests,
+    sessionId: result.sessionId,
+    prompt: 'Run the supported and unsupported shell semantics verification. BROWSER_NATIVE_SHELL_SEMANTICS_E2E',
+    marker: 'BROWSER_NATIVE_SHELL_SEMANTICS_DONE',
+    timeout: 60_000,
+  })
+  const shellCalls = shellSemantics.session.events.filter(event => event.type === 'tool/call'
+    && event.data.name === 'bash' && event.data.turn === shellSemantics.turn)
+  assert.equal(shellCalls.length, 4, 'the Worker shell semantics sequence must execute four bash calls')
+  assert.equal(JSON.parse(shellCalls[0].data.arguments).command, "printf 'BROWSER_NATIVE_PIPE_x\\n' | tr x X")
+  assert.equal(JSON.parse(shellCalls[1].data.arguments).command, "printf 'BROWSER_NATIVE_REDIRECT_OK\\n' > /dsh/home/workspace/shell-redirect.txt")
+  const shellResults = shellCalls.map(call => shellSemantics.session.events.find(event => event.type === 'tool/result'
+    && event.data.message?.toolCallId === call.data.callId))
+  assert.equal(shellResults.every(result => result !== undefined), true, 'each shell call must have a result')
+  assert.match(shellResults[0].data.message.content.map(block => block.text ?? '').join(''), /BROWSER_NATIVE_PIPE_X/)
+  assert.match(shellResults[2].data.message.content.map(block => block.text ?? '').join(''), /BROWSER_NATIVE_REDIRECT_OK/)
+  assert.match(shellResults[3].data.message.content.map(block => block.text ?? '').join(''), /exit code|not found|command/i)
+
   assert.deepEqual(pageErrors, [])
   assert.deepEqual(externalRequests, [])
 

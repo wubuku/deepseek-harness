@@ -69,6 +69,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 14. [Browser-Native 完整性与生命周期验证计划](browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md)及[进度](browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md)：真实 Chrome 验证冷 hydrate 分块 hash、OPFS orphan 保守回收、durable pagehide 本地屏障，以及 Session receipt、Workspace commit unknown 与 writer fencing 的组合恢复；不把结果外推为块级 delta、后台 Agent 或跨存储原子事务。
 15. [OPFS 外置大文件的 DSH 工具闭环计划](browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md)及[进度](browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md)：真实 Chrome Worker/DSH Host 在 12 MiB 冷 hydrate 文件上验证 scripted `read → grep → edit → read` 和刷新恢复；另行记录真实 LLM 普通文件工具闭环。当前 checkout 已补有界 Browser-native `grep`/`glob` fallback，但它不等同 ripgrep；超长单行 `edit` 会触发 Session body 上限。
 16. [Browser-native 文件工具与载荷安全计划](browser-native-dsh-poc/browser-file-tools-validation-plan.md)及[进度](browser-native-dsh-poc/browser-file-tools-validation-progress.md)：验证 Worker 内置 `grep`/`glob`、搜索和编辑载荷上限、失败后继续以及取消 helper 后的 Worker 可用性；真实模型自主选工具仍未由本批证明。
+17. [Browser-Native 能力预检与插件兼容性计划](browser-native-dsh-poc/browser-capability-preflight-plan.md)及[进度](browser-native-dsh-poc/browser-capability-preflight-progress.md)：集中声明 Worker profile 的能力，验证 boot 前 fail-closed 预检、默认 profile 的受限 Shell 语义和真实 LLM 独立 roster 回归；不把静态清单或模块加载外推为全部插件兼容。
 
 ### 需要实现或审查代码时
 
