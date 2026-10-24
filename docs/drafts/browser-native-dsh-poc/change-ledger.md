@@ -22,6 +22,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 ## PoC 内部兼容性变更
 
+### BN-P2-020：在 OPFS 外置大文件上验证 DSH 文件工具闭环
+
+```text
+changeId: BN-P2-020
+upstreamBaseline: research checkout after BN-P2-019; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md; docs/drafts/browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已分别验证 OPFS range backing、大文件 Workspace 传输和 DSH 文件工具，但没有证明真实 DSH 工具能在 cold hydrate 后的 OPFS 外置文件上读写并经刷新恢复。
+existingExtensionPointsChecked: 复用 Worker Host 的 VFS backing、现有 URL-gated Workspace test MessagePort、同源 Workspace backend、真实 DSH `ctx.agentLoop` 及正式 `read`/`grep`/`edit` 工具；未改正式 DSH package、Agent Loop、Session format、Browser profile 或默认启动行为。
+whyDraftOnlyWasInsufficient: VFS range 单测不能证明真实 DSH 工具经 Cordis Host 执行；普通文件工具 E2E 不能证明 OPFS external backing、edit materialize、atomic-write staging、Session payload 和 Workspace receipt 的组合行为。
+behaviorChange: Worker 测试端口支持生成带有有界 UTF-8 行和 marker 的大文件，并在 marker 缺少 `lineBytes` 时于 VFS 写入前拒绝请求；PoC backend scripted handler 可固定 `read → grep → edit → read` 选择。真实 Chrome E2E 覆盖 12 MiB cold hydrate 文件、工具结果和 receipt 身份、一次 edit commit、manifest/hash、请求载荷以及刷新后同 Session read。运行时产品工具没有新增能力；Browser Worker `grep` 仍因 ripgrep 子进程不可执行而返回可见错误。另观察到 10 MiB 单行文件 edit 会使 Session 请求体超过 backend 上限，该问题未修复。
+directoryOutChangeReason: 无；所有代码、测试和研究记录均位于 `docs/drafts/`。
+consumersUpdated: OPFS 文件工具 E2E、验证计划/进度、兼容矩阵、PoC README 与 docs/drafts 索引。
+tests: preview build 通过；backend tests 17/17、Workspace/Durable Workspace Vitest 23/23、MemoryVfs/diff Vitest 34/34；真实 Chrome E2E 拒绝缺少 `lineBytes` 的 marker 生成请求，随后通过大文件 `read → grep(error) → edit → read`、唯一 edit receipt、一次 Workspace revision、刷新后读取新值且无页面/Worker/跨源错误。另以真实 `gpt-5.6-sol` 和 Chrome 通过普通文件 `read → write → read`、刷新后的同 Session read 与 durable Workspace；8 个 LLM HTTP 200、59 个 Session events 全部 durable、两个 Workspace commit HTTP 200。真实模型没有运行 12 MiB scripted 故事。文档门禁和 pre-push 检查以本次提交记录为准。
+syncReplaySteps: 上游同步后检查 MemoryVfs 外部 backing、DSH `read`/`edit` 的流式访问和结果限制，以及 Browser Worker 的 grep 实现。若正式工具接口变化，将 12 MiB Chrome 用例迁移到相同正式 API，并保留刷新后同 Session 读取、单次 receipt、staging 排除和 payload 上限断言；不要把 scripted 选择报告为真实模型行为，也不要把普通文件真实模型 E2E 外推为大文件模型能力。
+deleteCondition: 正式 Browser Workspace 与 DSH 文件工具拥有等价的外部文件 backing、受限搜索和可恢复大文件编辑能力，且相应 E2E 已迁移；或 Browser-Native Workspace PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-007：增加模型无关的 durable Workspace 故障恢复测试接缝
 
 ```text

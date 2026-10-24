@@ -67,6 +67,9 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly base64?: string
   readonly byteLength?: number
   readonly byteValue?: number
+  readonly lineBytes?: number
+  readonly markerLine?: number
+  readonly marker?: string
   readonly offset?: number
   readonly length?: number
   readonly mode?: number
@@ -225,8 +228,28 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         || !Number.isSafeInteger(request.byteValue) || request.byteValue < 0 || request.byteValue > 255) {
         throw new Error('browser-native workspace test: byteLength or byteValue is invalid')
       }
+      if (request.lineBytes !== undefined && (!Number.isSafeInteger(request.lineBytes) || request.lineBytes < 2 || request.lineBytes > 65_536)
+        || request.markerLine !== undefined && (!Number.isSafeInteger(request.markerLine) || request.markerLine < 1)
+        || request.marker !== undefined && typeof request.marker !== 'string') {
+        throw new Error('browser-native workspace test: lineBytes, markerLine, or marker is invalid')
+      }
+      if (request.marker !== undefined && (request.lineBytes === undefined || request.markerLine === undefined)) {
+        throw new Error('browser-native workspace test: marker requires lineBytes and markerLine')
+      }
       const bytes = new Uint8Array(request.byteLength)
       bytes.fill(request.byteValue)
+      if (request.lineBytes !== undefined) {
+        for (let offset = request.lineBytes - 1; offset < bytes.byteLength; offset += request.lineBytes) bytes[offset] = 0x0a
+      }
+      if (request.marker !== undefined) {
+        const marker = new TextEncoder().encode(request.marker)
+        const offset = (request.markerLine! - 1) * request.lineBytes!
+        if (marker.byteLength > request.lineBytes! - 1 || offset + marker.byteLength > bytes.byteLength) {
+          throw new Error('browser-native workspace test: marker does not fit in the selected line')
+        }
+        bytes.set(marker, offset)
+        bytes[offset + marker.byteLength] = 0x0a
+      }
       workspaceRuntime.vfs.writeFileSync(request.path, bytes)
       await workspaceRuntime.flushLocalWorkspace()
       workspaceTestResponse(request.requestId, {

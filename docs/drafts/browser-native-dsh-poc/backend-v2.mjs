@@ -560,6 +560,73 @@ async function scriptedLlm(response, messages, tools) {
     return
   }
 
+  const opfsAgentToolsMarker = 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_E2E'
+  if (textContent(messages).includes(opfsAgentToolsMarker)
+    && ['read', 'grep', 'edit'].every(name => hasTool(tools, name))) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(opfsAgentToolsMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const sequence = [
+      {
+        id: 'browser-native-opfs-large-read-before',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      },
+      {
+        id: 'browser-native-opfs-large-grep-before',
+        name: 'grep',
+        arguments: { pattern: 'BROWSER_NATIVE_OPFS_EDIT_TARGET_V1', path: '/dsh/home/workspace/opfs-agent-file.txt' },
+      },
+      {
+        id: 'browser-native-opfs-large-edit',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/opfs-agent-file.txt',
+          old_string: 'BROWSER_NATIVE_OPFS_EDIT_TARGET_V1',
+          new_string: 'BROWSER_NATIVE_OPFS_EDIT_TARGET_V2',
+        },
+      },
+      {
+        id: 'browser-native-opfs-large-read-after',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      },
+    ]
+    if (toolResults.length < sequence.length) {
+      await scriptedWorkspaceToolCall(response, sequence[toolResults.length])
+      return
+    }
+    const text = 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
+  const opfsAfterRefreshMarker = 'BROWSER_NATIVE_OPFS_AGENT_AFTER_REFRESH_E2E'
+  if (textContent(messages).includes(opfsAfterRefreshMarker) && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(opfsAfterRefreshMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-opfs-large-read-after-refresh',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      })
+      return
+    }
+    const text = 'BROWSER_NATIVE_OPFS_AGENT_AFTER_REFRESH_DONE'
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE')) {
     const text = 'BROWSER_NATIVE_AFTER_HITL_REFRESH_CONTINUE_OK'
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })

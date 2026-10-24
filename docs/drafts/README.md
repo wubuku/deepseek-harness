@@ -67,6 +67,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 12. [Browser-Native 恢复边界验证计划](browser-native-dsh-poc/recovery-boundary-validation-plan.md)及[实测进度](browser-native-dsh-poc/recovery-boundary-validation-progress.md)：真实 Chrome 验证 DSH `write` 在本地 durable 前/后的 Worker 强制终止及 `TOOL_OUTCOME_UNKNOWN` 恢复、本地损坏数据导出、双标签 writer lease 倒计时重试与 fencing；Safari、真实模型和 OS 级浏览器崩溃未验证。
 13. [Browser-Native 交互与恢复验证计划](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md)及[实测进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md)：Chrome/scripted LLM 验证默认问答与工作目录工具、清除浏览器缓存后 backend 503 时 fail-closed、真实 Worker 写权交接，并回归缓存重建和 mutation/snapshot crash window；自然 eviction、OS crash、Safari、多实例 backend 和真实模型工具选择未验证。
 14. [Browser-Native 完整性与生命周期验证计划](browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md)及[进度](browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md)：真实 Chrome 验证冷 hydrate 分块 hash、OPFS orphan 保守回收、durable pagehide 本地屏障，以及 Session receipt、Workspace commit unknown 与 writer fencing 的组合恢复；不把结果外推为块级 delta、后台 Agent 或跨存储原子事务。
+15. [OPFS 外置大文件的 DSH 工具闭环计划](browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md)及[进度](browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md)：真实 Chrome Worker/DSH Host 在 12 MiB 冷 hydrate 文件上验证 scripted `read → grep(error) → edit → read` 和刷新恢复；另行记录真实 LLM 普通文件工具闭环。当前 Worker `grep` 子进程不可用，超长单行 `edit` 会触发 Session body 上限。
 
 ### 需要实现或审查代码时
 
@@ -304,6 +305,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [tests/cold-hydrate-integrity.e2e.mjs](browser-native-dsh-poc/tests/cold-hydrate-integrity.e2e.mjs) | 真实 Chrome 验证远端 Workspace 文件冷启动按 1 MiB chunk 写入 OPFS、range backing、hash 错误 fail-closed 和低 VFS 驻留。 |
 | [tests/orphan-blob-reconciliation.e2e.mjs](browser-native-dsh-poc/tests/orphan-blob-reconciliation.e2e.mjs) | 真实 Chrome 验证 metadata transaction abort 后只回收无引用 OPFS blob，metadata 缺失时保留并报告 corruption。 |
 | [tests/pagehide-local-barrier.e2e.mjs](browser-native-dsh-poc/tests/pagehide-local-barrier.e2e.mjs) | 真实 Chrome 验证 durable pagehide 的 Worker 本地 flush、ack/终止和 BFCache 保留语义。 |
+| [opfs-agent-file-tools-validation-plan.md](browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md) / [进度](browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md) | 冷 hydrate 的 OPFS 外置大文件经 DSH `read`/`grep`/`edit`、Workspace receipt 和刷新后同 Session 读取；明确 scripted 大文件场景、真实模型普通文件证据及 grep/超长行限制。 |
+| [tests/opfs-agent-file-tools.e2e.mjs](browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs) | 真实 Chrome Worker 生成 12 MiB 文件，验收外置 backing 上的 DSH 工具、bounded payload、单次 edit commit 和刷新恢复。 |
 | [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
 
 ### v2 实现和测试入口

@@ -109,6 +109,20 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 `large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。分块只限制网络 body 和传输临时缓冲；`MemoryVfs` 仍持有完整 bytes，客户端下载也会组装完整文件，PoC backend 仍使用本地 `dataDir`，因此这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
 
+## OPFS 外置大文件的 DSH 工具闭环
+
+[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep(error) → edit → read` 中，grep 返回可见错误后 Agent Loop 继续，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 Browser Worker 的 `grep` 因 ripgrep 子进程不可执行而不可用；`edit` 会完整 materialize 文件。10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限，因此结果只适用于有界 4 KiB 行样本。
+
+在 preview 构建后运行模型无关的大文件验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+```
+
+本批另以真实 Chrome 和真实 LLM 运行 `runtime-validation.e2e.mjs`，通过普通大小文件的 `read → write → read`、同 Session 刷新恢复与同源凭据隔离。真实模型结果不覆盖 12 MiB scripted 场景，也不证明模型能稳定调用不可用的 `grep`。结果、实际命令及限制见[进度记录](opfs-agent-file-tools-validation-progress.md)。
+
 ## 故障边界与 S3 blob 验证
 
 [故障边界计划](mock-and-crash-boundary-validation-plan.md)与[实测进度](mock-and-crash-boundary-validation-progress.md)记录 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL`、共享 `dataDir` 的双 backend、超大工具参数和 MinIO S3-compatible blob store。Chrome 155 实测表明：本地元数据缺失时孤儿 OPFS bytes 会 fail closed 并可按 hash 导出；Chrome 强杀后匿名身份 cookie 未自动恢复；两个 backend 都接受同一 seq/revision 写入，冷启动只留下其中一个结果。
