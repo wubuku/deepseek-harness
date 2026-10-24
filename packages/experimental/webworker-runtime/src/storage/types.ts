@@ -165,6 +165,8 @@ export interface VfsOpenFile {
    * @returns Current file metadata, including device and inode identity.
    */
   statBigInt(): VfsBigIntStats
+  /** Release this descriptor; repeated calls are harmless. */
+  close(): void
 }
 
 /**
@@ -249,6 +251,8 @@ export interface VfsMutationSink {
 export interface VfsFileBacking {
   /** Total byte length of the external file. */
   readonly size: number
+  /** Content-addressed identity when the backing is an immutable stored blob. */
+  readonly reference?: VfsFileReference
   /** Read a bounded range and return exactly the available bytes. */
   read(position: number, length: number): Uint8Array
   /** Release the underlying file handle. */

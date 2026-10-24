@@ -237,6 +237,44 @@ describe('mutation publication', () => {
 })
 
 describe('external file backing', () => {
+  it('keeps an open descriptor on the old backing across replacement, rename, unlink, and hard links', () => {
+    const oldBytes = new TextEncoder().encode('old external bytes')
+    const newBytes = new TextEncoder().encode('new external bytes')
+    let oldBackingCloses = 0
+    let newBackingCloses = 0
+    const vfs = new MemoryVfs()
+    vfs.seedExternal('/dsh/external', {
+      size: oldBytes.byteLength,
+      reference: { hash: 'b'.repeat(64), bytes: oldBytes.byteLength },
+      read: (position, length) => oldBytes.slice(position, Math.min(position + length, oldBytes.byteLength)),
+      close: () => { oldBackingCloses += 1 },
+    })
+    vfs.linkSync('/dsh/external', '/dsh/external-link')
+    const descriptor = vfs.openFileSync('/dsh/external', 'r')
+
+    vfs.renameSync('/dsh/external', '/dsh/renamed')
+    vfs.replaceExternalSync('/dsh/renamed', {
+      size: newBytes.byteLength,
+      read: (position, length) => newBytes.slice(position, Math.min(position + length, newBytes.byteLength)),
+      close: () => { newBackingCloses += 1 },
+    }, { hash: 'a'.repeat(64), bytes: newBytes.byteLength })
+
+    expect(new TextDecoder().decode(descriptor.read(0, descriptor.stat().size))).toBe('old external bytes')
+    expect(new TextDecoder().decode(vfs.readFileRangeSync('/dsh/renamed', 0, newBytes.byteLength))).toBe('new external bytes')
+    expect(new TextDecoder().decode(vfs.readFileRangeSync('/dsh/external-link', 0, oldBytes.byteLength))).toBe('old external bytes')
+    expect(oldBackingCloses).toBe(0)
+    expect(vfs.usage().residentBytes).toBe(0)
+
+    vfs.unlinkSync('/dsh/external-link')
+    descriptor.close()
+    descriptor.close()
+    expect(oldBackingCloses).toBe(1)
+    expect(newBackingCloses).toBe(0)
+
+    vfs.close()
+    expect(newBackingCloses).toBe(1)
+  })
+
   it('publishes a reference replacement without carrying file bytes in the mutation', () => {
     let sourceClosed = false
     let targetClosed = false

@@ -145,6 +145,23 @@ DSH_POC_BROWSER=chrome DSH_POC_REFERENCE_EDIT_BYTES=4194304 \
 
 本批没有把该测试端口注册成标准 Agent 工具。真实 LLM 仅需按既有运行时命令回归普通文件闭环，不能据此宣称模型已验证大型 external-reference tool arguments。
 
+## External reference 接入标准 `edit` 的 Agent Loop 验证
+
+[本批计划](external-edit-agent-loop-validation-plan.md)与[实施进度](external-edit-agent-loop-validation-progress.md)进一步把 external reference 接入真实 DSH `edit` 工具，并覆盖 Workspace commit unknown、backend 重启、Session durable flush、OPFS 句柄恢复和 CAS conflict。真实 Chrome/scripted DSH E2E 已证明：`tool/call` 在 Workspace side effect 前先进入 Session durable 状态；commit 响应丢失时同一 operationId 可查询/重放，Session 只产生一条 receipt、一次 `edit` call，并以 `TOOL_OUTCOME_UNKNOWN` 结算，不重放原工具。第二个页面提交远端版本后，刷新不会静默覆盖：本地 external retry 保留并显示 `conflict`，远端 revision 和内容也保留。
+
+复跑本批模型无关验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/external-edit-conflict-retention.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-crash-window.e2e.mjs
+```
+
+Chrome 终止 Worker 后可能暂时保留 OPFS sync access handle。Store 会在 hash/size 已验证后有限重试，仍不可重开时使用只读内存 backing；这保证恢复路径不误报损坏，但会牺牲该文件的冷 backing heap 优势。本批仍不证明真实 LLM 自主工具选择、生产多实例 backend、自然 eviction、OS crash 或块级 delta。
+
 ## OPFS 外置大文件的 DSH 工具闭环
 
 [验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep → edit → read` 中，Browser-native `grep` fallback 返回唯一 marker，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 checkout 新增的 fallback 不依赖不存在的 ripgrep 子进程；它不是完整 ripgrep 语法，也不是任意容量的搜索实现。`edit` 会完整 materialize 文件。10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限，因此结果只适用于有界 4 KiB 行样本。

@@ -398,7 +398,13 @@ export function writeSync(fd: number, data: string | Uint8Array): number {
  * @param fd - descriptor.
  */
 export function closeSync(fd: number): void {
-  if (!openFiles.delete(fd)) fileOf(fd, 'close')
+  const opened = openFiles.get(fd)
+  if (opened === undefined) {
+    fileOf(fd, 'close')
+    return
+  }
+  openFiles.delete(fd)
+  opened.file.close()
 }
 
 /**

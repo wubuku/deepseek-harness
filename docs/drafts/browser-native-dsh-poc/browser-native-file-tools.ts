@@ -1,4 +1,10 @@
 import type { MemoryVfs } from '../../../packages/experimental/webworker-runtime/src/storage/memory.ts'
+import type { VfsBigIntStats, VfsFileBacking, VfsOpenFile } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
+import {
+  createSyncAccessChunkBackedFile,
+  replaceUtf8CopyOnWriteAsync,
+  type ChunkBackedFile,
+} from './browser-native-chunk-editor.ts'
 
 const WORKSPACE_ROOT = '/dsh/home/workspace'
 const MAX_SEARCH_FILES = 10_000
@@ -12,8 +18,12 @@ const SEARCH_CHUNK_BYTES = 64 * 1024
 const MAX_MATCHED_LINE_BYTES = 64 * 1024
 const MAX_EDIT_ARGUMENT_BYTES = 256 * 1024
 const MAX_EDIT_FILE_BYTES = 64 * 1024 * 1024
+const EDIT_CHUNK_BYTES = 1024 * 1024
+const MAX_EDIT_RESULT_BYTES = 256 * 1024
+const EDIT_DIRECTORY_PREFIX = 'dsh-browser-native-edit-'
 const encoder = new TextEncoder()
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'])
+const activeEditDirectories = new Set<string>()
 
 export interface BrowserNativeGrepMatch {
   readonly path: string
@@ -29,6 +39,19 @@ export interface BrowserNativeGrepInput {
 export interface BrowserNativeGlobInput {
   readonly pattern: string
   readonly path?: string
+}
+
+interface BrowserNativeEditInput {
+  readonly filePath: string
+  readonly oldString: string
+  readonly newString: string
+  readonly replaceAll: boolean
+}
+
+export interface BrowserNativeEditResult {
+  readonly path: string
+  readonly before: string
+  readonly after: string
 }
 
 export class BrowserNativeFileToolError extends Error {
@@ -86,6 +109,28 @@ function parseGlobInput(value: unknown): BrowserNativeGlobInput {
     throw new BrowserNativeFileToolError(`pattern exceeds the ${String(MAX_SEARCH_PATTERN_BYTES)}-byte browser limit`, 'SEARCH_PATTERN_TOO_LARGE')
   }
   return { pattern: value.pattern, ...(value.path === undefined ? {} : { path: value.path }) }
+}
+
+function parseEditInput(value: unknown): BrowserNativeEditInput {
+  if (!isRecord(value) || typeof value.file_path !== 'string' || typeof value.old_string !== 'string'
+    || typeof value.new_string !== 'string') {
+    throw new BrowserNativeFileToolError('file_path, old_string and new_string must be strings', 'FS_IO_ERROR')
+  }
+  if (value.file_path.trim().length === 0) throw new BrowserNativeFileToolError('file_path must be a non-empty string', 'FS_IO_ERROR')
+  if (value.old_string.length === 0) throw new BrowserNativeFileToolError('old_string must be a non-empty string', 'FS_EDIT_NOT_FOUND')
+  if (value.old_string === value.new_string) throw new BrowserNativeFileToolError('old_string and new_string must differ', 'FS_IO_ERROR')
+  if (value.replace_all !== undefined && typeof value.replace_all !== 'boolean') {
+    throw new BrowserNativeFileToolError('replace_all must be a boolean when given', 'FS_IO_ERROR')
+  }
+  if (encoder.encode(value.old_string).byteLength + encoder.encode(value.new_string).byteLength > MAX_EDIT_ARGUMENT_BYTES) {
+    throw new BrowserNativeFileToolError(`edit arguments exceed the ${String(MAX_EDIT_ARGUMENT_BYTES)}-byte browser limit`, 'EDIT_PAYLOAD_TOO_LARGE')
+  }
+  return {
+    filePath: value.file_path,
+    oldString: value.old_string,
+    newString: value.new_string,
+    replaceAll: value.replace_all === true,
+  }
 }
 
 function absoluteWorkspacePath(input: string | undefined): string {
@@ -327,6 +372,8 @@ async function searchFile(
   } catch (error) {
     if (error instanceof BrowserNativeFileToolError) throw error
     throw new BrowserNativeFileToolError(`cannot search ${relativeWorkspacePath(path)}: ${String(error)}`, 'SEARCH_FAILED')
+  } finally {
+    file.close()
   }
 }
 
@@ -412,6 +459,160 @@ export function assertBrowserNativeEditSafe(vfs: MemoryVfs, value: unknown, sign
     }
     position += Math.max(1, value.old_string.length)
     if (signal.aborted) return
+  }
+}
+
+function sourceFile(descriptor: VfsOpenFile): ChunkBackedFile {
+  const size = descriptor.stat().size
+  return {
+    get size(): number { return size },
+    read: (position, length) => descriptor.read(position, length),
+    write: () => { throw new Error('browser-native edit source is read-only') },
+    truncate: () => { throw new Error('browser-native edit source is read-only') },
+    flush: () => {},
+    close: () => {},
+  }
+}
+
+async function validateEditText(source: ChunkBackedFile, path: string, signal: AbortSignal): Promise<void> {
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (let offset = 0; offset < source.size; offset += EDIT_CHUNK_BYTES) {
+    if (signal.aborted) throw new BrowserNativeFileToolError(`edit aborted for ${relativeWorkspacePath(path)}`, 'FS_ABORTED')
+    const bytes = source.read(offset, Math.min(EDIT_CHUNK_BYTES, source.size - offset))
+    if (bytes.includes(0)) throw new BrowserNativeFileToolError(`cannot edit binary file ${relativeWorkspacePath(path)} as UTF-8 text`, 'FS_NOT_TEXT')
+    try {
+      decoder.decode(bytes, { stream: offset + bytes.byteLength < source.size })
+    } catch (error) {
+      throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)} as UTF-8 text: ${String(error)}`, 'FS_NOT_TEXT')
+    }
+    if (await yieldToWorker(signal, 0)) throw new BrowserNativeFileToolError(`edit aborted for ${relativeWorkspacePath(path)}`, 'FS_ABORTED')
+  }
+  try {
+    decoder.decode()
+  } catch (error) {
+    throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)} as UTF-8 text: ${String(error)}`, 'FS_NOT_TEXT')
+  }
+}
+
+function vfsFileVersion(stats: VfsBigIntStats): string {
+  return `${String(stats.dev)}:${String(stats.ino)}:${String(stats.size)}:${String(stats.mtimeNs)}:${String(stats.ctimeNs)}`
+}
+
+export async function cleanupAbandonedBrowserNativeEdits(workspaceId: string): Promise<void> {
+  const storage = globalThis.navigator?.storage
+  if (storage === undefined || typeof storage.getDirectory !== 'function') return
+  const root = await storage.getDirectory()
+  const prefix = `${EDIT_DIRECTORY_PREFIX}${workspaceId}-`
+  for await (const [name, handle] of root.entries()) {
+    if (handle.kind !== 'directory' || !name.startsWith(prefix) || activeEditDirectories.has(name)) continue
+    await root.removeEntry(name, { recursive: true })
+  }
+}
+
+async function createEditTarget(workspaceId: string): Promise<{ readonly file: ChunkBackedFile; readonly backing: VfsFileBacking; readonly dispose: () => Promise<void> }> {
+  const storage = globalThis.navigator?.storage
+  if (storage === undefined || typeof storage.getDirectory !== 'function') {
+    throw new BrowserNativeFileToolError('OPFS is required for bounded browser-native edit', 'EDIT_OPFS_UNAVAILABLE')
+  }
+  const root = await storage.getDirectory()
+  const directoryName = `${EDIT_DIRECTORY_PREFIX}${workspaceId}-${crypto.randomUUID()}`
+  const directory = await root.getDirectoryHandle(directoryName, { create: true })
+  const targetHandle = await directory.getFileHandle('target', { create: true })
+  const target = createSyncAccessChunkBackedFile(await targetHandle.createSyncAccessHandle())
+  activeEditDirectories.add(directoryName)
+  let closed = false
+  const remove = async (): Promise<void> => {
+    await root.removeEntry(directoryName, { recursive: true }).catch(() => {})
+  }
+  const close = (): void => {
+    if (closed) return
+    closed = true
+    target.close()
+    void remove().finally(() => { activeEditDirectories.delete(directoryName) })
+  }
+  return {
+    file: target,
+    backing: { get size(): number { return target.size }, read: (position, length) => target.read(position, length), close },
+    dispose: async () => {
+      close()
+      await remove()
+      activeEditDirectories.delete(directoryName)
+    },
+  }
+}
+
+function mapChunkEditError(error: unknown, path: string): BrowserNativeFileToolError {
+  if (!(error instanceof Error)) return new BrowserNativeFileToolError(String(error), 'FS_IO_ERROR')
+  if (error instanceof BrowserNativeFileToolError) return error
+  if (error.name === 'ChunkEditError') {
+    if (error.message.startsWith('TEXT_NOT_FOUND:')) {
+      return new BrowserNativeFileToolError(`No replacement was performed in ${relativeWorkspacePath(path)}.`, 'FS_EDIT_NOT_FOUND')
+    }
+    if (error.message.startsWith('TEXT_NOT_UNIQUE:')) {
+      return new BrowserNativeFileToolError(`No replacement was performed. The old string occurs more than once in ${relativeWorkspacePath(path)}.`, 'FS_AMBIGUOUS_EDIT')
+    }
+    if (error.message.startsWith('TOO_MANY_MATCHES:')) {
+      return new BrowserNativeFileToolError(`edit has more than 10,000 matches in ${relativeWorkspacePath(path)}`, 'EDIT_MATCH_LIMIT')
+    }
+    if (error.message.startsWith('CANCELLED:')) return new BrowserNativeFileToolError(`edit aborted for ${relativeWorkspacePath(path)}`, 'FS_ABORTED')
+  }
+  return new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)}: ${error.message}`, 'FS_IO_ERROR')
+}
+
+/** Edit a Workspace file with bounded copy-on-write and publish a reference mutation. */
+export async function executeBrowserNativeEdit(
+  vfs: MemoryVfs,
+  value: unknown,
+  signal: AbortSignal,
+  workspaceId: string,
+): Promise<BrowserNativeEditResult> {
+  const input = parseEditInput(value)
+  const path = absoluteWorkspacePath(input.filePath)
+  const stat = vfs.statSync(path, { bigint: true }) as VfsBigIntStats
+  if (!stat.isFile()) throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)}: not a regular file`, 'FS_NOT_REGULAR_FILE')
+  if (stat.size > BigInt(MAX_EDIT_FILE_BYTES)) {
+    throw new BrowserNativeFileToolError(`edit input exceeds the ${String(MAX_EDIT_FILE_BYTES)}-byte browser preflight limit`, 'EDIT_PAYLOAD_TOO_LARGE')
+  }
+  const descriptor = vfs.openFileSync(path, 'r')
+  const initialVersion = vfsFileVersion(descriptor.statBigInt())
+  const source = sourceFile(descriptor)
+  let target: Awaited<ReturnType<typeof createEditTarget>> | undefined
+  let published = false
+  try {
+    await validateEditText(source, path, signal)
+    const resultBefore = source.size <= MAX_EDIT_RESULT_BYTES
+      ? new TextDecoder('utf-8', { fatal: true }).decode(source.read(0, source.size))
+      : input.oldString
+    const editTarget = await createEditTarget(workspaceId)
+    target = editTarget
+    if (signal.aborted) throw new BrowserNativeFileToolError(`edit aborted for ${relativeWorkspacePath(path)}`, 'FS_ABORTED')
+    let metrics
+    try {
+      metrics = await replaceUtf8CopyOnWriteAsync(source, editTarget.file, input.oldString, input.newString, input.replaceAll, {
+        chunkBytes: EDIT_CHUNK_BYTES,
+        signal,
+        yieldToCaller: async () => { await yieldToWorker(signal, 0) },
+      })
+    } catch (error) {
+      throw mapChunkEditError(error, path)
+    }
+    if (metrics.resultBytes > MAX_EDIT_FILE_BYTES) {
+      throw new BrowserNativeFileToolError(`edited file exceeds the ${String(MAX_EDIT_FILE_BYTES)}-byte browser limit`, 'EDIT_PAYLOAD_TOO_LARGE')
+    }
+    const currentStat = vfs.statSync(path, { bigint: true }) as VfsBigIntStats
+    if (!currentStat.isFile() || vfsFileVersion(currentStat) !== initialVersion) {
+      throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)}: file changed while the edit was running`, 'FS_STALE_VERSION')
+    }
+    const reference = { hash: metrics.resultHash, bytes: metrics.resultBytes }
+    vfs.replaceExternalSync(path, editTarget.backing, reference)
+    published = true
+    const resultAfter = source.size <= MAX_EDIT_RESULT_BYTES && metrics.resultBytes <= MAX_EDIT_RESULT_BYTES
+      ? input.replaceAll ? resultBefore.split(input.oldString).join(input.newString) : resultBefore.replace(input.oldString, input.newString)
+      : input.newString
+    return { path, before: resultBefore, after: resultAfter }
+  } finally {
+    descriptor.close()
+    if (!published) await target?.dispose()
   }
 }
 

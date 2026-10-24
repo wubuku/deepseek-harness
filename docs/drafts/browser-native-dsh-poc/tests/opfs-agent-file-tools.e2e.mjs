@@ -83,6 +83,17 @@ async function hashBlob(origin, workspaceId, hash, cookieHeader) {
   return { byteLength, digest: digest.digest('hex'), tail: tail.toString('utf8'), prefix: prefix.toString('utf8') }
 }
 
+async function listEditTemporaryDirectories(page) {
+  return await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory()
+    const names = []
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind === 'directory' && name.startsWith('dsh-browser-native-edit-')) names.push(name)
+    }
+    return names.sort()
+  })
+}
+
 let image
 let app
 let browser
@@ -142,7 +153,7 @@ try {
     await route.continue()
   })
 
-  await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`)
+  await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&browser-native-test=workspace-recovery&preview-fixture=none`)
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
   const beforeWriteUsage = await testAction(page, { action: 'usage' })
@@ -176,7 +187,9 @@ try {
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
   const coldUsage = await testAction(page, { action: 'usage' })
+  const coldFileStat = await testAction(page, { action: 'stat', path: filePath })
   assert.ok(coldUsage.logicalBytes >= fileBytes, JSON.stringify(coldUsage))
+  assert.equal(coldFileStat.bytes, fileBytes)
   assert.ok(coldUsage.residentBytes < seededUsage.residentBytes - fileBytes / 2,
     JSON.stringify({ seededUsage, coldUsage }))
 
@@ -215,8 +228,10 @@ try {
     throw error
   }
   const duringEditUsage = await testAction(page, { action: 'usage' })
-  assert.ok(duringEditUsage.residentBytes >= coldUsage.residentBytes + fileBytes / 2,
+  const editedFileStat = await testAction(page, { action: 'stat', path: filePath })
+  assert.ok(duringEditUsage.residentBytes <= coldUsage.residentBytes + 1024 * 1024,
     JSON.stringify({ coldUsage, duringEditUsage }))
+  assert.equal(editedFileStat.bytes, coldFileStat.bytes, 'editing an external file must preserve its byte length')
   const pendingState = await page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state)
   assert.notEqual(pendingState, 'synced', 'Workspace must not claim sync while the edit commit is blocked')
   releaseCommit()
@@ -323,9 +338,10 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
+  assert.deepEqual(await listEditTemporaryDirectories(page), [], 'Worker reconstruction must remove abandoned external-edit temporary directories')
   const restoredUsage = await testAction(page, { action: 'usage' })
-  assert.ok(restoredUsage.residentBytes < duringEditUsage.residentBytes - fileBytes / 2,
-    JSON.stringify({ duringEditUsage, restoredUsage }))
+  assert.ok(Math.abs(restoredUsage.residentBytes - coldUsage.residentBytes) <= 1024 * 1024,
+    JSON.stringify({ coldUsage, restoredUsage }))
   const restoredTurn = await sendTurn({
     page,
     origin,
@@ -364,7 +380,7 @@ try {
     restoredTurnToolSequence: restoredCalls.map(event => event.data.name),
     seedResidentBytes: seededUsage.residentBytes,
     coldResidentBytes: coldUsage.residentBytes,
-    materializedResidentBytes: duringEditUsage.residentBytes,
+    postEditResidentBytes: duringEditUsage.residentBytes,
     restoredResidentBytes: restoredUsage.residentBytes,
     seedCommitCount,
     commitCount: commits.length,

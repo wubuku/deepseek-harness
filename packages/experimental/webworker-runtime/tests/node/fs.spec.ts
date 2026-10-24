@@ -117,6 +117,18 @@ check('readSync at eof', fs.readSync(readFd, target, 0, 8), 0)
 fs.closeSync(readFd)
 throws('closed fd', () => fs.readSync(readFd, target, 0, 8), 'EBADF')
 
+let externalCloseCount = 0
+const externalBytes = new TextEncoder().encode('external descriptor')
+vfs.seedExternal('/dsh/external-descriptor', {
+  size: externalBytes.byteLength,
+  read: (position, length) => externalBytes.slice(position, Math.min(position + length, externalBytes.byteLength)),
+  close: () => { externalCloseCount += 1 },
+})
+const externalFd = fs.openSync('/dsh/external-descriptor', 'r')
+fs.unlinkSync('/dsh/external-descriptor')
+fs.closeSync(externalFd)
+check('closeSync releases external backing', externalCloseCount, 1)
+
 const writeFd = fs.openSync('/dsh/truncated.txt', 'w')
 fs.writeSync(writeFd, 'abc')
 fs.closeSync(writeFd)

@@ -553,14 +553,18 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         throw new Error('browser-native workspace test: range offset and length are required')
       }
       const descriptor = workspaceRuntime.vfs.openFileSync(request.path, 'r')
-      const bytes = descriptor.read(request.offset, request.length)
-      workspaceTestResponse(request.requestId, {
-        ok: true,
-        path: request.path,
-        offset: request.offset,
-        length: bytes.byteLength,
-        base64: encodeBase64(bytes),
-      })
+      try {
+        const bytes = descriptor.read(request.offset, request.length)
+        workspaceTestResponse(request.requestId, {
+          ok: true,
+          path: request.path,
+          offset: request.offset,
+          length: bytes.byteLength,
+          base64: encodeBase64(bytes),
+        })
+      } finally {
+        descriptor.close()
+      }
       return
     }
     if (request.action === 'append') {

@@ -5,6 +5,7 @@ import {
   findUniqueUtf8Range,
   hashChunkBackedFile,
   replaceRangeCopyOnWrite,
+  replaceUtf8CopyOnWriteAsync,
   replaceUniqueUtf8CopyOnWrite,
 } from '../browser-native-chunk-editor.ts'
 
@@ -50,6 +51,39 @@ describe('browser-native chunk editor', () => {
       'new',
       { chunkBytes: 8 },
     )).toThrowError(new RegExp('TEXT_NOT_UNIQUE'))
+  })
+
+  it('replaces non-overlapping matches across chunk boundaries', async () => {
+    const source = new MemoryChunkBackedFile(encoder.encode('aaaa目标目标'))
+    const target = new MemoryChunkBackedFile()
+    await replaceUtf8CopyOnWriteAsync(source, target, 'aa', 'b', true, { chunkBytes: 3 })
+    expect(decoder.decode(target.snapshot())).toBe('bb目标目标')
+  })
+
+  it('yields between reads so cancellation leaves the source and target unpublished', async () => {
+    const source = new MemoryChunkBackedFile(encoder.encode(`${'x'.repeat(24 * 1024)}TARGET`))
+    const target = new MemoryChunkBackedFile()
+    const controller = new AbortController()
+    let yields = 0
+    await expect(replaceUtf8CopyOnWriteAsync(source, target, 'TARGET', 'DONE', false, {
+      chunkBytes: 1024,
+      signal: controller.signal,
+      yieldToCaller: async () => {
+        yields += 1
+        if (yields === 3) controller.abort()
+      },
+    })).rejects.toThrow(/CANCELLED/)
+    expect(yields).toBe(3)
+    expect(target.size).toBe(0)
+    expect(decoder.decode(source.snapshot())).toContain('TARGET')
+  })
+
+  it('bounds replace-all match metadata', async () => {
+    const source = new MemoryChunkBackedFile(encoder.encode('x'.repeat(10_001)))
+    const target = new MemoryChunkBackedFile()
+    await expect(replaceUtf8CopyOnWriteAsync(source, target, 'x', 'y', true, { chunkBytes: 1024 }))
+      .rejects.toThrow(/TOO_MANY_MATCHES/)
+    expect(target.size).toBe(0)
   })
 
   it('keeps the source unchanged when the target fails before publish', () => {

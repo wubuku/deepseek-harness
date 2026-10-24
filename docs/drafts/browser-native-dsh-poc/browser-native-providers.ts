@@ -9,7 +9,7 @@
 import { requireActiveModuleLoader, type StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import './browser-native-session-events.ts'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type {
   GenerateOptions,
   LlmAdapter,
@@ -28,6 +28,7 @@ import type {
 } from '@deepseek-ai/dsh-session'
 import type { BrowserNativeWorkspaceReceiptEvent } from './browser-native-session-events.ts'
 import type { BrowserNativeWorkspaceRuntime, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
+import type {} from '@deepseek-ai/dsh-working-directory'
 import type {
   SessionAccess,
   SessionHandle,
@@ -45,7 +46,9 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import { publishBrowserNativeOwner, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
 import {
+  BrowserNativeFileToolError,
   assertBrowserNativeEditSafe,
+  executeBrowserNativeEdit,
   executeBrowserNativeGlob,
   executeBrowserNativeGrep,
   isBrowserWorkspacePath,
@@ -96,6 +99,21 @@ interface RuntimeLlmModule {
   readonly LlmError: typeof import('@deepseek-ai/dsh-llm').LlmError
 }
 
+interface RuntimeFsModule {
+  readonly FsError: typeof import('@deepseek-ai/dsh-fs').FsError
+  readonly FsVersion: typeof import('@deepseek-ai/dsh-fs').FsVersion
+}
+
+interface RuntimeFsSandboxController {
+  resolvePolicy(toolName: string, args: Record<string, unknown>, exec: ToolExecution): Promise<unknown>
+  mapError(error: unknown, policy: unknown): unknown
+}
+
+interface RuntimeFileToolHelpers {
+  readonly FsSandboxController: new(ctx: Context) => RuntimeFsSandboxController
+  readonly remediateFsError: (error: unknown, displayPath: string) => unknown
+}
+
 interface BrowserNativeOwner {
   readonly ownerToken: string
   readonly leaseDurationMs: number
@@ -116,6 +134,20 @@ function runtimePersistence(): RuntimePersistenceModule {
 
 function runtimeLlm(): RuntimeLlmModule {
   return loaderRequire()('@deepseek-ai/dsh-llm') as RuntimeLlmModule
+}
+
+function runtimeFs(): RuntimeFsModule {
+  return loaderRequire()('@deepseek-ai/dsh-fs') as RuntimeFsModule
+}
+
+function runtimeFileToolHelpers(): RuntimeFileToolHelpers {
+  return loaderRequire()('@deepseek-ai/dsh-tool-fs') as RuntimeFileToolHelpers
+}
+
+function browserNativeFsVersion(vfs: BrowserNativeWorkspaceRuntime['vfs'], path: string): string {
+  const stats = vfs.statSync(path, { bigint: true })
+  if (stats.isDirectory()) throw new Error(`browser-native edit target is a directory: ${path}`)
+  return `${String(stats.dev)}:${String(stats.ino)}:${String(stats.size)}:${String(stats.mtimeNs)}:${String(stats.ctimeNs)}`
 }
 
 function requestId(): string {
@@ -360,12 +392,15 @@ function createRemoteSessionPersistenceClass(
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
     override readonly name = 'session-persistence-browser-native'
+    static inject = ['fs', 'workingDirectory']
     private readonly handles = new Set<RemoteSessionHandle>()
     private readonly writers = new Map<SessionId, RemoteSessionHandle>()
     private readonly receiptWrites = new Map<SessionId, Promise<void>>()
+    private readonly fsSandbox: RuntimeFsSandboxController
 
     constructor(ctx: Context) {
       super(ctx)
+      this.fsSandbox = new (runtimeFileToolHelpers().FsSandboxController)(ctx)
       ctx.on('session/event', (session: Session, event: SessionEvent) => {
         this.writers.get(session.id)?.enqueueLive(event, error => {
           ctx.logger.warn(`browser-native session write failed for "${session.id}": ${String(error)}`)
@@ -418,9 +453,6 @@ function createRemoteSessionPersistenceClass(
           const value = await executeBrowserNativeGlob(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
           return { isError: false, value } as ToolExecutionResult
         }
-        if (exec.name === 'edit' && isBrowserWorkspacePath(String((exec.arguments as Record<string, unknown>).file_path ?? ''))) {
-          assertBrowserNativeEditSafe(workspace.vfs, exec.arguments, exec.signal)
-        }
         if (!['write', 'edit'].includes(exec.name)) return await next()
         const session = exec.agent.session
         const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)
@@ -432,6 +464,75 @@ function createRemoteSessionPersistenceClass(
           callId: String(call.data.callId),
           toolName: call.data.name,
           toolCallSeq: Number(call.seq),
+        }
+        const sessionWriter = this.writers.get(session.id)
+        if (sessionWriter === undefined) throw new Error(`browser-native Session "${String(session.id)}" has no write handle`)
+        await sessionWriter.flush()
+        if (exec.name === 'edit' && isRecord(exec.arguments) && typeof exec.arguments.file_path === 'string') {
+          const cwd = await ctx.workingDirectory.ensure(exec.agent, exec.signal)
+          const target = await ctx.fs.resolve(exec.arguments.file_path, { cwd, signal: exec.signal })
+          const targetPath = ctx.fs.processPath(target)
+          if (isBrowserWorkspacePath(targetPath)) {
+            const storage = globalThis.navigator?.storage
+            const workspaceId = workspace.getWorkspaceId()
+            if (workspace.isDurableWorkspace() && workspaceId !== undefined
+              && storage !== undefined && typeof storage.getDirectory === 'function') {
+              const sandboxPolicy = await this.fsSandbox.resolvePolicy('edit', exec.arguments, exec)
+              try {
+                const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
+                const currentVersion = runtimeFs().FsVersion(browserNativeFsVersion(workspace.vfs, targetPath))
+                if (intent !== undefined && intent.version !== currentVersion) {
+                  throw new (runtimeFs().FsError)(`cannot edit "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
+                }
+                const directResult = await workspace.runToolOperation(operation, async () => {
+                  try {
+                    return {
+                      isError: false,
+                      value: await executeBrowserNativeEdit(
+                        workspace.vfs,
+                        { ...exec.arguments, file_path: targetPath },
+                        exec.signal,
+                        workspaceId,
+                      ),
+                    } as ToolExecutionResult
+                  } catch (error) {
+                    if (!(error instanceof BrowserNativeFileToolError)) throw error
+                    const code = error.code === 'EDIT_PAYLOAD_TOO_LARGE' || error.code === 'EDIT_MATCH_LIMIT'
+                      ? 'FS_TOO_LARGE'
+                      : error.code === 'FS_NOT_TEXT' || error.code === 'FS_NOT_REGULAR_FILE' || error.code === 'FS_EDIT_NOT_FOUND'
+                        || error.code === 'FS_AMBIGUOUS_EDIT' || error.code === 'FS_ABORTED' || error.code === 'FS_STALE_VERSION'
+                        ? error.code
+                        : 'FS_IO_ERROR'
+                    throw new (runtimeFs().FsError)(error.message, code)
+                  }
+                })
+                if (!directResult.isError) ctx.emit('fs/observed', target, {
+                  kind: 'present',
+                  version: runtimeFs().FsVersion(browserNativeFsVersion(workspace.vfs, targetPath)),
+                }, exec)
+                if (!directResult.isError) {
+                  try {
+                    await workspace.flushLocalWorkspace()
+                  } catch (error) {
+                    throw new Error(
+                      `browser-native local Workspace persistence was not confirmed; the file change may remain only in volatile Worker memory (${String(error)})`,
+                      { cause: error },
+                    )
+                  }
+                  try {
+                    await workspace.flushWorkspace()
+                  } catch (error) {
+                    ctx.logger.warn(`browser-native Workspace commit for tool call "${String(exec.callId)}" remains pending: ${String(error)}`)
+                  }
+                }
+                return directResult
+              } catch (error) {
+                const helpers = runtimeFileToolHelpers()
+                throw helpers.remediateFsError(this.fsSandbox.mapError(error, sandboxPolicy), target.displayPath)
+              }
+            }
+            assertBrowserNativeEditSafe(workspace.vfs, { ...exec.arguments, file_path: targetPath }, exec.signal)
+          }
         }
         const result = await workspace.runToolOperation(operation, next)
         if (!result.isError) {

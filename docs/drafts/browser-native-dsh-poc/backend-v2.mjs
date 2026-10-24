@@ -522,6 +522,35 @@ function scriptedText(response, text) {
 }
 
 async function scriptedLlm(response, messages, tools) {
+  const externalEditCrashMarker = 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
+  if (textContent(messages).includes(externalEditCrashMarker) && hasTool(tools, 'edit')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(externalEditCrashMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-external-edit-crash-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/external-edit-crash.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-external-edit-crash-window',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/external-edit-crash.txt',
+          old_string: 'before',
+          new_string: 'after',
+        },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_DONE')
+    return
+  }
+
   const oversizedToolMarkers = [
     'BROWSER_NATIVE_TOOL_ARGS_768K_E2E',
     'BROWSER_NATIVE_TOOL_ARGS_1M_E2E',

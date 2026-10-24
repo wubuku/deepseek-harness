@@ -52,13 +52,33 @@ async function readLocalBlob(page, workspaceId, hash) {
   }, { id: workspaceId, blobHash: hash })
 }
 
+async function listEditTemporaryDirectories(page, workspaceId) {
+  return await page.evaluate(async id => {
+    const root = await navigator.storage.getDirectory()
+    const prefix = `dsh-browser-native-edit-${id}-`
+    const names = []
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind === 'directory' && name.startsWith(prefix)) names.push(name)
+    }
+    return names.sort()
+  }, workspaceId)
+}
+
 function resultFor(session, callId) {
   return session.events.find(event => event.type === 'tool/result'
     && (event.data.callId === callId || event.data.toolCallId === callId
       || event.data.message?.toolCallId === callId))
 }
 
-async function runCrashCase(app, origin, stage) {
+async function runCrashCase(app, origin, stage, kind = 'write') {
+  const externalEdit = kind === 'external-edit'
+  const operationName = externalEdit ? 'edit' : 'write'
+  const targetPath = externalEdit ? '/dsh/home/workspace/external-edit-crash.txt' : workspacePath
+  const targetName = externalEdit ? 'external-edit-crash.txt' : 'crash-window.txt'
+  const turnPrompt = externalEdit
+    ? 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E：先读取再编辑文件。'
+    : prompt
+  let baseRevision = 0
   const browser = await chromium.launch({ headless: true, channel: process.env.DSH_POC_BROWSER ?? 'chrome' })
   const context = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
   await context.addInitScript(() => {
@@ -89,16 +109,32 @@ async function runCrashCase(app, origin, stage) {
     if (url.pathname.endsWith('/workspace/commit')) commits.push(body)
   })
   try {
-    await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`)
+    await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&browser-native-test=workspace-recovery&preview-fixture=none`)
     await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
     const workspaceId = await page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.workspaceId)
     assert.equal(typeof workspaceId, 'string')
+    if (externalEdit) {
+      const seeded = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+        action: 'write', path, content: 'before\n',
+      }), targetPath)
+      assert.equal(seeded?.ok, true, JSON.stringify(seeded))
+      const seedCommit = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'flush-workspace' }))
+      assert.equal(seedCommit?.ok, true, JSON.stringify(seedCommit))
+      await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+        && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 1, undefined, { timeout: 30_000 })
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await waitForPreview(page)
+      await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
+        && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+        && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 1, undefined, { timeout: 30_000 })
+      baseRevision = 1
+    }
     const armed = await page.evaluate(async saveStage => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
       action: 'pause-local-save', stage: saveStage,
     }), stage)
     assert.equal(armed?.ok, true, JSON.stringify(armed))
 
-    await page.locator('[data-composer-input][contenteditable="true"]').last().fill(prompt)
+    await page.locator('[data-composer-input][contenteditable="true"]').last().fill(turnPrompt)
     await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click()
     const create = await waitFor(
       () => requests.find(request => request.path.endsWith('/session/create')),
@@ -114,9 +150,9 @@ async function runCrashCase(app, origin, stage) {
 
     const beforeCrash = await waitFor(async () => {
       const session = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
-      const call = session.events.find(event => event.type === 'tool/call' && event.data.name === 'write')
+      const call = session.events.find(event => event.type === 'tool/call' && event.data.name === operationName)
       return call === undefined ? undefined : { session, call }
-    }, 'actual DSH write tool call', 15_000)
+    }, `actual DSH ${operationName} tool call`, 15_000)
     const callId = String(beforeCrash.call.data.callId)
     assert.equal(resultFor(beforeCrash.session, callId), undefined,
       'the tool result must wait for the blocked local persistence acknowledgement')
@@ -126,17 +162,18 @@ async function runCrashCase(app, origin, stage) {
 
     const localRecordBeforeCrash = await readLocalRecord(page, workspaceId)
     const manifestBeforeCrash = await readManifest(page, workspaceId)
-    assert.equal(manifestBeforeCrash.revision, 0)
-    assert.equal(manifestBeforeCrash.entries.some(entry => entry.path === 'crash-window.txt'), false)
+    assert.equal(manifestBeforeCrash.revision, baseRevision)
+    assert.equal(manifestBeforeCrash.entries.some(entry => entry.path === targetName), externalEdit)
     let expectedLocalHash
     if (stage === 'before') {
       assert.equal(localRecordBeforeCrash?.pending?.length ?? 0, 0)
       assert.equal(localRecordBeforeCrash?.retryBatch, undefined)
     } else {
-      const change = localRecordBeforeCrash?.pending?.find(item => item.path === 'crash-window.txt')
+      const change = localRecordBeforeCrash?.pending?.find(item => item.path === targetName)
       assert.ok(change, 'the after-save barrier must stop after IndexedDB stores the pending mutation')
       expectedLocalHash = change.contentHash
-      assert.equal(await readLocalBlob(page, workspaceId, expectedLocalHash), 'crash-window-payload\n')
+      if (externalEdit) assert.equal(change.externalContent, true)
+      assert.equal(await readLocalBlob(page, workspaceId, expectedLocalHash), externalEdit ? 'after\n' : 'crash-window-payload\n')
     }
 
     await page.evaluate(() => {
@@ -147,14 +184,19 @@ async function runCrashCase(app, origin, stage) {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForPreview(page)
     await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function', undefined, { timeout: 30_000 })
+    const expectedRevision = baseRevision + (stage === 'after' ? 1 : 0)
     await page.waitForFunction(expectedRevision => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
       && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === expectedRevision,
-    stage === 'after' ? 1 : 0, { timeout: 30_000 })
+    expectedRevision, { timeout: 30_000 })
     await new Promise(resolveDelay => setTimeout(resolveDelay, 500))
+    if (externalEdit) assert.deepEqual(await listEditTemporaryDirectories(page, workspaceId), [])
 
     const recovered = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
-    const originalCalls = recovered.events.filter(event => event.type === 'tool/call' && event.data.name === 'write')
-    assert.equal(originalCalls.length, 1, 'Worker reconstruction must not replay the unfinished DSH file tool')
+    const originalCalls = recovered.events.filter(event => event.type === 'tool/call'
+      && event.data.turn === beforeCrash.call.data.turn
+      && (externalEdit ? ['read', 'edit'].includes(event.data.name) : event.data.name === operationName))
+    assert.equal(originalCalls.filter(event => event.data.name === operationName).length, 1,
+      'Worker reconstruction must not replay the unfinished DSH file tool')
     const recoveredResult = resultFor(recovered, callId)
     assert.ok(recoveredResult, 'Session recovery must close the unmatched tool call')
     assert.equal(recoveredResult.data.message?.isError, true)
@@ -174,20 +216,30 @@ async function runCrashCase(app, origin, stage) {
     const manifestAfterCrash = await readManifest(page, workspaceId)
     const localRecordAfterCrash = await readLocalRecord(page, workspaceId)
     if (stage === 'before') {
-      assert.equal(manifestAfterCrash.revision, 0)
-      assert.equal(manifestAfterCrash.entries.some(entry => entry.path === 'crash-window.txt'), false)
+      assert.equal(manifestAfterCrash.revision, baseRevision)
+      assert.equal(manifestAfterCrash.entries.some(entry => entry.path === targetName), externalEdit)
       assert.equal(localRecordAfterCrash?.pending?.length ?? 0, 0)
-      const missingVolatileFile = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+      const recoveredFile = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
         action: 'read', path,
-      }), workspacePath)
-      assert.equal(missingVolatileFile?.ok, false, 'volatile bytes must not appear after Worker reconstruction')
+      }), targetPath)
+      if (externalEdit) {
+        assert.deepEqual({ ok: recoveredFile?.ok, content: recoveredFile?.content }, { ok: true, content: 'before\n' })
+      } else {
+        assert.equal(recoveredFile?.ok, false, 'volatile bytes must not appear after Worker reconstruction')
+      }
     } else {
-      assert.equal(manifestAfterCrash.revision, 1)
-      const remoteFile = manifestAfterCrash.entries.find(entry => entry.path === 'crash-window.txt')
+      assert.equal(manifestAfterCrash.revision, baseRevision + 1)
+      const remoteFile = manifestAfterCrash.entries.find(entry => entry.path === targetName)
       assert.equal(remoteFile?.hash, expectedLocalHash)
-      assert.equal(commits.length, 1, 'the durable pending mutation must commit exactly once after reload')
+      assert.equal(commits.length, baseRevision + 1, 'the durable pending mutation must commit exactly once after reload')
       assert.deepEqual(localRecordAfterCrash?.pending ?? [], [])
       assert.equal(localRecordAfterCrash?.retryBatch, undefined)
+      if (externalEdit) {
+        const recoveredFile = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+          action: 'read', path,
+        }), targetPath)
+        assert.deepEqual({ ok: recoveredFile?.ok, content: recoveredFile?.content }, { ok: true, content: 'after\n' })
+      }
     }
 
     const continuation = await submitPrompt({
@@ -202,12 +254,14 @@ async function runCrashCase(app, origin, stage) {
     assert.equal(requests.filter(request => request.path.endsWith('/llm')).length, llmRequestCountBeforeCrash + 1,
       'one explicit follow-up must add exactly one LLM request')
     assert.equal(continuation.session.events.filter(event => event.type === 'tool/call'
-      && event.data.name === 'write').length, 1, 'the follow-up must not replay the interrupted write')
+      && event.data.turn === beforeCrash.call.data.turn && event.data.name === operationName).length, 1,
+    'the follow-up must not replay the interrupted file tool')
     assert.equal(resultFor(continuation.session, callId)?.data.error?.code, 'TOOL_OUTCOME_UNKNOWN')
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(nonLocalRequests, [])
     return {
       stage,
+      kind,
       sessionId,
       workspaceId,
       callId,
@@ -240,10 +294,12 @@ try {
   const results = []
   results.push(await runCrashCase(app, origin, 'before'))
   results.push(await runCrashCase(app, origin, 'after'))
+  results.push(await runCrashCase(app, origin, 'before', 'external-edit'))
+  results.push(await runCrashCase(app, origin, 'after', 'external-edit'))
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
-    scope: 'real-DSH-write-crash-before-and-after-OPFS-IndexedDB-local-durable-save',
+    scope: 'real-DSH-write-and-external-edit-crash-before-and-after-OPFS-IndexedDB-local-durable-save',
     cases: results,
   })}\n`)
 } finally {

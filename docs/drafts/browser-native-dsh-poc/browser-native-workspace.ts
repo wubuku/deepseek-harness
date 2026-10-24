@@ -12,6 +12,7 @@ import {
 import {
   createBrowserDurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
+import { cleanupAbandonedBrowserNativeEdits } from './browser-native-file-tools.ts'
 import type {
   DurableWorkspaceSnapshot,
   DurableWorkspaceStore,
@@ -223,6 +224,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       }
       this.workspaceId = identity.workspaceId
       if (this.useWriterLease) await this.claimWriter()
+      if (this.useWriterLease) await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
       const manifestResponse = await fetch(
         `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
         { credentials: 'same-origin' },
@@ -437,6 +439,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   getWriterLease(): BrowserNativeWorkspaceWriterLease | undefined {
     if (this.writerToken === undefined || this.fencingToken === undefined) return undefined
     return { writerToken: this.writerToken, fencingToken: this.fencingToken }
+  }
+
+  getWorkspaceId(): string | undefined {
+    return this.workspaceId
+  }
+
+  isDurableWorkspace(): boolean {
+    return this.store !== undefined
   }
 
   getWriterLeaseTestState(): {
@@ -1225,6 +1235,10 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly releaseWriter: () => Promise<void>
   /** Return the PoC-only delay inserted at cooperative file-search yields. */
   readonly getFileToolYieldDelayMs: () => number
+  /** Return the current Workspace identity after preparation. */
+  readonly getWorkspaceId: () => string | undefined
+  /** Whether this runtime has a local durable store for external file backing. */
+  readonly isDurableWorkspace: () => boolean
 }
 
 /** Optional local persistence for the Browser-Native Workspace PoC. */
@@ -1275,5 +1289,7 @@ export function createBrowserNativeWorkspaceRuntime(
     getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),
     getFileToolYieldDelayMs: () => options.testHooks?.fileToolYieldDelayMs?.() ?? 0,
+    getWorkspaceId: () => mirror.getWorkspaceId(),
+    isDurableWorkspace: () => mirror.isDurableWorkspace(),
   }
 }

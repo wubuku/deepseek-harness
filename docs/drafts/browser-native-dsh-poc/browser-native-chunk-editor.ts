@@ -39,7 +39,7 @@ export interface ChunkEditRange {
 export class ChunkEditError extends Error {
   override readonly name = 'ChunkEditError'
 
-  constructor(readonly code: 'INVALID_RANGE' | 'TEXT_NOT_FOUND' | 'TEXT_NOT_UNIQUE' | 'CANCELLED' | 'WRITE_FAILED', message: string, options?: ErrorOptions) {
+  constructor(readonly code: 'INVALID_RANGE' | 'TEXT_NOT_FOUND' | 'TEXT_NOT_UNIQUE' | 'TOO_MANY_MATCHES' | 'CANCELLED' | 'WRITE_FAILED', message: string, options?: ErrorOptions) {
     super(`${code}: ${message}`, options)
   }
 }
@@ -49,7 +49,10 @@ export interface ChunkEditOptions {
   readonly chunkBytes?: number
   readonly signal?: AbortSignal
   readonly onStage?: (stage: ChunkEditStage) => void
+  readonly yieldToCaller?: () => Promise<void>
 }
+
+const MAX_REPLACEMENT_RANGES = 10_000
 
 /** Hash one chunk-backed file without materializing its contents. */
 export function hashChunkBackedFile(file: ChunkBackedFile, chunkBytes = DEFAULT_CHUNK_BYTES): string {
@@ -86,15 +89,15 @@ function findBytes(haystack: Uint8Array, needle: Uint8Array, from: number): numb
   return -1
 }
 
-/** Locate a unique UTF-8 string without materializing the source file. */
-export function findUniqueUtf8Range(file: ChunkBackedFile, oldText: string, options: ChunkEditOptions = {}): ChunkEditRange {
+/** Locate all UTF-8 string occurrences without materializing the source file. */
+export function findUtf8Ranges(file: ChunkBackedFile, oldText: string, options: ChunkEditOptions = {}): readonly ChunkEditRange[] {
   const chunkBytes = checkChunkBytes(options.chunkBytes)
   const needle = new TextEncoder().encode(oldText)
   if (needle.byteLength === 0) throw new ChunkEditError('INVALID_RANGE', 'oldText must not be empty')
   const overlap = Math.max(0, needle.byteLength - 1)
   let carry = new Uint8Array(0)
   let offset = 0
-  let found: ChunkEditRange | undefined
+  const ranges: ChunkEditRange[] = []
   while (offset < file.size) {
     checkSignal(options.signal)
     const length = Math.min(chunkBytes, file.size - offset)
@@ -109,17 +112,68 @@ export function findUniqueUtf8Range(file: ChunkBackedFile, oldText: string, opti
       const index = findBytes(combined, needle, cursor)
       if (index < 0) break
       const start = base + index
-      if (found?.start !== start) {
-        if (found !== undefined) throw new ChunkEditError('TEXT_NOT_UNIQUE', 'oldText occurs more than once')
-        found = { start, end: start + needle.byteLength }
+      const previous = ranges[ranges.length - 1]
+      if (previous?.start !== start) ranges.push({ start, end: start + needle.byteLength })
+      cursor = index + needle.byteLength
+      if (ranges.length > MAX_REPLACEMENT_RANGES) {
+        throw new ChunkEditError('TOO_MANY_MATCHES', `oldText occurs more than ${String(MAX_REPLACEMENT_RANGES)} times`)
       }
-      cursor = index + 1
     }
     carry = combined.slice(Math.max(0, combined.byteLength - overlap))
     offset += length
   }
-  if (found === undefined) throw new ChunkEditError('TEXT_NOT_FOUND', 'oldText was not found')
-  return found
+  if (ranges.length === 0) throw new ChunkEditError('TEXT_NOT_FOUND', 'oldText was not found')
+  return ranges
+}
+
+/** Locate non-overlapping UTF-8 string occurrences while yielding between bounded reads. */
+export async function findUtf8RangesAsync(
+  file: ChunkBackedFile,
+  oldText: string,
+  options: ChunkEditOptions = {},
+  maxMatches = MAX_REPLACEMENT_RANGES,
+): Promise<readonly ChunkEditRange[]> {
+  const chunkBytes = checkChunkBytes(options.chunkBytes)
+  const needle = new TextEncoder().encode(oldText)
+  if (needle.byteLength === 0) throw new ChunkEditError('INVALID_RANGE', 'oldText must not be empty')
+  const overlap = Math.max(0, needle.byteLength - 1)
+  let carry = new Uint8Array(0)
+  let offset = 0
+  const ranges: ChunkEditRange[] = []
+  while (offset < file.size) {
+    checkSignal(options.signal)
+    const length = Math.min(chunkBytes, file.size - offset)
+    const bytes = file.read(offset, length)
+    if (bytes.byteLength !== length) throw new ChunkEditError('WRITE_FAILED', 'source returned a short read')
+    const combined = new Uint8Array(carry.byteLength + bytes.byteLength)
+    combined.set(carry)
+    combined.set(bytes, carry.byteLength)
+    const base = offset - carry.byteLength
+    let cursor = 0
+    while (true) {
+      const index = findBytes(combined, needle, cursor)
+      if (index < 0) break
+      const start = base + index
+      if (ranges[ranges.length - 1]?.start !== start) ranges.push({ start, end: start + needle.byteLength })
+      if (ranges.length > maxMatches) {
+        throw new ChunkEditError('TOO_MANY_MATCHES', `oldText occurs more than ${String(maxMatches)} times`)
+      }
+      cursor = index + needle.byteLength
+    }
+    carry = combined.slice(Math.max(0, combined.byteLength - overlap))
+    offset += length
+    await options.yieldToCaller?.()
+    checkSignal(options.signal)
+  }
+  if (ranges.length === 0) throw new ChunkEditError('TEXT_NOT_FOUND', 'oldText was not found')
+  return ranges
+}
+
+/** Locate one unique UTF-8 string without materializing the source file. */
+export function findUniqueUtf8Range(file: ChunkBackedFile, oldText: string, options: ChunkEditOptions = {}): ChunkEditRange {
+  const ranges = findUtf8Ranges(file, oldText, options)
+  if (ranges.length !== 1) throw new ChunkEditError('TEXT_NOT_UNIQUE', 'oldText occurs more than once')
+  return ranges[0]!
 }
 
 interface MutableMetrics {
@@ -175,35 +229,104 @@ function hashFile(file: ChunkBackedFile, buffer: Uint8Array, metrics: MutableMet
   return digest.digestHex()
 }
 
-/** Replace one unique byte range in a new file using bounded copy-on-write IO. */
-export function replaceRangeCopyOnWrite(
+async function hashFileAsync(
+  file: ChunkBackedFile,
+  buffer: Uint8Array,
+  metrics: MutableMetrics,
+  options: ChunkEditOptions,
+): Promise<string> {
+  const digest = new Sha256()
+  let offset = 0
+  while (offset < file.size) {
+    checkSignal(options.signal)
+    options.onStage?.('hash')
+    const length = Math.min(buffer.byteLength, file.size - offset)
+    const bytes = file.read(offset, length)
+    if (bytes.byteLength !== length) throw new ChunkEditError('WRITE_FAILED', 'file returned a short hash read')
+    digest.update(bytes)
+    metrics.readCalls += 1
+    metrics.bytesRead += bytes.byteLength
+    offset += length
+    await options.yieldToCaller?.()
+    checkSignal(options.signal)
+  }
+  return digest.digestHex()
+}
+
+async function copyRangeAsync(
   source: ChunkBackedFile,
   target: ChunkBackedFile,
-  range: ChunkEditRange,
+  sourceStart: number,
+  sourceEnd: number,
+  targetStart: number,
+  buffer: Uint8Array,
+  metrics: MutableMetrics,
+  options: ChunkEditOptions,
+  stage: ChunkEditStage,
+): Promise<void> {
+  let sourcePosition = sourceStart
+  let targetPosition = targetStart
+  while (sourcePosition < sourceEnd) {
+    checkSignal(options.signal)
+    options.onStage?.(stage)
+    const length = Math.min(buffer.byteLength, sourceEnd - sourcePosition)
+    const bytes = source.read(sourcePosition, length)
+    if (bytes.byteLength !== length) throw new ChunkEditError('WRITE_FAILED', 'source returned a short read')
+    target.write(targetPosition, bytes)
+    metrics.readCalls += 1
+    metrics.writeCalls += 1
+    metrics.bytesRead += bytes.byteLength
+    metrics.bytesWritten += bytes.byteLength
+    sourcePosition += bytes.byteLength
+    targetPosition += bytes.byteLength
+    await options.yieldToCaller?.()
+    checkSignal(options.signal)
+  }
+}
+
+/** Replace one or more non-overlapping byte ranges using bounded copy-on-write IO. */
+export function replaceRangesCopyOnWrite(
+  source: ChunkBackedFile,
+  target: ChunkBackedFile,
+  ranges: readonly ChunkEditRange[],
   replacement: Uint8Array,
   options: ChunkEditOptions = {},
 ): ChunkEditMetrics {
   const chunkBytes = checkChunkBytes(options.chunkBytes)
-  if (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
-    || range.start < 0 || range.end < range.start || range.end > source.size) {
-    throw new ChunkEditError('INVALID_RANGE', 'replacement range is outside the source file')
+  if (ranges.length === 0) throw new ChunkEditError('INVALID_RANGE', 'at least one replacement range is required')
+  let previousEnd = 0
+  for (const range of ranges) {
+    if (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
+      || range.start < previousEnd || range.end < range.start || range.end > source.size) {
+      throw new ChunkEditError('INVALID_RANGE', 'replacement range is outside the source file')
+    }
+    previousEnd = range.end
   }
   checkSignal(options.signal)
   const metrics: MutableMetrics = { readCalls: 0, writeCalls: 0, bytesRead: 0, bytesWritten: 0 }
   const buffer = new Uint8Array(chunkBytes)
-  const resultBytes = source.size - (range.end - range.start) + replacement.byteLength
+  const removedBytes = ranges.reduce((total, range) => total + range.end - range.start, 0)
+  const resultBytes = source.size - removedBytes + replacement.byteLength * ranges.length
   try {
     const sourceHash = hashFile(source, buffer, metrics, options)
     target.truncate(0)
-    copyRange(source, target, 0, range.start, 0, buffer, metrics, options, 'copy-prefix')
-    options.onStage?.('write-replacement')
-    checkSignal(options.signal)
-    if (replacement.byteLength > 0) {
-      target.write(range.start, replacement)
-      metrics.writeCalls += 1
-      metrics.bytesWritten += replacement.byteLength
+    let sourcePosition = 0
+    let targetPosition = 0
+    for (const [index, range] of ranges.entries()) {
+      copyRange(source, target, sourcePosition, range.start, targetPosition, buffer, metrics, options,
+        index === 0 ? 'copy-prefix' : 'copy-suffix')
+      targetPosition += range.start - sourcePosition
+      options.onStage?.('write-replacement')
+      checkSignal(options.signal)
+      if (replacement.byteLength > 0) {
+        target.write(targetPosition, replacement)
+        targetPosition += replacement.byteLength
+        metrics.writeCalls += 1
+        metrics.bytesWritten += replacement.byteLength
+      }
+      sourcePosition = range.end
     }
-    copyRange(source, target, range.end, source.size, range.start + replacement.byteLength, buffer, metrics, options, 'copy-suffix')
+    copyRange(source, target, sourcePosition, source.size, targetPosition, buffer, metrics, options, 'copy-suffix')
     options.onStage?.('truncate')
     checkSignal(options.signal)
     target.truncate(resultBytes)
@@ -229,7 +352,98 @@ export function replaceRangeCopyOnWrite(
   }
 }
 
-/** Find a unique UTF-8 range and replace it in one bounded-memory operation. */
+/** Replace one byte range in a new file using bounded copy-on-write IO. */
+export function replaceRangeCopyOnWrite(
+  source: ChunkBackedFile,
+  target: ChunkBackedFile,
+  range: ChunkEditRange,
+  replacement: Uint8Array,
+  options: ChunkEditOptions = {},
+): ChunkEditMetrics {
+  return replaceRangesCopyOnWrite(source, target, [range], replacement, options)
+}
+
+/** Locate and replace literal UTF-8 text with bounded copy-on-write IO. */
+export function replaceUtf8CopyOnWrite(
+  source: ChunkBackedFile,
+  target: ChunkBackedFile,
+  oldText: string,
+  newText: string,
+  replaceAll: boolean,
+  options: ChunkEditOptions = {},
+): ChunkEditMetrics {
+  const ranges = findUtf8Ranges(source, oldText, options)
+  if (!replaceAll && ranges.length !== 1) throw new ChunkEditError('TEXT_NOT_UNIQUE', 'oldText occurs more than once')
+  return replaceRangesCopyOnWrite(source, target, replaceAll ? ranges : [ranges[0]!], new TextEncoder().encode(newText), options)
+}
+
+/** Replace non-overlapping UTF-8 text using bounded IO and cooperative cancellation. */
+export async function replaceUtf8CopyOnWriteAsync(
+  source: ChunkBackedFile,
+  target: ChunkBackedFile,
+  oldText: string,
+  newText: string,
+  replaceAll: boolean,
+  options: ChunkEditOptions = {},
+): Promise<ChunkEditMetrics> {
+  const ranges = await findUtf8RangesAsync(source, oldText, options, replaceAll ? MAX_REPLACEMENT_RANGES : 2)
+  if (!replaceAll && ranges.length !== 1) throw new ChunkEditError('TEXT_NOT_UNIQUE', 'oldText occurs more than once')
+  const selected = replaceAll ? ranges : [ranges[0]!]
+  const chunkBytes = checkChunkBytes(options.chunkBytes)
+  const replacement = new TextEncoder().encode(newText)
+  const removedBytes = selected.reduce((total, range) => total + range.end - range.start, 0)
+  const resultBytes = source.size - removedBytes + replacement.byteLength * selected.length
+  if (!Number.isSafeInteger(resultBytes)) throw new ChunkEditError('WRITE_FAILED', 'edited file size exceeds the safe integer range')
+  const metrics: MutableMetrics = { readCalls: 0, writeCalls: 0, bytesRead: 0, bytesWritten: 0 }
+  const buffer = new Uint8Array(chunkBytes)
+  try {
+    const sourceHash = await hashFileAsync(source, buffer, metrics, options)
+    target.truncate(0)
+    let sourcePosition = 0
+    let targetPosition = 0
+    for (const [index, range] of selected.entries()) {
+      await copyRangeAsync(source, target, sourcePosition, range.start, targetPosition, buffer, metrics, options,
+        index === 0 ? 'copy-prefix' : 'copy-suffix')
+      targetPosition += range.start - sourcePosition
+      options.onStage?.('write-replacement')
+      checkSignal(options.signal)
+      if (replacement.byteLength > 0) {
+        target.write(targetPosition, replacement)
+        targetPosition += replacement.byteLength
+        metrics.writeCalls += 1
+        metrics.bytesWritten += replacement.byteLength
+      }
+      sourcePosition = range.end
+      await options.yieldToCaller?.()
+      checkSignal(options.signal)
+    }
+    await copyRangeAsync(source, target, sourcePosition, source.size, targetPosition, buffer, metrics, options, 'copy-suffix')
+    options.onStage?.('truncate')
+    checkSignal(options.signal)
+    target.truncate(resultBytes)
+    target.flush()
+    const resultHash = await hashFileAsync(target, buffer, metrics, options)
+    options.onStage?.('publish')
+    target.flush()
+    return {
+      sourceBytes: source.size,
+      resultBytes,
+      chunkBytes,
+      readCalls: metrics.readCalls,
+      writeCalls: metrics.writeCalls,
+      bytesRead: metrics.bytesRead,
+      bytesWritten: metrics.bytesWritten,
+      maxWorkingBytes: buffer.byteLength + replacement.byteLength,
+      sourceHash,
+      resultHash,
+    }
+  } catch (error) {
+    if (error instanceof ChunkEditError) throw error
+    throw new ChunkEditError('WRITE_FAILED', String(error), { cause: error })
+  }
+}
+
+/** Find one unique string and replace it using bounded copy-on-write IO. */
 export function replaceUniqueUtf8CopyOnWrite(
   source: ChunkBackedFile,
   target: ChunkBackedFile,
@@ -237,8 +451,7 @@ export function replaceUniqueUtf8CopyOnWrite(
   newText: string,
   options: ChunkEditOptions = {},
 ): ChunkEditMetrics {
-  const range = findUniqueUtf8Range(source, oldText, options)
-  return replaceRangeCopyOnWrite(source, target, range, new TextEncoder().encode(newText), options)
+  return replaceUtf8CopyOnWrite(source, target, oldText, newText, false, options)
 }
 
 /** In-memory file used by unit tests and deterministic fault injection. */

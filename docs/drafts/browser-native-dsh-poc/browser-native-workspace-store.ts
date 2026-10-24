@@ -7,6 +7,7 @@ const DATABASE_NAME = 'dsh-browser-native-workspace-v1'
 const METADATA_STORE = 'workspace'
 const BLOB_DIRECTORY_PREFIX = 'dsh-workspace-blobs-'
 const BLOB_IO_CHUNK_BYTES = 1024 * 1024
+const OPFS_ACCESS_HANDLE_RETRY_DELAYS_MS = [25, 50, 100, 200, 400] as const
 
 /** Snapshot persisted locally while a Browser-Native Workspace operation is pending. */
 export interface DurableWorkspaceSnapshot {
@@ -184,6 +185,7 @@ export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
     let closed = false
     return {
       size: bytes,
+      reference: { hash, bytes },
       read: (position, length) => {
         if (closed) throw new Error('browser-native workspace: memory blob is closed')
         return content.slice(position, Math.min(position + length, bytes))
@@ -476,6 +478,18 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     return bytes
   }
 
+  private async createSyncAccessHandle(handle: FileSystemFileHandle): Promise<FileSystemSyncAccessHandle> {
+    for (const delay of [0, ...OPFS_ACCESS_HANDLE_RETRY_DELAYS_MS]) {
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
+      try {
+        return await handle.createSyncAccessHandle()
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== 'NoModificationAllowedError' || delay === OPFS_ACCESS_HANDLE_RETRY_DELAYS_MS.at(-1)) throw error
+      }
+    }
+    throw new Error('browser-native workspace: OPFS access handle retry exhausted')
+  }
+
   private async encodeChange(directory: FileSystemDirectoryHandle, change: WorkspaceChange): Promise<StoredChange> {
     if (change.contentReference !== undefined) {
       return storedChange(change, change.contentReference.hash, true)
@@ -632,13 +646,31 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     if (await sha256File(file) !== hash) {
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local blob hash mismatch (${hash})`)
     }
-    const sync = await handle.createSyncAccessHandle()
+    let sync: FileSystemSyncAccessHandle | undefined
+    try {
+      sync = await this.createSyncAccessHandle(handle)
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'NoModificationAllowedError') throw error
+      const resident = new Uint8Array(await file.arrayBuffer())
+      return {
+        size: bytes,
+        reference: { hash, bytes },
+        read: (position: number, length: number): Uint8Array => {
+          if (!Number.isSafeInteger(position) || !Number.isSafeInteger(length) || position < 0 || length < 0) {
+            throw new RangeError('browser-native workspace: invalid external blob read range')
+          }
+          return resident.slice(position, Math.min(position + length, bytes))
+        },
+        close: (): void => {},
+      }
+    }
     if (sync.getSize() !== bytes) {
       sync.close()
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: local blob size mismatch (${hash})`)
     }
     return {
       size: bytes,
+      reference: { hash, bytes },
       read: (position, length) => {
         if (!Number.isSafeInteger(position) || !Number.isSafeInteger(length) || position < 0 || length < 0) {
           throw new RangeError('browser-native workspace: invalid external blob read range')
@@ -647,7 +679,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
         const read = sync.read(output, { at: position })
         return output.subarray(0, read)
       },
-      close: () => { sync.close() },
+      close: () => { sync!.close() },
     }
   }
 

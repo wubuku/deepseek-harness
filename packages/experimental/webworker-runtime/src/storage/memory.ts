@@ -20,6 +20,7 @@ const encoder = new TextEncoder()
 interface FileNode {
   bytes?: Uint8Array
   backing?: VfsFileBacking | undefined
+  reference?: VfsFileReference | undefined
   mtimeMs: number
   /** Permission bits (`0o777` mask), set at creation and changed only by `chmod`. */
   mode: number
@@ -27,6 +28,8 @@ interface FileNode {
   identity?: bigint
   /** One path normally, a Set only for hard links, or undefined after the final unlink. */
   paths: string | Set<string> | undefined
+  /** Open descriptors retain the node and external backing after replacement or unlink. */
+  openDescriptors: number
 }
 
 /** One lazy archive's registration and its single in-flight fetch. */
@@ -211,6 +214,7 @@ export class MemoryVfs implements Vfs {
   private readonly mutationListeners = new Set<VfsMutationListener>()
   private readonly sink: VfsMutationSink | undefined
   private closed = false
+  private readonly openFiles = new Set<FileNode>()
   private temporaries = 0
   // Directories retain path identities. File identities live on FileNode so
   // descriptors, renames, and hard links continue to address the same file.
@@ -262,7 +266,14 @@ export class MemoryVfs implements Vfs {
   close(): void {
     if (this.closed) return
     this.closed = true
-    for (const node of this.files.values()) node.backing?.close()
+    const nodes = new Set([...this.files.values(), ...this.openFiles])
+    const backings = new Set<VfsFileBacking>()
+    for (const node of nodes) {
+      if (node.backing !== undefined) backings.add(node.backing)
+      node.backing = undefined
+    }
+    for (const backing of backings) backing.close()
+    this.openFiles.clear()
   }
 
   private bytesOf(node: FileNode): Uint8Array {
@@ -286,6 +297,28 @@ export class MemoryVfs implements Vfs {
 
   private sizeOf(node: FileNode): number {
     return node.bytes?.byteLength ?? node.backing?.size ?? 0
+  }
+
+  private validReference(reference: VfsFileReference, bytes: number): boolean {
+    return reference.bytes === bytes && Number.isSafeInteger(reference.bytes) && reference.bytes >= 0
+      && /^[a-f0-9]{64}$/.test(reference.hash)
+  }
+
+  /** Publish a new path without materializing a content-addressed backing. */
+  private publishFileEntry(node: FileNode, path: string): void {
+    const reference = node.reference
+    if (reference !== undefined) {
+      this.publish({
+        kind: 'write-reference',
+        path,
+        hash: reference.hash,
+        bytes: reference.bytes,
+        mode: node.mode,
+        entryChanged: true,
+      })
+      return
+    }
+    this.publish({ kind: 'write', path, bytes: this.bytesOf(node), mode: node.mode, entryChanged: true })
   }
 
   /** Promise face mirroring `node:fs/promises` for the methods the roster uses. */
@@ -403,7 +436,8 @@ export class MemoryVfs implements Vfs {
         const identity = this.identities.get(target)
         this.identities.delete(target)
         this.setFile(target, {
-          bytes, mtimeMs: file.mtimeMs, mode: file.mode, paths: undefined, ...identity === undefined ? {} : { identity },
+          bytes, mtimeMs: file.mtimeMs, mode: file.mode, paths: undefined, openDescriptors: 0,
+          ...identity === undefined ? {} : { identity },
         })
       }
     } catch (error) {
@@ -567,7 +601,10 @@ export class MemoryVfs implements Vfs {
     const previous = this.files.get(path)
     if (previous !== undefined) {
       this.removeFilePath(previous, path)
-      if (previous.paths === undefined) previous.backing?.close()
+      if (previous.paths === undefined && previous.openDescriptors === 0) {
+        previous.backing?.close()
+        previous.backing = undefined
+      }
     }
     this.files.set(path, node)
     this.addFilePath(node, path)
@@ -577,9 +614,12 @@ export class MemoryVfs implements Vfs {
   private deleteFile(path: string): FileNode | undefined {
     const node = this.files.get(path)
     if (node === undefined) return undefined
-    if (node.paths === path || node.paths === undefined) this.bytesOf(node)
     this.files.delete(path)
     this.removeFilePath(node, path)
+    if (node.paths === undefined && node.openDescriptors === 0) {
+      node.backing?.close()
+      node.backing = undefined
+    }
     return node
   }
 
@@ -605,6 +645,7 @@ export class MemoryVfs implements Vfs {
   private replaceFile(node: FileNode, bytes: Uint8Array, appendedFrom?: number): void {
     node.backing?.close()
     node.backing = undefined
+    node.reference = undefined
     node.bytes = bytes
     node.mtimeMs = this.touchNode(node)
     this.publishFile(node, appendedFrom)
@@ -790,7 +831,7 @@ export class MemoryVfs implements Vfs {
       this.replaceFile(previous, bytes)
       return
     }
-    const node: FileNode = { bytes, mtimeMs: this.touch(target), mode, paths: undefined }
+    const node: FileNode = { bytes, mtimeMs: this.touch(target), mode, paths: undefined, openDescriptors: 0 }
     this.setFile(target, node)
     this.touchDirectory(dirname(target))
     this.publish({ kind: 'write', path: target, bytes, mode, entryChanged: true })
@@ -877,7 +918,11 @@ export class MemoryVfs implements Vfs {
         : current('fstat').stat(),
       sync: async (): Promise<void> => { current('fsync'); await this.flush() },
       datasync: async (): Promise<void> => { current('fdatasync'); await this.flush() },
-      close: async (): Promise<void> => { closed = true },
+      close: async (): Promise<void> => {
+        if (closed) return
+        closed = true
+        file.close()
+      },
     }
   }
 
@@ -903,6 +948,21 @@ export class MemoryVfs implements Vfs {
     }
     const node = this.files.get(target)
     if (node === undefined) fail('ENOENT', 'open', target)
+    node.openDescriptors += 1
+    this.openFiles.add(node)
+    let closed = false
+    const release = (): void => {
+      if (closed) return
+      closed = true
+      node.openDescriptors -= 1
+      if (node.openDescriptors === 0) {
+        this.openFiles.delete(node)
+        if (node.paths === undefined) {
+          node.backing?.close()
+          node.backing = undefined
+        }
+      }
+    }
     return {
       readable: access.readable,
       writable: access.writable,
@@ -922,6 +982,7 @@ export class MemoryVfs implements Vfs {
       chmod: (mode) => { this.chmodFile(node, mode) },
       stat: () => this.fileStats(node),
       statBigInt: () => this.fileBigIntStats(node),
+      close: release,
     }
   }
 
@@ -979,7 +1040,7 @@ export class MemoryVfs implements Vfs {
       this.touchDirectory(dirname(source))
       this.touchDirectory(dirname(destination))
       this.publish({ kind: 'remove', path: source })
-      this.publish({ kind: 'write', path: destination, bytes: this.bytesOf(node), mode: node.mode, entryChanged: true })
+      this.publishFileEntry(node, destination)
       return
     }
     if (!this.directories.has(source)) fail('ENOENT', 'rename', source)
@@ -996,13 +1057,13 @@ export class MemoryVfs implements Vfs {
       this.directoryModes.delete(destination)
       this.directoryMtimes.delete(destination)
     }
-    const movedFiles: Array<{ path: string; bytes: Uint8Array; mode: number }> = []
+    const movedFiles: Array<{ path: string; node: FileNode }> = []
     for (const [candidate, value] of [...this.files]) {
       if (!candidate.startsWith(prefix)) continue
       this.deleteFile(candidate)
       const target = join(destination, candidate.slice(prefix.length))
       this.setFile(target, value)
-      movedFiles.push({ path: target, bytes: this.bytesOf(value), mode: value.mode })
+      movedFiles.push({ path: target, node: value })
     }
     const movedDirectories: Array<{ path: string; mode: number }> = []
     for (const candidate of [...this.directories]) {
@@ -1027,9 +1088,7 @@ export class MemoryVfs implements Vfs {
       this.publish({ kind: 'mkdir', path: directory.path, mode: directory.mode })
     }
     for (const entry of movedFiles) {
-      this.publish({
-        kind: 'write', path: entry.path, bytes: entry.bytes, mode: entry.mode, entryChanged: true,
-      })
+      this.publishFileEntry(entry.node, entry.path)
     }
   }
 
@@ -1051,7 +1110,7 @@ export class MemoryVfs implements Vfs {
     if (!this.directories.has(dirname(target))) fail('ENOENT', 'link', target)
     this.setFile(target, node)
     this.touchDirectory(dirname(target))
-    this.publish({ kind: 'write', path: target, bytes: this.bytesOf(node), mode: node.mode, entryChanged: true })
+    this.publishFileEntry(node, target)
   }
 
   /**
@@ -1164,6 +1223,7 @@ export class MemoryVfs implements Vfs {
       mtimeMs: options.mtimeMs ?? this.touch(target),
       mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
       paths: undefined,
+      openDescriptors: 0,
     })
     this.touchDirectory(dirname(target))
   }
@@ -1179,14 +1239,20 @@ export class MemoryVfs implements Vfs {
       backing.close()
       throw new Error('webworker vfs: external file backing has an invalid size')
     }
+    if (backing.reference !== undefined && !this.validReference(backing.reference, backing.size)) {
+      backing.close()
+      throw new Error('webworker vfs: external file backing has an invalid content reference')
+    }
     const target = this.key(path)
     this.seedDirectory(dirname(target))
     this.deferred.delete(target)
     this.setSeedFile(target, {
       backing,
+      reference: backing.reference,
       mtimeMs: options.mtimeMs ?? this.touch(target),
       mode: (options.mode ?? DEFAULT_FILE_MODE) & 0o777,
       paths: undefined,
+      openDescriptors: 0,
     })
     this.touchDirectory(dirname(target))
   }
@@ -1204,8 +1270,7 @@ export class MemoryVfs implements Vfs {
     reference: VfsFileReference,
     options: VfsSeedOptions = {},
   ): void {
-    if (!Number.isSafeInteger(backing.size) || backing.size < 0 || backing.size !== reference.bytes
-      || !/^[a-f0-9]{64}$/.test(reference.hash)) {
+    if (!Number.isSafeInteger(backing.size) || backing.size < 0 || !this.validReference(reference, backing.size)) {
       backing.close()
       throw new Error('webworker vfs: external file reference does not match its backing')
     }
@@ -1217,9 +1282,11 @@ export class MemoryVfs implements Vfs {
     const mode = previous?.mode ?? (options.mode ?? DEFAULT_FILE_MODE)
     this.setSeedFile(target, {
       backing,
+      reference,
       mtimeMs: options.mtimeMs ?? this.touch(target),
       mode: mode & 0o777,
       paths: undefined,
+      openDescriptors: 0,
     })
     this.touchDirectory(dirname(target))
     this.publish({

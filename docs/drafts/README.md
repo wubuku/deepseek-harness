@@ -201,6 +201,7 @@ Agentic UI 事实核查
 18. [故障边界验证 E2E](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：记录五类新验证的 Chrome/Node/MinIO 版本、命令、失败观察、恢复结果和明确限制。
 19. [可写分块编辑验证](browser-native-dsh-poc/chunk-backed-edit-validation-progress.md)：记录 64 MiB OPFS copy-on-write 原型、六个故障点、资源预算和当前 DSH `edit` 的 materialize 对照。
 20. [External reference 编辑验证](browser-native-dsh-poc/reference-backed-edit-validation-progress.md)：记录 external reference 接入 `MemoryVfs` mutation、Workspace range cache/upload、manifest CAS、compact receipt、真实 Chrome 刷新恢复和失败重试；明确不是正式 `edit` 或块级 delta。
+21. [External reference Agent Loop 验证](browser-native-dsh-poc/external-edit-agent-loop-validation-progress.md)：验证标准 DSH `edit` 的 Session durable 屏障、Workspace commit unknown/backend 重启恢复、OPFS 句柄恢复 fallback，以及并发 CAS conflict 下 local/remote 版本均不被静默覆盖。
 
 ### 路径 D：Cloud Agent 和长期执行
 

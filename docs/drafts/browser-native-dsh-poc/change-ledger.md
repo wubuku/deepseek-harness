@@ -66,6 +66,24 @@ deleteCondition: 正式 Browser-Native VFS、Workspace provider 和 Session rece
 status: implemented-as-draft
 ```
 
+### BN-P2-025：external reference 接入标准 `edit` 的恢复与冲突验证
+
+```text
+changeId: BN-P2-025
+upstreamBaseline: research checkout after BN-P2-024; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/external-edit-conflict-retention.e2e.mjs; docs/drafts/browser-native-dsh-poc/external-edit-agent-loop-validation-plan.md; docs/drafts/browser-native-dsh-poc/external-edit-agent-loop-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: P2-024 证明了 external reference 可以经过 VFS、Workspace 和刷新 hydrate，但没有证明真实 DSH `edit` 的 Session `tool/call` 在 Workspace side effect 前已 durable，也没有证明 commit 响应丢失、backend 重启和并发 CAS 冲突下不会丢 receipt、重复副作用或静默覆盖。
+existingExtensionPointsChecked: 复用 DSH `session/event`、Session handle `flush()`、`tools/execute`、Workspace outbox/CAS、OPFS `FileSystemSyncAccessHandle`、真实 Chrome Worker 和同源 backend；未修改正式 Agent Loop、Session event catalog、默认 Web profile 或根级依赖。
+whyDraftOnlyWasInsufficient: 只观察 Workspace revision 不能证明模型可见 Session 事实已落盘；只做协议级 CAS 不能证明标准 Agent `edit` 会保留 external reference；只做正常刷新不能覆盖 Worker terminate 后的 OPFS 句柄竞争和 unknown commit。
+behaviorChange: 写入型 Browser-native Agent tool 在执行 Workspace side effect 前 flush 当前 Session writer，建立 durable `tool/call` 屏障。Browser Durable Store 对 Chrome Worker terminate 后暂时不可重开的 OPFS sync handle 做有限重试；仍不可重开但 File hash/size 已验证时，以只读内存 backing 恢复，避免把可验证数据误报为 local corruption。新增真实 Chrome E2E 覆盖 external edit unknown commit/backend restart 和 external edit CAS conflict/local retry retention。
+directoryOutChangeReason: none
+consumersUpdated: Browser provider、Browser Durable Store、external edit recovery/conflict E2E、PoC README、docs/drafts 索引和本账本。
+tests: preview build 通过；`external-edit-unknown-commit.e2e.mjs` 真实 Chrome 通过，Session tool call 在 Workspace commit 前已 durable，commit response 丢失后同 operationId 重放、revision 只增加一次、单 receipt、单 edit call、unknown result；`external-edit-conflict-retention.e2e.mjs` 真实 Chrome 通过，remote revision 2 与 concurrent content 保留，本地 external retry 和内容保留并进入 conflict；`agent-workspace-crash-window.e2e.mjs` 四场景回归通过。未验证真实 LLM 自主选择、自然 eviction、OS/磁盘 crash、Safari、生产多实例 backend 或块级 delta。
+syncReplaySteps: 上游同步后检查 Session tool execution 是否已有 durable side-effect barrier，若有则迁移 E2E 并删除 PoC provider 屏障；检查 Worker/VFS 是否有正式 async range backing 或 access-handle lifecycle hook，若有则迁移 OPFS fallback。重跑 webworker/runtime focused tests、Workspace/backend tests、preview build、三项 Chrome E2E 和文档门禁；不得把内存 fallback 写成零拷贝或把本地 CAS 写成分布式 HA。
+deleteCondition: 正式 Browser-Native VFS、Workspace 和 Session reconciliation 提供等价的 durable tool-call、unknown settlement、external reference conflict 和句柄恢复语义，且 E2E 已迁移；或 Browser-Native Workspace PoC 被移除。
+status: implemented-as-draft
+```
+
 ### 2026-10-21：durable Workspace opt-in 接线
 
 - **文件**：`apps/web/src/preview.ts`、`docs/drafts/browser-native-dsh-poc/browser-native-worker.ts`。
