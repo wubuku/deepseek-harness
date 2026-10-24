@@ -4,10 +4,14 @@ const WORKSPACE_ROOT = '/dsh/home/workspace'
 const MAX_SEARCH_FILES = 10_000
 const MAX_SEARCH_BYTES = 32 * 1024 * 1024
 const MAX_SEARCH_MATCHES = 5_000
+const MAX_GLOB_RESULTS = 5_000
+const MAX_SEARCH_PATTERN_BYTES = 4 * 1024
+const MAX_INCLUDE_PATTERN_BYTES = 4 * 1024
+const MAX_GLOB_ALTERNATIVES = 128
+const SEARCH_CHUNK_BYTES = 64 * 1024
 const MAX_MATCHED_LINE_BYTES = 64 * 1024
 const MAX_EDIT_ARGUMENT_BYTES = 256 * 1024
 const MAX_EDIT_FILE_BYTES = 64 * 1024 * 1024
-const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'])
 
@@ -49,6 +53,9 @@ function parseGrepInput(value: unknown): BrowserNativeGrepInput {
     throw new BrowserNativeFileToolError('pattern must be a string', 'SEARCH_INVALID_ARGUMENT')
   }
   if (value.pattern.length === 0) throw new BrowserNativeFileToolError('pattern must be a non-empty string', 'SEARCH_INVALID_ARGUMENT')
+  if (encoder.encode(value.pattern).byteLength > MAX_SEARCH_PATTERN_BYTES) {
+    throw new BrowserNativeFileToolError(`pattern exceeds the ${String(MAX_SEARCH_PATTERN_BYTES)}-byte browser limit`, 'SEARCH_PATTERN_TOO_LARGE')
+  }
   if (value.path !== undefined && typeof value.path !== 'string') {
     throw new BrowserNativeFileToolError('path must be a string when given', 'SEARCH_INVALID_ARGUMENT')
   }
@@ -57,6 +64,9 @@ function parseGrepInput(value: unknown): BrowserNativeGrepInput {
   }
   if (typeof value.include === 'string' && (value.include.trim().length === 0 || value.include.startsWith('!'))) {
     throw new BrowserNativeFileToolError('include must be one non-empty positive glob', 'SEARCH_INVALID_ARGUMENT')
+  }
+  if (typeof value.include === 'string' && encoder.encode(value.include).byteLength > MAX_INCLUDE_PATTERN_BYTES) {
+    throw new BrowserNativeFileToolError(`include exceeds the ${String(MAX_INCLUDE_PATTERN_BYTES)}-byte browser limit`, 'SEARCH_PATTERN_TOO_LARGE')
   }
   return {
     pattern: value.pattern,
@@ -71,6 +81,9 @@ function parseGlobInput(value: unknown): BrowserNativeGlobInput {
   }
   if (value.path !== undefined && typeof value.path !== 'string') {
     throw new BrowserNativeFileToolError('path must be a string when given', 'SEARCH_INVALID_ARGUMENT')
+  }
+  if (encoder.encode(value.pattern).byteLength > MAX_SEARCH_PATTERN_BYTES) {
+    throw new BrowserNativeFileToolError(`pattern exceeds the ${String(MAX_SEARCH_PATTERN_BYTES)}-byte browser limit`, 'SEARCH_PATTERN_TOO_LARGE')
   }
   return { pattern: value.pattern, ...(value.path === undefined ? {} : { path: value.path }) }
 }
@@ -107,7 +120,11 @@ function expandBraces(pattern: string): string[] {
         const body = pattern.slice(start + 1, index)
         const alternatives = body.split(',')
         if (alternatives.length < 2) return [pattern]
-        return alternatives.flatMap(alternative => expandBraces(`${pattern.slice(0, start)}${alternative}${pattern.slice(index + 1)}`))
+        const expanded = alternatives.flatMap(alternative => expandBraces(`${pattern.slice(0, start)}${alternative}${pattern.slice(index + 1)}`))
+        if (expanded.length > MAX_GLOB_ALTERNATIVES) {
+          throw new BrowserNativeFileToolError(`glob expands to more than ${String(MAX_GLOB_ALTERNATIVES)} alternatives`, 'SEARCH_PATTERN_TOO_COMPLEX')
+        }
+        return expanded
       }
     }
   }
@@ -136,42 +153,180 @@ function globRegex(pattern: string): RegExp {
   return new RegExp(`^(?:${source})$`)
 }
 
-function fileMatchesInclude(path: string, include: string | undefined): boolean {
-  return include === undefined || globRegex(include).test(path)
-}
-
 function fileBytes(vfs: MemoryVfs, path: string): Uint8Array {
   const value = vfs.readFileSync(path)
   return typeof value === 'string' ? encoder.encode(value) : value
 }
 
-function childPaths(vfs: MemoryVfs, root: string): string[] {
-  const files: string[] = []
-  const visit = (path: string): void => {
-    const stat = vfs.statSync(path)
+async function* walkFiles(vfs: MemoryVfs, root: string, signal: AbortSignal, yieldDelayMs: number): AsyncGenerator<string> {
+  const rootStat = vfs.statSync(root)
+  if (rootStat.isFile()) {
+    yield root
+    return
+  }
+  const pending = [root]
+  let fileCount = 0
+  while (pending.length > 0) {
+    if (signal.aborted) return
+    const current = pending.pop()
+    if (current === undefined) continue
+    const stat = vfs.statSync(current)
     if (stat.isFile()) {
-      files.push(path)
-      return
+      fileCount += 1
+      if (fileCount > MAX_SEARCH_FILES) {
+        throw new BrowserNativeFileToolError(`search would inspect more than ${String(MAX_SEARCH_FILES)} files`, 'SEARCH_RESULT_OVERFLOW')
+      }
+      yield current
+      if (fileCount % 16 === 0 && await yieldToWorker(signal, yieldDelayMs)) return
+      continue
     }
-    for (const name of vfs.readdirSync(path)) {
-      if (IGNORED_DIRECTORY_NAMES.has(name) && vfs.statSync(`${path}/${name}`).isDirectory()) continue
-      visit(`${path}/${name}`)
+    const names = vfs.readdirSync(current)
+    if (names.length > MAX_SEARCH_FILES) {
+      throw new BrowserNativeFileToolError(`directory contains more than ${String(MAX_SEARCH_FILES)} entries`, 'SEARCH_RESULT_OVERFLOW')
+    }
+    for (let index = names.length - 1; index >= 0; index -= 1) {
+      if (signal.aborted) return
+      const name = names[index]
+      if (name === undefined) continue
+      const child = `${current}/${name}`
+      if (IGNORED_DIRECTORY_NAMES.has(name) && vfs.statSync(child).isDirectory()) continue
+      pending.push(child)
+      if (index % 64 === 0 && await yieldToWorker(signal, yieldDelayMs)) return
     }
   }
-  visit(root)
-  return files
 }
 
-function searchFiles(vfs: MemoryVfs, root: string): string[] {
-  const stat = vfs.statSync(root)
-  return stat.isFile() ? [root] : childPaths(vfs, root)
+function isQuantifierAt(pattern: string, index: number): number {
+  const char = pattern[index]
+  if (char === '*' || char === '+' || char === '?') return 1
+  if (char !== '{') return 0
+  const end = pattern.indexOf('}', index + 1)
+  if (end < 0 || !/^\{\d+(?:,\d*)?\}$/.test(pattern.slice(index, end + 1))) return 0
+  return end - index + 1
+}
+
+function hasPotentiallyUnsafeRegex(pattern: string): boolean {
+  if (/\\(?:\d+|k<[^>]+>)/u.test(pattern)) return true
+  const groups: boolean[] = []
+  let inClass = false
+  let escaped = false
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '[') {
+      inClass = true
+      continue
+    }
+    if (char === ']' && inClass) {
+      inClass = false
+      continue
+    }
+    if (inClass) continue
+    if (char === '(') {
+      groups.push(false)
+      continue
+    }
+    if (char === ')') {
+      const containsQuantifier = groups.pop() ?? false
+      const quantifierLength = isQuantifierAt(pattern, index + 1)
+      if (quantifierLength > 0 && containsQuantifier) return true
+      if (quantifierLength > 0 && groups.length > 0) groups[groups.length - 1] = true
+      continue
+    }
+    if (isQuantifierAt(pattern, index) > 0 && char !== '?' && pattern[index - 1] !== '(') {
+      for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) groups[groupIndex] = true
+    }
+  }
+  return false
 }
 
 function parseRegex(pattern: string): RegExp {
+  if (hasPotentiallyUnsafeRegex(pattern)) {
+    throw new BrowserNativeFileToolError('pattern contains a backreference or nested quantifier', 'SEARCH_PATTERN_TOO_COMPLEX')
+  }
   try {
     return new RegExp(pattern, 'u')
   } catch (error) {
     throw new BrowserNativeFileToolError(`pattern is not supported by the Worker regex engine: ${String(error)}`, 'SEARCH_INVALID_PATTERN')
+  }
+}
+
+async function searchFile(
+  vfs: MemoryVfs,
+  path: string,
+  regex: RegExp,
+  matches: BrowserNativeGrepMatch[],
+  scannedBytes: number,
+  signal: AbortSignal,
+  yieldDelayMs: number,
+): Promise<{ readonly scannedBytes: number; readonly aborted: boolean }> {
+  const file = vfs.openFileSync(path, 'r')
+  const size = file.stat().size
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let position = 0
+  let lineNumber = 1
+  let pending = ''
+  let totalBytes = scannedBytes
+
+  const consumeLine = (line: string): void => {
+    const normalized = line.endsWith('\r') ? line.slice(0, -1) : line
+    if (!regex.test(normalized)) return
+    if (encoder.encode(normalized).byteLength > MAX_MATCHED_LINE_BYTES) {
+      throw new BrowserNativeFileToolError(`matched line in ${relativeWorkspacePath(path)} exceeds the ${String(MAX_MATCHED_LINE_BYTES)}-byte result limit`, 'SEARCH_LINE_TOO_LONG')
+    }
+    matches.push({ path: relativeWorkspacePath(path), lineNumber, line: normalized })
+    if (matches.length > MAX_SEARCH_MATCHES) {
+      throw new BrowserNativeFileToolError(`search returned more than ${String(MAX_SEARCH_MATCHES)} matches`, 'SEARCH_RESULT_OVERFLOW')
+    }
+  }
+
+  try {
+    while (position < size) {
+      if (signal.aborted) return { scannedBytes: totalBytes, aborted: true }
+      const bytes = file.read(position, Math.min(SEARCH_CHUNK_BYTES, size - position))
+      if (bytes.byteLength === 0) break
+      position += bytes.byteLength
+      totalBytes += bytes.byteLength
+      if (totalBytes > MAX_SEARCH_BYTES) {
+        throw new BrowserNativeFileToolError(`search exceeded the ${String(MAX_SEARCH_BYTES)}-byte scan limit`, 'SEARCH_RESULT_OVERFLOW')
+      }
+      if (bytes.includes(0)) {
+        throw new BrowserNativeFileToolError(`cannot search binary file ${relativeWorkspacePath(path)} as UTF-8 text`, 'SEARCH_BINARY_FILE')
+      }
+      let text: string
+      try {
+        text = decoder.decode(bytes, { stream: position < size })
+      } catch (error) {
+        throw new BrowserNativeFileToolError(`cannot decode ${relativeWorkspacePath(path)} as UTF-8 text: ${String(error)}`, 'SEARCH_BINARY_FILE')
+      }
+      pending += text
+      let newline = pending.indexOf('\n')
+      while (newline >= 0) {
+        consumeLine(pending.slice(0, newline))
+        pending = pending.slice(newline + 1)
+        lineNumber += 1
+        if (lineNumber % 128 === 0 && await yieldToWorker(signal, yieldDelayMs)) return { scannedBytes: totalBytes, aborted: true }
+        newline = pending.indexOf('\n')
+      }
+      if (await yieldToWorker(signal, yieldDelayMs)) return { scannedBytes: totalBytes, aborted: true }
+    }
+    try {
+      pending += decoder.decode()
+    } catch (error) {
+      throw new BrowserNativeFileToolError(`cannot decode ${relativeWorkspacePath(path)} as UTF-8 text: ${String(error)}`, 'SEARCH_BINARY_FILE')
+    }
+    if (pending.length > 0) consumeLine(pending)
+    return { scannedBytes: totalBytes, aborted: false }
+  } catch (error) {
+    if (error instanceof BrowserNativeFileToolError) throw error
+    throw new BrowserNativeFileToolError(`cannot search ${relativeWorkspacePath(path)}: ${String(error)}`, 'SEARCH_FAILED')
   }
 }
 
@@ -185,44 +340,15 @@ export async function executeBrowserNativeGrep(
   const input = parseGrepInput(value)
   const regex = parseRegex(input.pattern)
   const root = absoluteWorkspacePath(input.path)
-  const files = searchFiles(vfs, root)
-  if (files.length > MAX_SEARCH_FILES) {
-    throw new BrowserNativeFileToolError(`search would inspect ${String(files.length)} files; limit is ${String(MAX_SEARCH_FILES)}`, 'SEARCH_RESULT_OVERFLOW')
-  }
+  const include = input.include === undefined ? undefined : globRegex(input.include)
   const matches: BrowserNativeGrepMatch[] = []
   let scannedBytes = 0
-  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+  for await (const file of walkFiles(vfs, root, signal, yieldDelayMs)) {
     if (signal.aborted) return { matches: [] }
-    const file = files[fileIndex]
-    if (file === undefined || !fileMatchesInclude(relativeWorkspacePath(file), input.include)) continue
-    const bytes = fileBytes(vfs, file)
-    scannedBytes += bytes.byteLength
-    if (scannedBytes > MAX_SEARCH_BYTES) {
-      throw new BrowserNativeFileToolError(`search exceeded the ${String(MAX_SEARCH_BYTES)}-byte scan limit`, 'SEARCH_RESULT_OVERFLOW')
-    }
-    const text = decoder.decode(bytes)
-    let start = 0
-    let lineNumber = 1
-    while (start <= text.length) {
-      const newline = text.indexOf('\n', start)
-      const end = newline < 0 ? text.length : newline
-      const line = text.slice(start, end).endsWith('\r') ? text.slice(start, end - 1) : text.slice(start, end)
-      if (regex.test(line)) {
-        const lineBytes = encoder.encode(line).byteLength
-        if (lineBytes > MAX_MATCHED_LINE_BYTES) {
-          throw new BrowserNativeFileToolError(`matched line in ${relativeWorkspacePath(file)} exceeds the ${String(MAX_MATCHED_LINE_BYTES)}-byte result limit`, 'SEARCH_LINE_TOO_LONG')
-        }
-        matches.push({ path: relativeWorkspacePath(file), lineNumber, line })
-        if (matches.length > MAX_SEARCH_MATCHES) {
-          throw new BrowserNativeFileToolError(`search returned more than ${String(MAX_SEARCH_MATCHES)} matches`, 'SEARCH_RESULT_OVERFLOW')
-        }
-      }
-      if (newline < 0) break
-      start = newline + 1
-      lineNumber += 1
-      if (lineNumber % 128 === 0 && await yieldToWorker(signal, yieldDelayMs)) return { matches: [] }
-    }
-    if (fileIndex % 16 === 0 && await yieldToWorker(signal, yieldDelayMs)) return { matches: [] }
+    if (include !== undefined && !include.test(relativeWorkspacePath(file))) continue
+    const result = await searchFile(vfs, file, regex, matches, scannedBytes, signal, yieldDelayMs)
+    scannedBytes = result.scannedBytes
+    if (result.aborted) return { matches: [] }
   }
   return { matches }
 }
@@ -237,16 +363,16 @@ export async function executeBrowserNativeGlob(
   const input = parseGlobInput(value)
   const rootPath = absoluteWorkspacePath(input.path)
   const pattern = globRegex(input.pattern)
-  const files = searchFiles(vfs, rootPath)
   const paths: Array<{ readonly path: string; readonly mtimeMs: number }> = []
-  for (let index = 0; index < files.length; index += 1) {
+  for await (const path of walkFiles(vfs, rootPath, signal, yieldDelayMs)) {
     if (signal.aborted) return { root: input.path ?? '.', paths: [] }
-    const path = files[index]
-    if (path !== undefined && pattern.test(relativeWorkspacePath(path))) {
+    if (pattern.test(relativeWorkspacePath(path))) {
+      if (paths.length >= MAX_GLOB_RESULTS) {
+        throw new BrowserNativeFileToolError(`glob returned more than ${String(MAX_GLOB_RESULTS)} paths`, 'SEARCH_RESULT_OVERFLOW')
+      }
       const stat = vfs.statSync(path)
-      paths.push({ path: relativeWorkspacePath(path), mtimeMs: stat.mtimeMs })
+      paths.push({ path: relativeWorkspacePath(path), mtimeMs: Number(stat.mtimeMs) })
     }
-    if (index % 32 === 0 && await yieldToWorker(signal, yieldDelayMs)) return { root: input.path ?? '.', paths: [] }
   }
   paths.sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
   return { root: input.path ?? '.', paths: paths.map(item => item.path) }
@@ -267,7 +393,15 @@ export function assertBrowserNativeEditSafe(vfs: MemoryVfs, value: unknown, sign
   }
   if (signal.aborted) return
   const bytes = fileBytes(vfs, target)
-  const text = decoder.decode(bytes)
+  if (bytes.includes(0)) {
+    throw new BrowserNativeFileToolError(`cannot edit binary file ${relativeWorkspacePath(target)} as UTF-8 text`, 'EDIT_BINARY_FILE')
+  }
+  let text: string
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch (error) {
+    throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(target)} as UTF-8 text: ${String(error)}`, 'EDIT_BINARY_FILE')
+  }
   let position = 0
   while ((position = text.indexOf(value.old_string, position)) >= 0) {
     const lineStart = text.lastIndexOf('\n', position) + 1

@@ -174,6 +174,7 @@ Agentic UI 事实核查
 13. [文件规模与分块传输验证计划](browser-native-dsh-poc/large-file-scale-validation-plan.md)与[进度](browser-native-dsh-poc/large-file-scale-validation-progress.md)：验证 1 MiB Workspace chunk staging、缺块续传、hash/size 校验、backend 重启、OPFS 分块写入、16/64 MiB Chrome 文件和 1,000 小文件；明确仍有完整 `MemoryVfs` bytes、完整下载组装、独立 Session JSON 上限和 PoC 本地 backend 限制。
 14. [故障边界与存储后端验证计划](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md)与[实测进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md)：真实 Chrome 验证 OPFS/IndexedDB 单侧丢失、Chrome `SIGKILL` 后身份缺口、双 backend 共用 `dataDir` 的数据覆盖、大型 tool args 安全拒绝，以及 MinIO blob 上传、Range 读取、outage、对象丢失恢复和 backend 重启；自然 eviction、OS/磁盘 crash、真实模型大参数和生产云存储未验证。
 15. [容量与进程安全验证计划](browser-native-dsh-poc/next-capacity-and-process-safety-plan.md)与[进度](browser-native-dsh-poc/next-capacity-and-process-safety-progress.md)：真实 Chrome 已验证 OPFS sync-handle range backing 让已提交 Workspace 文件在刷新后不驻留 VFS heap，并验证 `dataDir` 单写者、第二实例 fail-closed、`SIGKILL` 后冷启动恢复和 operation replay；不将本机单写者锁说成 HA，也明确 hydrate 的临时完整校验读取。
+16. [文件工具下一批验证计划](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md)与[进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md)：验证 Worker 内结构化 `grep`/`glob` 的遍历、分块 UTF-8、结果预算、二进制拒绝、取消和失败后继续；明确不引入完整 Shell/WASI runtime，也不把文件级分块读取写成块级同步。
 
 ### 路径 C：直接复现 PoC
 
@@ -309,6 +310,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [opfs-agent-file-tools-validation-plan.md](browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md) / [进度](browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md) | 冷 hydrate 的 OPFS 外置大文件经 DSH `read`/`grep`/`edit`、Workspace receipt 和刷新后同 Session 读取；明确 scripted 大文件场景、真实模型普通文件证据及 grep/超长行限制。 |
 | [tests/opfs-agent-file-tools.e2e.mjs](browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs) | 真实 Chrome Worker 生成 12 MiB 文件，验收外置 backing 上的 DSH 工具、bounded payload、单次 edit commit 和刷新恢复。 |
 | [operational-capacity-chrome-results.json](browser-native-dsh-poc/operational-capacity-chrome-results.json) | Chrome 155.0.8059.85、macOS 的九组单机容量原始样本；是可复跑基线，不是 SLA 或生产容量上限。 |
+| [browser-file-tools-next-validation-plan.md](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md) / [进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md) | 文件工具资源边界与文本语义的本批计划、实现证据、真实 Chrome/LLM 范围和未验证的 Shell/WASI 边界。 |
 
 ### v2 实现和测试入口
 

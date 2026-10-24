@@ -18,6 +18,7 @@ description: "核查浏览器虚拟文件系统、类 Unix 命令套件和完整
 - [二、逐项事实核查](#二逐项事实核查)
 - [三、项目之间真正的技术差异](#三项目之间真正的技术差异)
 - [四、与 Browser-Native DSH 的关系](#四与-browser-native-dsh-的关系)
+- [四点五、当前 PoC 实现注解](#四点五当前-poc-实现注解)
 - [五、初步选型建议](#五初步选型建议)
 - [六、下一轮验证](#六下一轮验证)
 - [证据索引](#证据索引)
@@ -107,6 +108,31 @@ Browser-Native DSH 至少需要区分文件写入确认、Session 事件确认�
 
 第一阶段的合理目标是“选择性 Browser-Native composition”：只装载已经有浏览器 provider、纯 JS/WASM 实现或明确禁用宿主依赖的插件；对其他插件在 profile reconcile 时显式拒绝或提供替代 provider。这样可以保持 DSH 的 all-plugin composition，而不把完整 Node 运行时的隐式假设塞进 Worker。
 
+## 四点五、当前 PoC 实现注解
+
+本节只解释当前 checkout 中 Browser-Native DSH 文件工具的证据，不把它提升为正式 DSH API，也不把 WIP 进度记录写成已发布能力。实现和测试入口见 [Browser 文件工具下一批验证计划](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md) 与 [进度记录](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md)。
+
+### 证据等级
+
+| 结论类型 | 本报告中的含义 |
+|---|---|
+| 源码事实 | 当前 checkout 的 `MemoryVfs`、Worker Host、provider 和文件工具源码直接表达的行为；仍需结合测试判断可观测结果。 |
+| 自动化证据 | 已实际运行的 Vitest、backend contract test、preview build 或真实 Chrome Worker E2E；命令和结果以进度记录为准。 |
+| 真实模型证据 | 同源 backend 使用配置的真实模型完成的有限回归，只覆盖记录中的任务，不外推到模型会自主选择每个 Browser 工具。 |
+| 设计建议 | 对生产 Workspace、WASI、Shell、VM、云对象存储或正式 capability manifest 的建议；不是当前 PoC 已有能力。 |
+
+### 当前 checkout 的分层边界
+
+当前 PoC 使用 Worker 中的 `MemoryVfs`、结构化 Browser 文件工具 provider 和 Workspace durable mirror；文件工具名称集中在 [`browser-native-capabilities.ts`](browser-native-dsh-poc/browser-native-capabilities.ts)，`grep` 和 `glob` 通过 [`browser-native-file-tools.ts`](browser-native-dsh-poc/browser-native-file-tools.ts) 访问 Worker VFS。它没有引入 Lifo、Bashkit、wasi-sh、uutils、BROWSIX、Wanix 或 v86，因此本轮没有验证这些项目能否作为 DSH provider。
+
+本轮实现的“增量”是资源受限的文件工具执行：目录遍历不先构造完整路径数组，`grep` 以 64 KiB range read 和流式 UTF-8 decoder 读取，`glob` 有独立的 5,000 路径结果上限，搜索 pattern/include glob 有字节上限，brace expansion 有分支上限，非法 UTF-8/NUL 输入返回二进制错误。它不是完整 Shell、ripgrep、POSIX 文件系统、块级 delta 或块级编辑；`edit` 仍会完整 materialize 文件，正则复杂度检查也只是有限启发式。
+
+因此，本 PoC 具体验证的是“Worker VFS + 结构化 command provider”这一层，而不是“浏览器已经获得主机 CLI”。若未来接入 WASI 或 Shell，应将其作为独立的 runtime adapter，重新验证同步 guest FS、取消、输出预算、权限、Session tool settlement 和 Worker 生命周期；不能把第三方 runtime 的命令数量直接映射为 DSH 默认插件兼容性。
+
+当前 Chrome 证据覆盖文件搜索边界、取消后继续、OPFS 外置大文件的 `read → grep → edit → read`，以及真实模型的普通大小文件 `read → write → read` 回归。真实模型回归不覆盖大文件 fallback 的自主工具选择；自然 storage eviction、OS/磁盘崩溃、生产对象存储、多实例 backend、完整插件兼容矩阵和任意容量编辑仍未验证。Workspace、Session、lease 和 durable store 的恢复语义仍按各自文档解释，不能据此声称跨存储原子事务。
+
+这项注解的工程含义是：当前不需要为了证明浏览器文件搜索而引入完整 Shell runtime；优先把 VFS、结构化工具、持久化和 DSH 事实层分别验收。第三方 runtime 只有在需要 Shell 兼容性、WASI 工具复用或 VM 隔离时，才应通过单独的候选 adapter 验证进入选型。
+
 ## 五、初步选型建议
 
 ### 5.1 建议的候选分组
@@ -172,6 +198,7 @@ Browser-Native DSH 至少需要区分文件写入确认、Session 事件确认�
 - [DSH 浏览器原生运行时、云端工作区与本机桥接深度调研](dsh-browser-native-runtime-research.md)
 - [Browser-Native Agent implementation plan](dsh-browser-native-agent-implementation-plan.md)
 - [DSH Browser-Native VFS and cloud sync research](dsh-browser-native-vfs-cloud-sync-research.md)
+- [Browser-Native 文件工具下一批验证计划](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md)与[进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md)
 - [DSH deployment and tenancy deep dive](dsh-deployment-and-tenancy-deep-dive.md)
 
 ## Dev Note

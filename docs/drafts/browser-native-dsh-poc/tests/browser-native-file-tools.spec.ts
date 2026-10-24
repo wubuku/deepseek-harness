@@ -33,6 +33,12 @@ describe('browser-native file tools', () => {
       .rejects.toThrow('SEARCH_LINE_TOO_LONG')
     await expect(executeBrowserNativeGrep(vfs, { pattern: '[' }, new AbortController().signal))
       .rejects.toThrow('SEARCH_INVALID_PATTERN')
+    await expect(executeBrowserNativeGrep(vfs, { pattern: '(?:a+)+$' }, new AbortController().signal))
+      .rejects.toThrow('SEARCH_PATTERN_TOO_COMPLEX')
+    await expect(executeBrowserNativeGrep(vfs, { pattern: 'a'.repeat(4 * 1024 + 1) }, new AbortController().signal))
+      .rejects.toThrow('SEARCH_PATTERN_TOO_LARGE')
+    await expect(executeBrowserNativeGrep(vfs, { pattern: 'x', include: 'a'.repeat(4 * 1024 + 1) }, new AbortController().signal))
+      .rejects.toThrow('SEARCH_PATTERN_TOO_LARGE')
   })
 
   it('cooperatively stops a long scan and leaves the VFS usable', async () => {
@@ -60,5 +66,29 @@ describe('browser-native file tools', () => {
     expect(() => assertBrowserNativeEditSafe(vfs, {
       file_path: 'one.ts', old_string: 'a'.repeat(256 * 1024), new_string: 'b',
     }, new AbortController().signal)).toThrow('EDIT_PAYLOAD_TOO_LARGE')
+  })
+
+  it('reads UTF-8 across chunks and rejects binary search input', async () => {
+    const vfs = workspace()
+    const content = `${'prefix '.repeat(8_000)}目标\n尾行\n`
+    vfs.writeFileSync('/dsh/home/workspace/chunked.txt', content)
+    const result = await executeBrowserNativeGrep(vfs, { pattern: '目标' }, new AbortController().signal)
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0]).toMatchObject({ path: 'chunked.txt', lineNumber: 1, line: content.split('\n')[0] })
+    vfs.writeFileSync('/dsh/home/workspace/binary.bin', new Uint8Array([0, 0xff, 0x01]))
+    await expect(executeBrowserNativeGrep(vfs, { pattern: 'x', path: 'binary.bin' }, new AbortController().signal))
+      .rejects.toThrow('SEARCH_BINARY_FILE')
+    expect(() => assertBrowserNativeEditSafe(vfs, {
+      file_path: 'binary.bin', old_string: 'x', new_string: 'y',
+    }, new AbortController().signal)).toThrow('EDIT_BINARY_FILE')
+  })
+
+  it('fails closed when glob output exceeds its browser budget', async () => {
+    const vfs = workspace()
+    for (let index = 0; index < 5_001; index += 1) {
+      vfs.writeFileSync(`/dsh/home/workspace/file-${String(index).padStart(4, '0')}.txt`, 'x')
+    }
+    await expect(executeBrowserNativeGlob(vfs, { pattern: '*.txt' }, new AbortController().signal))
+      .rejects.toThrow('SEARCH_RESULT_OVERFLOW')
   })
 })

@@ -656,6 +656,14 @@ async function scriptedLlm(response, messages, tools) {
       })
       return
     }
+    if (toolResults.length === 2) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-boundary-grep-binary',
+        name: 'grep',
+        arguments: { pattern: 'x', path: '/dsh/home/workspace/binary.bin' },
+      })
+      return
+    }
     scriptedText(response, 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_DONE')
     return
   }

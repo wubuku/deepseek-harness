@@ -75,6 +75,23 @@ deleteCondition: 正式 Browser-native 文件搜索和编辑能力提供等价�
 status: implemented
 ```
 
+### BN-P2-021：Browser Worker 文件工具资源边界与二进制语义
+
+```text
+changeId: BN-P2-021
+upstreamBaseline: research checkout after BN-P2-014; 2026-10-24
+file: docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-capabilities.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-file-tools-next-validation-plan.md; docs/drafts/browser-native-dsh-poc/browser-file-tools-next-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/dsh-browser-native-vfs-cli-fact-check.md
+reason: 现有 Browser 文件工具先收集完整路径数组并将整个文件 materialize 到 Worker heap；结果上限、跨 chunk 文本语义、二进制误读和 provider 工具名称重复登记仍缺少验证。生态事实核查还需要明确当前 PoC 没有引入第三方 Shell/WASI runtime。
+existingExtensionPointsChecked: 复用 MemoryVfs 的同步 range read、Worker VFS 注入的同一 VFS、已有 Browser 文件工具 provider、Workspace durable mirror 和真实 Chrome Worker E2E；未修改正式 Agent Loop、Session schema、默认 Web profile 或第三方 runtime 依赖。
+whyDraftOnlyWasInsufficient: 单测和原有 scripted E2E 不能证明 12 MiB OPFS 外置文件的搜索读取路径、取消后的 Worker 可用性、二进制错误是否进入真实 DSH tool/result，或真实模型普通文件回归仍可通过。
+behaviorChange: grep 使用显式栈遍历和 64 KiB range read，glob 增加独立 5,000 路径结果上限；搜索 pattern/include glob 限制为 4 KiB，brace expansion 限制为 128 个分支，反向引用和检测到的嵌套量词 fail closed；非法 UTF-8/NUL 文件拒绝搜索，编辑同类文件拒绝作为文本编辑。浏览器文件工具名称集中登记。错误保持结构化，不返回部分结果冒充完整结果。
+consumersUpdated: browser-native-providers.ts、backend scripted E2E、Browser-Native README、兼容矩阵、事实核查注解、docs/drafts 导读和本记录。
+tests: helper Vitest 6/6；preview build 通过；真实 Chrome 文件边界、取消后续 turn、12 MiB OPFS 外置文件 read/grep/edit/read 与刷新恢复均通过；真实 Chrome + `gpt-5.6-sol` 普通文件 read/write/read、刷新后 read 和流式响应回归通过，记录 8 个 HTTP 200 与 57 个 Session events。真实模型未证明其会自主选择大文件 fallback；自然 eviction、OS crash、生产对象存储、多实例 backend、完整 ReDoS 证明、完整 Shell/WASI 和 Safari 未验证。
+syncReplaySteps: 上游同步后核对 MemoryVfs.openFileSync().read、Worker VFS 注入和 Browser provider 的文件工具条件；若上游已有正式 bounded search/capability registry，迁移测试并删除重复 PoC 接线，否则保留本批 resource/error tests。运行 helper Vitest、backend contract、Workspace tests、preview build、Chrome E2E、文档门禁和 typecheck；若引入 WASI/Shell，另建 adapter 计划与兼容矩阵，不把本批结果升级为 runtime 兼容证据。
+deleteCondition: 正式 Browser file capability 提供等价的遍历、分块读取、取消、结果预算和二进制错误语义，且 E2E 已迁移；或 Browser-Native 文件工具 fallback 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-019：拒绝空 SSE `[DONE]` 并复验真实 LLM 闭环
 
 ```text

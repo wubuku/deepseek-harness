@@ -46,7 +46,7 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
 http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none
 ```
 
-本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。
+本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。事实核查进一步说明：VFS、结构化 command provider、WASI adapter 和 Shell/VM runtime 是不同层，当前 PoC 只验证前两层。
 
 ## 完整性与生命周期验证
 
@@ -125,7 +125,7 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 ## Browser-native 文件搜索与载荷安全
 
-[本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、匹配数、单行、参数和文件大小上限，超限 fail closed。
+[本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、匹配数、命中行、参数和文件大小上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。复杂正则只做有限启发式拒绝，不能写成完整 ReDoS 防护。
 
 在 preview 构建后运行模型无关验收：
 
@@ -139,7 +139,13 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools-cancel.e2e.mjs
 ```
 
-`browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、超长编辑目标和失败后继续；`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型仍只证明普通大小文件的独立闭环；本批没有宣称真实模型会主动选择 Browser-native `grep`/`glob`。
+`browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、二进制文件、超长编辑目标和失败后继续；`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型仍只证明普通大小文件的独立闭环；本批没有宣称真实模型会主动选择 Browser-native `grep`/`glob`。
+
+## 文件工具下一批验证
+
+[计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了对前一批 fallback 的进一步修正：目录不再先收集完整路径数组，`glob` 超过 5,000 个结果返回 `SEARCH_RESULT_OVERFLOW`，搜索 pattern 和 `include` glob 以及 brace expansion 有预算，`grep` 通过 `openFileSync().read()` 分块处理跨 chunk UTF-8，NUL/非法 UTF-8 文件不再被替换成文本。首次 Chrome 复跑暴露了“无关超长行也失败”的回归，修正为只有命中的超长行才触发结果上限；该经验已纳入进度记录。
+
+本批仍不把 JavaScript 正则启发式检查当作完整 ReDoS 解决方案，也不把分块读取当作块级同步或块级编辑。正式产品仍应单独验证 RE2/WASM 或独立搜索 Worker、任意容量 edit、Browser capability manifest 及正式 profile 的插件兼容性。
 
 ## 故障边界与 S3 blob 验证
 

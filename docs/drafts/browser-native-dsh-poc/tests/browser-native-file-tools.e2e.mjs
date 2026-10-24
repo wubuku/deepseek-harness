@@ -49,6 +49,7 @@ try {
   assert.equal((await testAction({ action: 'write', path: '/dsh/home/workspace/boundary.txt', content: `${lines}\n` }))?.ok, true)
   const longLine = `${'x'.repeat(70 * 1024)}BROWSER_NATIVE_LONG_EDIT_MARKER\n`
   assert.equal((await testAction({ action: 'write', path: '/dsh/home/workspace/long-edit.txt', content: longLine }))?.ok, true)
+  assert.equal((await testAction({ action: 'write-binary', path: '/dsh/home/workspace/binary.bin', base64: 'AP+AQQ==' }))?.ok, true)
   assert.equal((await testAction({ action: 'flush-workspace' }))?.ok, true)
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.dirtyCount === 0, undefined, { timeout: 60_000 })
@@ -63,10 +64,11 @@ try {
     timeout: 60_000,
   })
   const searchCalls = searchTurn.session.events.filter(event => event.type === 'tool/call' && event.data.turn === searchTurn.turn)
-  assert.deepEqual(searchCalls.map(event => event.data.name), ['grep', 'grep'])
+  assert.deepEqual(searchCalls.map(event => event.data.name), ['grep', 'grep', 'grep'])
   const searchResults = searchTurn.session.events.filter(event => event.type === 'tool/result')
   const firstSearchResult = searchResults.find(event => event.data.message?.toolCallId === searchCalls[0].data.callId)
   const invalidSearchResult = searchResults.find(event => event.data.message?.toolCallId === searchCalls[1].data.callId)
+  const binarySearchResult = searchResults.find(event => event.data.message?.toolCallId === searchCalls[2].data.callId)
   assert.ok(firstSearchResult)
   assert.notEqual(firstSearchResult.data.message.isError, true, JSON.stringify(firstSearchResult.data.message))
   assert.match(firstSearchResult.data.message.content.map(block => block.text ?? '').join(''), /Found 250 of 300 matches/)
@@ -74,6 +76,9 @@ try {
   assert.ok(invalidSearchResult)
   assert.equal(invalidSearchResult.data.message.isError, true)
   assert.match(invalidSearchResult.data.message.content.map(block => block.text ?? '').join(''), /SEARCH_INVALID_PATTERN/)
+  assert.ok(binarySearchResult)
+  assert.equal(binarySearchResult.data.message.isError, true)
+  assert.match(binarySearchResult.data.message.content.map(block => block.text ?? '').join(''), /SEARCH_BINARY_FILE/)
   assert.equal(assistantText(searchTurn.session, searchTurn.turn).includes('BROWSER_NATIVE_FILE_TOOL_BOUNDARY_DONE'), true)
 
   const editTurn = await sendTurn({
@@ -114,6 +119,7 @@ try {
     commitCount: commits.length,
     searchToolSequence: searchCalls.map(event => event.data.name),
     invalidSearchError: invalidSearchResult.data.message.content.map(block => block.text ?? '').join(''),
+    binarySearchError: binarySearchResult.data.message.content.map(block => block.text ?? '').join(''),
     editError: editResult.data.message.content.map(block => block.text ?? '').join(''),
     pageErrors,
     workerErrors,

@@ -50,6 +50,7 @@ import {
   executeBrowserNativeGrep,
   isBrowserWorkspacePath,
 } from './browser-native-file-tools.ts'
+import { isBrowserNativeFileToolName } from './browser-native-capabilities.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -406,7 +407,7 @@ function createRemoteSessionPersistenceClass(
         if (errors.length > 0) throw new AggregateError(errors, 'browser-native session persistence dispose failed')
       }, 'session-persistence-browser-native open handles')
       ctx.on('tools/execute', async (exec, next) => {
-        if (!['read', 'read_image', 'write', 'edit', 'grep', 'glob'].includes(exec.name) || exec.agent === undefined) return await next()
+        if (!isBrowserNativeFileToolName(exec.name) || exec.agent === undefined) return await next()
         workspace.assertLocalWorkspaceUsable()
         await workspace.ensureWriterLease()
         if (exec.name === 'grep') {
