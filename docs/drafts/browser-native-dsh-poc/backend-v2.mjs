@@ -1301,6 +1301,8 @@ export async function createBrowserNativeV2Server(options) {
   await store.load()
   const workspaces = new WorkspaceStore(options.dataDir, {
     writerLeaseMs: options.testHooks?.workspaceWriterLeaseMs,
+    now: options.testHooks?.workspaceNow ?? options.testHooks?.now,
+    pendingUploadTtlMs: options.pendingUploadTtlMs,
     blobStore: options.workspaceBlobStore,
   })
   await workspaces.load()

@@ -37,6 +37,13 @@ async function restartBackend() {
   await app.close()
   app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: 'scripted' })
   origin = await app.listen(new URL(origin).port)
+  await waitFor(async () => {
+    try {
+      return (await fetch(`${origin}/api/browser-native/health`)).ok
+    } catch {
+      return false
+    }
+  }, 'backend health after restart', 10_000)
 }
 
 try {
@@ -97,7 +104,7 @@ try {
   await waitFor(() => interrupted, 'backend commit before response loss', 45_000)
   assert.equal(commits.length, 1)
   const operationId = commits[0].operationId
-  workspaceId = await page.evaluate(async () => (await (await fetch('/api/browser-native/workspace/identity')).json()).workspaceId)
+  workspaceId = commits[0].workspaceId
   assert.equal(typeof workspaceId, 'string')
   const beforeReload = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
   assert.equal(beforeReload.events.some(event => event.type === 'browser-native/workspace-receipt'), false)

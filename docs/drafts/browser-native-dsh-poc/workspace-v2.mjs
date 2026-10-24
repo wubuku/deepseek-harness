@@ -11,6 +11,7 @@ const DEFAULT_WRITER_LEASE_MS = 30_000
 export const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024
 const MAX_WORKSPACE_BLOB_BYTES = 64 * 1024 * 1024
 const UPLOAD_EXPIRY_MS = 24 * 60 * 60 * 1000
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export class WorkspaceError extends Error {
   constructor(code, message, status = 400, details) {
@@ -93,6 +94,21 @@ class FileWorkspaceBlobStore {
     try { await directory.sync() } finally { await directory.close() }
     return { reused: false }
   }
+
+  async listHashes() {
+    const hashes = []
+    for (const entry of await readdir(this.root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{2}$/.test(entry.name)) continue
+      for (const blob of await readdir(join(this.root, entry.name), { withFileTypes: true })) {
+        if (blob.isFile() && /^[a-f0-9]{64}$/.test(blob.name)) hashes.push(blob.name)
+      }
+    }
+    return hashes
+  }
+
+  async delete(hash) {
+    await rm(this.path(hash), { force: true })
+  }
 }
 
 function assertRecord(value, label) {
@@ -102,8 +118,24 @@ function assertRecord(value, label) {
   return value
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function metadataRecord(value, label) {
+  if (!isRecord(value)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `${label} is invalid`, 500)
+  return value
+}
+
+function metadataKeys(value, required, optional, label, code = 'WORKSPACE_METADATA_INVALID') {
+  const allowed = new Set([...required, ...optional])
+  if (required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !allowed.has(key))) {
+    throw new WorkspaceError(code, `${label} has missing or unknown fields`, 500)
+  }
+}
+
 function assertId(value, label) {
-  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
     throw new WorkspaceError('INVALID_REQUEST', `${label} is invalid`)
   }
   return value
@@ -171,6 +203,139 @@ function validateMode(value) {
   return value
 }
 
+function validateLoadedEntry(value, workspaceId) {
+  const entry = metadataRecord(value, `Workspace ${workspaceId} manifest entry`)
+  try {
+    if (entry.kind === 'directory') metadataKeys(entry, ['path', 'kind', 'mode'], [], `Workspace ${workspaceId} directory`)
+    else if (entry.kind === 'file') metadataKeys(entry, ['path', 'kind', 'hash', 'bytes', 'mode'], [], `Workspace ${workspaceId} file`)
+    else throw new Error('entry kind is invalid')
+    const path = validatePath(entry.path)
+    if (entry.kind === 'directory') return { path, kind: 'directory', mode: validateMode(entry.mode) }
+    if (!/^[a-f0-9]{64}$/.test(entry.hash)
+      || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) {
+      throw new Error('file entry fields are invalid')
+    }
+    return { path, kind: 'file', hash: entry.hash, bytes: entry.bytes, mode: validateMode(entry.mode) }
+  } catch (error) {
+    if (error instanceof WorkspaceError && error.code === 'WORKSPACE_METADATA_INVALID') throw error
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} contains an invalid manifest entry`, 500, { cause: error })
+  }
+}
+
+function validateLoadedOperation(value, workspaceId, operationId, currentRevision) {
+  const operation = metadataRecord(value, `Workspace ${workspaceId} operation`)
+  metadataKeys(operation, ['digest', 'receipt'], [], `Workspace ${workspaceId} operation`)
+  if (!/^[a-f0-9]{64}$/.test(operation.digest) || !isRecord(operation.receipt)) {
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} contains an invalid operation`, 500)
+  }
+  const receipt = operation.receipt
+  metadataKeys(receipt, ['workspaceId', 'revision', 'operationId', 'changedPaths', 'digest'], [], `Workspace ${workspaceId} operation receipt`)
+  if (receipt.workspaceId !== workspaceId || receipt.operationId !== operationId
+    || !Number.isSafeInteger(receipt.revision) || receipt.revision < 1 || receipt.revision > currentRevision
+    || !Array.isArray(receipt.changedPaths) || receipt.changedPaths.length === 0 || receipt.changedPaths.length > MAX_ENTRIES
+    || new Set(receipt.changedPaths).size !== receipt.changedPaths.length || receipt.changedPaths.some(path => {
+      try { validatePath(path); return false } catch { return true }
+    }) || !/^[a-f0-9]{64}$/.test(receipt.digest)) {
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} contains an invalid operation receipt`, 500)
+  }
+  return { digest: operation.digest, receipt: structuredClone(receipt) }
+}
+
+function validateLoadedWorkspace(raw, workspaceId) {
+  if (!isRecord(raw)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} metadata is invalid`, 500)
+  metadataKeys(raw, ['version', 'id', 'owner', 'revision', 'entries'], ['operations', 'uploadedHashes', 'uploadedAt', 'writerEpoch'], `Workspace ${workspaceId} metadata`)
+  if (!UUID_PATTERN.test(workspaceId) || raw.version !== 1 || raw.id !== workspaceId || !UUID_PATTERN.test(raw.owner)
+    || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Array.isArray(raw.entries)
+    || raw.entries.length > MAX_ENTRIES) {
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} metadata is invalid`, 500)
+  }
+  const entries = new Map()
+  for (const rawEntry of raw.entries) {
+    const entry = validateLoadedEntry(rawEntry, workspaceId)
+    if (entries.has(entry.path)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} contains a duplicate path`, 500)
+    entries.set(entry.path, entry)
+  }
+  for (const entry of entries.values()) {
+    const segments = entry.path.split('/')
+    for (let index = 1; index < segments.length; index += 1) {
+      const parent = entries.get(segments.slice(0, index).join('/'))
+      if (parent?.kind !== 'directory') throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has a missing or non-directory parent`, 500)
+    }
+  }
+  const operations = new Map()
+  if (raw.operations !== undefined) {
+    const rawOperations = metadataRecord(raw.operations, `Workspace ${workspaceId} operations`)
+    for (const [operationId, operation] of Object.entries(rawOperations)) {
+      if (!UUID_PATTERN.test(operationId)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has an invalid operation id`, 500)
+      operations.set(operationId, validateLoadedOperation(operation, workspaceId, operationId, raw.revision))
+    }
+  }
+  const uploadedHashes = new Set()
+  if (raw.uploadedHashes !== undefined && !Array.isArray(raw.uploadedHashes)) {
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} pending uploads are invalid`, 500)
+  }
+  for (const hash of raw.uploadedHashes ?? []) {
+    if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has an invalid pending upload hash`, 500)
+    if (uploadedHashes.has(hash)) throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has a duplicate pending upload hash`, 500)
+    uploadedHashes.add(hash)
+  }
+  const uploadedAt = new Map()
+  if (raw.uploadedAt !== undefined) {
+    const timestamps = metadataRecord(raw.uploadedAt, `Workspace ${workspaceId} upload timestamps`)
+    for (const [hash, timestamp] of Object.entries(timestamps)) {
+      if (!uploadedHashes.has(hash) || !Number.isSafeInteger(timestamp) || timestamp < 0) {
+        throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has an invalid pending upload timestamp`, 500)
+      }
+      uploadedAt.set(hash, timestamp)
+    }
+  }
+  const writerEpoch = raw.writerEpoch === undefined ? 0 : raw.writerEpoch
+  if (!Number.isSafeInteger(writerEpoch) || writerEpoch < 0) {
+    throw new WorkspaceError('WORKSPACE_METADATA_INVALID', `Workspace ${workspaceId} has an invalid writer epoch`, 500)
+  }
+  return { entries, operations, uploadedHashes, uploadedAt, owner: raw.owner, revision: raw.revision, writerEpoch }
+}
+
+function validateLoadedIdentities(raw) {
+  if (!isRecord(raw)) {
+    throw new WorkspaceError('IDENTITY_METADATA_INVALID', 'Workspace identity metadata is invalid', 500)
+  }
+  metadataKeys(raw, ['version', 'identities'], [], 'Workspace identity metadata', 'IDENTITY_METADATA_INVALID')
+  if (raw.version !== 1 || !Array.isArray(raw.identities)) throw new WorkspaceError('IDENTITY_METADATA_INVALID', 'Workspace identity metadata is invalid', 500)
+  const identities = new Map()
+  const workspaces = new Set()
+  for (const value of raw.identities) {
+    if (!isRecord(value)) throw new WorkspaceError('IDENTITY_METADATA_INVALID', 'Workspace identity record is invalid', 500)
+    metadataKeys(value, ['principalId', 'workspaceId'], [], 'Workspace identity record', 'IDENTITY_METADATA_INVALID')
+    if (!UUID_PATTERN.test(value.principalId)
+      || !UUID_PATTERN.test(value.workspaceId) || identities.has(value.principalId)
+      || workspaces.has(value.workspaceId)) {
+      throw new WorkspaceError('IDENTITY_METADATA_INVALID', 'Workspace identity record is invalid', 500)
+    }
+    identities.set(value.principalId, value.workspaceId)
+    workspaces.add(value.workspaceId)
+  }
+  return identities
+}
+
+function isValidUploadMetadata(value, workspaceId, operationId, hash) {
+  const fields = ['version', 'workspaceId', 'operationId', 'hash', 'totalBytes', 'chunkBytes', 'chunkCount', 'chunks', 'createdAt', 'updatedAt']
+  return isRecord(value)
+    && Object.keys(value).length === fields.length
+    && fields.every(field => Object.hasOwn(value, field))
+    && value.version === 1
+    && value.workspaceId === workspaceId
+    && value.operationId === operationId
+    && value.hash === hash
+    && Number.isSafeInteger(value.totalBytes) && value.totalBytes >= 0 && value.totalBytes <= MAX_WORKSPACE_BLOB_BYTES
+    && value.chunkBytes === WORKSPACE_BLOB_CHUNK_BYTES
+    && value.chunkCount === Math.ceil(value.totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
+    && Array.isArray(value.chunks) && value.chunks.length <= value.chunkCount
+    && value.chunks.every(chunkHash => typeof chunkHash === 'string' && /^[a-f0-9]{64}$/.test(chunkHash))
+    && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
+    && Number.isSafeInteger(value.updatedAt) && value.updatedAt >= 0
+}
+
 function stableManifest(entries) {
   return [...entries.values()].sort((left, right) => left.path.localeCompare(right.path))
 }
@@ -215,8 +380,13 @@ export class WorkspaceStore {
     this.workspaces = new Map()
     this.locks = new Map()
     this.writerLeaseMs = options.writerLeaseMs ?? DEFAULT_WRITER_LEASE_MS
+    this.now = options.now ?? (() => Date.now())
+    this.pendingUploadTtlMs = options.pendingUploadTtlMs ?? UPLOAD_EXPIRY_MS
     if (!Number.isSafeInteger(this.writerLeaseMs) || this.writerLeaseMs < 300) {
       throw new TypeError('workspace writer lease must be an integer of at least 300 ms')
+    }
+    if (!Number.isSafeInteger(this.pendingUploadTtlMs) || this.pendingUploadTtlMs < 1_000) {
+      throw new TypeError('pending upload TTL must be an integer of at least 1000 ms')
     }
   }
 
@@ -226,16 +396,9 @@ export class WorkspaceStore {
       mkdir(this.uploadsDir, { recursive: true }),
       this.blobStore.initialize(),
     ])
-    await this.removeExpiredUploads()
     try {
       const raw = JSON.parse(await readFile(this.identitiesPath, 'utf8'))
-      if (Array.isArray(raw.identities)) {
-        for (const identity of raw.identities) {
-          if (typeof identity.principalId === 'string' && typeof identity.workspaceId === 'string') {
-            this.identities.set(identity.principalId, identity.workspaceId)
-          }
-        }
-      }
+      this.identities = validateLoadedIdentities(raw)
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
     }
@@ -243,25 +406,30 @@ export class WorkspaceStore {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       const workspaceId = entry.name.slice(0, -'.json'.length)
       const raw = JSON.parse(await readFile(join(this.workspacesDir, entry.name), 'utf8'))
-      if (raw.id !== workspaceId || !Number.isSafeInteger(raw.revision) || !Array.isArray(raw.entries)) continue
-      const entries = new Map(raw.entries.map(item => [item.path, item]))
-      const operations = new Map(Object.entries(raw.operations ?? {}))
-      const uploadedHashes = new Set(raw.uploadedHashes ?? [])
+      const validated = validateLoadedWorkspace(raw, workspaceId)
       this.workspaces.set(workspaceId, {
         id: workspaceId,
-        owner: raw.owner,
-        revision: raw.revision,
-        entries,
-        operations,
-        uploadedHashes,
-        writerEpoch: Number.isSafeInteger(raw.writerEpoch) && raw.writerEpoch >= 0 ? raw.writerEpoch : 0,
+        owner: validated.owner,
+        revision: validated.revision,
+        entries: validated.entries,
+        operations: validated.operations,
+        uploadedHashes: validated.uploadedHashes,
+        uploadedAt: validated.uploadedAt,
+        writerEpoch: validated.writerEpoch,
         writerToken: undefined,
         writerExpiresAt: 0,
       })
     }
+    for (const [principalId, workspaceId] of this.identities) {
+      const workspace = this.workspaces.get(workspaceId)
+      if (workspace === undefined || workspace.owner !== principalId) {
+        throw new WorkspaceError('IDENTITY_METADATA_INVALID', 'Workspace identity references missing or foreign metadata', 500)
+      }
+    }
+    await this.removeExpiredUploads(this.now())
   }
 
-  async exclusive(id, operation) {
+  async exclusiveKey(id, operation) {
     const previous = this.locks.get(id) ?? Promise.resolve()
     let release
     const current = new Promise(resolveRelease => { release = resolveRelease })
@@ -273,6 +441,10 @@ export class WorkspaceStore {
       release()
       if (this.locks.get(id) === current) this.locks.delete(id)
     }
+  }
+
+  async exclusive(id, operation) {
+    return await this.exclusiveKey('blob-lifecycle', async () => await this.exclusiveKey(id, operation))
   }
 
   async writeIdentities(records) {
@@ -293,6 +465,7 @@ export class WorkspaceStore {
       entries: stableManifest(workspace.entries),
       operations: Object.fromEntries(workspace.operations),
       uploadedHashes: [...workspace.uploadedHashes].sort(),
+      uploadedAt: Object.fromEntries([...workspace.uploadedAt].sort(([left], [right]) => left.localeCompare(right))),
       writerEpoch: workspace.writerEpoch,
     }
     await atomicWrite(this.workspacePath(workspace.id), JSON.stringify(value))
@@ -316,7 +489,7 @@ export class WorkspaceStore {
         const identities = new Map(this.identities).set(newPrincipalId, workspaceId)
         const workspace = {
           id: workspaceId, owner: newPrincipalId, revision: 0,
-          entries: new Map(), operations: new Map(), uploadedHashes: new Set(),
+          entries: new Map(), operations: new Map(), uploadedHashes: new Set(), uploadedAt: new Map(),
           writerEpoch: 0, writerToken: undefined, writerExpiresAt: 0,
         }
         await this.persistWorkspace(workspace)
@@ -369,7 +542,11 @@ export class WorkspaceStore {
       const workspace = this.requireWorkspace(principalId, workspaceId)
       const stored = await this.blobStore.put(hash, bytes)
       if (!workspace.uploadedHashes.has(hash)) {
-        const next = { ...workspace, uploadedHashes: new Set(workspace.uploadedHashes).add(hash) }
+        const next = {
+          ...workspace,
+          uploadedHashes: new Set(workspace.uploadedHashes).add(hash),
+          uploadedAt: new Map(workspace.uploadedAt).set(hash, this.now()),
+        }
         await this.persistWorkspace(next)
         this.workspaces.set(workspaceId, next)
       }
@@ -385,42 +562,56 @@ export class WorkspaceStore {
     return join(this.uploadDirectory(workspaceId, operationId, hash), 'upload.json')
   }
 
-  async removeExpiredUploads() {
+  async removeExpiredUploads(now = this.now()) {
+    let removed = 0
+    let preservedUnrecognized = 0
     for (const workspace of await readdir(this.uploadsDir, { withFileTypes: true })) {
-      if (!workspace.isDirectory() || !/^[0-9a-f-]{36}$/i.test(workspace.name)) continue
+      if (!workspace.isDirectory() || !UUID_PATTERN.test(workspace.name)) continue
       const workspaceDirectory = join(this.uploadsDir, workspace.name)
       for (const upload of await readdir(workspaceDirectory, { withFileTypes: true })) {
         if (!upload.isDirectory()) continue
         const directory = join(workspaceDirectory, upload.name)
+        const identity = upload.name.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-([a-f0-9]{64})$/i)
+        if (identity === null) {
+          preservedUnrecognized += 1
+          continue
+        }
+        let metadata
         try {
-          const metadata = JSON.parse(await readFile(join(directory, 'upload.json'), 'utf8'))
-          if (!Number.isSafeInteger(metadata.updatedAt) || Date.now() - metadata.updatedAt > UPLOAD_EXPIRY_MS) {
-            await rm(directory, { recursive: true, force: true })
-          }
+          metadata = JSON.parse(await readFile(join(directory, 'upload.json'), 'utf8'))
         } catch (error) {
           if (error?.code === 'ENOENT' || error instanceof SyntaxError) {
-            await rm(directory, { recursive: true, force: true })
+            preservedUnrecognized += 1
             continue
           }
           throw error
         }
+        if (!isValidUploadMetadata(metadata, workspace.name, identity[1], identity[2])) {
+          preservedUnrecognized += 1
+          continue
+        }
+        if (now >= metadata.updatedAt && now - metadata.updatedAt > UPLOAD_EXPIRY_MS) {
+          await rm(directory, { recursive: true, force: true })
+          removed += 1
+        }
       }
     }
+    return { removed, preservedUnrecognized }
   }
 
   async readUploadMetadata(workspaceId, operationId, hash) {
+    let metadata
     try {
-      const metadata = JSON.parse(await readFile(this.uploadMetadataPath(workspaceId, operationId, hash), 'utf8'))
-      if (metadata.version !== 1 || metadata.workspaceId !== workspaceId || metadata.operationId !== operationId
-        || metadata.hash !== hash || !Number.isSafeInteger(metadata.totalBytes)
-        || !Number.isSafeInteger(metadata.chunkCount) || !Array.isArray(metadata.chunks)) {
-        throw new WorkspaceError('UPLOAD_METADATA_INVALID', 'upload metadata is invalid', 500)
-      }
-      return metadata
+      metadata = JSON.parse(await readFile(this.uploadMetadataPath(workspaceId, operationId, hash), 'utf8'))
     } catch (error) {
       if (error?.code === 'ENOENT') throw new WorkspaceError('UPLOAD_NOT_FOUND', 'blob upload does not exist', 404)
+      if (error instanceof SyntaxError) throw new WorkspaceError('UPLOAD_METADATA_INVALID', 'upload metadata is invalid', 500, { cause: error })
       throw error
     }
+    if (!isValidUploadMetadata(metadata, workspaceId, operationId, hash)) {
+      throw new WorkspaceError('UPLOAD_METADATA_INVALID', 'upload metadata is invalid', 500)
+    }
+    return metadata
   }
 
   async startBlobUpload(request, input) {
@@ -444,7 +635,9 @@ export class WorkspaceStore {
         }
         const uploadedHashes = new Set(workspace.uploadedHashes)
         uploadedHashes.delete(hash)
-        workspace = { ...workspace, uploadedHashes }
+        const uploadedAt = new Map(workspace.uploadedAt)
+        uploadedAt.delete(hash)
+        workspace = { ...workspace, uploadedHashes, uploadedAt }
         await this.persistWorkspace(workspace)
         this.workspaces.set(workspaceId, workspace)
       }
@@ -470,8 +663,8 @@ export class WorkspaceStore {
           chunkBytes: input.chunkBytes,
           chunkCount,
           chunks: [],
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt: this.now(),
+          updatedAt: this.now(),
         }
         await atomicWrite(metadataPath, JSON.stringify(metadata))
       }
@@ -487,27 +680,29 @@ export class WorkspaceStore {
     const principalId = this.principalFromRequest(request)
     workspaceId = assertId(workspaceId, 'workspaceId')
     assertUploadIdentity(operationId, hash)
-    const workspace = this.requireWorkspace(principalId, workspaceId)
-    if (workspace.uploadedHashes.has(hash)) return { workspaceId, operationId, hash, complete: true, missing: [] }
-    const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
-    const missing = []
-    for (let index = 0; index < metadata.chunkCount; index += 1) {
-      const expectedDigest = metadata.chunks[index]
-      if (expectedDigest === undefined) {
-        missing.push(index)
-        continue
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      if (workspace.uploadedHashes.has(hash)) return { workspaceId, operationId, hash, complete: true, missing: [] }
+      const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+      const missing = []
+      for (let index = 0; index < metadata.chunkCount; index += 1) {
+        const expectedDigest = metadata.chunks[index]
+        if (expectedDigest === undefined) {
+          missing.push(index)
+          continue
+        }
+        const path = join(this.uploadDirectory(workspaceId, operationId, hash), `${String(index)}.part`)
+        try {
+          const info = await stat(path)
+          if (info.size !== expectedChunkBytes(metadata.totalBytes, index, metadata.chunkCount)
+            || await hashFile(path) !== expectedDigest) missing.push(index)
+        } catch (error) {
+          if (error?.code === 'ENOENT') missing.push(index)
+          else throw error
+        }
       }
-      const path = join(this.uploadDirectory(workspaceId, operationId, hash), `${String(index)}.part`)
-      try {
-        const info = await stat(path)
-        if (info.size !== expectedChunkBytes(metadata.totalBytes, index, metadata.chunkCount)
-          || await hashFile(path) !== expectedDigest) missing.push(index)
-      } catch (error) {
-        if (error?.code === 'ENOENT') missing.push(index)
-        else throw error
-      }
-    }
-    return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount: metadata.chunkCount, missing }
+      return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount: metadata.chunkCount, missing }
+    })
   }
 
   async putBlobChunk(request, workspaceId, operationId, hash, chunkIndex, bytes, chunkHash) {
@@ -544,7 +739,7 @@ export class WorkspaceStore {
       await atomicWrite(this.uploadMetadataPath(workspaceId, operationId, hash), JSON.stringify({
         ...metadata,
         chunks,
-        updatedAt: Date.now(),
+        updatedAt: this.now(),
       }))
       return { workspaceId, operationId, hash, chunkIndex, chunkHash, replayed: false }
     })
@@ -602,7 +797,11 @@ export class WorkspaceStore {
           await rm(temporary, { force: true })
         }
       }
-      const next = { ...workspace, uploadedHashes: new Set(workspace.uploadedHashes).add(hash) }
+      const next = {
+        ...workspace,
+        uploadedHashes: new Set(workspace.uploadedHashes).add(hash),
+        uploadedAt: new Map(workspace.uploadedAt).set(hash, this.now()),
+      }
       await this.persistWorkspace(next)
       this.workspaces.set(workspaceId, next)
       await rm(this.uploadDirectory(workspaceId, operationId, hash), { recursive: true, force: true })
@@ -612,17 +811,19 @@ export class WorkspaceStore {
 
   async getBlobChunk(request, workspaceId, hash, chunkIndex) {
     const principalId = this.principalFromRequest(request)
-    const workspace = this.requireWorkspace(principalId, workspaceId)
-    const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
-    if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
-    const info = await this.blobStore.stat(hash)
-    if (info === undefined) throw new WorkspaceError('BLOB_NOT_FOUND', 'workspace blob is missing', 404)
-    const chunkCount = Math.ceil(info.size / WORKSPACE_BLOB_CHUNK_BYTES)
-    const bytesInChunk = expectedChunkBytes(info.size, chunkIndex, chunkCount)
-    const buffer = await this.blobStore.getRange(hash, chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES, bytesInChunk)
-    if (buffer.byteLength !== bytesInChunk) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob chunk is truncated', 500)
-    return { bytes: buffer, chunkHash: hashBytes(buffer), chunkIndex, chunkCount, totalBytes: info.size }
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
+      if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
+      const info = await this.blobStore.stat(hash)
+      if (info === undefined) throw new WorkspaceError('BLOB_NOT_FOUND', 'workspace blob is missing', 404)
+      const chunkCount = Math.ceil(info.size / WORKSPACE_BLOB_CHUNK_BYTES)
+      const bytesInChunk = expectedChunkBytes(info.size, chunkIndex, chunkCount)
+      const buffer = await this.blobStore.getRange(hash, chunkIndex * WORKSPACE_BLOB_CHUNK_BYTES, bytesInChunk)
+      if (buffer.byteLength !== bytesInChunk) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob chunk is truncated', 500)
+      return { bytes: buffer, chunkHash: hashBytes(buffer), chunkIndex, chunkCount, totalBytes: info.size }
+    })
   }
 
   async lease(request, body) {
@@ -724,13 +925,15 @@ export class WorkspaceStore {
 
   async getBlob(request, workspaceId, hash) {
     const principalId = this.principalFromRequest(request)
-    const workspace = this.requireWorkspace(principalId, workspaceId)
-    const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
-    if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
-    const bytes = await this.blobStore.get(hash)
-    if (hashBytes(bytes) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
-    return bytes
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const referenced = [...workspace.entries.values()].some(entry => entry.kind === 'file' && entry.hash === hash)
+      if (!referenced) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
+      const bytes = await this.blobStore.get(hash)
+      if (hashBytes(bytes) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
+      return bytes
+    })
   }
 
   validateChanges(changes) {
@@ -827,6 +1030,9 @@ export class WorkspaceStore {
         entries,
         operations: new Map(workspace.operations),
       }
+      const referencedHashes = new Set([...entries.values()].filter(entry => entry.kind === 'file').map(entry => entry.hash))
+      next.uploadedHashes = new Set([...workspace.uploadedHashes].filter(hash => !referencedHashes.has(hash)))
+      next.uploadedAt = new Map([...workspace.uploadedAt].filter(([hash]) => next.uploadedHashes.has(hash)))
       const receipt = {
         workspaceId,
         revision: next.revision,
@@ -838,6 +1044,60 @@ export class WorkspaceStore {
       await this.persistWorkspace(next)
       this.workspaces.set(workspaceId, next)
       return { ...receipt, replayed: false }
+    })
+  }
+
+  async collectGarbage(workspaceId, { now = this.now() } = {}) {
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.workspaces.get(workspaceId)
+      if (workspace === undefined) throw new WorkspaceError('WORKSPACE_NOT_FOUND', 'workspace does not exist', 404)
+      if (typeof this.blobStore.listHashes !== 'function' || typeof this.blobStore.delete !== 'function') {
+        return { workspaceId, skipped: 'blob-store-does-not-support-gc', scannedFiles: 0, retainedFiles: 0, removedFiles: 0, removedBytes: 0, expiredPending: 0, expiredUploads: 0, preservedUnrecognizedUploads: 0 }
+      }
+      const uploadCleanup = await this.removeExpiredUploads(now)
+      const retained = new Set()
+      const expiredByWorkspace = new Map()
+      for (const candidate of this.workspaces.values()) {
+        for (const entry of candidate.entries.values()) if (entry.kind === 'file') retained.add(entry.hash)
+        const expired = new Set()
+        for (const hash of candidate.uploadedHashes) {
+          const uploadedAt = candidate.uploadedAt.get(hash)
+          if (uploadedAt !== undefined && now - uploadedAt > this.pendingUploadTtlMs) expired.add(hash)
+          else retained.add(hash)
+        }
+        if (expired.size > 0) expiredByWorkspace.set(candidate.id, { candidate, expired })
+      }
+      const hashes = await this.blobStore.listHashes()
+      let removedFiles = 0
+      let removedBytes = 0
+      for (const hash of hashes) {
+        if (retained.has(hash)) continue
+        const info = await this.blobStore.stat(hash)
+        await this.blobStore.delete(hash)
+        removedFiles += 1
+        removedBytes += info?.size ?? 0
+      }
+      let expiredPending = 0
+      for (const { candidate, expired } of expiredByWorkspace.values()) {
+        const next = {
+          ...candidate,
+          uploadedHashes: new Set([...candidate.uploadedHashes].filter(hash => !expired.has(hash))),
+          uploadedAt: new Map([...candidate.uploadedAt].filter(([hash]) => !expired.has(hash))),
+        }
+        await this.persistWorkspace(next)
+        this.workspaces.set(candidate.id, next)
+        expiredPending += expired.size
+      }
+      return {
+        workspaceId,
+        scannedFiles: hashes.length,
+        retainedFiles: retained.size,
+        removedFiles,
+        removedBytes,
+        expiredPending,
+        expiredUploads: uploadCleanup.removed,
+        preservedUnrecognizedUploads: uploadCleanup.preservedUnrecognized,
+      }
     })
   }
 }

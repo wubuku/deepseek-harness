@@ -73,6 +73,19 @@ async function createMinioContainer() {
     const response = await fetch(`http://127.0.0.1:${String(minioPort)}/minio/health/ready`).catch(() => undefined)
     return response?.ok === true ? true : undefined
   }, 'MinIO startup readiness', 30_000)
+  const readinessStore = makeBlobStore()
+  try {
+    await waitFor(async () => {
+      try {
+        await readinessStore.initialize()
+        return true
+      } catch {
+        return undefined
+      }
+    }, 'MinIO authenticated S3 readiness', 30_000)
+  } finally {
+    readinessStore.close()
+  }
 }
 
 async function restartMinioAndBackend(distRoot) {
@@ -185,6 +198,15 @@ try {
     throw error
   })
   assert.deepEqual(localBlobFiles, [], 'S3 mode must not place content blobs in the backend local blob directory')
+
+  const orphanBytes = Buffer.from('orphan object must be collected')
+  const orphanHash = createHash('sha256').update(orphanBytes).digest('hex')
+  await blobStore.put(orphanHash, orphanBytes)
+  const garbage = await app.workspaces.collectGarbage(identity.workspaceId)
+  assert.equal(garbage.removedFiles, 1)
+  assert.equal(garbage.retainedFiles, 1)
+  assert.equal(await blobStore.stat(orphanHash), undefined)
+  assert.equal((await blobStore.stat(dataHash)).size, fileBytes)
 
   const chunkRead = await page.evaluate(async ({ workspaceId, hash }) => {
     const response = await fetch(`/api/browser-native/workspace/blob/${hash}/chunk/1?protocolVersion=1&workspaceId=${encodeURIComponent(workspaceId)}`)

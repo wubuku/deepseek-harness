@@ -70,6 +70,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 15. [OPFS 外置大文件的 DSH 工具闭环计划](browser-native-dsh-poc/opfs-agent-file-tools-validation-plan.md)及[进度](browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md)：真实 Chrome Worker/DSH Host 在 12 MiB 冷 hydrate 文件上验证 scripted `read → grep → edit → read` 和刷新恢复；另行记录真实 LLM 普通文件工具闭环。当前 checkout 已补有界 Browser-native `grep`/`glob` fallback，但它不等同 ripgrep；超长单行 `edit` 会触发 Session body 上限。
 16. [Browser-native 文件工具与载荷安全计划](browser-native-dsh-poc/browser-file-tools-validation-plan.md)及[进度](browser-native-dsh-poc/browser-file-tools-validation-progress.md)：验证 Worker 内置 `grep`/`glob`、搜索和编辑载荷上限、失败后继续以及取消 helper 后的 Worker 可用性；真实模型自主选工具仍未由本批证明。
 17. [Browser-Native 能力预检与插件兼容性计划](browser-native-dsh-poc/browser-capability-preflight-plan.md)及[进度](browser-native-dsh-poc/browser-capability-preflight-progress.md)：集中声明 Worker profile 的能力，验证 boot 前 fail-closed 预检、默认 profile 的受限 Shell 语义和真实 LLM 独立 roster 回归；不把静态清单或模块加载外推为全部插件兼容。
+18. [Workspace 持久化 metadata 与 blob 生命周期验证计划](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-progress.md)：验证 backend 冷启动对损坏 metadata 的 fail-closed、文件/MinIO blob GC 对跨 Workspace 引用和 pending upload 的保留，以及未知 staging metadata 的保守保留；不推断多实例对象存储安全或生产云行为。
 
 ### 需要实现或审查代码时
 
@@ -317,6 +318,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [browser-file-tools-next-validation-plan.md](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md) / [进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md) | 文件工具资源边界与文本语义的本批计划、实现证据、真实 Chrome/LLM 范围和未验证的 Shell/WASI 边界。 |
 | [chunk-backed-edit-validation-plan.md](browser-native-dsh-poc/chunk-backed-edit-validation-plan.md) / [进度](browser-native-dsh-poc/chunk-backed-edit-validation-progress.md) | 可写 chunk-backed 文件编辑原型、64 MiB OPFS bounded-memory 证据、故障注入和当前 DSH `edit` materialize 对照；明确尚未接入正式 VFS/Workspace。 |
 | [reference-backed-edit-validation-plan.md](browser-native-dsh-poc/reference-backed-edit-validation-plan.md) / [进度](browser-native-dsh-poc/reference-backed-edit-validation-progress.md) | External reference mutation、range-based durable cache/upload、manifest CAS、compact edit receipt、刷新恢复和失败重试；明确 test action、experimental 类型和正式 `edit`/Session 能力仍未接入。 |
+| [durable-metadata-and-blob-lifecycle-validation-plan.md](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-progress.md) | Workspace metadata 冷加载 fail-closed、全 Workspace manifest/pending 引用扫描、文件与 MinIO orphan GC、过期/损坏 staging 处置和 unknown-commit 回归；不证明跨主机 GC 或生产对象存储。 |
 
 ### v2 实现和测试入口
 

@@ -214,6 +214,14 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 PoC backend 可在测试启动时注入 S3 blob adapter；默认 `run-v2.mjs` 仍使用本地文件 blob store。真实 Chrome Worker + MinIO 验证了 2,097,189-byte staging 文件流式上传、Range 下载、503 outage、刷新后补传先前丢失的已上传对象和 backend 重启读回。adapter 流式校验 SHA-256；关闭 AWS SDK 的可选 request checksum 后兼容所测 MinIO 版本。Session、manifest、identity、writer lease 与 operation ledger 仍驻留单机 JSON `dataDir`；结果不证明真实 AWS/GCS/Azure、生产权限模型或多实例安全。
 
+### Durable metadata 与远端 blob 生命周期
+
+[元数据和 blob 生命周期验证计划](durable-metadata-and-blob-lifecycle-validation-plan.md)及[实施进度](durable-metadata-and-blob-lifecycle-validation-progress.md)记录当前 checkout 对 Workspace metadata 冷加载和显式 GC 的验证。backend 在 listen 前严格校验 version 1 metadata 的字段、UUID、路径树、operation receipt、pending upload hash/timestamp 和 identity 引用；未知字段或损坏记录会拒绝启动。旧 Workspace 缺少 `uploadedAt` 时，pending hash 会永久保留，不按猜测期限删除。
+
+文件与 S3 blob store 都支持列举和删除。GC 通过单 backend 的全局 blob-lifecycle lock 读取所有 Workspace manifest 和 pending upload 引用；无受保护引用的完成 blob 可立即回收，pending hash 在 TTL 内保留。续传与清理都要求 staging schema 和目录身份完整有效；未知、缺失或损坏的 metadata 不可续传，也会保留并由 GC 计数。只有 metadata 可验证且超过期限的分块 staging 才会删除。GC 不改变 manifest revision 或 operation receipt。真实 Chrome + MinIO 验证了 orphan 删除、当前内容保留、503 后恢复、对象丢失后刷新补传和 backend 重启读回。
+
+该 GC 只在一个 backend 进程和一个 WorkspaceStore metadata 视图内有依据；它不是共享 S3 bucket 的多实例协调器。启动校验不扫描每个对象的完整 hash；本地 JSON metadata、生产云对象权限/版本控制、自然 eviction、OS/磁盘崩溃和跨存储事务仍未验证。复跑命令和失败复跑记录见[实施进度](durable-metadata-and-blob-lifecycle-validation-progress.md)。
+
 复跑需要 Docker、固定 MinIO 镜像、Node、已构建 preview 和 Playwright。S3 adapter 的 AWS SDK 依赖固定在目录私有 package 中，不修改根依赖：
 
 ```sh

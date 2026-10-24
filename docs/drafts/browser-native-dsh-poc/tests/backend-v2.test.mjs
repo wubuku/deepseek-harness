@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { WORKSPACE_BLOB_CHUNK_BYTES } from '../workspace-v2.mjs'
@@ -665,6 +665,261 @@ describe('browser-native DSH v2 backend', () => {
     })
     assert.equal(replay.response.status, 409)
     assert.equal(replay.value.error.code, 'OPERATION_ID_REUSED')
+  })
+
+  it('fails closed on corrupted Workspace metadata and releases the data directory lock', async () => {
+    const dataDir = await temporaryDirectory()
+    const first = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(first.origin)
+    const stagedBytes = Buffer.from('preserve staging until metadata validates')
+    const stagedHash = createHash('sha256').update(stagedBytes).digest('hex')
+    const stagedOperationId = randomUUID()
+    await postAuthenticatedWorkspace(first.origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('metadata-failure-staging-start', {
+      workspaceId: identity.workspaceId,
+      operationId: stagedOperationId,
+      hash: stagedHash,
+      totalBytes: stagedBytes.byteLength,
+      chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    await first.app.close()
+    liveApps.delete(first.app)
+    const stagingPath = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${stagedOperationId}-${stagedHash}`, 'upload.json')
+    const stagingMetadata = JSON.parse(await readFile(stagingPath, 'utf8'))
+    await writeFile(stagingPath, JSON.stringify({ ...stagingMetadata, updatedAt: 0 }))
+    const workspacePath = join(dataDir, 'workspace-v2', 'workspaces', `${identity.workspaceId}.json`)
+    const valid = await readFile(workspacePath, 'utf8')
+    const operationId = randomUUID()
+    const invalidRecords = [
+      { label: 'path', mutate: value => { value.entries = [{ path: '../escape', kind: 'directory', mode: 0o755 }] } },
+      { label: 'hash', mutate: value => { value.entries = [{ path: 'bad.txt', kind: 'file', hash: '0', bytes: 1, mode: 0o600 }] } },
+      { label: 'bytes', mutate: value => { value.entries = [{ path: 'bad.txt', kind: 'file', hash: '0'.repeat(64), bytes: -1, mode: 0o600 }] } },
+      { label: 'unknown workspace field', mutate: value => { value.futureField = true } },
+      { label: 'unknown entry field', mutate: value => { value.entries = [{ path: 'bad.txt', kind: 'directory', mode: 0o755, futureField: true }] } },
+      { label: 'missing parent directory', mutate: value => { value.entries = [{ path: 'parent/child.txt', kind: 'file', hash: '0'.repeat(64), bytes: 1, mode: 0o600 }] } },
+      { label: 'operation', mutate: value => { value.operations = { [operationId]: { digest: '0', receipt: {} } } } },
+      {
+        label: 'unknown operation receipt field',
+        mutate: value => {
+          value.revision = 1
+          value.operations = { [operationId]: {
+            digest: 'a'.repeat(64),
+            receipt: {
+              workspaceId: identity.workspaceId,
+              revision: 1,
+              operationId,
+              changedPaths: ['valid.txt'],
+              digest: 'b'.repeat(64),
+              futureField: true,
+            },
+          } }
+        },
+      },
+    ]
+    for (const invalid of invalidRecords) {
+      const value = JSON.parse(valid)
+      invalid.mutate(value)
+      await writeFile(workspacePath, JSON.stringify(value))
+      await assert.rejects(
+        () => createBrowserNativeV2Server({ dataDir, distRoot: resolve('apps/web/dist'), llmMode: 'scripted', testHooks: { workspaceNow: () => 86_400_001 } }),
+        error => error?.code === 'WORKSPACE_METADATA_INVALID',
+        `${invalid.label} metadata must fail closed`,
+      )
+    }
+    await assert.doesNotReject(() => readFile(stagingPath, 'utf8'), 'failed metadata load must not clean an expired staging record first')
+    await writeFile(workspacePath, valid)
+    const identityPath = join(dataDir, 'workspace-v2', 'identities.json')
+    const validIdentities = await readFile(identityPath, 'utf8')
+    for (const invalid of [
+      { version: 1, identities: [{ principalId: 'invalid', workspaceId: identity.workspaceId }] },
+      { version: 1, identities: [{ principalId: identity.principalId, workspaceId: identity.workspaceId, futureField: true }] },
+      { version: 1, identities: [{ principalId: identity.principalId, workspaceId: 'not-a-uuid' }] },
+    ]) {
+      await writeFile(identityPath, JSON.stringify(invalid))
+      await assert.rejects(
+        () => createBrowserNativeV2Server({ dataDir, distRoot: resolve('apps/web/dist'), llmMode: 'scripted', testHooks: { workspaceNow: () => 86_400_001 } }),
+        error => error?.code === 'IDENTITY_METADATA_INVALID',
+      )
+    }
+    await assert.doesNotReject(() => readFile(stagingPath, 'utf8'), 'failed identity load must not clean an expired staging record first')
+    await writeFile(identityPath, validIdentities)
+    const restored = await start({ dataDir, llmMode: 'scripted', testHooks: { workspaceNow: () => 86_400_001 } })
+    await assert.rejects(() => readFile(stagingPath, 'utf8'), error => error?.code === 'ENOENT')
+    const manifest = await fetch(`${restored.origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(manifest.ok, true)
+    assert.equal((await manifest.json()).revision, 0)
+  })
+
+  it('garbage-collects unreachable blobs while preserving current and pending references', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = 10_000
+    const { origin, app } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      pendingUploadTtlMs: 1_000,
+      testHooks: { workspaceNow: () => now },
+    })
+    const identity = await openWorkspaceIdentity(origin)
+    const oldBytes = Buffer.from('old content')
+    const newBytes = Buffer.from('new content')
+    const pendingBytes = Buffer.from('never committed')
+    const secondIdentity = await openWorkspaceIdentity(origin)
+    const oldBlob = await uploadWorkspaceBlob(origin, identity, oldBytes)
+    const firstOperation = randomUUID()
+    const firstCommit = await postWorkspace(origin, identity, 'commit', {
+      operationId: firstOperation,
+      baseRevision: 0,
+      changes: [{ path: 'document.txt', kind: 'file', hash: oldBlob.hash, bytes: oldBlob.bytes, mode: 0o600 }],
+    })
+    assert.equal(firstCommit.response.ok, true)
+    const newBlob = await uploadWorkspaceBlob(origin, identity, newBytes)
+    const pendingBlob = await uploadWorkspaceBlob(origin, identity, pendingBytes)
+    const secondCommit = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 1,
+      changes: [{ path: 'document.txt', kind: 'file', hash: newBlob.hash, bytes: newBlob.bytes, mode: 0o600 }],
+    })
+    assert.equal(secondCommit.response.ok, true)
+    const sharedBlob = await uploadWorkspaceBlob(origin, secondIdentity, newBytes)
+    const sharedCommit = await postWorkspace(origin, secondIdentity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes: [{ path: 'shared.txt', kind: 'file', hash: sharedBlob.hash, bytes: sharedBlob.bytes, mode: 0o600 }],
+    })
+    assert.equal(sharedCommit.response.ok, true)
+
+    const beforeExpiry = await app.workspaces.collectGarbage(identity.workspaceId, { now })
+    assert.equal(beforeExpiry.removedFiles, 1)
+    assert.equal(beforeExpiry.expiredPending, 0)
+    assert.equal(beforeExpiry.retainedFiles, 2)
+    const pendingStillThere = await fetch(`${origin}/api/browser-native/workspace/blob/${pendingBlob.hash}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(pendingStillThere.status, 404, 'uncommitted blobs are not exposed as workspace files')
+
+    now += 1_001
+    const afterExpiry = await app.workspaces.collectGarbage(identity.workspaceId, { now })
+    assert.equal(afterExpiry.removedFiles, 1)
+    assert.equal(afterExpiry.expiredPending, 1)
+    const current = await fetch(`${origin}/api/browser-native/workspace/blob/${newBlob.hash}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(current.status, 200)
+    assert.deepEqual(Buffer.from(await current.arrayBuffer()), newBytes)
+    const secondWorkspaceCurrent = await fetch(`${origin}/api/browser-native/workspace/blob/${sharedBlob.hash}?protocolVersion=1&workspaceId=${secondIdentity.workspaceId}`, {
+      headers: { cookie: secondIdentity.cookie },
+    })
+    assert.equal(secondWorkspaceCurrent.status, 200)
+    const replay = await postWorkspace(origin, identity, 'commit', {
+      operationId: firstOperation,
+      baseRevision: 0,
+      changes: [{ path: 'document.txt', kind: 'file', hash: oldBlob.hash, bytes: oldBlob.bytes, mode: 0o600 }],
+    })
+    assert.equal(replay.response.ok, true)
+    assert.equal(replay.value.replayed, true)
+
+    const durable = JSON.parse(await readFile(join(dataDir, 'workspace-v2', 'workspaces', `${identity.workspaceId}.json`), 'utf8'))
+    assert.equal(durable.revision, 2)
+    assert.deepEqual(durable.uploadedHashes, [])
+  })
+
+  it('expires incomplete chunk staging without removing unrelated blobs', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = 50_000
+    const { origin, app } = await start({ dataDir, llmMode: 'scripted', testHooks: { workspaceNow: () => now } })
+    const identity = await openWorkspaceIdentity(origin)
+    const content = Buffer.from('staged content')
+    const hash = createHash('sha256').update(content).digest('hex')
+    const operationId = randomUUID()
+    const malformedOperationId = randomUUID()
+    const unknownOperationId = randomUUID()
+    const missingOperationId = randomUUID()
+    const malformedHash = createHash('sha256').update(Buffer.from('malformed staging')).digest('hex')
+    const uploadPath = `/api/browser-native/workspace/blob-upload/${operationId}-${hash}`
+    await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('gc-staging-start', {
+      workspaceId: identity.workspaceId,
+      operationId,
+      hash,
+      totalBytes: content.byteLength,
+      chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('gc-staging-malformed-start', {
+      workspaceId: identity.workspaceId,
+      operationId: malformedOperationId,
+      hash: malformedHash,
+      totalBytes: content.byteLength,
+      chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    for (const [requestId, uploadOperationId] of [
+      ['gc-staging-unknown-start', unknownOperationId],
+      ['gc-staging-missing-start', missingOperationId],
+    ]) {
+      await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope(requestId, {
+        workspaceId: identity.workspaceId,
+        operationId: uploadOperationId,
+        hash: malformedHash,
+        totalBytes: content.byteLength,
+        chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+      }))
+    }
+    const before = await app.workspaces.collectGarbage(identity.workspaceId, { now })
+    assert.equal(before.expiredUploads, 0)
+    assert.equal(before.preservedUnrecognizedUploads, 0)
+    const staging = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${operationId}-${hash}`)
+    const malformedStaging = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${malformedOperationId}-${malformedHash}`)
+    const unknownStaging = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${unknownOperationId}-${malformedHash}`)
+    const missingStaging = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${missingOperationId}-${malformedHash}`)
+    await writeFile(join(malformedStaging, 'upload.json'), '{')
+    const unknownMetadata = JSON.parse(await readFile(join(unknownStaging, 'upload.json'), 'utf8'))
+    await writeFile(join(unknownStaging, 'upload.json'), JSON.stringify({ ...unknownMetadata, futureField: true }))
+    await rm(join(missingStaging, 'upload.json'), { force: true })
+    await assert.rejects(
+      () => app.workspaces.readUploadMetadata(identity.workspaceId, malformedOperationId, malformedHash),
+      error => error?.code === 'UPLOAD_METADATA_INVALID',
+    )
+    await assert.rejects(
+      () => app.workspaces.readUploadMetadata(identity.workspaceId, unknownOperationId, malformedHash),
+      error => error?.code === 'UPLOAD_METADATA_INVALID',
+    )
+    await assert.rejects(
+      () => app.workspaces.readUploadMetadata(identity.workspaceId, missingOperationId, malformedHash),
+      error => error?.code === 'UPLOAD_NOT_FOUND',
+    )
+    const withMalformed = await app.workspaces.collectGarbage(identity.workspaceId, { now })
+    assert.equal(withMalformed.preservedUnrecognizedUploads, 3)
+    await assert.doesNotReject(() => readFile(join(staging, 'upload.json')))
+    now += 86_400_001
+    const after = await app.workspaces.collectGarbage(identity.workspaceId, { now })
+    assert.equal(after.expiredUploads, 1)
+    assert.equal(after.preservedUnrecognizedUploads, 3)
+    await assert.rejects(() => readFile(join(staging, 'upload.json')), error => error?.code === 'ENOENT')
+    assert.equal(await readFile(join(malformedStaging, 'upload.json'), 'utf8'), '{')
+    assert.equal(JSON.parse(await readFile(join(unknownStaging, 'upload.json'), 'utf8')).futureField, true)
+    assert.equal(await readFile(join(missingStaging, 'upload.json'), 'utf8').catch(error => error?.code), 'ENOENT')
+    const status = await fetch(`${origin}${uploadPath}?protocolVersion=1&workspaceId=${encodeURIComponent(identity.workspaceId)}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(status.status, 404)
+  })
+
+  it('conservatively retains legacy pending blobs without upload timestamps', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin, app } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const pending = await uploadWorkspaceBlob(origin, identity, Buffer.from('legacy pending blob'))
+    const workspacePath = join(dataDir, 'workspace-v2', 'workspaces', `${identity.workspaceId}.json`)
+    const record = JSON.parse(await readFile(workspacePath, 'utf8'))
+    delete record.uploadedAt
+    await writeFile(workspacePath, JSON.stringify(record))
+    await app.close()
+    liveApps.delete(app)
+
+    const restarted = await start({ dataDir, llmMode: 'scripted' })
+    const result = await restarted.app.workspaces.collectGarbage(identity.workspaceId, { now: Number.MAX_SAFE_INTEGER })
+    assert.equal(result.expiredPending, 0)
+    assert.equal(result.removedFiles, 0)
+    assert.equal(await restarted.app.workspaces.blobStore.verify(pending.hash, pending.bytes), true)
   })
 
   it('fences write ownership and releases it on close', async () => {

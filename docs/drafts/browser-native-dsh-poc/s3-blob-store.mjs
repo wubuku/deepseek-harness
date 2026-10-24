@@ -1,8 +1,10 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -166,6 +168,36 @@ export class S3WorkspaceBlobStore {
         throw unavailable(error)
       }
     })
+  }
+
+  async listHashes() {
+    const hashes = []
+    let continuationToken
+    do {
+      try {
+        const page = await this.client.send(new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: 'sha256/',
+          ...(continuationToken === undefined ? {} : { ContinuationToken: continuationToken }),
+        }))
+        for (const object of page.Contents ?? []) {
+          const match = typeof object.Key === 'string' ? object.Key.match(/^sha256\/[a-f0-9]{2}\/([a-f0-9]{64})$/) : null
+          if (match !== null) hashes.push(match[1])
+        }
+        continuationToken = page.IsTruncated === true ? page.NextContinuationToken : undefined
+      } catch (error) {
+        throw unavailable(error)
+      }
+    } while (continuationToken !== undefined)
+    return hashes
+  }
+
+  async delete(hash) {
+    try {
+      await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.key(hash) }))
+    } catch (error) {
+      throw unavailable(error)
+    }
   }
 
   async #withHashLock(hash, operation) {
