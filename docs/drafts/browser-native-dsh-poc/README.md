@@ -508,7 +508,26 @@ DSH_POC_OPFS_FILE_BYTES=8388608 node docs/drafts/browser-native-dsh-poc/tests/op
 DSH_POC_REFERENCE_EDIT_BYTES=16777216 DSH_POC_REFERENCE_EDIT_CHUNK_BYTES=1048576 node docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs
 ```
 
-本批没有证明 Session compaction/分页、永久 append 故障后的用户界面、自然 eviction、OS/磁盘崩溃、多实例 backend、生产对象存储、Safari/WebKit 或真实 LLM 生成大型 tool args。`RemoteSessionHandle` 的 live retry 达到上限后保留 pending events 并报告错误；这不是离线 outbox，也不是跨存储事务。标准 `write`/`edit` 仍可能完整驻留文件，external/chunk 路径是 PoC-local 原型。
+本批没有证明 Session 分页、永久 append 故障后的用户界面、自然 eviction、OS/磁盘崩溃、多实例 backend、生产对象存储、Safari/WebKit 或真实 LLM 生成大型 tool args。`RemoteSessionHandle` 的 live retry 达到上限后保留 pending events 并报告错误；这不是离线 outbox，也不是跨存储事务。标准 `write`/`edit` 仍可能完整驻留文件，external/chunk 路径是 PoC-local 原型。
+
+## 长会话可持续性与上下文压缩验证
+
+[长会话可持续性验证计划](next-session-sustainability-validation-plan.md)及[进度记录](next-session-sustainability-validation-progress.md)补齐了 Browser profile 的 compaction 组合、模型 context window 传递、大工具结果裁剪、摘要失败、Session append 重试、真实模型压缩记忆和 64 轮冷 hydrate。Browser profile 现在显式挂载 Web standard preset 的 `compaction-basic`、`command-compact` 和 `tool-result-pruner`；backend 只在显式配置时向 Worker 传递非敏感 `contextWindow`，未配置时不猜测。
+
+当前 Chrome 证据包括：默认 Browser profile 的 scripted `/compact`；自动压力和 context-overflow recovery；摘要部分流失败后的 error end；一次 `compaction/end` append 503 后无重复 summary/replacement；真实 `gpt-5.6-sol` 在 `contextWindow=32768` 下生成 summary，刷新后回忆 sentinel。64 轮 scripted Session 刷新前有 522 个事件、落盘 142,006 bytes，hydrate 响应 284,184 bytes、耗时 1,885 ms，刷新没有重放 LLM 请求。这些数据说明 compaction 改变模型可见内容但不缩小权威 Session event log；它们不是生产 SLA、所有模型摘要质量或分页已经实现的证明。
+
+复跑命令：
+
+```sh
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/compaction-session-sustainability.e2e.mjs
+DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_CONTEXT_WINDOW=32768 \
+  node docs/drafts/browser-native-dsh-poc/tests/compaction-real.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_LONG_SESSION_TURNS=64 \
+  node docs/drafts/browser-native-dsh-poc/tests/long-session-hydrate.e2e.mjs
+```
+
+真实模型测试只验证当前 provider/model、Chrome 和当前摘要提示；不会把真实模型凭据写入浏览器或测试输出。自然 eviction、OS crash、Safari/WebKit、Session 本地 outbox 和跨设备恢复仍未验证。
 
 ## 历史协议实验：运行
 

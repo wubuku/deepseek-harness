@@ -35,6 +35,28 @@
         name: '@deepseek-ai/dsh-tool-todo'
         config:
           allowParallelInProgress: true
+      - id: compaction
+        name: cordis:group
+        group: true
+        isolate:
+          compaction: true
+          toolResultPruner: true
+        config:
+          - id: compaction-basic
+            name: '@deepseek-ai/dsh-compaction-basic'
+            config:
+              thresholdRatio: 0.8
+              headroomTokens: 512
+              retainTokens: 256
+              maxTokens: 512
+          - id: command-compact
+            name: '@deepseek-ai/dsh-command-compact'
+          - id: tool-result-pruner
+            name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+            config:
+              thresholdChars: 2048
+              headChars: 512
+              tailChars: 256
 
 - insert:
     - id: session-persistence-browser-native

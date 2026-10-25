@@ -92,6 +92,9 @@ export const BROWSER_NATIVE_PROFILE_PLUGINS: readonly BrowserNativePluginRequire
   { id: 'tool-working-directory', packageName: '@deepseek-ai/dsh-tool-working-directory', required: ['working-directory', 'worker-vfs'] },
   { id: 'tool-ask-user', packageName: '@deepseek-ai/dsh-tool-ask-user', required: ['human-interaction'] },
   { id: 'tool-todo', packageName: '@deepseek-ai/dsh-tool-todo', required: ['todo-persistence'] },
+  { id: 'compaction-basic', packageName: '@deepseek-ai/dsh-compaction-basic', required: ['remote-llm-proxy', 'remote-session-persistence'] },
+  { id: 'command-compact', packageName: '@deepseek-ai/dsh-command-compact', required: ['remote-llm-proxy', 'remote-session-persistence'] },
+  { id: 'tool-result-pruner', packageName: '@deepseek-ai/dsh-compaction-tool-result-pruner', required: ['remote-session-persistence'] },
   { id: 'session-persistence-browser-native', packageName: 'PoC static module', required: ['remote-session-persistence'] },
   { id: 'llm-browser-native', packageName: 'PoC static module', required: ['remote-llm-proxy'] },
 ]

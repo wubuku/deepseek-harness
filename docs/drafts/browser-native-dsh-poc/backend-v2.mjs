@@ -443,7 +443,10 @@ async function loadEnv(envFile) {
 
 async function createLlmConfig(options) {
   const mode = options.llmMode ?? 'scripted'
-  if (mode === 'scripted') return { mode, model: 'browser-native-scripted', provider: 'scripted' }
+  if (mode === 'scripted') {
+    const contextWindow = positiveInteger(options.contextWindow, 'contextWindow')
+    return { mode, model: 'browser-native-scripted', provider: 'scripted', ...(contextWindow === undefined ? {} : { contextWindow }) }
+  }
   if (mode !== 'real') throw new Error(`unsupported LLM mode: ${mode}`)
   const env = await loadEnv(options.envFile)
   const model = options.model ?? env.OPENAI_NEXT_GPT_MODEL
@@ -459,6 +462,7 @@ async function createLlmConfig(options) {
     ? DEFAULT_LLM_TIMEOUT_MS
     : Number(env.DSH_POC_LLM_TIMEOUT_MS))
   const timeout = timeoutMs(configuredTimeout, 'llmTimeoutMs')
+  const contextWindow = positiveInteger(options.contextWindow ?? env.DSH_POC_CONTEXT_WINDOW, 'DSH_POC_CONTEXT_WINDOW')
   return {
     mode,
     model,
@@ -467,7 +471,15 @@ async function createLlmConfig(options) {
     apiKey,
     proxyConfigured: proxy !== undefined,
     timeoutMs: timeout,
+    ...(contextWindow === undefined ? {} : { contextWindow }),
   }
+}
+
+function positiveInteger(value, name) {
+  if (value === undefined) return undefined
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive safe integer`)
+  return parsed
 }
 
 function textContent(messages) {
@@ -539,7 +551,11 @@ function scriptedText(response, text) {
   response.end()
 }
 
-async function scriptedLlm(response, messages, tools, fault, isClientClosed = () => false) {
+async function scriptedLlm(response, messages, tools, fault, isClientClosed = () => false, purpose) {
+  if (fault?.kind === 'error') {
+    writeStreamError(response, fault.code ?? 'SCRIPTED_LLM_ERROR', fault.message ?? 'scripted model request failed')
+    return
+  }
   if (fault?.kind === 'partial-text') {
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: fault.text ?? 'partial response' } })
@@ -558,6 +574,22 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStreamError(response, fault.code ?? 'UPSTREAM_LLM_TRUNCATED', fault.message ?? 'scripted stream truncated during tool arguments')
     return
   }
+  if (purpose === 'compaction') {
+    const visibleUserText = messages.filter(message => message.role === 'user'
+      && typeof message.content === 'string').map(message => message.content).join('\n')
+    const markers = [...new Set(visibleUserText.match(/BROWSER_NATIVE_[A-Z0-9_]{8,}/g) ?? [])]
+    scriptedText(response, [
+      '## Primary Request and Intent', `- Keep ${markers.join(', ') || 'the active task'}.`,
+      '## Key Technical Concepts', '- DSH.',
+      '## Files and Code', '- Worker VFS.',
+      '## Errors and Fixes', '- (none)',
+      '## Pending Jobs', '- (none)',
+      '## Current Work', '- Validate.',
+      '## Next Step', '- Continue.',
+      '## Critical Context', '- Session log is authoritative.',
+    ].join('\n'))
+    return
+  }
   if (fault?.kind === 'delayed-text') {
     const text = fault.text ?? 'delayed scripted response'
     const split = Math.max(1, Math.floor(text.length / 2))
@@ -569,6 +601,30 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
     response.end()
+    return
+  }
+  const latestUserText = [...messages].reverse().find(message => message.role === 'user'
+    && typeof message.content === 'string'
+    && !message.content.startsWith('Current runtime context.')
+    && !message.content.startsWith('Time sampled while preparing turn'))?.content ?? ''
+  const compactionMarker = [
+    'BROWSER_NATIVE_COMPACTION_PRESSURE_E2E',
+    'BROWSER_NATIVE_COMPACTION_SUMMARY_FAILURE_E2E',
+    'BROWSER_NATIVE_COMPACTION_END_APPEND_503_E2E',
+  ].find(marker => latestUserText.includes(marker))
+  if (compactionMarker !== undefined && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(compactionMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-${compactionMarker.toLowerCase().replaceAll('_', '-')}-read`,
+        name: 'read',
+        arguments: { file_path: '/dsh/home/browser-validation/large.txt' },
+      })
+      return
+    }
+    scriptedText(response, `${compactionMarker}_DONE`)
     return
   }
   const parallelToolMarker = [
@@ -906,7 +962,7 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
   }
 
   const shellSemanticsMarker = 'BROWSER_NATIVE_SHELL_SEMANTICS_E2E'
-  if (hasUserMarker(messages, shellSemanticsMarker) && hasTool(tools, 'bash')) {
+  if (latestUserText.includes(shellSemanticsMarker) && hasTool(tools, 'bash')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
       && typeof message.content === 'string' && message.content.includes(shellSemanticsMarker))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
@@ -945,7 +1001,7 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
-  if (hasUserMarker(messages, 'BROWSER_NATIVE_SCRIPTED_E2E_OK')) {
+  if (latestUserText.includes('BROWSER_NATIVE_SCRIPTED_E2E_OK')) {
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'BROWSER_NATIVE_SCRIPTED_E2E_OK' } } })
@@ -978,7 +1034,7 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
-  if (hasUserMarker(messages, 'BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E')) {
+  if (latestUserText.includes('BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
       && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E'))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
@@ -1465,6 +1521,15 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model, ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }) })
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/config') {
+        sendJson(response, 200, {
+          llmMode: llm.mode,
+          provider: llm.provider,
+          model: llm.model,
+          ...(llm.contextWindow === undefined ? {} : { contextWindow: llm.contextWindow }),
+        })
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/identity') {
         const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
         sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookie })
@@ -1600,6 +1665,9 @@ export async function createBrowserNativeV2Server(options) {
         const body = await readBody(request)
         assertProtocol(body)
         if (!Array.isArray(body.messages)) throw new BackendError('INVALID_REQUEST', 'messages must be an array')
+        if (body.purpose !== undefined && body.purpose !== 'compaction' && body.purpose !== 'session-title') {
+          throw new BackendError('INVALID_REQUEST', 'purpose must be compaction or session-title')
+        }
         if (body.sessionId !== undefined) {
           const session = store.get(body.sessionId)
           store.assertOwner(session, body.ownerToken)
@@ -1623,6 +1691,7 @@ export async function createBrowserNativeV2Server(options) {
               body.tools,
               options.testHooks?.scriptedLlmFault?.(body),
               () => clientClosed,
+              body.purpose,
             )
           } finally {
             response.off('close', onClose)

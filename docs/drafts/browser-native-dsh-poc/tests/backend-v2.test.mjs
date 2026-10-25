@@ -1132,6 +1132,43 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(fenced.code, 'SESSION_OWNERSHIP_LOST')
   })
 
+  it('returns only non-secret model capacity metadata and validates auxiliary LLM purpose', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted', contextWindow: 4096 })
+    const configResponse = await fetch(`${origin}/api/browser-native/config`)
+    const config = await configResponse.json()
+    assert.equal(configResponse.status, 200)
+    assert.deepEqual(config, {
+      protocolVersion: 1,
+      llmMode: 'scripted',
+      provider: 'scripted',
+      model: 'browser-native-scripted',
+      contextWindow: 4096,
+    })
+    assert.equal(JSON.stringify(config).includes('apiKey'), false)
+    assert.equal(JSON.stringify(config).includes('baseUrl'), false)
+
+    const validPurpose = await fetch(`${origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('llm-purpose-valid', {
+        provider: 'browser-native',
+        model: 'browser-native',
+        purpose: 'compaction',
+        messages: [{ role: 'user', content: 'PURPOSE_ALLOWLIST_CONTRACT_PROMPT' }],
+      })),
+    })
+    assert.equal((await readNdjson(validPurpose)).at(-1).chunk.type, 'finish')
+
+    const invalidPurpose = await failure(origin, '/api/browser-native/llm', envelope('llm-purpose-invalid', {
+      provider: 'browser-native',
+      model: 'browser-native',
+      purpose: 'arbitrary-routing-data',
+      messages: [{ role: 'user', content: 'PURPOSE_INVALID_CONTRACT_PROMPT' }],
+    }))
+    assert.equal(invalidPurpose.code, 'INVALID_REQUEST')
+  })
+
   it('injects partial scripted streams and observes client response cancellation', async () => {
     const dataDir = await temporaryDirectory()
     const closedBodies = []

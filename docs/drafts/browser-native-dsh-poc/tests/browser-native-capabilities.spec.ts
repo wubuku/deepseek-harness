@@ -14,6 +14,9 @@ describe('browser-native capability preflight', () => {
     expect(BROWSER_NATIVE_PROFILE_MANIFEST.tools.map(tool => tool.name)).toEqual([
       'bash', 'read', 'write', 'edit', 'grep', 'glob', 'todo_write', 'ask_user_question', 'working_directory',
     ])
+    expect(BROWSER_NATIVE_PROFILE_MANIFEST.plugins.map(plugin => plugin.id)).toContain('compaction-basic')
+    expect(BROWSER_NATIVE_PROFILE_MANIFEST.plugins.map(plugin => plugin.id)).toContain('command-compact')
+    expect(BROWSER_NATIVE_PROFILE_MANIFEST.plugins.map(plugin => plugin.id)).toContain('tool-result-pruner')
     expect(result.providedCapabilities).toContain('restricted-shell')
     expect(result.providedCapabilities).not.toContain('host-subprocess')
   })

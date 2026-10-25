@@ -9,12 +9,15 @@ const execFileAsync = promisify(execFile)
 const here = new URL('.', import.meta.url)
 
 /**
- * Serve the real preview with a reproducible VFS fixture and optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original'}} options - Built preview and selected roster.
+ * Serve the real preview with reproducible VFS files and an optional browser-only preset.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original', largeFileChars?: number}} options - Built preview and validation fixtures.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
-export async function createRuntimeValidationDist({ distRoot = 'apps/web/dist', roster = 'browser' } = {}) {
+export async function createRuntimeValidationDist({ distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0 } = {}) {
   if (!['browser', 'original'].includes(roster)) throw new Error('roster must be browser or original')
+  if (!Number.isSafeInteger(largeFileChars) || largeFileChars < 0 || largeFileChars > 1_000_000) {
+    throw new Error('largeFileChars must be an integer between 0 and 1000000')
+  }
   const sourceRoot = resolve(distRoot)
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-browser-runtime-image-'))
   try {
@@ -28,6 +31,15 @@ export async function createRuntimeValidationDist({ distRoot = 'apps/web/dist', 
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
     await writeFile(join(home, 'browser-validation', 'input.txt'), 'runtime=DedicatedWorker\nfixture=VFS_INPUT_READY\n')
+    if (largeFileChars > 0) {
+      const filler = Array.from(
+        { length: Math.ceil(largeFileChars / 96) },
+        (_, index) => `fixture-line-${String(index).padStart(5, '0')} ${'x'.repeat(78)}\n`,
+      ).join('').slice(0, largeFileChars)
+      const midpoint = Math.floor(filler.length / 2)
+      const largeFile = `${filler.slice(0, midpoint)}\nBROWSER_NATIVE_LARGE_TOOL_RESULT_MIDDLE_SENTINEL\n${filler.slice(midpoint)}`
+      await writeFile(join(home, 'browser-validation', 'large.txt'), largeFile)
+    }
     const archive = join(temporary, 'overlay.tar.gz')
     await execFileAsync('tar', ['-czf', archive, '-C', imageRoot, 'home'])
     const dataUrl = `data:application/gzip;base64,${(await readFile(archive)).toString('base64')}`

@@ -147,6 +147,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-028：Browser-Native Session compaction 与长会话可持续性
+
+```text
+changeId: BN-P2-028
+upstreamBaseline: clean research checkout at batch start; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/browser-native-capabilities.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts; docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/compaction-session-sustainability.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/compaction-real.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/long-session-hydrate.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-session-sustainability-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-session-sustainability-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Browser profile 覆盖 Web standard preset 时遗漏 compaction group；Browser LLM adapter 固定报告 128000 context window；此前长 Session 只有 24 轮事件计数，没有验证模型可见裁剪、summary 故障收束、真实模型压缩记忆或 64 轮 hydrate 成本。
+existingExtensionPointsChecked: 复用 DSH `compaction-basic`、`command-compact`、`tool-result-pruner`、token meter、Session remote writer、现有 Browser LLM proxy、Worker Host 和测试 overlay；未修改正式 compaction、Agent Loop、Session format 或根级依赖。
+whyDraftOnlyWasInsufficient: 仅检查 bundle 或 Node package composition 不能证明真实 Cordis Host 装载 compaction；单元测试不能证明 Dedicated Worker、同源 Session append、真实 Chrome refresh 和模型代理在压缩故障时序下共同工作；scripted 故障用于稳定收束，真实 provider 单独验证当前模型的 summary 和记忆。
+behaviorChange: Browser profile 显式挂载 compaction group；backend config 只在显式设置时返回正整数 `contextWindow`，不再猜测 128000；LLM auxiliary purpose 只接受 `compaction` 和 `session-title`。新增默认 `/compact`、压力/overflow、摘要失败、`compaction/end` append 503、真实 LLM sentinel 和 64 轮 hydrate 验收。
+directoryOutChangeReason: none; 所有代码、测试和文档仍在 docs/drafts。
+consumersUpdated: Browser profile/capability manifest、Browser LLM adapter、v2 backend、runtime validation overlay、默认 profile 回归、压缩故障 E2E、真实压缩 E2E、长 Session 诊断、PoC README、兼容矩阵、drafts 索引、验证计划/进度和本账本。
+tests: 默认 profile Chrome 回归通过；scripted compaction Chrome 三场景通过，压力场景 1 次 prune/2 个 summary，摘要失败无成功 summary 且有 error end，append 503 后无重复事件；真实 Chrome `gpt-5.6-sol` 在 `contextWindow=32768` 下生成 1 个 summary 和 1 个 end，刷新不重放请求并回忆唯一 sentinel；64 轮 Session 522 个事件，落盘 142006 bytes，hydrate 响应 284184 bytes，耗时 1885 ms，刷新后 LLM 请求数不变。未把这些结果外推为所有模型、生产 SLA、分页、自然 eviction、OS crash、Safari 或多实例 HA。
+syncReplaySteps: 上游同步后核对 compaction group 的标准 preset 组合、LLM model context metadata、`command-compact` 入口、Session compaction event relationship 和 remote writer flush；若正式 Browser profile 已提供等价能力，迁移测试并删除重复 PoC 接线。否则保留显式 contextWindow、真实 Chrome 压缩/恢复和 64 轮诊断，运行 backend、capability、preview、Chrome 与文档门禁。
+deleteCondition: 正式 Browser-Native profile 提供等价 compaction 组合、真实模型 context metadata、故障收束和长 Session recovery 测试，且本批 E2E 已迁移；或 Browser-Native PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-027：长期 Session、并行只读工具和远程 attempt 失败收束
 
 ```text

@@ -58,6 +58,7 @@ import { isBrowserNativeFileToolName } from './browser-native-capabilities.ts'
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
 const LLM_ROUTE = '/api/browser-native/llm'
+const CONFIG_ROUTE = '/api/browser-native/config'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
@@ -76,6 +77,13 @@ interface SessionResponse {
   readonly nextSeq?: number
   readonly owner?: BrowserNativeOwner
   readonly snapshots?: readonly SessionPersistenceSnapshot[]
+}
+
+interface BrowserNativeConfigResponse extends ErrorPayload {
+  readonly llmMode?: 'scripted' | 'real'
+  readonly provider?: string
+  readonly model?: string
+  readonly contextWindow?: number
 }
 
 interface LlmStreamResponse {
@@ -166,7 +174,7 @@ function responseError(value: ErrorPayload, fallback: string): { code: string; m
   }
 }
 
-async function readJson(response: Response): Promise<ErrorPayload & SessionResponse> {
+async function readJson<T extends Record<string, unknown> = SessionResponse>(response: Response): Promise<ErrorPayload & T> {
   const text = await response.text()
   let parsed: unknown
   try {
@@ -175,7 +183,7 @@ async function readJson(response: Response): Promise<ErrorPayload & SessionRespo
     throw new Error(`browser-native backend returned invalid JSON: ${String(error)}`)
   }
   if (!isRecord(parsed)) throw new Error('browser-native backend returned a non-object response')
-  return parsed as ErrorPayload & SessionResponse
+  return parsed as ErrorPayload & T
 }
 
 async function sessionRequest(
@@ -820,6 +828,8 @@ function toWireTools(tools: readonly ToolSchema[] | undefined): readonly unknown
 function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
   const Base = runtimeLlm().LlmAdapter
   return class RemoteLlmAdapter extends Base {
+    private configPromise: Promise<BrowserNativeConfigResponse> | undefined
+
     override providerInfo(provider: string): { id: string; name: string } {
       return { id: provider, name: 'Browser-native remote' }
     }
@@ -828,8 +838,27 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
       return Promise.resolve([{ provider, id: 'browser-native', name: 'Browser-native remote' }])
     }
 
-    override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-      return Promise.resolve({ provider, id: model, name: model, context: { contextWindow: 128_000 } })
+    override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+      this.configPromise ??= (async () => {
+        const response = await fetch(CONFIG_ROUTE, { cache: 'no-store' })
+        const payload = await readJson<BrowserNativeConfigResponse>(response)
+        if (!response.ok) {
+          const error = responseError(payload, 'browser-native configuration request failed')
+          throw new Error(error.message)
+        }
+        if (payload.contextWindow !== undefined
+          && (!Number.isSafeInteger(payload.contextWindow) || payload.contextWindow <= 0)) {
+          throw new Error('browser-native config returned an invalid contextWindow')
+        }
+        return payload
+      })()
+      const config = await this.configPromise
+      return {
+        provider,
+        id: model,
+        name: model,
+        ...(config.contextWindow === undefined ? {} : { context: { contextWindow: config.contextWindow } }),
+      }
     }
 
     override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -843,6 +872,7 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
         ownerToken: options.sessionId === undefined ? undefined : activeSessionOwners.get(options.sessionId),
         provider: options.provider,
         model: options.model,
+        ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
         messages: options.messages.map(toWireMessage),
         tools: toWireTools(options.tools),
         temperature: options.temperature,

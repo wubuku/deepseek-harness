@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -45,7 +45,18 @@ try {
     if (!url.pathname.startsWith('/api/browser-native/')) return
     let body = {}
     try { body = request.postDataJSON() ?? {} } catch {}
-    requests.push({ path: url.pathname, body, at: Date.now() })
+    requests.push({
+      request,
+      path: url.pathname,
+      body,
+      requestBytes: Buffer.byteLength(request.postData() ?? ''),
+      at: Date.now(),
+    })
+  })
+  page.on('response', response => {
+    const record = requests.find(candidate => candidate.request === response.request())
+    if (record === undefined) return
+    void response.body().then(body => { record.responseBytes = body.byteLength }).catch(() => {})
   })
 
   await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none`)
@@ -72,12 +83,17 @@ try {
   assert.equal(beforeReload.events.filter(event => event.type === 'turn/end').length, turnCount)
   assert.ok(beforeReload.events.length > turnCount * 3, `expected a non-trivial event log, got ${beforeReload.events.length}`)
   assert.match(assistantText(beforeReload, turnCount), /BROWSER_NATIVE_SCRIPTED_E2E_OK/)
+  const sessionPath = join(dataDir, 'sessions', `${sessionId}.json`)
+  const durableBytesBeforeReload = (await stat(sessionPath)).size
   const llmCountBeforeReload = requests.filter(request => request.path.endsWith('/llm')).length
   const reloadStartedAt = Date.now()
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForPreview(page)
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
   const hydrateMs = Date.now() - reloadStartedAt
+  await waitFor(async () => requests.filter(request => request.at >= reloadStartedAt
+    && request.path.endsWith('/session/read')).every(request => request.responseBytes !== undefined),
+  'long Session hydrate response bytes', 30_000)
   await page.getByText('BROWSER_NATIVE_SCRIPTED_E2E_OK', { exact: false }).last().waitFor({ timeout: 30_000 })
   let afterReload
   try {
@@ -93,6 +109,7 @@ try {
   assert.deepEqual(afterReload.events.slice(beforeReload.events.length).map(event => event.type), ['session/end-seed'])
   const llmCountAfterReload = requests.filter(request => request.path.endsWith('/llm')).length
   assert.equal(llmCountAfterReload, llmCountBeforeReload, 'refresh hydration must not replay a model request')
+  const durableBytesAfterReload = (await stat(sessionPath)).size
 
   const followup = await sendTurn({
     page,
@@ -107,6 +124,9 @@ try {
   assert.equal(followup.session.events.filter(event => event.type === 'user/message'
     && (eventText(event).includes('long-session-turn-') || eventText(event).includes('long-session-followup'))).length, turnCount + 1)
   assert.deepEqual(pageErrors, [])
+  const durableBytesAfterFollowup = (await stat(sessionPath)).size
+  const hydrateReads = requests.filter(request => request.at >= reloadStartedAt
+    && request.path.endsWith('/session/read'))
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: 'chrome',
@@ -115,6 +135,12 @@ try {
     turnCount,
     eventCountBeforeReload: beforeReload.events.length,
     eventCountAfterFollowup: followup.session.events.length,
+    durableBytesBeforeReload,
+    durableBytesAfterReload,
+    durableBytesAfterFollowup,
+    hydrateReadRequestBytes: hydrateReads.reduce((sum, request) => sum + request.requestBytes, 0),
+    hydrateReadResponseBytes: hydrateReads.reduce((sum, request) => sum + (request.responseBytes ?? 0), 0),
+    hydrateReadCount: hydrateReads.length,
     hydrateMs,
     llmCountBeforeReload,
     llmCountAfterReload,

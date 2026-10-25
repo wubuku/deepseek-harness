@@ -325,6 +325,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [reference-backed-edit-validation-plan.md](browser-native-dsh-poc/reference-backed-edit-validation-plan.md) / [进度](browser-native-dsh-poc/reference-backed-edit-validation-progress.md) | External reference mutation、range-based durable cache/upload、manifest CAS、compact edit receipt、刷新恢复和失败重试；明确 test action、experimental 类型和正式 `edit`/Session 能力仍未接入。 |
 | [durable-metadata-and-blob-lifecycle-validation-plan.md](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-progress.md) | Workspace metadata 冷加载 fail-closed、全 Workspace manifest/pending 引用扫描、文件与 MinIO orphan GC、过期/损坏 staging 处置和 unknown-commit 回归；不证明跨主机 GC 或生产对象存储。 |
 | [next-deep-runtime-validation-plan.md](browser-native-dsh-poc/next-deep-runtime-validation-plan.md) / [进度](browser-native-dsh-poc/next-deep-runtime-validation-progress.md) | 长 Session 冷 hydrate、同 turn 并行只读工具、`assistant/attempt` append 503 后重试与错误收束，以及标准大文件写入和 external/chunk backing 的真实 Chrome 证据；不证明 compaction、离线 outbox 或生产 HA。 |
+| [next-session-sustainability-validation-plan.md](browser-native-dsh-poc/next-session-sustainability-validation-plan.md) / [进度](browser-native-dsh-poc/next-session-sustainability-validation-progress.md) | Browser profile compaction 组合、显式模型 context window、大工具结果裁剪、摘要/append 故障恢复、真实 LLM sentinel 回忆和 64 轮冷 hydrate；不证明分页、生产 SLA、自然 eviction 或 Safari。 |
 
 ### v2 实现和测试入口
 

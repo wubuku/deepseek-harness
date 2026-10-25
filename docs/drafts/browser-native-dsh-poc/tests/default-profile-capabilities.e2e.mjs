@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { assistantText, openPreview, sendTurn } from './runtime-test-support.mjs'
+import { assistantText, openPreview, sendTurn, sessionRequest, waitFor } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightPath = process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright')
@@ -121,6 +121,29 @@ try {
   assert.match(shellResults[2].data.message.content.map(block => block.text ?? '').join(''), /BROWSER_NATIVE_REDIRECT_OK/)
   assert.match(shellResults[3].data.message.content.map(block => block.text ?? '').join(''), /exit code|not found|command/i)
 
+  const compactionTurn = await sendTurn({
+    page,
+    origin,
+    requests,
+    sessionId: shellSemantics.sessionId,
+    prompt: `BROWSER_NATIVE_PROFILE_COMPACT_E2E ${'Retain this Browser-native Session fact. '.repeat(700)}`,
+    marker: 'BROWSER_NATIVE_PROFILE_COMPACT_E2E',
+    timeout: 60_000,
+  })
+  const beforeManualCompact = await sessionRequest(origin, 'read', { sessionId: compactionTurn.sessionId, offset: 0 })
+  await page.locator('[data-composer-input][contenteditable="true"]').last().fill('/compact')
+  await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click()
+  const afterManualCompact = await waitFor(async () => {
+    const current = await sessionRequest(origin, 'read', { sessionId: compactionTurn.sessionId, offset: 0 })
+    return current.events.some((event, index) => index >= beforeManualCompact.events.length
+      && event.type === 'compaction/end') ? current : undefined
+  }, 'default Browser profile /compact completion', 60_000)
+  assert.ok(afterManualCompact.events.some((event, index) => index >= beforeManualCompact.events.length
+    && event.type === 'compaction/summary'), 'the default Browser profile must persist a DSH compaction summary')
+  assert.equal(requestRecords.some(request => request.purpose === 'compaction'), true,
+    'the Browser LLM adapter must identify the auxiliary summary request')
+  assert.deepEqual(afterManualCompact.events.slice(0, beforeManualCompact.events.length), beforeManualCompact.events)
+
   assert.deepEqual(pageErrors, [])
   assert.deepEqual(externalRequests, [])
 
@@ -128,6 +151,7 @@ try {
     result: 'passed',
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
     toolNames,
+    defaultProfileCompaction: true,
     executedTool: call.data.name,
     toolResultError: toolResult.data.message.isError,
     sessionId: result.sessionId,
