@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-031：Session handoff 从 DSH event log 派生安全点
+
+```text
+changeId: BN-P2-031
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-read.ts; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-session-read.spec.ts; docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-worker-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-session-handoff-safe-point-plan.md; docs/drafts/browser-native-dsh-poc/next-session-handoff-safe-point-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: handoff backend 只检查 checkpoint cursor 和客户端 pending ID；调用方可在 Session 已记录活动 turn、step 或 tool call 时伪报空列表并提升 owner epoch。
+existingExtensionPointsChecked: 复用 FormalSessionStore 的 per-Session exclusive queue、Session event log、owner epoch/token、handoff receipt、真实 Chrome Dedicated Worker 和已有 handoff test port；未修改正式 Agent Loop、Session format、默认 profile、Workspace lease 或根依赖。
+whyDraftOnlyWasInsufficient: DSH `turn/start`、`step/start`、assistant tool-call、`tool/call` 和 `tool/result` 的配对顺序必须由真实 Session 事实判定；Node 单测不能证明真实 Worker 活动期间 handoff 被拒且原 turn 不重复。Chrome 测试还确认 Agent Loop 的 `turn/start` 先于对应 `user/message`，测试不能假设相反顺序。
+behaviorChange: 新 handoff 在同一 per-Session queue 内扫描已追加 event log，打开的 turn/step 或未结算 tool call 返回 `HANDOFF_BUSY`；turn/step 边界、assistant tool request 与 tool/result 配对损坏返回 `HANDOFF_STATE_INVALID`。tool-call ID 按 `(turn, step, callId)` 配对，允许不同 turn/step 重用 ID；已结算历史 tool result 的 compaction replacement 必须引用其当前结果 seq 和完整 replacement range。拒绝发生在 owner epoch/token、receipt 和 flush 变更之前。重复 receipt replay 不重复运行安全点迁移。合同测试覆盖伪空 pending、已结算 error tool result、malformed events、重复 call ID、历史 compaction replacement 和 append/handoff 两种串行锁顺序。远端 Session reader 将剩余日志拆成最多 2048 条一页并校验跨页 seq/ownership state；单测覆盖多页和短页，Chrome Worker handoff E2E 验证恢复同一 Session 后可继续执行。真实 Chrome E2E 在 delayed scripted LLM 的活动 turn 请求 handoff，确认拒绝后原 turn 完成一次、模型请求只发出一次，再执行既有 response-drop/reclaim 流程。
+directoryOutChangeReason: 无；所有实现、测试和文档都在 docs/drafts。
+consumersUpdated: PoC Session backend 与远端 Session reader、backend contract tests、Session page aggregation tests、真实 Chrome Session/Workspace handoff E2E、handoff 验证计划/进度、兼容矩阵、PoC README、docs/drafts 导读和本账本。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 42/42；handoff coordinator 与 Session pagination Vitest 7/7；真实 Chrome `session-owner-handoff.e2e.mjs` 通过，活动 turn handoff 返回 `HANDOFF_BUSY`、模型请求计数 1、turn 正常完成，之后 response-loss/reclaim 提升 owner epoch 1→3 且旧 append 返回 409；`workspace-worker-handoff.e2e.mjs` 在重建 preview 后通过，第二 Worker 恢复同一 Session、Workspace revision 到 2，旧 lease renew/commit 均返回 409。preview 构建通过，含已记录的 unsupported-platform 与 chunk-size 警告；typecheck 和文档 gates 的命令/结果记录在本批进度文件。未验证尚未上传的 Worker event/outbox、真实 LLM handoff、多实例 backend、生产授权、Workspace/Session 原子转移、Safari、自然 eviction 或 OS crash。
+syncReplaySteps: 上游同步后核对正式 Session writer 是否仍通过相同 queue 串行 append 与 ownership handoff，以及 event log 是否保留 turn/step/tool-result 身份。若 DSH event schema 或 ToolCallRecovery 配对规则变化，迁移 scanner 和 malformed/terminal fixtures；保留旧 cursor race、caller 伪报和 Chrome active-turn 用例。运行 backend tests、handoff Vitest、session-owner-handoff 与 Workspace worker-handoff Chrome E2E、preview build、typecheck 和 docs gates。不要将此单 backend 检查写成对未上传客户端 mutation、跨实例 fencing 或 Cloud Worker 的证明。
+deleteCondition: 正式 Session handoff API 在服务端以权威 event log/持久化执行状态拒绝未结算 turn/step/tool，具备跨实例 fencing，且等价故障矩阵已迁移到正式接口；或 Browser-Native Session handoff PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-022：Browser-Native capability manifest、boot 预检与受限 Shell 语义
 
 ```text

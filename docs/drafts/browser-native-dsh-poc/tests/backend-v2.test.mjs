@@ -58,6 +58,138 @@ function header(id) {
   return { id, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
 }
 
+function sessionEvent(seq, type, data, extra = {}) {
+  return { seq, type, data, ...extra }
+}
+
+function handoffCheckpoint(sessionId, owner, nextSessionSeq) {
+  return {
+    sessionId,
+    ownerId: 'browser-worker-1',
+    epoch: owner.ownerEpoch,
+    nextSessionSeq,
+    workspaceRevision: 0,
+    pendingOperationIds: [],
+    pendingExecutionIds: [],
+  }
+}
+
+function assistantMessage(turn, step, content) {
+  return {
+    turn,
+    step,
+    message: {
+      id: `assistant-${turn}-${step}`,
+      role: 'assistant',
+      source: { kind: 'model', provider: 'test', model: 'test' },
+      content,
+    },
+  }
+}
+
+function pendingToolEvents({ started = false } = {}) {
+  const events = [
+    sessionEvent(0, 'turn/start', { turn: 1 }),
+    sessionEvent(1, 'step/start', { turn: 1, step: 1 }),
+    sessionEvent(2, 'assistant/message', assistantMessage(1, 1, [
+      { type: 'tool-call', id: 'call-1', name: 'read', arguments: '{}' },
+    ]), { surfaceOp: 'append' }),
+  ]
+  if (started) events.push(sessionEvent(3, 'tool/call', {
+    turn: 1, step: 1, callId: 'call-1', name: 'read', arguments: '{}',
+  }))
+  return events
+}
+
+function settledToolEvents() {
+  return [
+    ...pendingToolEvents({ started: true }),
+    sessionEvent(4, 'tool/result', {
+      turn: 1,
+      step: 1,
+      message: {
+        id: 'result-call-1',
+        role: 'tool',
+        toolCallId: 'call-1',
+        isError: true,
+        source: { kind: 'tool', callId: 'call-1' },
+        content: [{ type: 'text', text: 'The read failed.' }],
+      },
+      error: { name: 'Error', code: 'READ_FAILED' },
+    }, { surfaceOp: 'append', sourceEventSeqs: [3] }),
+    sessionEvent(5, 'step/end', { turn: 1, step: 1 }),
+    sessionEvent(6, 'turn/end', { turn: 1, reason: { kind: 'error', error: { message: 'read failed', code: 'READ_FAILED' } } }),
+  ]
+}
+
+async function createHandoffSession(origin, sessionId, events = []) {
+  const created = await post(origin, '/api/browser-native/session/create', envelope(`${sessionId}-create`, {
+    sessionId,
+    header: header(sessionId),
+    inheritedEventCount: 0,
+  }))
+  if (events.length > 0) {
+    await post(origin, '/api/browser-native/session/append', envelope(`${sessionId}-events`, {
+      sessionId,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      expectedNextSeq: 0,
+      events,
+    }))
+    await post(origin, '/api/browser-native/session/flush', envelope(`${sessionId}-flush`, {
+      sessionId,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+    }))
+  }
+  return created
+}
+
+async function requestHandoff(origin, sessionId, owner, eventCount, handoffId = `${sessionId}-handoff`) {
+  return await post(origin, '/api/browser-native/session/handoff', envelope(`${handoffId}-request`, {
+    sessionId,
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+    handoffId,
+    checkpoint: handoffCheckpoint(sessionId, owner, eventCount),
+  }))
+}
+
+async function assertRejectedHandoffPreservesOwner({ origin, dataDir, sessionId, owner, eventCount, code }) {
+  const before = await readFile(join(dataDir, 'sessions', `${sessionId}.json`), 'utf8')
+  const rejected = await failure(origin, '/api/browser-native/session/handoff', envelope(`${sessionId}-reject`, {
+    sessionId,
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+    handoffId: `${sessionId}-rejected-handoff`,
+    checkpoint: handoffCheckpoint(sessionId, owner, eventCount),
+  }))
+  assert.equal(rejected.code, code)
+  const current = await post(origin, '/api/browser-native/session/read', envelope(`${sessionId}-read-after-reject`, {
+    sessionId,
+    offset: 0,
+  }))
+  assert.equal(current.ownerEpoch, owner.ownerEpoch)
+  assert.equal(current.nextSeq, eventCount)
+  const renewed = await post(origin, '/api/browser-native/session/open', envelope(`${sessionId}-owner-after-reject`, {
+    sessionId,
+    access: 'write',
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+  }))
+  assert.equal(renewed.owner.ownerEpoch, owner.ownerEpoch)
+  assert.equal(renewed.owner.ownerToken, owner.ownerToken)
+  assert.equal(await readFile(join(dataDir, 'sessions', `${sessionId}.json`), 'utf8'), before)
+  const retried = await failure(origin, '/api/browser-native/session/handoff', envelope(`${sessionId}-reject-retry`, {
+    sessionId,
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+    handoffId: `${sessionId}-rejected-handoff`,
+    checkpoint: handoffCheckpoint(sessionId, owner, eventCount),
+  }))
+  assert.equal(retried.code, code)
+}
+
 async function readNdjson(response) {
   const body = await response.text()
   assert.equal(response.ok, true, body)
@@ -424,6 +556,261 @@ describe('browser-native DSH v2 backend', () => {
       checkpoint: { ...checkpoint, pendingOperationIds: [] },
     }))
     assert.equal(validHandoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+  })
+
+  it('derives handoff busy state from open DSH turn and step events, ignoring empty caller pending lists', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const cases = [
+      { id: 'handoff-open-turn', events: [sessionEvent(0, 'turn/start', { turn: 1 })] },
+      { id: 'handoff-open-step', events: [
+        sessionEvent(0, 'turn/start', { turn: 1 }),
+        sessionEvent(1, 'step/start', { turn: 1, step: 1 }),
+      ] },
+      { id: 'handoff-assistant-tool-pending', events: pendingToolEvents() },
+      { id: 'handoff-tool-result-pending', events: pendingToolEvents({ started: true }) },
+    ]
+
+    for (const item of cases) {
+      const created = await createHandoffSession(origin, item.id, item.events)
+      await assertRejectedHandoffPreservesOwner({
+        origin,
+        dataDir,
+        sessionId: item.id,
+        owner: created.owner,
+        eventCount: item.events.length,
+        code: 'HANDOFF_BUSY',
+      })
+    }
+  })
+
+  it('rejects malformed DSH turn, step, and tool-result sequences without publishing a receipt', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const cases = [
+      {
+        id: 'handoff-malformed-step',
+        events: [
+          sessionEvent(0, 'turn/start', { turn: 1 }),
+          sessionEvent(1, 'step/start', { turn: 2, step: 1 }),
+        ],
+      },
+      {
+        id: 'handoff-orphan-tool-result',
+        events: [
+          sessionEvent(0, 'turn/start', { turn: 1 }),
+          sessionEvent(1, 'step/start', { turn: 1, step: 1 }),
+          sessionEvent(2, 'tool/result', {
+            turn: 1,
+            step: 1,
+            message: {
+              id: 'orphan-result',
+              role: 'tool',
+              toolCallId: 'missing-call',
+              isError: true,
+              source: { kind: 'tool', callId: 'missing-call' },
+              content: [{ type: 'text', text: 'orphan' }],
+            },
+          }, { surfaceOp: 'append' }),
+        ],
+      },
+      {
+        id: 'handoff-orphan-tool-result-replacement',
+        events: [sessionEvent(0, 'tool/result', {
+          turn: 1,
+          step: 1,
+          message: {
+            id: 'replacement-without-result',
+            role: 'tool',
+            toolCallId: 'missing-call',
+            isError: true,
+            source: { kind: 'tool', callId: 'missing-call' },
+            content: [{ type: 'text', text: 'orphan replacement' }],
+          },
+        }, { surfaceOp: { op: 'replace', startSeq: 0, endSeq: 0 }, sourceEventSeqs: [0] })],
+      },
+    ]
+
+    for (const item of cases) {
+      const created = await createHandoffSession(origin, item.id, item.events)
+      await assertRejectedHandoffPreservesOwner({
+        origin,
+        dataDir,
+        sessionId: item.id,
+        owner: created.owner,
+        eventCount: item.events.length,
+        code: 'HANDOFF_STATE_INVALID',
+      })
+    }
+  })
+
+  it('allows handoff after a tool error result and terminal turn are recorded', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-settled-error-tool'
+    const events = settledToolEvents()
+    const created = await createHandoffSession(origin, id, events)
+    const handoff = await requestHandoff(origin, id, created.owner, events.length)
+    assert.equal(handoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+    assert.equal(handoff.checkpoint.nextSessionSeq, events.length)
+  })
+
+  it('allows compaction replacement of an already settled historical tool result', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-compacted-tool-result'
+    const events = [
+      ...settledToolEvents(),
+      sessionEvent(7, 'turn/start', { turn: 2 }),
+      sessionEvent(8, 'step/start', { turn: 2, step: 1 }),
+      sessionEvent(9, 'tool/result', {
+        ...structuredClone(settledToolEvents()[4].data),
+        message: {
+          ...structuredClone(settledToolEvents()[4].data.message),
+          content: [{ type: 'text', text: 'Earlier result compacted.' }],
+        },
+      }, { surfaceOp: { op: 'replace', startSeq: 4, endSeq: 4 }, sourceEventSeqs: [4] }),
+      sessionEvent(10, 'step/end', { turn: 2, step: 1 }),
+      sessionEvent(11, 'turn/end', { turn: 2, reason: { kind: 'completed' } }),
+    ]
+    const created = await createHandoffSession(origin, id, events)
+    const handoff = await requestHandoff(origin, id, created.owner, events.length)
+    assert.equal(handoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+  })
+
+  it('scopes repeated tool call ids by turn and matches late compaction replacements to their source result', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-reused-tool-call-id'
+    const firstTurn = settledToolEvents()
+    const secondTurn = [
+      sessionEvent(7, 'turn/start', { turn: 2 }),
+      sessionEvent(8, 'step/start', { turn: 2, step: 1 }),
+      sessionEvent(9, 'assistant/message', assistantMessage(2, 1, [
+        { type: 'tool-call', id: 'call-1', name: 'read', arguments: '{}' },
+      ]), { surfaceOp: 'append' }),
+      sessionEvent(10, 'tool/call', { turn: 2, step: 1, callId: 'call-1', name: 'read', arguments: '{}' }),
+      sessionEvent(11, 'tool/result', {
+        turn: 2,
+        step: 1,
+        message: {
+          id: 'result-call-1-turn-2',
+          role: 'tool',
+          toolCallId: 'call-1',
+          isError: true,
+          source: { kind: 'tool', callId: 'call-1' },
+          content: [{ type: 'text', text: 'The second read failed.' }],
+        },
+        error: { name: 'Error', code: 'READ_FAILED' },
+      }, { surfaceOp: 'append', sourceEventSeqs: [10] }),
+      sessionEvent(12, 'step/end', { turn: 2, step: 1 }),
+      sessionEvent(13, 'turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'read failed', code: 'READ_FAILED' } } }),
+    ]
+    const originalFirstResult = structuredClone(firstTurn[4].data)
+    const events = [
+      ...firstTurn,
+      ...secondTurn,
+      sessionEvent(14, 'tool/result', {
+        ...originalFirstResult,
+        message: { ...originalFirstResult.message, content: [{ type: 'text', text: 'First result compacted later.' }] },
+      }, { surfaceOp: { op: 'replace', startSeq: 4, endSeq: 4 }, sourceEventSeqs: [4] }),
+    ]
+    const created = await createHandoffSession(origin, id, events)
+    const handoff = await requestHandoff(origin, id, created.owner, events.length)
+    assert.equal(handoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+  })
+
+  it('ignores unrelated extension events when deriving DSH quiescence', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-extension-event'
+    const events = [sessionEvent(0, 'extension/observed', { detail: 'not a turn boundary' })]
+    const created = await createHandoffSession(origin, id, events)
+    const handoff = await requestHandoff(origin, id, created.owner, events.length)
+    assert.equal(handoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+  })
+
+  it('serializes handoff against terminal Session append and requires a fresh cursor after either race', async () => {
+    let heldRequestId
+    let releaseHeldRequest
+    let signalHeldRequest
+    let queuedRequestId
+    let signalQueuedRequest
+    let heldRequestReached = new Promise(resolve => { signalHeldRequest = resolve })
+    let queuedRequestReached = new Promise(resolve => { signalQueuedRequest = resolve })
+    let heldRequestGate = new Promise(resolve => { releaseHeldRequest = resolve })
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: {
+        onSessionOperationQueued: (_operation, body) => {
+          if (body.requestId === queuedRequestId) signalQueuedRequest()
+        },
+        beforeSessionOperation: async (_operation, body) => {
+          if (body.requestId !== heldRequestId) return
+          signalHeldRequest()
+          await heldRequestGate
+        },
+      },
+    })
+
+    async function race({ id, heldOperation, expectedHandoffCode }) {
+      const initialEvents = [
+        sessionEvent(0, 'turn/start', { turn: 1 }),
+        sessionEvent(1, 'step/start', { turn: 1, step: 1 }),
+      ]
+      const created = await createHandoffSession(origin, id, initialEvents)
+      const terminalEvents = [
+        sessionEvent(2, 'step/end', { turn: 1, step: 1 }),
+        sessionEvent(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      ]
+      const appendRequestId = `${id}-terminal-append`
+      const handoffRequestId = `${id}-racing-handoff`
+      heldRequestId = heldOperation === 'append' ? appendRequestId : handoffRequestId
+      queuedRequestId = heldOperation === 'append' ? handoffRequestId : appendRequestId
+      heldRequestReached = new Promise(resolve => { signalHeldRequest = resolve })
+      queuedRequestReached = new Promise(resolve => { signalQueuedRequest = resolve })
+      heldRequestGate = new Promise(resolve => { releaseHeldRequest = resolve })
+
+      const appendRequest = () => post(origin, '/api/browser-native/session/append', envelope(appendRequestId, {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        ownerEpoch: created.owner.ownerEpoch,
+        expectedNextSeq: initialEvents.length,
+        events: terminalEvents,
+      }))
+      const handoffRequest = () => post(origin, '/api/browser-native/session/handoff', envelope(handoffRequestId, {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        ownerEpoch: created.owner.ownerEpoch,
+        handoffId: `${id}-handoff`,
+        checkpoint: handoffCheckpoint(id, created.owner, initialEvents.length),
+      }))
+      const heldRequest = heldOperation === 'append' ? appendRequest() : handoffRequest()
+      await heldRequestReached
+      const queuedRequest = heldOperation === 'append' ? handoffRequest() : appendRequest()
+      await queuedRequestReached
+      releaseHeldRequest()
+      const [heldResult, queuedResult] = await Promise.allSettled([heldRequest, queuedRequest])
+      const appendResult = heldOperation === 'append' ? heldResult : queuedResult
+      const handoffResult = heldOperation === 'handoff' ? heldResult : queuedResult
+      assert.equal(appendResult.status, 'fulfilled')
+      assert.equal(handoffResult.status, 'rejected')
+      assert.equal(handoffResult.reason.code, expectedHandoffCode)
+      const afterRace = await post(origin, '/api/browser-native/session/read', envelope(`${id}-read-race`, {
+        sessionId: id,
+        offset: 0,
+      }))
+      assert.equal(afterRace.nextSeq, initialEvents.length + terminalEvents.length)
+      assert.equal(afterRace.ownerEpoch, created.owner.ownerEpoch)
+
+      const retried = await requestHandoff(origin, id, created.owner, afterRace.nextSeq, `${id}-handoff`)
+      assert.equal(retried.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+    }
+
+    await race({ id: 'handoff-append-first', heldOperation: 'append', expectedHandoffCode: 'CHECKPOINT_INVALID' })
+    await race({ id: 'handoff-first', heldOperation: 'handoff', expectedHandoffCode: 'HANDOFF_BUSY' })
   })
 
   it('keeps the old owner when handoff durability fails before publish', async () => {

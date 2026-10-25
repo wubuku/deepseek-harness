@@ -535,6 +535,10 @@ DSH_POC_BROWSER=chrome DSH_POC_LONG_SESSION_TURNS=64 \
 
 当前实现包含四个 PoC-local 适配器：Session cursor 的连续 seq/去重/identity 检查、execution lifecycle 的 `confirmed`/`unknown`/`failed` settlement、capability publication 的 `live + probe + permission` roster，以及 Session backend 的 owner epoch handoff。handoff 是 Session 写权协议，不会启动 Cloud Host 或转移 Workspace lease、插件状态、模型流和 HITL Promise。最新的[handoff 安全与恢复验证](next-handoff-security-and-recovery-plan.md)修复了旧 owner 重放取回新 token、receipt 落盘 bearer 和 rename 后失败错误回滚的问题；handoff 现在要求 pending operation/execution 为空，旧 token replay 只返回不含 owner credential 的 receipt，rename 后 durability unknown 会封锁该 Session 直到 backend 重载。
 
+[handoff 安全点验证](next-session-handoff-safe-point-plan.md)进一步让 backend 在 per-Session queue 内折叠已追加的 DSH event log，拒绝仍有打开 turn/step 或未结算 tool call 的 handoff；损坏的边界和 tool/result 配对以 `HANDOFF_STATE_INVALID` 拒绝。空 checkpoint pending 列表不能覆盖服务端已记录的活动工作。扫描按 `(turn, step, callId)` 配对，允许 DSH 在不同 turn/step 重用 tool-call ID，并保留 compaction 对已结算历史 tool result 的合法 `surfaceOp: replace`。合同测试覆盖终态错误工具、伪空列表、损坏序列、历史 replacement 及 terminal append/handoff 两种锁顺序；Chrome Dedicated Worker E2E 在活动 scripted LLM turn 中观察到 `HANDOFF_BUSY`，并确认原 turn 只发出一次模型请求后完成。
+
+Worker 远端 Session reader 将 DSH `SessionHandle.read()` 的读取剩余日志语义转换为 backend 每页最多 2048 条的连续读取，并校验分页间的事件 seq 与 ownership state。分页单测覆盖多页、backend 短页、空尾部及不连续响应；重建 preview 后的 Chrome Workspace handoff E2E 验证第二个 Worker 能恢复同一 Session 并继续执行。此处仍是 PoC 同源 backend 的分页读，不表示大 Session 已完成流式 hydrate 或内存占用优化。
+
 上一批 Session 适配、能力发布和初次 handoff 证据仍可按[原进度记录](next-session-adapter-and-handoff-validation-progress.md)查看；它证明旧协议曾通过测试，不代表凭据恢复安全。复跑 handoff 安全与恢复验证：
 
 ```sh
@@ -548,7 +552,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/default-pro
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs
 ```
 
-这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 使用真实 Chrome Dedicated Worker 调用同源 Session backend，验证提交后响应丢失、旧 token 重试不获凭据、租约过期后新 owner 重新 claim，以及旧 token 写入被拒绝；新 owner 仍是协议测试角色，没有启动真实 Cloud Agent。Safari/WebKit、自然 eviction、OS/磁盘 crash、生产授权和真实 LLM handoff 未执行。
+这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 使用真实 Chrome Dedicated Worker 调用同源 Session backend，验证活动 turn 中 handoff 被拒、原 turn 只执行一次、提交后响应丢失、旧 token 重试不获凭据、租约过期后新 owner 重新 claim，以及旧 token 写入被拒绝；新 owner 仍是协议测试角色，没有启动真实 Cloud Agent。服务端只能检查已追加到 backend 的事件，无法证明 Worker 内存队列或浏览器本地 outbox 已清空；调用方仍须停止新工作并 flush Session。Safari/WebKit、自然 eviction、OS/磁盘 crash、生产授权和真实 LLM handoff 未执行。
 
 ## 会话目录、观察者与交接幂等验证
 

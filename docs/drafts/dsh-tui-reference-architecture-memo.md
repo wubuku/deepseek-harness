@@ -155,7 +155,7 @@ TUI 的 approval、sandbox 和 permission preset 面向用户信任的本机工�
 
 当前 PoC 已经覆盖参考项目最重要的若干原则：真实 DSH Session 是事实源；Worker/页面只交换 typed 数据；Session seq、requestId、owner token、Workspace revision 和 fencing token 分开；真实 DSH Loop 的 live tool 结果和刷新恢复可以回放；Browser capability preflight 会在 Host boot 前拒绝明显不兼容的 profile。
 
-参考项目暴露出的主要增量不是再加一个 UI，而是建立跨执行者的 conformance 验收。当前 PoC 仍需要明确验证或产品化的方向包括：Worker Session adapter 的 history-before-live 和重连连续性；`cancel()` 的 confirmed/unknown/failed 投影；dispose 对挂起 HITL 的统一结算；能力从声明到 probe 到模型 schema 的可追溯证据；Session catalog 的分页/缓存不冒充事实；Browser Worker 到 Durable Worker 的 owner handoff。
+参考项目暴露出的主要增量不是再加一个 UI，而是建立跨执行者的 conformance 验收。当前 PoC 已在 backend 对已追加的 Session event log 派生 handoff 安全点：活动 turn/step 和未结算工具不能因客户端伪报空 pending 而转移写权；同一 backend queue 会串行化 terminal append 与 handoff。该证据不涵盖尚未上传的 Worker 事件、本地 outbox、Workspace lease 或跨实例 owner fencing，因而不等同于 Browser Worker 到 Durable Worker 的 handoff。其余仍待验证或产品化的方向包括：Worker Session adapter 的 history-before-live 和重连连续性；`cancel()` 的 confirmed/unknown/failed 投影；dispose 对挂起 HITL 的统一结算；能力从声明到 probe 到模型 schema 的可追溯证据；Session catalog 的分页/缓存不冒充事实；跨执行者 owner handoff。handoff 证据和限制见 [Browser-Native 安全点验证记录](browser-native-dsh-poc/next-session-handoff-safe-point-plan.md)。
 
 当前 capability manifest 仍是 docs-owned 静态输入，`provided/adapted` 也不等于每个具体插件已经通过运行时 probe。当前 Browser bridge 的 Workspace/Session 控制消息与 DSH Session event 也不是同一个协议；它们应继续保持独立，并分别记录 revision、fencing、durability 和来源。
 

@@ -183,6 +183,164 @@ function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, 
   return clone(checkpoint)
 }
 
+function invalidHandoffState(message) {
+  throw new BackendError('HANDOFF_STATE_INVALID', message, 409)
+}
+
+function positiveEventInteger(value, field, eventType) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    invalidHandoffState(`${eventType} has an invalid ${field}`)
+  }
+  return value
+}
+
+function handoffToolCallKey(turn, step, callId) {
+  return JSON.stringify([turn, step, callId])
+}
+
+function handoffEventData(event, eventType) {
+  if (event.data === null || typeof event.data !== 'object' || Array.isArray(event.data)) {
+    invalidHandoffState(`${eventType} has no event data`)
+  }
+  return event.data
+}
+
+function assertHandoffQuiescent(session) {
+  let activeTurn
+  let activeStep
+  let previousTurn = 0
+  let previousStep = 0
+  const pendingCalls = new Map()
+  const settledCalls = new Map()
+
+  for (const [index, event] of session.events.entries()) {
+    if (event === null || typeof event !== 'object' || event.seq !== index || typeof event.type !== 'string') {
+      invalidHandoffState(`Session event ${index} has an invalid envelope`)
+    }
+
+    switch (event.type) {
+      case 'turn/start': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        if (activeTurn !== undefined || turn <= previousTurn) invalidHandoffState('turn/start is out of order')
+        activeTurn = turn
+        previousTurn = turn
+        previousStep = 0
+        break
+      }
+      case 'turn/end': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        if (activeTurn !== turn || activeStep !== undefined) invalidHandoffState('turn/end has no matching closed turn')
+        if ([...pendingCalls.values()].some(call => call.turn === turn)) {
+          invalidHandoffState('turn/end closes a turn with unsettled tool calls')
+        }
+        activeTurn = undefined
+        break
+      }
+      case 'step/start': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        const step = positiveEventInteger(data.step, 'step', event.type)
+        if (activeTurn !== turn || activeStep !== undefined || step <= previousStep) {
+          invalidHandoffState('step/start is out of order')
+        }
+        activeStep = step
+        break
+      }
+      case 'step/end': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        const step = positiveEventInteger(data.step, 'step', event.type)
+        if (activeTurn !== turn || activeStep !== step) invalidHandoffState('step/end has no matching step')
+        if ([...pendingCalls.values()].some(call => call.turn === turn && call.step === step)) {
+          invalidHandoffState('step/end closes a step with unsettled tool calls')
+        }
+        activeStep = undefined
+        previousStep = step
+        break
+      }
+      case 'assistant/message': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        const step = positiveEventInteger(data.step, 'step', event.type)
+        if (activeTurn !== turn || activeStep !== step
+          || data.message === null || typeof data.message !== 'object'
+          || !Array.isArray(data.message.content)) {
+          invalidHandoffState('assistant/message is outside its matching step or has invalid content')
+        }
+        for (const block of data.message.content) {
+          if (block?.type !== 'tool-call') continue
+          const callId = block.id
+          const key = typeof callId === 'string' ? handoffToolCallKey(turn, step, callId) : ''
+          if (typeof callId !== 'string' || callId.length === 0 || pendingCalls.has(key) || settledCalls.has(key)) {
+            invalidHandoffState('assistant/message has an invalid or duplicate tool call id')
+          }
+          pendingCalls.set(key, { turn, step, started: false })
+        }
+        break
+      }
+      case 'tool/call': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        const step = positiveEventInteger(data.step, 'step', event.type)
+        const key = typeof data.callId === 'string' ? handoffToolCallKey(turn, step, data.callId) : ''
+        const call = pendingCalls.get(key)
+        if (typeof data.callId !== 'string' || call === undefined || call.started
+          || activeTurn !== turn || activeStep !== step || call.turn !== turn || call.step !== step) {
+          invalidHandoffState('tool/call has no matching assistant tool request')
+        }
+        call.started = true
+        break
+      }
+      case 'tool/result': {
+        const data = handoffEventData(event, event.type)
+        const turn = positiveEventInteger(data.turn, 'turn', event.type)
+        const step = positiveEventInteger(data.step, 'step', event.type)
+        const message = data.message
+        const source = message?.source
+        const callId = source?.callId
+        const key = typeof callId === 'string' ? handoffToolCallKey(turn, step, callId) : ''
+        if (source?.kind !== 'tool' || message?.toolCallId !== callId
+          || typeof callId !== 'string' || callId.length === 0) {
+          invalidHandoffState('tool/result has no matching assistant tool request')
+        }
+        if (event.surfaceOp === 'append') {
+          const call = pendingCalls.get(key)
+          if (activeTurn !== turn || activeStep !== step || call === undefined || call.turn !== turn || call.step !== step) {
+            invalidHandoffState('tool/result has no matching assistant tool request')
+          }
+          pendingCalls.delete(key)
+          settledCalls.set(key, { turn, step, resultSeq: event.seq })
+          break
+        }
+        if (event.surfaceOp?.op === 'replace') {
+          const settled = settledCalls.get(key)
+          const { startSeq, endSeq } = event.surfaceOp
+          if (settled === undefined || settled.turn !== turn || settled.step !== step
+            || !Number.isSafeInteger(startSeq) || startSeq !== settled.resultSeq
+            || !Number.isSafeInteger(endSeq) || endSeq !== settled.resultSeq
+            || !Array.isArray(event.sourceEventSeqs) || !event.sourceEventSeqs.includes(settled.resultSeq)) {
+            invalidHandoffState('tool/result replacement does not reference its settled result')
+          }
+          settledCalls.set(key, { ...settled, resultSeq: event.seq })
+          break
+        }
+        invalidHandoffState('tool/result has an unsupported surface operation')
+      }
+      default:
+        break
+    }
+  }
+
+  if (activeTurn !== undefined) {
+    throw new BackendError('HANDOFF_BUSY', 'Session has an active DSH turn', 409)
+  }
+  if (pendingCalls.size > 0) {
+    throw new BackendError('HANDOFF_BUSY', 'Session has unsettled DSH tool calls', 409)
+  }
+}
+
 async function readBody(request) {
   const chunks = []
   let size = 0
@@ -589,7 +747,9 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
     })
   }
   const id = assertSessionId(body.sessionId)
+  testHooks.onSessionOperationQueued?.(operation, body)
   return store.exclusive(id, async () => {
+    await testHooks.beforeSessionOperation?.(operation, body)
     if (operation === 'create') {
       const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0)
       const owner = store.claim(session)
@@ -627,13 +787,15 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
     }
     if (operation === 'handoff') {
       const handoffId = boundedString(body.handoffId, 'handoffId', MAX_HANDOFF_ID_LENGTH)
+      const existingHandoff = store.findHandoff(session, handoffId)
       const checkpoint = validateHandoffCheckpoint(
         session,
         body.checkpoint,
         body.ownerToken,
         body.ownerEpoch,
-        store.findHandoff(session, handoffId) === undefined,
+        existingHandoff === undefined,
       )
+      if (existingHandoff === undefined) assertHandoffQuiescent(session)
       const result = store.beginHandoff(session, body.ownerToken, body.ownerEpoch, handoffId, checkpoint)
       if (result.replayed) {
         return sessionResponse(session, {

@@ -57,6 +57,7 @@ import {
   BROWSER_NATIVE_PUBLISHED_TOOL_NAMES,
   isBrowserNativeFileToolName,
 } from './browser-native-capabilities.ts'
+import { readSessionPages } from './browser-native-session-read.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -78,6 +79,7 @@ interface SessionResponse {
   readonly eventState?: SessionHandleReadResult['eventState']
   readonly revision?: string
   readonly nextSeq?: number
+  readonly hasMore?: boolean
   readonly owner?: BrowserNativeOwner
   readonly snapshots?: readonly SessionPersistenceSnapshot[]
 }
@@ -377,7 +379,19 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     this.assertOpen('read')
     try {
       await this.writeChain
-      const result = await sessionRequest('read', { sessionId: this.id, offset, length }, options?.signal)
+      const result = await readSessionPages(async (pageOffset, pageLength, signal) => {
+        const page = await sessionRequest('read', {
+          sessionId: this.id,
+          offset: pageOffset,
+          length: pageLength,
+        }, signal)
+        return {
+          events: required(page.events, 'events'),
+          eventState: required(page.eventState, 'eventState'),
+          nextSeq: required(page.nextSeq, 'nextSeq'),
+          hasMore: page.hasMore,
+        }
+      }, offset, length, options?.signal)
       this.nextSeq = Math.max(this.nextSeq, required(result.nextSeq, 'nextSeq'))
       return {
         eventState: required(result.eventState, 'eventState'),

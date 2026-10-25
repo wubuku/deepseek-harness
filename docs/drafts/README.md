@@ -75,6 +75,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 20. [Browser-Native 深度运行时验证计划](browser-native-dsh-poc/next-deep-runtime-validation-plan.md)及[进度](browser-native-dsh-poc/next-deep-runtime-validation-progress.md)：验证长 Session 刷新 hydrate、同 turn 并行只读工具、`assistant/attempt` append 失败收束和大文件 materialize/external backing 边界；Safari、自然 eviction、OS crash、多实例 backend 和真实 LLM 大型 tool args 仍未验证。
 21. [Browser-Native 会话目录与观察交接验证计划](browser-native-dsh-poc/next-catalog-observer-bridge-validation-plan.md)及[进度](browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md)：验证初始 handoff receipt、Session catalog 分页、多观察者单写者和跨边界载荷预算；其中 handoff 安全结论已由第 22 项的后续复核取代，不外推为分布式 HA 或云端 Durable Worker。
 22. [Browser-Native handoff 安全与恢复验证计划](browser-native-dsh-poc/next-handoff-security-and-recovery-plan.md)及[进度](browser-native-dsh-poc/next-handoff-security-and-recovery-progress.md)：修复并验证旧 owner 重放取回新 bearer、旧 receipt 凭据迁移、未结算工作拒绝、rename 后 unknown durability、响应丢失与并发 fencing；handoff 仍只转移 PoC Session 写权，不启动 Cloud Agent。
+23. [Browser-Native handoff 安全点验证计划](browser-native-dsh-poc/next-session-handoff-safe-point-plan.md)及[进度](browser-native-dsh-poc/next-session-handoff-safe-point-progress.md)：由服务端从 DSH Session event log 判定 turn、step 与工具是否已结算；覆盖 caller 伪报 pending 列表、append/handoff 竞态和真实 Chrome Worker 活跃 turn，不宣称 Workspace/Session 双 lease 原子转移。
 
 ### 需要实现或审查代码时
 

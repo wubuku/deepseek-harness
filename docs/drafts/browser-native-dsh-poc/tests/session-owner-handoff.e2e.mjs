@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { openPreview, sendTurn, sessionRequest } from './runtime-test-support.mjs'
+import { openPreview, sendTurn, sessionRequest, submitPrompt, waitFor } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightPath = process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright')
@@ -18,6 +18,7 @@ let browser
 let context
 let page
 const requests = []
+const llmRequests = []
 let backendNow = Date.now()
 let dropHandoffResponse = true
 
@@ -29,6 +30,16 @@ try {
     llmMode: 'scripted',
     ownerLeaseMs: 300,
     testHooks: {
+      scriptedLlmFault: body => {
+        const marker = 'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_E2E'
+        if (!JSON.stringify(body.messages ?? []).includes(marker)) return undefined
+        return {
+          kind: 'delayed-text',
+          delayMs: 10_000,
+          text: 'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_COMPLETED',
+          prefix: 'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_STREAMING',
+        }
+      },
       now: () => backendNow,
       dropSessionHandoffResponse: () => {
         if (!dropHandoffResponse) return false
@@ -42,8 +53,13 @@ try {
   context = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
   page = await context.newPage()
   page.on('request', request => {
-    if (!request.url().includes('/api/browser-native/session/create')) return
-    try { requests.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() ?? {} }) } catch {}
+    const pathname = new URL(request.url()).pathname
+    if (pathname !== '/api/browser-native/session/create' && pathname !== '/api/browser-native/llm') return
+    try {
+      const body = request.postDataJSON() ?? {}
+      if (pathname === '/api/browser-native/session/create') requests.push({ path: pathname, body })
+      else llmRequests.push(body)
+    } catch {}
   })
   const url = `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`
   await openPreview(page, url)
@@ -62,6 +78,72 @@ try {
   ), firstTurn.sessionId)
   assert.equal(typeof ownerToken, 'string')
 
+  const activeMarker = 'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_E2E'
+  let activeTurn
+  let busyHandoff
+  const activeSubmission = await submitPrompt({
+    page,
+    origin,
+    requests,
+    sessionId: firstTurn.sessionId,
+    prompt: activeMarker,
+    timeout: 30_000,
+    probeWhileRunning: async () => {
+      try {
+        activeTurn = await waitFor(async () => {
+          const current = await sessionRequest(origin, 'read', { sessionId: firstTurn.sessionId, offset: 0 })
+          const start = current.events.findLast(event => event.type === 'turn/start')
+          if (start === undefined || current.events.some(event => event.type === 'turn/end' && event.data.turn === start.data.turn)) {
+            return undefined
+          }
+          return { current, turn: start.data.turn }
+        }, 'backend-observed active DSH turn')
+      } catch (error) {
+        const current = await sessionRequest(origin, 'read', { sessionId: firstTurn.sessionId, offset: 0 })
+        const observed = current.events.map(event => ({ seq: event.seq, type: event.type, turn: event.data?.turn }))
+        const matchingRequests = llmRequests.filter(body => JSON.stringify(body.messages).includes(activeMarker)).length
+        throw new Error(`${error.message}; matchingLlmRequests=${matchingRequests}; events=${JSON.stringify(observed)}`)
+      }
+      await page.waitForFunction(marker => document.body.innerText.includes(marker),
+        'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_STREAMING', { timeout: 30_000 })
+      assert.equal(llmRequests.filter(body => JSON.stringify(body.messages).includes(activeMarker)).length, 1)
+
+      busyHandoff = await page.evaluate(async input => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+        action: 'session-handoff',
+        sessionId: input.sessionId,
+        ownerToken: input.ownerToken,
+        ownerEpoch: input.ownerEpoch,
+        handoffId: input.handoffId,
+        checkpoint: input.checkpoint,
+      }), {
+        sessionId: firstTurn.sessionId,
+        ownerToken,
+        ownerEpoch: 1,
+        handoffId: 'active-turn-must-not-handoff',
+        checkpoint: {
+          sessionId: firstTurn.sessionId,
+          ownerId: 'browser-worker-1',
+          epoch: 1,
+          nextSessionSeq: activeTurn.current.nextSeq,
+          workspaceRevision: 1,
+          pendingOperationIds: [],
+          pendingExecutionIds: [],
+        },
+      })
+      assert.equal(busyHandoff?.ok, false, JSON.stringify(busyHandoff))
+      assert.equal(busyHandoff?.status, 409)
+      assert.equal(busyHandoff?.value?.error?.code, 'HANDOFF_BUSY')
+      const ownerAfterBusy = await sessionRequest(origin, 'read', { sessionId: firstTurn.sessionId, offset: 0 })
+      assert.equal(ownerAfterBusy.ownerEpoch, 1)
+    },
+  })
+  assert.equal(activeSubmission.turn, activeTurn.turn)
+  assert.equal(activeSubmission.terminal?.data?.reason?.kind ?? activeSubmission.session.events.find(
+    event => event.type === 'turn/end' && event.data.turn === activeTurn.turn,
+  )?.data?.reason?.kind, 'completed')
+  assert.equal(llmRequests.filter(body => JSON.stringify(body.messages).includes(activeMarker)).length, 1)
+
+  const currentSession = await sessionRequest(origin, 'read', { sessionId: firstTurn.sessionId, offset: 0 })
   const handoffInput = {
     sessionId: firstTurn.sessionId,
     ownerToken,
@@ -71,7 +153,7 @@ try {
       sessionId: firstTurn.sessionId,
       ownerId: 'browser-worker-1',
       epoch: 1,
-      nextSessionSeq: firstTurn.session.events.length,
+      nextSessionSeq: currentSession.nextSeq,
       workspaceRevision: 1,
       pendingOperationIds: [],
       pendingExecutionIds: [],
@@ -156,7 +238,7 @@ try {
     sessionId: firstTurn.sessionId,
     ownerToken: newOwner.ownerToken,
     ownerEpoch: newOwner.ownerEpoch,
-    nextSeq: firstTurn.session.events.length,
+    nextSeq: currentSession.nextSeq,
   })
   assert.equal(acceptedAppend.status, 200, JSON.stringify(acceptedAppend))
 
@@ -175,7 +257,7 @@ try {
       }),
     })
     return { status: response.status, body: await response.json() }
-  }, { sessionId: firstTurn.sessionId, ownerToken, ownerEpoch: 1, nextSeq: firstTurn.session.events.length })
+  }, { sessionId: firstTurn.sessionId, ownerToken, ownerEpoch: 1, nextSeq: currentSession.nextSeq })
   assert.equal(staleAppend.status, 409, JSON.stringify(staleAppend))
   assert.equal(staleAppend.body.error.code, 'SESSION_OWNERSHIP_LOST')
 
@@ -190,6 +272,8 @@ try {
     previousOwnerEpoch: 1,
     recoveredOwnerEpoch: newOwner.ownerEpoch,
     handoffReplayReturnsCredential: false,
+    busyHandoffRejected: busyHandoff.value.error.code,
+    activeTurnCompletedOnce: llmRequests.filter(body => JSON.stringify(body.messages).includes(activeMarker)).length === 1,
     staleAppendStatus: staleAppend.status,
   })}\n`)
 } finally {
