@@ -218,6 +218,8 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   private ownershipLost = false
   private closeOperation: Promise<void> | undefined
   private renewTimer: ReturnType<typeof setTimeout> | undefined
+  private liveRetryTimer: ReturnType<typeof setTimeout> | undefined
+  private liveRetryAttempt = 0
   private nextSeq: number
   private readonly pendingLive: SessionEvent[] = []
   private writeChain: Promise<void> = Promise.resolve()
@@ -288,9 +290,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   private async appendEvents(events: readonly SessionEvent[], signal?: AbortSignal): Promise<void> {
     if (events.length === 0) return
     const owner = this.ownerBody()
-    const persistedEvents = events.map(event => event.type === 'browser-native/workspace-receipt'
-      ? { ...event, ignorable: true as const }
-      : event)
+    const persistedEvents = this.persistedEvents(events)
     const result = await sessionRequest('append', {
       sessionId: this.id,
       ...owner,
@@ -300,21 +300,65 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     this.nextSeq = required(result.nextSeq, 'nextSeq')
   }
 
+  private persistedEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+    return events.map(event => event.type === 'browser-native/workspace-receipt'
+      ? { ...event, ignorable: true as const }
+      : event)
+  }
+
+  private async reconcileLiveEvents(events: readonly SessionEvent[]): Promise<boolean> {
+    if (events.length === 0) return true
+    const result = await sessionRequest('read', {
+      sessionId: this.id,
+      offset: events[0].seq,
+      length: events.length,
+    })
+    const persistedEvents = this.persistedEvents(events)
+    if (result.events.length !== persistedEvents.length
+      || result.events.some((event, index) => JSON.stringify(event) !== JSON.stringify(persistedEvents[index]))) {
+      return false
+    }
+    this.nextSeq = Math.max(this.nextSeq, required(result.nextSeq, 'nextSeq'))
+    return true
+  }
+
   private async drainLiveNow(): Promise<void> {
     if (this.pendingLive.length === 0) return
     const events = this.pendingLive.splice(0)
     try {
       await this.appendEvents(events)
     } catch (error) {
+      const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
+      if (code === 'SEQ_CONFLICT' && await this.reconcileLiveEvents(events)) return
       this.pendingLive.unshift(...events)
       throw error
     }
   }
 
+  private scheduleLiveRetry(report: (error: unknown) => void): void {
+    if (this.liveRetryTimer !== undefined || this.closed || this.ownershipLost || this.pendingLive.length === 0) return
+    if (this.liveRetryAttempt >= 5) return
+    const delayMs = Math.min(1_000, 25 * 2 ** this.liveRetryAttempt)
+    this.liveRetryAttempt += 1
+    this.liveRetryTimer = setTimeout(() => {
+      this.liveRetryTimer = undefined
+      this.startLiveDrain(report)
+    }, delayMs)
+  }
+
+  private startLiveDrain(report: (error: unknown) => void): void {
+    void this.enqueueWrite(() => this.drainLiveNow()).then(() => {
+      this.liveRetryAttempt = 0
+    }, error => {
+      report(error)
+      this.scheduleLiveRetry(report)
+    })
+  }
+
   enqueueLive(event: SessionEvent, report: (error: unknown) => void): void {
     if (this.closed || this.ownershipLost || this.access !== 'write') return
     this.pendingLive.push(event)
-    void this.enqueueWrite(() => this.drainLiveNow()).catch(report)
+    this.startLiveDrain(report)
   }
 
   async read(offset = 0, length = Number.MAX_SAFE_INTEGER, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult> {
@@ -364,6 +408,8 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     if (this.closed) return
     clearTimeout(this.renewTimer)
     this.renewTimer = undefined
+    clearTimeout(this.liveRetryTimer)
+    this.liveRetryTimer = undefined
     this.closeOperation = (async () => {
       if (this.access === 'write' && this.owner !== undefined && !this.ownershipLost) {
         try {
@@ -452,6 +498,16 @@ function createRemoteSessionPersistenceClass(
         if (exec.name === 'glob') {
           const value = await executeBrowserNativeGlob(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
           return { isError: false, value } as ToolExecutionResult
+        }
+        if (exec.name === 'read') {
+          const delayMs = workspace.getFileToolYieldDelayMs()
+          const filePath = isRecord(exec.arguments) && typeof exec.arguments.file_path === 'string'
+            ? exec.arguments.file_path
+            : ''
+          const readDelayMs = filePath.includes('parallel-slow') ? delayMs
+            : filePath.includes('parallel-fast') ? Math.floor(delayMs * 0.6) : 0
+          if (readDelayMs > 0) await new Promise<void>(resolve => { setTimeout(resolve, readDelayMs) })
+          return await next()
         }
         if (!['write', 'edit'].includes(exec.name)) return await next()
         const session = exec.agent.session

@@ -147,6 +147,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-027：长期 Session、并行只读工具和远程 attempt 失败收束
+
+```text
+changeId: BN-P2-027
+upstreamBaseline: research checkout after BN-P2-026; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/tests/long-session-hydrate.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/parallel-tool-fanout.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/attempt-settlement-failure.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-deep-runtime-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-deep-runtime-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有 PoC 尚未用同一批证据证明长 Session 刷新 hydrate、同一 turn 的只读工具并行结算，以及远端 Session append 暂时失败时 attempt 和 turn 是否仍能可靠收束；大文件边界需要把已有 external range 和 copy-on-write 证据纳入同一运行时结论。
+existingExtensionPointsChecked: 复用真实 `ctx.agentLoop`、Session `session/event` fire-and-forget observer、远程 `SessionPersistence`、Worker Host、同源 backend testHooks、既有 OPFS residency 和 reference-backed edit test port；未修改正式 Agent Loop、Session format、默认 Web profile 或正式 Workspace package。
+whyDraftOnlyWasInsufficient: Node 协议测试不能证明真实 Dedicated Worker 中的多轮 hydrate、DSH scheduler、工具结果身份和页面刷新时序；只看已有 storage 原型也不能说明标准写入会 materialize，或 copy-on-write 失败不会破坏源文件。
+behaviorChange: scripted backend 增加同一 assistant message 的两个只读 `read` call、部分失败后的最终回复和一次性 Session append 503 注入。Remote Session handle 对 live event append 做有限退避重试，并在 `SEQ_CONFLICT` 后按事件内容对账，避免已提交但响应丢失时重复写入。新增三个 Chrome E2E；M4 复用既有 residency/reference-edit E2E，不重复创建测试协议。
+directoryOutChangeReason: none; 所有实现、测试和文档都在 docs/drafts。
+consumersUpdated: Browser-native backend/provider、四项深度运行时 E2E、PoC README、docs/drafts 索引、验证计划/进度和本账本。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 通过 23/23；真实 Chrome 长 Session 24 轮通过，刷新前 202 个事件、LLM 请求计数 25 到 25；并行工具通过，两个 read call 重叠且部分失败 turn 完成；attempt append 503 通过，失败 turn 为 error、刷新不重发、显式新 turn 完成；8 MiB OPFS residency 和 16 MiB/1 MiB reference-backed edit 通过，六个 copy-on-write 故障点保持源 hash。首次 attempt E2E 超时是断言错误：测试把 turn/start 误当成 user/message 的后继事件，已修正并重新通过。Safari、自然 eviction、OS/磁盘 crash、多实例 backend、生产对象存储、永久 append 故障和真实 LLM 大型 tool args 未验证。
+syncReplaySteps: 上游同步后先核对 Session event observer、Session append conflict/error 类型和 Agent Loop 的 turn start 顺序；若已有正式 live persistence retry 或 event receipt，迁移本批 E2E 并删除重复 PoC 逻辑。否则保留有限重试、事件对账和 fail-closed 记录，运行 backend tests、Browser-Native Vitest、preview build、四项 Chrome E2E 和文档门禁。
+deleteCondition: 正式 Browser-Native Session provider 提供等价的可验证 live event retry/settlement、hydrate 和并行工具测试，且本批 E2E 已迁移；或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-020：Browser-native 文件搜索、编辑载荷与取消验证
 
 ```text

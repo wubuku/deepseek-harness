@@ -487,6 +487,29 @@ node docs/drafts/browser-native-dsh-poc/tests/workspace-backend-multi-instance-c
 
 这批验证仍不覆盖自然 storage eviction、OS/磁盘崩溃、Safari/WebKit、多设备 merge、跨主机 backend、多实例 metadata store、真实云对象存储或真实 LLM 生成大型文件参数。
 
+## 长 Session、并行工具与失败收束验证
+
+[下一批深度运行时验证计划](next-deep-runtime-validation-plan.md)和[进度记录](next-deep-runtime-validation-progress.md)把四个高价值运行时风险放在同一批次：长 Session 刷新 hydrate、同一 turn 的并行只读工具、`assistant/attempt` append 失败，以及大文件标准写入与 external/chunk backing 的边界。验证仍使用真实 Chrome、Dedicated Worker、真实 DSH Host 和同源 backend；scripted LLM 只固定工具调用和故障时序。
+
+当前 checkout 的 Chrome 证据如下：24 轮 Session 刷新前有 202 个事件，刷新后只新增 `session/end-seed`，LLM 请求计数保持 `25 -> 25`，刷新后同一 Session 可以继续；两个 `read` call 在同一 assistant message 中发出并重叠执行，部分失败仍由同一 turn 完成；第一次 `assistant/attempt` append 注入 503 后，有限重试将 attempt 落盘，turn 以 `error` 收束，刷新不重发失败 prompt，显式新 turn 可以继续。
+
+大文件验证复用本目录已有的 [OPFS residency E2E](tests/opfs-vfs-residency.e2e.mjs) 和 [reference-backed edit E2E](tests/reference-backed-edit.e2e.mjs)：8 MiB 标准写入和 append 证明标准路径会 materialize，刷新后 external range backing 降低驻留；16 MiB/1 MiB chunk copy-on-write 的六个注入失败点均保持源 hash，正常路径刷新后 hash 一致。这不是零拷贝、块级 delta、通用 Node `fs` 或正式 DSH `edit` 的有界内存保证。
+
+复跑本批 Chrome 验证：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js
+DSH_POC_LONG_SESSION_TURNS=24 node docs/drafts/browser-native-dsh-poc/tests/long-session-hydrate.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/parallel-tool-fanout.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/attempt-settlement-failure.e2e.mjs
+DSH_POC_OPFS_FILE_BYTES=8388608 node docs/drafts/browser-native-dsh-poc/tests/opfs-vfs-residency.e2e.mjs
+DSH_POC_REFERENCE_EDIT_BYTES=16777216 DSH_POC_REFERENCE_EDIT_CHUNK_BYTES=1048576 node docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs
+```
+
+本批没有证明 Session compaction/分页、永久 append 故障后的用户界面、自然 eviction、OS/磁盘崩溃、多实例 backend、生产对象存储、Safari/WebKit 或真实 LLM 生成大型 tool args。`RemoteSessionHandle` 的 live retry 达到上限后保留 pending events 并报告错误；这不是离线 outbox，也不是跨存储事务。标准 `write`/`edit` 仍可能完整驻留文件，external/chunk 路径是 PoC-local 原型。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

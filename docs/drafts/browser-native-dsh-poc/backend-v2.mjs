@@ -347,7 +347,7 @@ function sessionResponse(session, extra = {}) {
   }
 }
 
-async function sessionOperation(store, operation, body) {
+async function sessionOperation(store, operation, body, testHooks = {}) {
   assertProtocol(body)
   if (operation === 'list') {
     return store.exclusive('__list__', async () => {
@@ -397,6 +397,9 @@ async function sessionOperation(store, operation, body) {
     store.assertOwner(session, body.ownerToken)
     if (operation === 'renew') return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
     if (operation === 'append') {
+      if (testHooks.failSessionAppend?.(body) === true) {
+        throw new BackendError('E2E_INJECTED_SESSION_APPEND_FAILURE', 'E2E injected Session append failure', 503)
+      }
       if (body.expectedNextSeq !== session.events.length || !Array.isArray(body.events)) {
         throw new BackendError('SEQ_CONFLICT', 'append does not continue the visible log', 409)
       }
@@ -513,6 +516,21 @@ async function scriptedWorkspaceToolCall(response, { id, name, arguments: toolAr
   response.end()
 }
 
+async function scriptedWorkspaceToolCalls(response, calls) {
+  for (const [index, call] of calls.entries()) {
+    const argumentsText = JSON.stringify(call.arguments)
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index, blockType: 'tool-call' } })
+    writeStream(response, { kind: 'chunk', chunk: {
+      type: 'tool-call-delta', index, id: call.id, name: call.name, argumentsDelta: argumentsText,
+    } })
+    writeStream(response, { kind: 'chunk', chunk: {
+      type: 'block-end', index, block: { type: 'tool-call', id: call.id, name: call.name, arguments: argumentsText },
+    } })
+  }
+  writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'tool-calls' } } })
+  response.end()
+}
+
 function scriptedText(response, text) {
   writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
   writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
@@ -552,6 +570,38 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
     response.end()
     return
+  }
+  const parallelToolMarker = [
+    'BROWSER_NATIVE_PARALLEL_TOOLS_E2E',
+    'BROWSER_NATIVE_PARALLEL_TOOLS_PARTIAL_FAILURE_E2E',
+  ].find(marker => textContent(messages).includes(marker))
+  if (parallelToolMarker !== undefined && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(parallelToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCalls(response, [
+        {
+          id: 'browser-native-parallel-slow-read',
+          name: 'read',
+          arguments: { file_path: '/dsh/home/workspace/parallel-slow.txt' },
+        },
+        {
+          id: 'browser-native-parallel-fast-read',
+          name: 'read',
+          arguments: { file_path: parallelToolMarker.endsWith('PARTIAL_FAILURE_E2E')
+            ? '/dsh/home/workspace/parallel-missing.txt'
+            : '/dsh/home/workspace/parallel-fast.txt' },
+        },
+      ])
+      return
+    }
+    if (toolResults.length === 2) {
+      scriptedText(response, parallelToolMarker.endsWith('PARTIAL_FAILURE_E2E')
+        ? 'BROWSER_NATIVE_PARALLEL_TOOLS_PARTIAL_FAILURE_DONE'
+        : 'BROWSER_NATIVE_PARALLEL_TOOLS_DONE')
+      return
+    }
   }
   const externalEditCrashMarker = 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
   if (textContent(messages).includes(externalEditCrashMarker) && hasTool(tools, 'edit')) {
@@ -1543,7 +1593,7 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
-        sendJson(response, 200, await sessionOperation(store, operation, body))
+        sendJson(response, 200, await sessionOperation(store, operation, body, options.testHooks))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/llm') {
