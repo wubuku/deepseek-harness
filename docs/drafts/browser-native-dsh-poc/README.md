@@ -280,7 +280,7 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&b
 
 最新[交互与恢复验证计划](browser-runtime-integrity-validation-plan.md)补齐默认问答和工作目录工具的真实 Worker 闭环、清除 OPFS/IndexedDB 后 backend 不可用时的 fail-closed，以及两个真实标签页间的 Worker 写权交接；同时回归缓存清除后的成功重建和 mutation/snapshot 中断窗口。计划与实测进度分别见[验证计划](browser-runtime-integrity-validation-plan.md)和[进度记录](browser-runtime-integrity-validation-progress.md)，能力状态见[兼容矩阵](operational-compatibility-matrix.md)。E2E 使用 Chrome、真实 Dedicated Worker/DSH Host 和 scripted LLM；503 由 Playwright 路由注入，handoff 使用 10 秒测试 lease。自然 eviction、OS 级浏览器崩溃、Safari/WebKit、多实例 backend、生产 lease SLA 和真实模型工具选择仍未验证。
 
-最新[运行时完整性验证计划](next-runtime-integrity-validation-plan.md)与[进度记录](next-runtime-integrity-validation-progress.md)补齐活动 Worker 的 Workspace lease heartbeat、Agent `write` 的未知 commit/backend 重启恢复、HITL 等待中的刷新中断，以及 IndexedDB 前向版本下的本地恢复导出。真实 Chrome/scripted E2E 证明活动页面在一次 renew 503 后继续续租并完成同一 Agent turn；Workspace manifest 503 导致初始化失败时 Worker 停止续租，服务端租约到期后可被接管；已提交但响应丢失的文件只增加一个 Workspace revision；刷新中的 `ask_user_question` 被结算为 `TOOL_OUTCOME_UNKNOWN` 和 interrupted turn，不保留可回答的旧问题卡或自动续跑，之后用户可在同一 Session 显式开启新 turn；v2 IndexedDB 不被 v1 客户端降级，已识别的 metadata 与 OPFS bytes 可导出。刷新不会恢复原问答 Promise，新 turn 不是旧审批答案，未知 object store 的记录不会进入恢复包；本批不证明真实 LLM、多实例 backend、自然 eviction、OS crash 或后台 Agent。
+最新[运行时完整性验证计划](next-runtime-integrity-validation-plan.md)与[进度记录](next-runtime-integrity-validation-progress.md)验证活动 Worker 的 Workspace lease heartbeat、Agent `write` 的未知 commit/backend 重启恢复、默认 legacy HITL 刷新中断，以及 IndexedDB 前向版本下的本地恢复导出。真实 Chrome/scripted E2E 证明活动页面在一次 renew 503 后继续续租并完成同一 Agent turn；Workspace manifest 503 导致初始化失败时 Worker 停止续租，服务端租约到期后可被接管；已提交但响应丢失的文件只增加一个 Workspace revision；默认 Browser profile 的 legacy `ask_user_question` 刷新后结算为 `TOOL_OUTCOME_UNKNOWN` 和 interrupted turn，不保留可回答的旧问题卡或自动续跑，之后用户可在同一 Session 显式开启新 turn。该批没有验证 timed schema；后续 timed HITL E2E 已验证其问题 projection 可在刷新后按原 callId 恢复。刷新都不会恢复原 Worker Promise，新 turn 不是旧审批答案；v2 IndexedDB 不被 v1 客户端降级，已识别的 metadata 与 OPFS bytes 可导出，未知 object store 的记录不会进入恢复包。本批不证明真实 LLM、多实例 backend、自然 eviction、OS crash 或后台 Agent。
 
 在 preview 构建后复跑本批 Chrome E2E：
 
@@ -553,6 +553,30 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-own
 ```
 
 这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 使用真实 Chrome Dedicated Worker 调用同源 Session backend，验证活动 turn 中 handoff 被拒、原 turn 只执行一次、提交后响应丢失、旧 token 重试不获凭据、租约过期后新 owner 重新 claim，以及旧 token 写入被拒绝；新 owner 仍是协议测试角色，没有启动真实 Cloud Agent。服务端只能检查已追加到 backend 的事件，无法证明 Worker 内存队列或浏览器本地 outbox 已清空；调用方仍须停止新工作并 flush Session。Safari/WebKit、自然 eviction、OS/磁盘 crash、生产授权和真实 LLM handoff 未执行。
+
+## Timed HITL 与 Worker 恢复
+
+[Timed HITL 生命周期验证计划](timed-hitl-lifecycle-validation-plan.md)及[进度记录](timed-hitl-lifecycle-validation-progress.md)使用只在临时验收镜像中启用的 `tool-ask-user mode: timed`，验证 deadline 前同一 turn 作答、timeout 后迟答、刷新后恢复原 callId、答案 durable 后再刷新，以及关闭问题卡后的恢复。默认 Browser profile 仍使用 legacy 问答；本批没有改变正式 DSH package 或默认 profile。
+
+Chrome 证据显示，deadline 前答案写入原工具结果并在同一 turn 继续；迟答保持原工具结果为 pending，并以 `user-question-reply` source 和原 callId 写入 Session，后续业务写只执行一次。Worker 刷新将未完成的工具调用记录为 `TOOL_OUTCOME_UNKNOWN`，timed question projection 仍可重建同一问题；答案已 durable 后刷新不会重复答案或恢复中断模型回复，显式新消息才能继续。脚本化测试只验证执行与持久化时序，不验证真实模型是否选择 timed 问答。
+
+当前 DSH Web UI 有一个明确限制：活动问答接管 composer 时不显示 Stop 按钮，Escape stop shortcut 在 `pendingInteraction` 存在时拒绝取消；关闭 timed 问题卡只隐藏面板，不会取消等待。用户只能回答或等到 timeout。该限制也影响 legacy 的活动问答交互；本 PoC 没有修改正式 UI，是否为产品补充显式取消操作仍需单独决策。
+
+在 Playwright 环境中复跑：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+DSH_POC_TIMED_QUESTION_TIMEOUT=10 DSH_POC_TIMED_HITL_SCENARIO=in-time node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_QUESTION_TIMEOUT=10 DSH_POC_TIMED_HITL_SCENARIO=late-answer node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_HITL_SCENARIO=refresh-before-answer node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_HITL_SCENARIO=refresh-after-answer node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_QUESTION_TIMEOUT=30 DSH_POC_TIMED_HITL_SCENARIO=hide-refresh node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_QUESTION_TIMEOUT=30 DSH_POC_TIMED_HITL_SCENARIO=stop-unavailable node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+```
+
+这组测试不代表真实 LLM、legacy refresh 迟答、双标签答案竞争、跨设备投递、Stop settlement、OS 级崩溃或生产交互策略已验证。
 
 ## 会话目录、观察者与交接幂等验证
 

@@ -936,6 +936,16 @@ function hasUserMarker(messages, marker) {
   return messages.some(message => message.role === 'user' && typeof message.content === 'string' && message.content.includes(marker))
 }
 
+function questionReplyForCall(messages, callId) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'user' || typeof message.content !== 'string') continue
+    let parsed
+    try { parsed = JSON.parse(message.content) } catch { continue }
+    if (parsed?.kind === 'answer_to_pending_question' && parsed.callId === callId) return message
+  }
+  return undefined
+}
+
 function hasToolResult(messages) {
   return messages.some(message => message.role === 'tool')
 }
@@ -1005,6 +1015,12 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStreamError(response, fault.code ?? 'UPSTREAM_LLM_TRUNCATED', fault.message ?? 'scripted stream truncated during tool arguments')
     return
   }
+  if (fault?.kind === 'barrier-text') {
+    await fault.release
+    if (isClientClosed()) return
+    scriptedText(response, fault.text ?? 'released scripted response')
+    return
+  }
   if (purpose === 'compaction') {
     const visibleUserText = messages.filter(message => message.role === 'user'
       && typeof message.content === 'string').map(message => message.content).join('\n')
@@ -1019,6 +1035,10 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
       '## Next Step', '- Continue.',
       '## Critical Context', '- Session log is authoritative.',
     ].join('\n'))
+    return
+  }
+  if (purpose === 'session-title') {
+    scriptedText(response, 'Browser-native timed interaction')
     return
   }
   if (fault?.kind === 'delayed-text') {
@@ -1038,6 +1058,75 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     && typeof message.content === 'string'
     && !message.content.startsWith('Current runtime context.')
     && !message.content.startsWith('Time sampled while preparing turn'))?.content ?? ''
+  const timedQuestionCases = [
+    { marker: 'BROWSER_NATIVE_TIMED_HITL_IN_TIME', callId: 'browser-native-timed-hitl-in-time' },
+    { marker: 'BROWSER_NATIVE_TIMED_HITL_LATE_REPLY', callId: 'browser-native-timed-hitl-late-reply' },
+    { marker: 'BROWSER_NATIVE_TIMED_HITL_REFRESH', callId: 'browser-native-timed-hitl-refresh' },
+    { marker: 'BROWSER_NATIVE_TIMED_HITL_REPLY_REFRESH', callId: 'browser-native-timed-hitl-reply-refresh' },
+    { marker: 'BROWSER_NATIVE_TIMED_HITL_STOP', callId: 'browser-native-timed-hitl-stop' },
+  ]
+  const timedQuestionCase = timedQuestionCases.find(item => hasUserMarker(messages, item.marker))
+  if (timedQuestionCase !== undefined) {
+    const reply = questionReplyForCall(messages, timedQuestionCase.callId)
+    if (reply !== undefined) {
+      if (timedQuestionCase.marker === 'BROWSER_NATIVE_TIMED_HITL_LATE_REPLY') {
+        const replyIndex = messages.lastIndexOf(reply)
+        const toolResults = messages.slice(replyIndex + 1).filter(message => message.role === 'tool')
+        if (toolResults.length === 0) {
+          await scriptedWorkspaceToolCall(response, {
+            id: `${timedQuestionCase.callId}-write`,
+            name: 'write',
+            arguments: {
+              file_path: '/dsh/home/workspace/timed-hitl-late-answer.txt',
+              content: 'late-answer-authorized-write\n',
+            },
+          })
+          return
+        }
+      }
+      scriptedText(response, `${timedQuestionCase.marker}_ANSWER_ADMITTED`)
+      return
+    }
+    const promptIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(timedQuestionCase.marker))
+    const toolResults = messages.slice(promptIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: timedQuestionCase.callId,
+        name: 'ask_user_question',
+        arguments: {
+          questions: [{
+            id: timedQuestionCase.marker.toLowerCase(),
+            question: `Answer the ${timedQuestionCase.marker} decision.`,
+            header: 'Timed confirmation',
+            options: [{ label: 'Yes' }, { label: 'No' }],
+          }],
+        },
+      })
+      return
+    }
+    const pendingResult = toolResults.find(message => {
+      if (typeof message.content !== 'string') return false
+      try { return JSON.parse(message.content).pending === true } catch { return false }
+    })
+    if (pendingResult !== undefined) {
+      scriptedText(response, `${timedQuestionCase.marker}_CONTINUED_WITHOUT_ANSWER`)
+      return
+    }
+    if (timedQuestionCase.marker === 'BROWSER_NATIVE_TIMED_HITL_IN_TIME' && toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `${timedQuestionCase.callId}-write`,
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/timed-hitl-in-time.txt',
+          content: 'in-time-answer-authorized-write\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${timedQuestionCase.marker}_DONE`)
+    return
+  }
   const compactionMarker = [
     'BROWSER_NATIVE_COMPACTION_PRESSURE_E2E',
     'BROWSER_NATIVE_COMPACTION_SUMMARY_FAILURE_E2E',

@@ -63,7 +63,7 @@ description: "评估 Browser-Native DSH 的高价值运行时缺口，并规划�
 - lease 测试证明活动长等待时实际续租，并证明租约失效后旧 writer 被 fencing；页面冻结/关闭仍明确不提供后台 Agent。
 - 初始化失败测试证明 Workspace manifest 返回 503 后旧 Worker 不再续租，租约自然到期后另一请求才能 claim；页面显示启动错误，不把失败状态报告为可用 Workspace。
 - 未知 commit 场景证明同一 Agent `write` 在服务端提交、响应丢失、Worker 终止及 backend 重启后不会重复 commit；Session receipt 和 operation receipt 可关联。
-- HITL 刷新场景明确区分可恢复的 Session 问题记录与不可恢复的 Worker Promise；不支持 inbox 时验证新 turn 可显式继续、旧工具调用不重跑，且未宣称 late answer 已支持。
+- 本计划的 HITL 刷新验收针对默认 Browser profile 的 legacy schema：刷新后 Worker Promise 不可恢复，问题卡不再可回答；用户可显式发起新 turn，旧工具调用不重跑。它不验证 timed schema 的 inbox/continued question，后续证据见[timed HITL 生命周期计划](timed-hitl-lifecycle-validation-plan.md)。
 - 前向版本测试证明本地数据库不被降级或静默删除，并验证当前恢复导出路径；未知数据格式不自动迁移。
 - 每个 E2E 使用隔离 profile、临时 dataDir 和动态端口；结束时等待 Chrome、页面、backend、测试路由和构建资源退出。
 - 更新本计划的进度文件、PoC README、兼容矩阵、`change-ledger.md` 与 `docs/drafts/README.md`；记录 Chrome、命令、结果、已知限制和未运行的检查。

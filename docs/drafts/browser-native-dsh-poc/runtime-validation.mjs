@@ -4,19 +4,26 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { dump, load } from 'js-yaml'
 
 const execFileAsync = promisify(execFile)
 const here = new URL('.', import.meta.url)
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original', largeFileChars?: number}} options - Built preview and validation fixtures.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
-export async function createRuntimeValidationDist({ distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0 } = {}) {
+export async function createRuntimeValidationDist({
+  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout,
+} = {}) {
   if (!['browser', 'original'].includes(roster)) throw new Error('roster must be browser or original')
   if (!Number.isSafeInteger(largeFileChars) || largeFileChars < 0 || largeFileChars > 1_000_000) {
     throw new Error('largeFileChars must be an integer between 0 and 1000000')
+  }
+  if (timedQuestionTimeout !== undefined
+    && (!Number.isSafeInteger(timedQuestionTimeout) || timedQuestionTimeout < 1 || timedQuestionTimeout > 2_147_483)) {
+    throw new Error('timedQuestionTimeout must be an integer between 1 and 2147483 seconds')
   }
   const sourceRoot = resolve(distRoot)
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-browser-runtime-image-'))
@@ -26,7 +33,22 @@ export async function createRuntimeValidationDist({ distRoot = 'apps/web/dist', 
     const home = join(imageRoot, 'home')
     await mkdir(join(home, 'browser-validation'), { recursive: true })
     const patch = roster === 'browser' ? 'runtime-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
-    await writeFile(join(home, 'cordis.patch.yml'), await readFile(new URL(patch, here)))
+    let profilePatch = await readFile(new URL(patch, here), 'utf8')
+    if (timedQuestionTimeout !== undefined) {
+      const entries = load(profilePatch)
+      if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
+      const preset = entries.find(entry => entry?.id === 'preset-standard')
+      if (!Array.isArray(preset?.config?.plugins)) throw new Error('validation profile has no preset-standard plugin list')
+      const askUser = preset.config.plugins.filter(plugin => plugin?.id === 'tool-ask-user')
+      if (askUser.length !== 1) throw new Error('validation profile must contain exactly one tool-ask-user plugin')
+      askUser[0].config = {
+        ...askUser[0].config,
+        mode: 'timed',
+        timeout: timedQuestionTimeout,
+      }
+      profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
+    }
+    await writeFile(join(home, 'cordis.patch.yml'), profilePatch)
     for (const file of ['browser-native-session-persistence.js', 'browser-native-llm.js']) {
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
