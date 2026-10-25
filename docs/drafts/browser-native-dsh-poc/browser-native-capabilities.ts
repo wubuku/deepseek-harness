@@ -19,12 +19,30 @@ export type BrowserNativeCapabilityId =
 /** Capability status at the Browser-Native PoC deployment point. */
 export type BrowserNativeCapabilityStatus = 'provided' | 'adapted' | 'unsupported' | 'unverified'
 
+/** Evidence class used before a capability can become model-visible. */
+export type BrowserNativeCapabilityEvidenceKind = 'declared' | 'service' | 'method' | 'version' | 'contract' | 'probe'
+
+/** Publication state kept separate from the coarse PoC status. */
+export type BrowserNativeCapabilityLifecycleState = 'declared' | 'staged' | 'live' | 'unsupported' | 'degraded'
+
+/** Permission state is independent from whether a browser API exists. */
+export type BrowserNativeCapabilityPermission = 'not-required' | 'unknown' | 'granted' | 'denied'
+
+export interface BrowserNativeCapabilityEvidence {
+  readonly kind: BrowserNativeCapabilityEvidenceKind
+  readonly id: string
+  readonly detail?: string
+}
+
 /** One capability exposed to the Browser-Native profile preflight. */
 export interface BrowserNativeCapabilityDescriptor {
   readonly id: BrowserNativeCapabilityId
   readonly status: BrowserNativeCapabilityStatus
   readonly provider: string
   readonly detail: string
+  readonly lifecycle?: BrowserNativeCapabilityLifecycleState
+  readonly evidence?: readonly BrowserNativeCapabilityEvidence[]
+  readonly permission?: BrowserNativeCapabilityPermission
 }
 
 /** A plugin requirement checked before the Worker Host starts. */
@@ -49,7 +67,7 @@ export interface BrowserNativeProfileManifest {
 
 /** A single reason why a Browser-Native profile cannot be started safely. */
 export interface BrowserNativePreflightIssue {
-  readonly kind: 'duplicate-plugin' | 'unknown-capability' | 'missing-capability' | 'unknown-tool-capability'
+  readonly kind: 'duplicate-plugin' | 'unknown-capability' | 'missing-capability' | 'unknown-tool-capability' | 'unpublished-tool' | 'permission-denied'
   readonly pluginId?: string
   readonly toolName?: string
   readonly capability: string
@@ -63,16 +81,22 @@ export interface BrowserNativePreflightResult {
   readonly providedCapabilities: readonly BrowserNativeCapabilityId[]
 }
 
+/** One model-visible tool after capability lifecycle and permission checks. */
+export interface BrowserNativePublishedTool extends BrowserNativeToolRequirement {
+  readonly capabilityState: 'live'
+  readonly evidence: readonly BrowserNativeCapabilityEvidence[]
+}
+
 /** Browser capability facts used by the current PoC profile. */
 export const BROWSER_NATIVE_CAPABILITIES: Readonly<Record<BrowserNativeCapabilityId, BrowserNativeCapabilityDescriptor>> = {
-  'worker-vfs': { id: 'worker-vfs', status: 'provided', provider: 'MemoryVfs', detail: 'Worker-local virtual files under /dsh/home/workspace' },
-  'structured-file-tools': { id: 'structured-file-tools', status: 'adapted', provider: 'browser-native-providers.ts', detail: 'Bounded read, write, edit, grep and glob execution against the Worker VFS' },
-  'restricted-shell': { id: 'restricted-shell', status: 'adapted', provider: 'webworker-runtime shell command table', detail: 'Worker shell with a fixed command table and no host process access' },
+  'worker-vfs': { id: 'worker-vfs', status: 'provided', provider: 'MemoryVfs', detail: 'Worker-local virtual files under /dsh/home/workspace', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'worker-vfs.prepare-and-read' }], permission: 'not-required' },
+  'structured-file-tools': { id: 'structured-file-tools', status: 'adapted', provider: 'browser-native-providers.ts', detail: 'Bounded read, write, edit, grep and glob execution against the Worker VFS', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'file-tools.chrome-worker' }], permission: 'not-required' },
+  'restricted-shell': { id: 'restricted-shell', status: 'adapted', provider: 'webworker-runtime shell command table', detail: 'Worker shell with a fixed command table and no host process access', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'restricted-shell.command-table' }], permission: 'not-required' },
   'remote-session-persistence': { id: 'remote-session-persistence', status: 'adapted', provider: 'same-origin Session backend', detail: 'Session events and leases are persisted through the PoC backend' },
   'remote-llm-proxy': { id: 'remote-llm-proxy', status: 'adapted', provider: 'same-origin LLM proxy', detail: 'The backend reads model credentials; the Worker receives only the stream' },
-  'human-interaction': { id: 'human-interaction', status: 'provided', provider: 'tool-ask-user', detail: 'DSH interaction service renders and records browser questions' },
-  'todo-persistence': { id: 'todo-persistence', status: 'provided', provider: 'tool-todo', detail: 'Todo events are part of the DSH Session history' },
-  'working-directory': { id: 'working-directory', status: 'provided', provider: 'tool-working-directory', detail: 'Working directory stays within the Worker VFS namespace' },
+  'human-interaction': { id: 'human-interaction', status: 'provided', provider: 'tool-ask-user', detail: 'DSH interaction service renders and records browser questions', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'ask-user.session-event' }], permission: 'not-required' },
+  'todo-persistence': { id: 'todo-persistence', status: 'provided', provider: 'tool-todo', detail: 'Todo events are part of the DSH Session history', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'todo.session-event' }], permission: 'not-required' },
+  'working-directory': { id: 'working-directory', status: 'provided', provider: 'tool-working-directory', detail: 'Working directory stays within the Worker VFS namespace', lifecycle: 'live', evidence: [{ kind: 'probe', id: 'working-directory.worker-vfs' }], permission: 'not-required' },
   'host-network-egress': { id: 'host-network-egress', status: 'adapted', provider: 'same-origin backend routes', detail: 'The profile has no web search or web fetch tool; only declared same-origin routes are used' },
   'host-subprocess': { id: 'host-subprocess', status: 'unsupported', provider: 'none', detail: 'The browser Worker cannot start host processes or native binaries' },
   'filesystem-watch': { id: 'filesystem-watch', status: 'unsupported', provider: 'none', detail: 'The profile does not expose host or persistent filesystem watch events' },
@@ -127,6 +151,47 @@ export type BrowserNativeFileToolName = typeof BROWSER_NATIVE_FILE_TOOL_NAMES[nu
 
 const browserNativeFileToolNames: ReadonlySet<string> = new Set(BROWSER_NATIVE_FILE_TOOL_NAMES)
 
+function capabilityLifecycle(descriptor: BrowserNativeCapabilityDescriptor): BrowserNativeCapabilityLifecycleState {
+  if (descriptor.lifecycle !== undefined) return descriptor.lifecycle
+  if (descriptor.status === 'unsupported') return 'unsupported'
+  if (descriptor.status === 'unverified') return 'degraded'
+  return 'staged'
+}
+
+function hasProbeEvidence(descriptor: BrowserNativeCapabilityDescriptor): boolean {
+  return (descriptor.evidence ?? []).some(evidence => evidence.kind === 'probe')
+}
+
+/**
+ * Return the Browser-Native tools that may enter a model request.
+ *
+ * A supported module without a probe is staged only. Degraded capabilities
+ * never publish their full tool group, and an explicit permission denial wins
+ * over every positive capability observation.
+ * @param manifest - Profile tools to evaluate.
+ * @param capabilities - Capability observations for this boot.
+ */
+export function publishBrowserNativeTools(
+  manifest: BrowserNativeProfileManifest,
+  capabilities: Partial<Readonly<Record<BrowserNativeCapabilityId, BrowserNativeCapabilityDescriptor>>> = BROWSER_NATIVE_CAPABILITIES,
+): readonly BrowserNativePublishedTool[] {
+  return manifest.tools.flatMap(tool => {
+    const descriptor = capabilities[tool.capability] ?? BROWSER_NATIVE_CAPABILITIES[tool.capability]
+    if (descriptor === undefined || capabilityLifecycle(descriptor) !== 'live'
+      || !hasProbeEvidence(descriptor) || descriptor.permission === 'denied' || descriptor.permission === 'unknown') return []
+    return [{
+      ...tool,
+      capabilityState: 'live' as const,
+      evidence: Object.freeze([...(descriptor.evidence ?? [])]),
+    }]
+  })
+}
+
+/** Model-facing tool names admitted by the checked-in Browser-Native profile. */
+export const BROWSER_NATIVE_PUBLISHED_TOOL_NAMES: ReadonlySet<string> = new Set(
+  publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST).map(tool => tool.name),
+)
+
 /** Test whether a runtime tool name belongs to the browser file provider. */
 export function isBrowserNativeFileToolName(name: string): name is BrowserNativeFileToolName {
   return browserNativeFileToolNames.has(name)
@@ -139,6 +204,7 @@ function isSupported(status: BrowserNativeCapabilityStatus): boolean {
 /** Check a profile without touching the Worker Host or any persistent state. */
 export function evaluateBrowserNativeProfile(
   manifest: BrowserNativeProfileManifest = BROWSER_NATIVE_PROFILE_MANIFEST,
+  capabilities: Partial<Readonly<Record<BrowserNativeCapabilityId, BrowserNativeCapabilityDescriptor>>> = BROWSER_NATIVE_CAPABILITIES,
 ): BrowserNativePreflightResult {
   const issues: BrowserNativePreflightIssue[] = []
   const seenPlugins = new Set<string>()
@@ -152,7 +218,7 @@ export function evaluateBrowserNativeProfile(
     }
     seenPlugins.add(plugin.id)
     for (const capability of plugin.required) {
-      const descriptor = BROWSER_NATIVE_CAPABILITIES[capability]
+      const descriptor = capabilities[capability] ?? BROWSER_NATIVE_CAPABILITIES[capability]
       if (descriptor === undefined) {
         issues.push({ kind: 'unknown-capability', pluginId: plugin.id, capability, message: `Plugin ${plugin.id} requires unknown Browser-Native capability ${capability}` })
       } else if (!isSupported(descriptor.status)) {
@@ -161,11 +227,15 @@ export function evaluateBrowserNativeProfile(
     }
   }
   for (const tool of manifest.tools) {
-    const descriptor = BROWSER_NATIVE_CAPABILITIES[tool.capability]
+    const descriptor = capabilities[tool.capability] ?? BROWSER_NATIVE_CAPABILITIES[tool.capability]
     if (descriptor === undefined) {
       issues.push({ kind: 'unknown-tool-capability', toolName: tool.name, capability: tool.capability, message: `Tool ${tool.name} refers to unknown Browser-Native capability ${tool.capability}` })
     } else if (!isSupported(descriptor.status)) {
       issues.push({ kind: 'missing-capability', toolName: tool.name, capability: tool.capability, message: `Tool ${tool.name} cannot be exposed because ${tool.capability} is ${descriptor.status}: ${descriptor.detail}` })
+    } else if (capabilityLifecycle(descriptor) !== 'live' || !hasProbeEvidence(descriptor)) {
+      issues.push({ kind: 'unpublished-tool', toolName: tool.name, capability: tool.capability, message: `Tool ${tool.name} cannot be exposed before ${tool.capability} reaches live with probe evidence` })
+    } else if (descriptor.permission === 'denied' || descriptor.permission === 'unknown') {
+      issues.push({ kind: 'permission-denied', toolName: tool.name, capability: tool.capability, message: `Tool ${tool.name} cannot be exposed because permission is ${descriptor.permission}` })
     }
   }
   return { ok: issues.length === 0, issues, providedCapabilities }

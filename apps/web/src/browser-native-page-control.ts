@@ -13,6 +13,7 @@ interface BrowserNativeOwnerNotice {
   readonly type: 'owner' | 'released' | 'unavailable'
   readonly sessionId: string
   readonly ownerToken?: string
+  readonly ownerEpoch?: number
 }
 
 interface BrowserNativeWorkspaceStatus {

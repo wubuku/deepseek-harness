@@ -3,6 +3,7 @@ import {
   BROWSER_NATIVE_PROFILE_MANIFEST,
   evaluateBrowserNativeProfile,
   formatBrowserNativePreflightFailure,
+  publishBrowserNativeTools,
   type BrowserNativeProfileManifest,
 } from '../browser-native-capabilities.ts'
 
@@ -19,6 +20,7 @@ describe('browser-native capability preflight', () => {
     expect(BROWSER_NATIVE_PROFILE_MANIFEST.plugins.map(plugin => plugin.id)).toContain('tool-result-pruner')
     expect(result.providedCapabilities).toContain('restricted-shell')
     expect(result.providedCapabilities).not.toContain('host-subprocess')
+    expect(publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST)).toHaveLength(9)
   })
 
   it('fails before boot when a plugin requires an unsupported host capability', () => {
@@ -50,5 +52,41 @@ describe('browser-native capability preflight', () => {
     const result = evaluateBrowserNativeProfile(manifest)
     expect(result.ok).toBe(false)
     expect(result.issues.map(issue => issue.kind)).toEqual(['duplicate-plugin', 'unknown-tool-capability'])
+  })
+
+  it('keeps staged, degraded and denied capabilities out of the model roster', () => {
+    const staged = {
+      ...BROWSER_NATIVE_PROFILE_MANIFEST,
+      tools: [{ name: 'staged_tool', capability: 'structured-file-tools' as const }],
+    }
+    const stagedCapabilities = {
+      'structured-file-tools': {
+        id: 'structured-file-tools' as const,
+        status: 'adapted' as const,
+        provider: 'test',
+        detail: 'module exists but probe did not run',
+        lifecycle: 'staged' as const,
+        evidence: [{ kind: 'method' as const, id: 'test.method' }],
+        permission: 'granted' as const,
+      },
+    }
+    expect(publishBrowserNativeTools(staged, stagedCapabilities)).toEqual([])
+
+    const deniedCapabilities = {
+      'structured-file-tools': {
+        id: 'structured-file-tools' as const,
+        status: 'adapted' as const,
+        provider: 'test',
+        detail: 'probe passed but user denied',
+        lifecycle: 'live' as const,
+        evidence: [{ kind: 'probe' as const, id: 'test.probe' }],
+        permission: 'denied' as const,
+      },
+    }
+    expect(publishBrowserNativeTools(staged, deniedCapabilities)).toEqual([])
+
+    const preflight = evaluateBrowserNativeProfile(staged, stagedCapabilities)
+    expect(preflight.ok).toBe(false)
+    expect(preflight.issues).toEqual([expect.objectContaining({ kind: 'unpublished-tool', toolName: 'staged_tool' })])
   })
 })

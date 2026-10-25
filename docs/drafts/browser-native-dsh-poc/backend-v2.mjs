@@ -18,6 +18,14 @@ const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_EVENTS = 100_000
+const MAX_SESSION_APPEND_EVENTS = 1_024
+const MAX_SESSION_APPEND_BYTES = 1 * 1024 * 1024
+const MAX_SESSION_READ_EVENTS = 2_048
+const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
+const MAX_CATALOG_PAGE_SIZE = 100
+const MAX_HANDOFF_ID_LENGTH = 200
+const MAX_CHECKPOINT_IDS = 1_000
+const MAX_CHECKPOINT_ID_LENGTH = 200
 const DEFAULT_OWNER_LEASE_MS = 30_000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
 const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
@@ -62,7 +70,75 @@ function timeoutMs(value, name) {
 function assertProtocol(body) {
   assertRecord(body, 'request')
   if (body.protocolVersion !== PROTOCOL_VERSION) throw new BackendError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
-  if (typeof body.requestId !== 'string' || body.requestId.length === 0) throw new BackendError('INVALID_REQUEST', 'requestId is required')
+  if (typeof body.requestId !== 'string' || body.requestId.length === 0 || body.requestId.length > 200) throw new BackendError('INVALID_REQUEST', 'requestId is required and must be at most 200 characters')
+}
+
+function boundedInteger(value, name, maximum) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
+    throw new BackendError('INVALID_REQUEST', `${name} must be a non-negative safe integer at most ${maximum}`)
+  }
+  return value
+}
+
+function boundedString(value, name, maximum) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum) {
+    throw new BackendError('INVALID_REQUEST', `${name} must be a non-empty string at most ${maximum} characters`)
+  }
+  return value
+}
+
+function jsonBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+}
+
+function catalogCursorFor(sessionId) {
+  return Buffer.from(sessionId, 'utf8').toString('base64url')
+}
+
+function sessionIdFromCatalogCursor(cursor) {
+  boundedString(cursor, 'cursor', 400)
+  let value
+  try {
+    value = Buffer.from(cursor, 'base64url').toString('utf8')
+  } catch {
+    throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
+  }
+  assertSessionId(value)
+  if (catalogCursorFor(value) !== cursor) throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
+  return value
+}
+
+function checkpointFingerprint(checkpoint) {
+  return JSON.stringify({
+    sessionId: checkpoint.sessionId,
+    ownerId: checkpoint.ownerId,
+    epoch: checkpoint.epoch,
+    nextSessionSeq: checkpoint.nextSessionSeq,
+    workspaceRevision: checkpoint.workspaceRevision,
+    pendingOperationIds: checkpoint.pendingOperationIds,
+    pendingExecutionIds: checkpoint.pendingExecutionIds,
+  })
+}
+
+function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, requireCurrent = true) {
+  assertRecord(checkpoint, 'checkpoint')
+  const expectedKeys = new Set(['sessionId', 'ownerId', 'epoch', 'nextSessionSeq', 'workspaceRevision', 'pendingOperationIds', 'pendingExecutionIds'])
+  for (const key of Object.keys(checkpoint)) {
+    if (!expectedKeys.has(key)) throw new BackendError('CHECKPOINT_INVALID', `checkpoint field ${key} is not supported`)
+  }
+  if (checkpoint.sessionId !== session.id) throw new BackendError('CHECKPOINT_INVALID', 'checkpoint sessionId does not match the Session')
+  boundedString(checkpoint.ownerId, 'checkpoint.ownerId', MAX_CHECKPOINT_ID_LENGTH)
+  if (checkpoint.epoch !== ownerEpoch) throw new BackendError('CHECKPOINT_INVALID', 'checkpoint epoch does not match the current owner')
+  boundedInteger(checkpoint.nextSessionSeq, 'checkpoint.nextSessionSeq', MAX_EVENTS)
+  if (requireCurrent && checkpoint.nextSessionSeq !== session.events.length) throw new BackendError('CHECKPOINT_INVALID', 'checkpoint nextSessionSeq is not the current Session cursor')
+  boundedInteger(checkpoint.workspaceRevision, 'checkpoint.workspaceRevision', Number.MAX_SAFE_INTEGER)
+  for (const name of ['pendingOperationIds', 'pendingExecutionIds']) {
+    const values = checkpoint[name]
+    if (!Array.isArray(values) || values.length > MAX_CHECKPOINT_IDS) throw new BackendError('CHECKPOINT_INVALID', `${name} must contain at most ${MAX_CHECKPOINT_IDS} ids`)
+    for (const value of values) boundedString(value, `${name} item`, MAX_CHECKPOINT_ID_LENGTH)
+  }
+  boundedString(ownerToken, 'ownerToken', 200)
+  return clone(checkpoint)
 }
 
 async function readBody(request) {
@@ -200,7 +276,7 @@ async function acquireDataDirLock(dataDir) {
 }
 
 class FormalSessionStore {
-  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now } = {}) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, failFlush } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
@@ -208,6 +284,7 @@ class FormalSessionStore {
     this.locks = new Map()
     this.ownerLeaseMs = ownerLeaseMs
     this.now = now
+    this.failFlush = failFlush
   }
 
   async load() {
@@ -224,7 +301,9 @@ class FormalSessionStore {
         events: clone(raw.events),
         durableThroughSeq: raw.durableThroughSeq ?? raw.events.length - 1,
         ownerToken: undefined,
+        ownerEpoch: Number.isSafeInteger(raw.ownerEpoch) && raw.ownerEpoch >= 0 ? raw.ownerEpoch : 0,
         ownerExpiresAt: 0,
+        handoffs: new Map(Object.entries(raw.handoffs ?? {})),
       })
     }
   }
@@ -259,15 +338,20 @@ class FormalSessionStore {
       events: [],
       durableThroughSeq: -1,
       ownerToken: undefined,
+      ownerEpoch: 0,
       ownerExpiresAt: 0,
+      handoffs: new Map(),
     }
     this.sessions.set(id, session)
     return session
   }
 
-  claim(session, requestedOwnerToken) {
+  claim(session, requestedOwnerToken, requestedOwnerEpoch) {
     if (session.ownerToken !== undefined && session.ownerExpiresAt > this.now()) {
-      if (requestedOwnerToken === session.ownerToken) return this.renew(session, session.ownerToken, true)
+      if (requestedOwnerToken === session.ownerToken
+        && (requestedOwnerEpoch === undefined || requestedOwnerEpoch === session.ownerEpoch)) {
+        return this.renew(session, session.ownerToken, true)
+      }
       throw new BackendError(
         'SESSION_ALREADY_OWNED',
         'session is already owned by another browser; close that tab or retry after its write lease expires',
@@ -275,6 +359,7 @@ class FormalSessionStore {
         session.ownerExpiresAt - this.now(),
       )
     }
+    session.ownerEpoch += 1
     session.ownerToken = typeof requestedOwnerToken === 'string' ? requestedOwnerToken : randomUUID()
     return this.renew(session, session.ownerToken, true)
   }
@@ -284,22 +369,75 @@ class FormalSessionStore {
     session.ownerExpiresAt = this.now() + this.ownerLeaseMs
     return {
       ownerToken: session.ownerToken,
+      ownerEpoch: session.ownerEpoch,
       leaseDurationMs: this.ownerLeaseMs,
       renewAfterMs: Math.floor(this.ownerLeaseMs / 3),
     }
   }
 
-  assertOwner(session, ownerToken) {
-    this.assertOwnerToken(session, ownerToken)
+  assertOwner(session, ownerToken, ownerEpoch) {
+    this.assertOwnerToken(session, ownerToken, ownerEpoch)
     if (session.ownerExpiresAt <= this.now()) {
       throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
     }
   }
 
-  assertOwnerToken(session, ownerToken) {
-    if (typeof ownerToken !== 'string' || session.ownerToken !== ownerToken) {
+  assertOwnerToken(session, ownerToken, ownerEpoch) {
+    if (typeof ownerToken !== 'string' || session.ownerToken !== ownerToken
+      || (ownerEpoch !== undefined && ownerEpoch !== session.ownerEpoch)) {
       throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
     }
+  }
+
+  findHandoff(session, handoffId) {
+    const record = session.handoffs.get(handoffId)
+    return record === undefined ? undefined : clone(record)
+  }
+
+  beginHandoff(session, ownerToken, ownerEpoch, handoffId, checkpoint) {
+    const existing = this.findHandoff(session, handoffId)
+    if (existing !== undefined) {
+      if (ownerToken !== existing.receipt.previous.ownerToken && ownerToken !== existing.receipt.next.ownerToken) {
+        throw new BackendError('SESSION_OWNERSHIP_LOST', 'handoff retry does not identify either owner', 409)
+      }
+      if (existing.fingerprint !== checkpointFingerprint(checkpoint)) {
+        throw new BackendError('HANDOFF_CONFLICT', 'handoffId is already bound to a different checkpoint', 409)
+      }
+      return { replayed: true, receipt: existing.receipt }
+    }
+    this.assertOwner(session, ownerToken, ownerEpoch)
+    const previous = {
+      sessionId: session.id,
+      ownerToken: session.ownerToken,
+      ownerEpoch: session.ownerEpoch,
+    }
+    const next = {
+      sessionId: session.id,
+      ownerToken: randomUUID(),
+      ownerEpoch: session.ownerEpoch + 1,
+      leaseDurationMs: this.ownerLeaseMs,
+      renewAfterMs: Math.floor(this.ownerLeaseMs / 3),
+    }
+    session.ownerEpoch = next.ownerEpoch
+    session.ownerToken = next.ownerToken
+    session.ownerExpiresAt = this.now() + this.ownerLeaseMs
+    const receipt = {
+      sessionId: session.id,
+      previous,
+      next,
+      checkpoint: clone(checkpoint),
+      handoffId,
+      durabilityReceipt: `durable-${session.id}-${session.events.length - 1}`,
+    }
+    session.handoffs.set(handoffId, { fingerprint: checkpointFingerprint(checkpoint), receipt })
+    return { replayed: false, receipt, previous }
+  }
+
+  rollbackHandoff(session, previous, handoffId) {
+    session.handoffs.delete(handoffId)
+    session.ownerToken = previous.ownerToken
+    session.ownerEpoch = previous.ownerEpoch
+    session.ownerExpiresAt = this.now() + this.ownerLeaseMs
   }
 
   async flush(session) {
@@ -311,8 +449,11 @@ class FormalSessionStore {
       inheritedEventCount: session.inheritedEventCount,
       events: session.events,
       durableThroughSeq: session.events.length - 1,
+      ownerEpoch: session.ownerEpoch,
+      handoffs: Object.fromEntries(session.handoffs),
     }
     try {
+      if (this.failFlush?.(session) === true) throw new BackendError('E2E_INJECTED_SESSION_FLUSH_FAILURE', 'E2E injected Session flush failure', 503)
       await writeFile(temporary, `${JSON.stringify(record)}\n`, 'utf8')
       const file = await open(temporary, 'r+')
       try { await file.sync() } finally { await file.close() }
@@ -351,7 +492,12 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
   assertProtocol(body)
   if (operation === 'list') {
     return store.exclusive('__list__', async () => {
-      const snapshots = [...store.sessions.values()].map(session => store.snapshot(session))
+      const limit = body.limit === undefined ? 50 : boundedInteger(body.limit, 'limit', MAX_CATALOG_PAGE_SIZE)
+      if (limit === 0) throw new BackendError('INVALID_REQUEST', 'limit must be at least 1')
+      const after = body.cursor === undefined ? undefined : sessionIdFromCatalogCursor(body.cursor)
+      const sessions = [...store.sessions.values()].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+      const page = sessions.filter(session => after === undefined || session.id > after).slice(0, limit)
+      const snapshots = page.map(session => store.snapshot(session))
       const items = snapshots.map(snapshot => ({
         agentAvailable: false,
         sessionId: snapshot.header.id,
@@ -360,7 +506,14 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
         blank: snapshot.eventCount === 0,
         cwd: snapshot.header.cwd,
       }))
-      return { snapshots, items }
+      return {
+        snapshots,
+        items,
+        hasMore: page.length > 0 && sessions.some(session => session.id > page.at(-1).id),
+        ...(page.length > 0 && sessions.some(session => session.id > page.at(-1).id)
+          ? { nextCursor: catalogCursorFor(page.at(-1).id) }
+          : {}),
+      }
     })
   }
   const id = assertSessionId(body.sessionId)
@@ -373,16 +526,22 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
     const session = store.get(id)
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
-      const owner = body.access === 'write' ? store.claim(session, body.ownerToken) : undefined
+      const owner = body.access === 'write' ? store.claim(session, body.ownerToken, body.ownerEpoch) : undefined
       return sessionResponse(session, owner === undefined ? {} : { owner })
     }
     if (operation === 'stat') return sessionResponse(session)
     if (operation === 'read') {
-      const offset = body.offset ?? 0
-      const length = body.length ?? Number.MAX_SAFE_INTEGER
+      const offset = body.offset === undefined ? 0 : boundedInteger(body.offset, 'offset', MAX_EVENTS)
+      const length = body.length === undefined ? MAX_SESSION_READ_EVENTS : boundedInteger(body.length, 'length', MAX_SESSION_READ_EVENTS)
+      if (length === 0) throw new BackendError('INVALID_REQUEST', 'length must be at least 1')
+      const events = clone(session.events.slice(offset, offset + length))
+      if (jsonBytes(events) > MAX_SESSION_READ_BYTES) throw new BackendError('RESPONSE_TOO_LARGE', 'Session read page exceeds the response byte budget', 413)
       return sessionResponse(session, {
-        events: clone(session.events.slice(offset, offset + length)),
+        events,
         eventState: 'shared-frozen',
+        durableThroughSeq: session.durableThroughSeq,
+        ownerEpoch: session.ownerEpoch,
+        hasMore: offset + events.length < session.events.length,
       })
     }
     if (operation === 'close') {
@@ -394,7 +553,40 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
       session.ownerExpiresAt = 0
       return sessionResponse(session, { closed: true, ...(durabilityReceipt === undefined ? {} : { durabilityReceipt }) })
     }
-    store.assertOwner(session, body.ownerToken)
+    if (operation === 'handoff') {
+      const handoffId = boundedString(body.handoffId, 'handoffId', MAX_HANDOFF_ID_LENGTH)
+      const checkpoint = validateHandoffCheckpoint(
+        session,
+        body.checkpoint,
+        body.ownerToken,
+        body.ownerEpoch,
+        store.findHandoff(session, handoffId) === undefined,
+      )
+      const result = store.beginHandoff(session, body.ownerToken, body.ownerEpoch, handoffId, checkpoint)
+      if (result.replayed) {
+        return sessionResponse(session, {
+          owner: result.receipt.next,
+          handoffId,
+          checkpoint: clone(result.receipt.checkpoint),
+          durabilityReceipt: result.receipt.durabilityReceipt,
+          replayed: true,
+        })
+      }
+      try {
+        const durabilityReceipt = await store.flush(session)
+        return sessionResponse(session, {
+          owner: result.receipt.next,
+          handoffId,
+          checkpoint: clone(result.receipt.checkpoint),
+          durabilityReceipt,
+          replayed: false,
+        })
+      } catch (error) {
+        store.rollbackHandoff(session, result.previous, handoffId)
+        throw error
+      }
+    }
+    store.assertOwner(session, body.ownerToken, body.ownerEpoch)
     if (operation === 'renew') return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
     if (operation === 'append') {
       if (testHooks.failSessionAppend?.(body) === true) {
@@ -403,9 +595,11 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
       if (body.expectedNextSeq !== session.events.length || !Array.isArray(body.events)) {
         throw new BackendError('SEQ_CONFLICT', 'append does not continue the visible log', 409)
       }
+      if (body.events.length > MAX_SESSION_APPEND_EVENTS) throw new BackendError('REQUEST_TOO_LARGE', 'Session append event count exceeds the request limit', 413)
+      if (jsonBytes(body.events) > MAX_SESSION_APPEND_BYTES) throw new BackendError('REQUEST_TOO_LARGE', 'Session append exceeds the request byte budget', 413)
       if (session.events.length + body.events.length > MAX_EVENTS) throw new BackendError('REQUEST_TOO_LARGE', 'Session event limit exceeded', 413)
       body.events.forEach((event, index) => {
-        if (event === null || typeof event !== 'object' || event.seq !== body.expectedNextSeq + index) {
+        if (event === null || typeof event !== 'object' || Array.isArray(event) || event.seq !== body.expectedNextSeq + index) {
           throw new BackendError('SEQ_CONFLICT', 'event sequence is not contiguous', 409)
         }
       })
@@ -1503,6 +1697,7 @@ export async function createBrowserNativeV2Server(options) {
   const store = new FormalSessionStore(options.dataDir, {
     ownerLeaseMs: options.ownerLeaseMs,
     now: options.testHooks?.now,
+    failFlush: options.testHooks?.failSessionFlush,
   })
   await store.load()
   const workspaces = new WorkspaceStore(options.dataDir, {
@@ -1670,7 +1865,7 @@ export async function createBrowserNativeV2Server(options) {
         }
         if (body.sessionId !== undefined) {
           const session = store.get(body.sessionId)
-          store.assertOwner(session, body.ownerToken)
+          store.assertOwner(session, body.ownerToken, body.ownerEpoch)
         }
         if (options.testHooks?.failLlmRequest?.(body) === true) {
           throw new BackendError('E2E_INJECTED_LLM_FAILURE', 'E2E injected model request failure', 400)

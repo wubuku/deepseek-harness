@@ -381,7 +381,7 @@ Bridge 至少需要验证调用方、Workspace、机器、能力、路径或参�
 
 ## 架构决策建议
 
-以下建议以复用现有接口、明确数据所有权和缩小首期验证范围为原则，不代表已经完成选型。
+以下建议以复用现有接口、明确数据所有权和缩小首期验证范围为原则，不代表已经完成选型。参考项目 `dsh-TUI` 对“后端中立 Session adapter、能力探测与发布门槛、live/replay 同语义、明确 owner 恢复”的源码证据和不可迁移的 TTY/Node 假设，见[dsh-TUI 参考架构启发备忘](dsh-tui-reference-architecture-memo.md)。
 
 ### 优先复用服务定义，而不是按部署位置新造 API
 

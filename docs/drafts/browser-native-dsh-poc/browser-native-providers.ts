@@ -53,7 +53,10 @@ import {
   executeBrowserNativeGrep,
   isBrowserWorkspacePath,
 } from './browser-native-file-tools.ts'
-import { isBrowserNativeFileToolName } from './browser-native-capabilities.ts'
+import {
+  BROWSER_NATIVE_PUBLISHED_TOOL_NAMES,
+  isBrowserNativeFileToolName,
+} from './browser-native-capabilities.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -62,7 +65,7 @@ const CONFIG_ROUTE = '/api/browser-native/config'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
-const activeSessionOwners = new Map<string, string>()
+const activeSessionOwners = new Map<string, { readonly ownerToken: string; readonly ownerEpoch: number }>()
 
 interface ErrorPayload {
   readonly error?: { readonly code?: string; readonly message?: string; readonly retryAfterMs?: number }
@@ -124,6 +127,7 @@ interface RuntimeFileToolHelpers {
 
 interface BrowserNativeOwner {
   readonly ownerToken: string
+  readonly ownerEpoch: number
   readonly leaseDurationMs: number
   readonly renewAfterMs: number
 }
@@ -264,8 +268,8 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
         await sessionRequest('renew', { sessionId: this.id, ...this.ownerBody() }, AbortSignal.timeout(owner.renewAfterMs))
       }).then(() => {
         if (this.closed || this.closeOperation !== undefined) return
-        activeSessionOwners.set(this.id, owner.ownerToken)
-        publishBrowserNativeOwner({ type: 'owner', sessionId: String(this.id), ownerToken: owner.ownerToken })
+        activeSessionOwners.set(this.id, { ownerToken: owner.ownerToken, ownerEpoch: owner.ownerEpoch })
+        publishBrowserNativeOwner({ type: 'owner', sessionId: String(this.id), ownerToken: owner.ownerToken, ownerEpoch: owner.ownerEpoch })
         this.scheduleRenewal()
       }, error => {
         if (this.closed || this.closeOperation !== undefined) return
@@ -286,7 +290,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     if (this.access !== 'write' || this.owner === undefined) {
       throw new (runtimePersistence().SessionReadOnlyError)(this.id, 'mutation')
     }
-    return { ownerToken: this.owner.ownerToken }
+    return { ownerToken: this.owner.ownerToken, ownerEpoch: this.owner.ownerEpoch }
   }
 
   private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
@@ -682,6 +686,7 @@ function createRemoteSessionPersistenceClass(
     private track(response: SessionResponse, id: SessionId, access: SessionAccess): SessionHandle {
       const owner = response.owner
       if (access === 'write' && (owner === undefined || typeof owner.ownerToken !== 'string'
+        || !Number.isSafeInteger(owner.ownerEpoch) || owner.ownerEpoch < 1
         || !Number.isSafeInteger(owner.leaseDurationMs) || owner.leaseDurationMs < 300
         || !Number.isSafeInteger(owner.renewAfterMs) || owner.renewAfterMs < 1 || owner.renewAfterMs >= owner.leaseDurationMs)) {
         throw new Error('browser-native Session response is missing a valid write lease')
@@ -695,7 +700,8 @@ function createRemoteSessionPersistenceClass(
         owner,
         required(response.nextSeq, 'nextSeq'),
         () => {
-          if (owner !== undefined && activeSessionOwners.get(id) === owner.ownerToken) {
+          if (owner !== undefined && activeSessionOwners.get(id)?.ownerToken === owner.ownerToken
+            && activeSessionOwners.get(id)?.ownerEpoch === owner.ownerEpoch) {
             activeSessionOwners.delete(id)
             publishBrowserNativeOwner({ type: 'released', sessionId: String(id) })
           }
@@ -706,8 +712,8 @@ function createRemoteSessionPersistenceClass(
       if (access === 'write') {
         this.writers.set(id, handle)
         if (owner !== undefined) {
-          activeSessionOwners.set(id, owner.ownerToken)
-          publishBrowserNativeOwner({ type: 'owner', sessionId: String(id), ownerToken: owner.ownerToken })
+          activeSessionOwners.set(id, { ownerToken: owner.ownerToken, ownerEpoch: owner.ownerEpoch })
+          publishBrowserNativeOwner({ type: 'owner', sessionId: String(id), ownerToken: owner.ownerToken, ownerEpoch: owner.ownerEpoch })
         }
       }
       return handle
@@ -819,7 +825,7 @@ function toWireMessage(message: RequestMessage): WireMessage {
 
 function toWireTools(tools: readonly ToolSchema[] | undefined): readonly unknown[] | undefined {
   if (tools === undefined) return undefined
-  return tools.map(tool => ({
+  return tools.filter(tool => BROWSER_NATIVE_PUBLISHED_TOOL_NAMES.has(tool.name)).map(tool => ({
     type: 'function',
     function: { name: tool.name, description: tool.description, parameters: tool.parameters },
   }))
@@ -869,7 +875,10 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
         protocolVersion: PROTOCOL_VERSION,
         requestId: requestId(),
         sessionId: options.sessionId,
-        ownerToken: options.sessionId === undefined ? undefined : activeSessionOwners.get(options.sessionId),
+        ...(options.sessionId === undefined || activeSessionOwners.get(options.sessionId) === undefined ? {} : {
+          ownerToken: activeSessionOwners.get(options.sessionId)!.ownerToken,
+          ownerEpoch: activeSessionOwners.get(options.sessionId)!.ownerEpoch,
+        }),
         provider: options.provider,
         model: options.model,
         ...(options.purpose === undefined ? {} : { purpose: options.purpose }),

@@ -529,6 +529,42 @@ DSH_POC_BROWSER=chrome DSH_POC_LONG_SESSION_TURNS=64 \
 
 真实模型测试只验证当前 provider/model、Chrome 和当前摘要提示；不会把真实模型凭据写入浏览器或测试输出。自然 eviction、OS crash、Safari/WebKit、Session 本地 outbox 和跨设备恢复仍未验证。
 
+## Session 适配、能力发布与执行交接验证
+
+[Session 适配与执行交接验证计划](next-session-adapter-and-handoff-validation-plan.md)及[进度记录](next-session-adapter-and-handoff-validation-progress.md)把 dsh-TUI 的四项可迁移纪律落到 Browser-Native PoC：history 完成后才接收 live event、取消/销毁保留 `unknown`、能力必须经过 probe 才发布，以及 Browser Worker 到云端执行者必须显式 handoff 并提升 fencing。它们不把现有 Workspace writer lease 测试改名为 Agent handoff。
+
+当前实现包含四个 PoC-local 适配器：Session cursor 的连续 seq/去重/identity 检查、execution lifecycle 的 `confirmed`/`unknown`/`failed` settlement、capability publication 的 `live + probe + permission` roster，以及 Session backend 的 owner epoch handoff。默认 Browser profile 的 LLM wire 请求现在只序列化 9 个已发布工具；真实 Chrome handoff E2E 在 DSH Worker 完成一次 `write` 后交接 Session，旧 owner append 返回 409，新 owner 可以继续追加，backend 重启后 epoch 继续递增。
+
+复跑本批验证：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-session-adapter.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-execution-lifecycle.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-handoff.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs
+```
+
+这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 的“云端”是 PoC backend 中的新 owner 协议角色；它没有启动真正的云执行进程，也没有复制 Worker 内存状态。Safari/WebKit、自然 eviction、OS crash 和真实 LLM handoff 未执行。
+
+## 会话目录、观察者与交接幂等验证
+
+[本批计划](next-catalog-observer-bridge-validation-plan.md)及[进度记录](next-catalog-observer-bridge-validation-progress.md)把 `dsh-TUI` 的 Session projection、单写者挂载和有界 dispatch 经验转成四个 Browser-Native 验证面：handoff 响应丢失后的幂等重试与严格 checkpoint、Session catalog 有界分页、只读观察者与单写 owner、跨边界 Session 载荷预算。它们不修改正式 Agent Loop 或 Session format。
+
+当前 checkout 已实现 backend 合同层：同一 `handoffId` 的相同 checkpoint 重试不会再次提升 owner epoch，flush 在发布前失败会恢复旧 owner；Session list 按稳定 id 游标分页，read 返回 `nextSeq`、`hasMore`、`durableThroughSeq` 和 `ownerEpoch`，append/read 超过预算时显式拒绝。真实 Chrome 双页面验收还会确认观察者能看到同一 Session 的追加事件但没有写权；这些证据不等于多实例 HA、跨设备同步或生产查询服务。
+
+复跑本批模型无关验收：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-observers.e2e.mjs
+```
+
+分页目录是查询投影，不是新的事实源；只读观察者不持有 owner token；载荷拒绝也不等于已经实现 blob 引用或大工具结果分页。真实 LLM、Safari/WebKit、自然 eviction、OS crash、跨主机 backend 和生产授权不在本批通过范围内。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

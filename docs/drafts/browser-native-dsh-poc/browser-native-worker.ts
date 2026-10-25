@@ -73,7 +73,7 @@ const pending: unknown[] = []
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -95,6 +95,11 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly oldText?: string
   readonly newText?: string
   readonly failStage?: ChunkEditStage
+  readonly sessionId?: string
+  readonly ownerToken?: string
+  readonly ownerEpoch?: number
+  readonly handoffId?: string
+  readonly checkpoint?: Readonly<Record<string, unknown>>
 }
 
 function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspaceTestRequest {
@@ -123,6 +128,12 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && typeof data.newText === 'string'
       && newTextBytes <= 256 * 1024
       && (data.failStage === undefined || ['copy-prefix', 'copy-suffix', 'write-replacement', 'truncate', 'hash', 'publish'].includes(String(data.failStage)))
+  }
+  if (data.action === 'session-handoff') {
+    return typeof data.sessionId === 'string' && typeof data.ownerToken === 'string'
+      && Number.isSafeInteger(data.ownerEpoch) && Number(data.ownerEpoch) > 0
+      && typeof data.handoffId === 'string' && data.handoffId.length > 0
+      && data.checkpoint !== null && typeof data.checkpoint === 'object' && !Array.isArray(data.checkpoint)
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
   return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
@@ -368,6 +379,27 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'reference-edit-probe') {
       workspaceTestResponse(request.requestId, await runReferenceEditProbe(request))
+      return
+    }
+    if (request.action === 'session-handoff') {
+      const response = await fetch('/api/browser-native/session/handoff', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: request.requestId,
+          sessionId: request.sessionId,
+          ownerToken: request.ownerToken,
+          ownerEpoch: request.ownerEpoch,
+          handoffId: request.handoffId,
+          checkpoint: request.checkpoint,
+        }),
+      })
+      workspaceTestResponse(request.requestId, {
+        ok: response.ok,
+        status: response.status,
+        value: await response.json(),
+      })
       return
     }
     if (request.action === 'flush-local') {

@@ -147,6 +147,23 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-029：Session 目录、观察者与 handoff 幂等验证
+
+```text
+changeId: BN-P2-029
+upstreamBaseline: research checkout after BN-P2-018; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/session-observers.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-catalog-observer-bridge-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: dsh-TUI 的 Session projection 与 mount ownership 经验指出，Browser-Native 还需要证明查询目录不会冒充事实、只读观察者不会获得写权，以及 handoff 响应丢失和 checkpoint 不一致不会重复交接或静默越过安全点。
+existingExtensionPointsChecked: 复用 PoC FormalSessionStore 的 per-Session exclusive queue、owner token/epoch、Session seq、BrowserNativeSessionCursor 和现有真实 Chrome Worker handoff E2E；未修改 Agent Loop、正式 Session format、默认 Web profile 或 Workspace CAS。
+whyDraftOnlyWasInsufficient: 单独的 owner fencing 测试不能证明同一 handoffId 的重试、flush 失败回滚、稳定 catalog cursor、双页面只读观察和跨边界载荷拒绝共同成立；仅有静态设计也不能证明浏览器页面实际通过同源 Session API 观察同一事实源。
+behaviorChange: Session handoff 记录 handoffId、规范化 checkpoint 和可重放 receipt；同一幂等键的等价重试返回原 owner，不重复提升 epoch，checkpoint/owner 不匹配显式失败，durability failure 在可识别失败前恢复旧 owner。Session list 增加有界 limit/stable cursor；Session read 返回 ownerEpoch、durableThroughSeq、hasMore；append/read 受事件数和 JSON 字节预算约束，超限显式拒绝。新增双 Chrome 页面 observer E2E，观察者可以读取追加事件但不能 append。
+consumersUpdated: backend Session route/store、backend contract tests、Chrome observer E2E、PoC README、验证计划/进度、docs/drafts 导读和本记录。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 30/30；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-observers.e2e.mjs` 真实 Chrome 双页面通过，观察者看到 nextSeq=2 且无 owner token 的 append 返回 409 SESSION_OWNERSHIP_LOST。未把 scripted 或直接 API 测试写成真实 LLM 证据；多实例 HA、自然 eviction、OS crash、跨主机 backend 和生产授权仍未验证。
+syncReplaySteps: 上游同步后先检查 Session query API、owner handoff 和 persistence writer 是否已提供原生幂等 receipt、分页 cursor 和只读 observer contract；若无，保留 backend-v2 的 PoC-local 限制与负例测试。重放后运行 backend contract、Chrome observer、已有 handoff E2E、preview build、typecheck 和文档门禁；若正式接口存在，则把 E2E 迁移到正式接口后删除重复路由逻辑。
+deleteCondition: 正式 Session service 提供等价的 handoff receipt 查询/幂等、分页目录、只读 observer cursor 和载荷预算，并且迁移后的测试仍通过；或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-028：Browser-Native Session compaction 与长会话可持续性
 
 ```text
