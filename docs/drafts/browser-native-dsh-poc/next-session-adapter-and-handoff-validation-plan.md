@@ -10,6 +10,8 @@ description: "规划 Browser-Native DSH 下一批 Session 回放、生命周期�
 
 目标是形成可复跑的 conformance 证据，而不是再增加几个孤立的工具测试。DSH Session 仍是对话和工具事实源；Workspace revision、operationId、Session seq、owner epoch 和 fencing token 各自保持独立。Browser Worker 仍受页面生命周期约束；云端接管只有在显式 handoff 协议和新 owner fencing 都成立时才存在。
 
+后续复核确认原 M4 只实现了 PoC Session owner epoch 转移，没有完成 pending execution settlement、Workspace lease 转移或 Cloud Host 接管；原 receipt 还允许旧 bearer 重放取回新凭据。当前 handoff 的实际安全范围和修复证据以[后续安全与恢复计划](next-handoff-security-and-recovery-plan.md)为准。
+
 ## 候选范围
 
 | 候选验证点 | 价值 | 本批决定 | 主要风险 |

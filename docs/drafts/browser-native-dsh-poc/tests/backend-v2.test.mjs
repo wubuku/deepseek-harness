@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -266,8 +266,8 @@ describe('browser-native DSH v2 backend', () => {
         epoch: oldOwner.ownerEpoch,
         nextSessionSeq: 1,
         workspaceRevision: 3,
-        pendingOperationIds: ['workspace-op-1'],
-        pendingExecutionIds: ['tool-1'],
+        pendingOperationIds: [],
+        pendingExecutionIds: [],
       },
     }))
     assert.equal(handoff.handoffId, 'handoff-1')
@@ -290,6 +290,14 @@ describe('browser-native DSH v2 backend', () => {
       messages: [],
     }))
     assert.equal(staleLlm.code, 'SESSION_OWNERSHIP_LOST')
+    for (const operation of ['renew', 'flush', 'close']) {
+      const staleWrite = await failure(origin, `/api/browser-native/session/${operation}`, envelope(`handoff-stale-${operation}`, {
+        sessionId: id,
+        ownerToken: oldOwner.ownerToken,
+        ownerEpoch: oldOwner.ownerEpoch,
+      }))
+      assert.equal(staleWrite.code, 'SESSION_OWNERSHIP_LOST')
+    }
 
     const accepted = await post(origin, '/api/browser-native/session/append', envelope('handoff-cloud-append', {
       sessionId: id,
@@ -332,6 +340,9 @@ describe('browser-native DSH v2 backend', () => {
       handoffId: 'same-handoff',
       checkpoint,
     }))
+    const storedAfterHandoff = JSON.parse(await readFile(join(dataDir, 'sessions', `${id}.json`), 'utf8'))
+    assert.equal(JSON.stringify(storedAfterHandoff.handoffs).includes(created.owner.ownerToken), false)
+    assert.equal(JSON.stringify(storedAfterHandoff.handoffs).includes(first.owner.ownerToken), false)
     await post(origin, '/api/browser-native/session/append', envelope('handoff-idempotent-after', {
       sessionId: id,
       ownerToken: first.owner.ownerToken,
@@ -348,8 +359,9 @@ describe('browser-native DSH v2 backend', () => {
     }))
     assert.equal(first.replayed, false)
     assert.equal(replay.replayed, true)
-    assert.equal(replay.owner.ownerEpoch, first.owner.ownerEpoch)
-    assert.equal(replay.owner.ownerToken, first.owner.ownerToken)
+    assert.equal(replay.owner, null)
+    assert.equal(replay.credentialStatus, 'not-replayed')
+    assert.equal(replay.ownerEpoch, first.owner.ownerEpoch)
 
     const conflict = await failure(origin, '/api/browser-native/session/handoff', envelope('handoff-idempotent-conflict', {
       sessionId: id,
@@ -359,6 +371,59 @@ describe('browser-native DSH v2 backend', () => {
       checkpoint: { ...checkpoint, workspaceRevision: 1 },
     }))
     assert.equal(conflict.code, 'HANDOFF_CONFLICT')
+  })
+
+  it('rejects unsettled work before changing Session ownership', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-pending-work-session'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('handoff-pending-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-1',
+      epoch: created.owner.ownerEpoch,
+      nextSessionSeq: 0,
+      workspaceRevision: 0,
+      pendingOperationIds: ['workspace-op-1'],
+      pendingExecutionIds: [],
+    }
+    const pendingOperation = await failure(origin, '/api/browser-native/session/handoff', envelope('handoff-pending-operation', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'pending-operation',
+      checkpoint,
+    }))
+    assert.equal(pendingOperation.code, 'HANDOFF_BUSY')
+
+    const pendingExecution = await failure(origin, '/api/browser-native/session/handoff', envelope('handoff-pending-execution', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'pending-execution',
+      checkpoint: { ...checkpoint, pendingOperationIds: [], pendingExecutionIds: ['tool-1'] },
+    }))
+    assert.equal(pendingExecution.code, 'HANDOFF_BUSY')
+
+    const renewed = await post(origin, '/api/browser-native/session/open', envelope('handoff-pending-owner', {
+      sessionId: id,
+      access: 'write',
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+    }))
+    assert.equal(renewed.owner.ownerEpoch, created.owner.ownerEpoch)
+    const validHandoff = await post(origin, '/api/browser-native/session/handoff', envelope('handoff-pending-valid', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'pending-operation',
+      checkpoint: { ...checkpoint, pendingOperationIds: [] },
+    }))
+    assert.equal(validHandoff.owner.ownerEpoch, created.owner.ownerEpoch + 1)
   })
 
   it('keeps the old owner when handoff durability fails before publish', async () => {
@@ -400,6 +465,258 @@ describe('browser-native DSH v2 backend', () => {
       events: [{ seq: 0, type: 'user/message', payload: { content: 'old owner retained' } }],
     }))
     assert.equal(appended.nextSeq, 1)
+  })
+
+  it('blocks writes after post-rename unknown durability and recovers from the published receipt', async () => {
+    const dataDir = await temporaryDirectory()
+    const first = await start({
+      dataDir,
+      llmMode: 'scripted',
+      ownerLeaseMs: 300,
+      testHooks: { failSessionFlushAfterRename: () => true },
+    })
+    const id = 'handoff-unknown-durability-session'
+    const created = await post(first.origin, '/api/browser-native/session/create', envelope('handoff-unknown-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-1',
+      epoch: created.owner.ownerEpoch,
+      nextSessionSeq: 0,
+      workspaceRevision: 0,
+      pendingOperationIds: [],
+      pendingExecutionIds: [],
+    }
+    const unknown = await failure(first.origin, '/api/browser-native/session/handoff', envelope('handoff-unknown', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'post-rename-unknown',
+      checkpoint,
+    }))
+    assert.equal(unknown.code, 'DURABILITY_UNKNOWN')
+    const blockedAppend = await failure(first.origin, '/api/browser-native/session/append', envelope('handoff-unknown-write', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      expectedNextSeq: 0,
+      events: [{ seq: 0, type: 'user/message', payload: { content: 'must remain blocked' } }],
+    }))
+    assert.equal(blockedAppend.code, 'SESSION_RECOVERY_REQUIRED')
+    const published = JSON.parse(await readFile(join(dataDir, 'sessions', `${id}.json`), 'utf8'))
+    assert.equal(published.ownerEpoch, 2)
+    assert.equal(JSON.stringify(published.handoffs).includes(created.owner.ownerToken), false)
+
+    await first.app.close()
+    liveApps.delete(first.app)
+    const second = await start({ dataDir, llmMode: 'scripted', ownerLeaseMs: 300 })
+    const recovered = await post(second.origin, '/api/browser-native/session/open', envelope('handoff-unknown-reopen', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.equal(recovered.owner.ownerEpoch, 3)
+    assert.notEqual(recovered.owner.ownerToken, created.owner.ownerToken)
+    const accepted = await post(second.origin, '/api/browser-native/session/append', envelope('handoff-unknown-recovered-append', {
+      sessionId: id,
+      ownerToken: recovered.owner.ownerToken,
+      ownerEpoch: recovered.owner.ownerEpoch,
+      expectedNextSeq: 0,
+      events: [{ seq: 0, type: 'user/message', payload: { content: 'recovered owner' } }],
+    }))
+    assert.equal(accepted.nextSeq, 1)
+  })
+
+  it('does not reissue a handoff token after a committed response is lost', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = 1_800_000_000_000
+    let dropResponse = true
+    const first = await start({
+      dataDir,
+      llmMode: 'scripted',
+      ownerLeaseMs: 300,
+      testHooks: {
+        now: () => now,
+        dropSessionHandoffResponse: () => {
+          if (!dropResponse) return false
+          dropResponse = false
+          return true
+        },
+      },
+    })
+    const id = 'handoff-lost-response-session'
+    const created = await post(first.origin, '/api/browser-native/session/create', envelope('handoff-lost-response-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-1',
+      epoch: created.owner.ownerEpoch,
+      nextSessionSeq: 0,
+      workspaceRevision: 0,
+      pendingOperationIds: [],
+      pendingExecutionIds: [],
+    }
+    await assert.rejects(fetch(`${first.origin}/api/browser-native/session/handoff`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('handoff-lost-response', {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        ownerEpoch: created.owner.ownerEpoch,
+        handoffId: 'lost-response',
+        checkpoint,
+      })),
+    }))
+    const replay = await post(first.origin, '/api/browser-native/session/handoff', envelope('handoff-lost-response-retry', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'lost-response',
+      checkpoint,
+    }))
+    assert.equal(replay.replayed, true)
+    assert.equal(replay.owner, null)
+    assert.equal(replay.credentialStatus, 'not-replayed')
+    const stillOwned = await failure(first.origin, '/api/browser-native/session/open', envelope('handoff-lost-response-too-early', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.equal(stillOwned.code, 'SESSION_ALREADY_OWNED')
+
+    now += 301
+    const recovered = await post(first.origin, '/api/browser-native/session/open', envelope('handoff-lost-response-claim', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.equal(recovered.owner.ownerEpoch, 3)
+    assert.notEqual(recovered.owner.ownerToken, created.owner.ownerToken)
+    const persisted = JSON.parse(await readFile(join(dataDir, 'sessions', `${id}.json`), 'utf8'))
+    assert.equal(JSON.stringify(persisted.handoffs).includes(created.owner.ownerToken), false)
+    assert.equal(JSON.stringify(persisted.handoffs).includes(recovered.owner.ownerToken), false)
+  })
+
+  it('serializes simultaneous handoff retries and fences a competing handoff ID', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'handoff-concurrent-session'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('handoff-concurrent-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-1',
+      epoch: created.owner.ownerEpoch,
+      nextSessionSeq: 0,
+      workspaceRevision: 0,
+      pendingOperationIds: [],
+      pendingExecutionIds: [],
+    }
+    const sameIdResults = await Promise.all([
+      post(origin, '/api/browser-native/session/handoff', envelope('handoff-concurrent-same-a', {
+        sessionId: id, ownerToken: created.owner.ownerToken, ownerEpoch: created.owner.ownerEpoch,
+        handoffId: 'same-concurrent-handoff', checkpoint,
+      })),
+      post(origin, '/api/browser-native/session/handoff', envelope('handoff-concurrent-same-b', {
+        sessionId: id, ownerToken: created.owner.ownerToken, ownerEpoch: created.owner.ownerEpoch,
+        handoffId: 'same-concurrent-handoff', checkpoint,
+      })),
+    ])
+    assert.deepEqual(sameIdResults.map(result => result.replayed).sort(), [false, true])
+    assert.equal(sameIdResults.filter(result => result.owner !== null).length, 1)
+    assert.equal(sameIdResults.find(result => result.replayed).owner, null)
+    assert.equal(sameIdResults.every(result => result.ownerEpoch === 2), true)
+
+    const secondId = 'handoff-concurrent-distinct-session'
+    const secondCreated = await post(origin, '/api/browser-native/session/create', envelope('handoff-concurrent-distinct-create', {
+      sessionId: secondId,
+      header: header(secondId),
+      inheritedEventCount: 0,
+    }))
+    const secondCheckpoint = { ...checkpoint, sessionId: secondId }
+    const distinctResults = await Promise.allSettled(['distinct-a', 'distinct-b'].map(handoffId =>
+      post(origin, '/api/browser-native/session/handoff', envelope(`handoff-concurrent-${handoffId}`, {
+        sessionId: secondId,
+        ownerToken: secondCreated.owner.ownerToken,
+        ownerEpoch: secondCreated.owner.ownerEpoch,
+        handoffId,
+        checkpoint: secondCheckpoint,
+      })),
+    ))
+    assert.equal(distinctResults.filter(result => result.status === 'fulfilled').length, 1)
+    const rejected = distinctResults.find(result => result.status === 'rejected')
+    assert.equal(rejected.reason.code, 'SESSION_OWNERSHIP_LOST')
+  })
+
+  it('scrubs legacy handoff bearer tokens before serving and fences the former owner', async () => {
+    const dataDir = await temporaryDirectory()
+    const id = 'handoff-legacy-migration-session'
+    const sessionsDir = join(dataDir, 'sessions')
+    await mkdir(sessionsDir, { recursive: true })
+    const previousToken = 'legacy-previous-bearer-token'
+    const nextToken = 'legacy-next-bearer-token'
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-legacy',
+      epoch: 1,
+      nextSessionSeq: 0,
+      workspaceRevision: 0,
+      pendingOperationIds: [],
+      pendingExecutionIds: [],
+    }
+    await writeFile(join(sessionsDir, `${id}.json`), JSON.stringify({
+      id,
+      header: header(id),
+      inheritedEventCount: 0,
+      events: [],
+      durableThroughSeq: -1,
+      ownerEpoch: 2,
+      handoffs: {
+        legacy: {
+          fingerprint: JSON.stringify(checkpoint),
+          receipt: {
+            sessionId: id,
+            previous: { sessionId: id, ownerToken: previousToken, ownerEpoch: 1 },
+            next: { sessionId: id, ownerToken: nextToken, ownerEpoch: 2 },
+            checkpoint,
+            handoffId: 'legacy',
+            durabilityReceipt: `durable-${id}-0`,
+          },
+        },
+      },
+    }))
+
+    await assert.rejects(
+      createBrowserNativeV2Server({ dataDir, llmMode: 'scripted', testHooks: { failSessionFlush: () => true } }),
+      error => error.code === 'DURABILITY_FAILED',
+    )
+    const unmigrated = await readFile(join(sessionsDir, `${id}.json`), 'utf8')
+    assert.equal(unmigrated.includes(previousToken), true)
+    assert.equal(unmigrated.includes(nextToken), true)
+
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const migrated = await readFile(join(sessionsDir, `${id}.json`), 'utf8')
+    assert.equal(migrated.includes(previousToken), false)
+    assert.equal(migrated.includes(nextToken), false)
+    const opened = await post(origin, '/api/browser-native/session/open', envelope('handoff-legacy-open', {
+      sessionId: id,
+      access: 'write',
+    }))
+    assert.equal(opened.owner.ownerEpoch, 3)
+    const staleRetry = await failure(origin, '/api/browser-native/session/handoff', envelope('handoff-legacy-retry', {
+      sessionId: id,
+      ownerToken: previousToken,
+      ownerEpoch: 1,
+      handoffId: 'legacy',
+      checkpoint,
+    }))
+    assert.equal(staleRetry.code, 'SESSION_OWNERSHIP_LOST')
   })
 
   it('returns bounded Session catalog pages without granting write ownership', async () => {
@@ -500,8 +817,9 @@ describe('browser-native DSH v2 backend', () => {
       },
     }))
     assert.equal(replayed.replayed, true)
-    assert.equal(replayed.owner.ownerEpoch, handedOff.owner.ownerEpoch)
-    assert.equal(replayed.owner.ownerToken, handedOff.owner.ownerToken)
+    assert.equal(replayed.ownerEpoch, handedOff.owner.ownerEpoch)
+    assert.equal(replayed.owner, null)
+    assert.equal(replayed.credentialStatus, 'not-replayed')
     const reopened = await post(second.origin, '/api/browser-native/session/open', envelope('handoff-restart-open', {
       sessionId: id,
       access: 'write',

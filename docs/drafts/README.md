@@ -73,7 +73,8 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 18. [Browser-Native 能力预检与插件兼容性计划](browser-native-dsh-poc/browser-capability-preflight-plan.md)及[进度](browser-native-dsh-poc/browser-capability-preflight-progress.md)：集中声明 Worker profile 的能力，验证 boot 前 fail-closed 预检、默认 profile 的受限 Shell 语义和真实 LLM 独立 roster 回归；不把静态清单或模块加载外推为全部插件兼容。
 19. [Workspace 持久化 metadata 与 blob 生命周期验证计划](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-progress.md)：验证 backend 冷启动对损坏 metadata 的 fail-closed、文件/MinIO blob GC 对跨 Workspace 引用和 pending upload 的保留，以及未知 staging metadata 的保守保留；不推断多实例对象存储安全或生产云行为。
 20. [Browser-Native 深度运行时验证计划](browser-native-dsh-poc/next-deep-runtime-validation-plan.md)及[进度](browser-native-dsh-poc/next-deep-runtime-validation-progress.md)：验证长 Session 刷新 hydrate、同 turn 并行只读工具、`assistant/attempt` append 失败收束和大文件 materialize/external backing 边界；Safari、自然 eviction、OS crash、多实例 backend 和真实 LLM 大型 tool args 仍未验证。
-21. [Browser-Native 会话目录与观察交接验证计划](browser-native-dsh-poc/next-catalog-observer-bridge-validation-plan.md)及[进度](browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md)：验证 handoff 幂等与安全点、Session catalog 分页、多观察者单写者和跨边界载荷预算；不把 PoC backend 外推为分布式 HA 或云端 Durable Worker。
+21. [Browser-Native 会话目录与观察交接验证计划](browser-native-dsh-poc/next-catalog-observer-bridge-validation-plan.md)及[进度](browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md)：验证初始 handoff receipt、Session catalog 分页、多观察者单写者和跨边界载荷预算；其中 handoff 安全结论已由第 22 项的后续复核取代，不外推为分布式 HA 或云端 Durable Worker。
+22. [Browser-Native handoff 安全与恢复验证计划](browser-native-dsh-poc/next-handoff-security-and-recovery-plan.md)及[进度](browser-native-dsh-poc/next-handoff-security-and-recovery-progress.md)：修复并验证旧 owner 重放取回新 bearer、旧 receipt 凭据迁移、未结算工作拒绝、rename 后 unknown durability、响应丢失与并发 fencing；handoff 仍只转移 PoC Session 写权，不启动 Cloud Agent。
 
 ### 需要实现或审查代码时
 

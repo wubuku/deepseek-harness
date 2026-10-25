@@ -147,6 +147,24 @@ deleteCondition: durable Workspace 具备正式的可观测故障注入或端到
 status: implemented
 ```
 
+### BN-P2-030：Session handoff 凭据隔离、unknown durability 与恢复
+
+```text
+changeId: BN-P2-030
+upstreamBaseline: clean research checkout after BN-P2-029; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-handoff.ts; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-handoff.spec.ts; docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-handoff-security-and-recovery-plan.md; docs/drafts/browser-native-dsh-poc/next-handoff-security-and-recovery-progress.md; docs/drafts/browser-native-dsh-poc/next-session-adapter-and-handoff-validation-progress.md; docs/drafts/browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: 旧 handoff receipt 持久化 previous/next bearer token；旧 owner 用相同 handoffId 重放可重新取得新 token。checkpoint 还接受未结算 operation/execution ID，而 PoC 没有迁移它们的协议。rename 后目录 sync 失败也被错误当作确定未提交并回滚内存 owner，可能让内存与已替换文件分叉。
+existingExtensionPointsChecked: 复用 PoC FormalSessionStore per-Session exclusive queue、owner epoch/token、现有 Session JSON flush、Browser Worker test MessagePort 和 Chrome Dedicated Worker handoff E2E；未修改 DSH Agent Loop、Session format、默认 profile、Workspace owner lease 或正式 package。
+whyDraftOnlyWasInsufficient: 原 backend 30/30 与旧 Chrome handoff E2E 虽通过，但测试断言本身允许重放新 token，也没有在 rename 后故障、响应提交后丢失、pending work、迁移失败或并发 owner 竞争场景观察凭据和 durable state。
+behaviorChange: receipt 只保留 previous owner token 的 SHA-256 digest 与不含 bearer 的 checkpoint/epoch 回执；首次 handoff 响应是唯一返回新 bearer 的请求，旧 token 等价重放只能返回 owner=null 和 credentialStatus=not-replayed。backend 启动时同步 scrub legacy receipt 中的 previous/next bearer；migration flush 失败则不开始服务。新 handoff 拒绝非空 pendingOperationIds/pendingExecutionIds。flush 将 rename 前失败作为 DURABILITY_FAILED；rename 成功后出现故障则报告 DURABILITY_UNKNOWN 并阻止 Session claim/write，直到 backend 重启重载实际持久化状态。测试 hook 可在 handoff commit 后丢弃响应；重试不发放 token，租约到期后新 claim 取得更高 epoch。Coordinator 与 backend 共用 pending-work safety rule。
+directoryOutChangeReason: none; 所有代码、测试和文档位于 docs/drafts。
+consumersUpdated: Session backend、纯 TS handoff coordinator、Node backend tests、Chrome handoff E2E、PoC README、兼容矩阵、前序 handoff 进度、docs/drafts 导读和本账本。
+tests: backend contract 35/35；handoff coordinator Vitest 4/4；Google Chrome 155.0.8059.85 的真实 Worker response-loss/reclaim E2E 通过，owner epoch 1→2→3、旧 append 409、重放不返回 credential；Chrome default-profile capability 和双页面 observer regressions 通过；typecheck 5/5；preview build 通过并有既有 native platform/chunk-size warnings；test:docs 21/21；doc-sync 43/43；git diff --check 通过。真实 LLM handoff、Safari/WebKit、OS/磁盘 crash、生产授权、多实例 backend 和 Cloud Agent 未运行。
+syncReplaySteps: 上游同步后先检查正式 Session writer 是否提供一次性交付 bearer、可迁移且不含 raw secret 的 durable receipt、unknown flush outcome 和 recovery gate。若正式接口具备这些机制，把 backend contract 与真实 Worker E2E 迁移到正式 service，再删除重复 PoC 逻辑。若没有，则保留 PoC fail-closed 行为和负例测试。重放后运行 backend tests、handoff Vitest、session-owner-handoff、default-profile-capabilities、session-observers、preview build、typecheck 和 docs gates；不把此单实例协议外推为生产授权或 Cloud Agent handoff。
+deleteCondition: 正式 Session service 提供受授权的一次性交接、可查询的安全 receipt、pending execution settle/transfer、跨实例 fencing 和可恢复 durability unknown，且相同故障矩阵已迁移到正式接口；或 Browser-Native Session handoff PoC 被删除。
+status: implemented-as-draft
+```
+
 ### BN-P2-029：Session 目录、观察者与 handoff 幂等验证
 
 ```text

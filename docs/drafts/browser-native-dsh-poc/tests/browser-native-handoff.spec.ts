@@ -7,8 +7,8 @@ const checkpoint = {
   epoch: 1,
   nextSessionSeq: 12,
   workspaceRevision: 4,
-  pendingOperationIds: ['operation-1'],
-  pendingExecutionIds: ['tool-1'],
+  pendingOperationIds: [],
+  pendingExecutionIds: [],
 } as const
 
 describe('Browser-to-Cloud handoff fencing', () => {
@@ -29,6 +29,16 @@ describe('Browser-to-Cloud handoff fencing', () => {
     const browser = coordinator.claim('browser-worker-1')
     expect(() => coordinator.handoff(browser, { ...checkpoint, sessionId: 'session-2' }, 'cloud-worker-1')).toThrow(/checkpoint/)
     expect(() => coordinator.handoff(browser, { ...checkpoint, ownerId: 'other-worker' }, 'cloud-worker-1')).toThrow(/checkpoint/)
+  })
+
+  it('rejects unsettled operations without changing the owner', () => {
+    const coordinator = new BrowserNativeHandoffCoordinator('session-1')
+    const browser = coordinator.claim('browser-worker-1')
+
+    expect(() => coordinator.handoff(browser, { ...checkpoint, pendingExecutionIds: ['tool-1'] }, 'cloud-worker-1'))
+      .toThrow(/settled/)
+    expect(coordinator.currentOwner()).toEqual(browser)
+    expect(() => coordinator.assertCurrent(browser)).not.toThrow()
   })
 
   it('does not allow two active owners and advances fencing after release', () => {

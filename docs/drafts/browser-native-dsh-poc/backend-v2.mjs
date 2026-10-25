@@ -6,7 +6,7 @@
  * or an OpenAI-compatible upstream. Credentials are loaded only in this Node
  * process and are never included in responses or logs.
  */
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
@@ -120,6 +120,45 @@ function checkpointFingerprint(checkpoint) {
   })
 }
 
+function ownerTokenDigest(ownerToken) {
+  return createHash('sha256').update(ownerToken).digest('hex')
+}
+
+function matchesOwnerTokenDigest(ownerToken, expectedDigest) {
+  if (typeof ownerToken !== 'string' || typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest)) return false
+  return timingSafeEqual(Buffer.from(ownerTokenDigest(ownerToken), 'hex'), Buffer.from(expectedDigest, 'hex'))
+}
+
+function normalizeHandoffRecord(handoffId, record) {
+  const receipt = record?.receipt
+  if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    throw new Error(`Session handoff ${handoffId} has an invalid receipt`)
+  }
+  if (receipt.previous?.ownerToken === undefined && receipt.next?.ownerToken === undefined) {
+    if (typeof record.previousOwnerTokenDigest !== 'string') throw new Error(`Session handoff ${handoffId} has no previous owner digest`)
+    return { record, migrated: false }
+  }
+  const previousOwnerToken = receipt.previous?.ownerToken
+  if (typeof previousOwnerToken !== 'string' || previousOwnerToken.length === 0) {
+    throw new Error(`Session handoff ${handoffId} cannot migrate its previous owner token`)
+  }
+  return {
+    record: {
+      fingerprint: record.fingerprint,
+      previousOwnerTokenDigest: ownerTokenDigest(previousOwnerToken),
+      receipt: {
+        sessionId: receipt.sessionId,
+        previousOwnerEpoch: receipt.previous?.ownerEpoch,
+        ownerEpoch: receipt.next?.ownerEpoch,
+        checkpoint: receipt.checkpoint,
+        handoffId: receipt.handoffId,
+        durabilityReceipt: receipt.durabilityReceipt,
+      },
+    },
+    migrated: true,
+  }
+}
+
 function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, requireCurrent = true) {
   assertRecord(checkpoint, 'checkpoint')
   const expectedKeys = new Set(['sessionId', 'ownerId', 'epoch', 'nextSessionSeq', 'workspaceRevision', 'pendingOperationIds', 'pendingExecutionIds'])
@@ -136,6 +175,9 @@ function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, 
     const values = checkpoint[name]
     if (!Array.isArray(values) || values.length > MAX_CHECKPOINT_IDS) throw new BackendError('CHECKPOINT_INVALID', `${name} must contain at most ${MAX_CHECKPOINT_IDS} ids`)
     for (const value of values) boundedString(value, `${name} item`, MAX_CHECKPOINT_ID_LENGTH)
+    if (requireCurrent && values.length > 0) {
+      throw new BackendError('HANDOFF_BUSY', `${name} must be empty before ownership can be handed off`, 409)
+    }
   }
   boundedString(ownerToken, 'ownerToken', 200)
   return clone(checkpoint)
@@ -276,7 +318,7 @@ async function acquireDataDirLock(dataDir) {
 }
 
 class FormalSessionStore {
-  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, failFlush } = {}) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, failFlush, failFlushAfterRename } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
@@ -285,6 +327,7 @@ class FormalSessionStore {
     this.ownerLeaseMs = ownerLeaseMs
     this.now = now
     this.failFlush = failFlush
+    this.failFlushAfterRename = failFlushAfterRename
   }
 
   async load() {
@@ -294,7 +337,14 @@ class FormalSessionStore {
       const raw = JSON.parse(await readFile(join(this.sessionsDir, entry.name), 'utf8'))
       const id = assertSessionId(raw.id)
       if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
-      this.sessions.set(id, {
+      const handoffs = new Map()
+      let handoffsMigrated = false
+      for (const [handoffId, record] of Object.entries(raw.handoffs ?? {})) {
+        const normalized = normalizeHandoffRecord(handoffId, record)
+        handoffs.set(handoffId, clone(normalized.record))
+        handoffsMigrated ||= normalized.migrated
+      }
+      const session = {
         id,
         header: clone(raw.header),
         inheritedEventCount: raw.inheritedEventCount ?? 0,
@@ -303,8 +353,11 @@ class FormalSessionStore {
         ownerToken: undefined,
         ownerEpoch: Number.isSafeInteger(raw.ownerEpoch) && raw.ownerEpoch >= 0 ? raw.ownerEpoch : 0,
         ownerExpiresAt: 0,
-        handoffs: new Map(Object.entries(raw.handoffs ?? {})),
-      })
+        writeBlocked: false,
+        handoffs,
+      }
+      this.sessions.set(id, session)
+      if (handoffsMigrated) await this.flush(session)
     }
   }
 
@@ -347,6 +400,7 @@ class FormalSessionStore {
   }
 
   claim(session, requestedOwnerToken, requestedOwnerEpoch) {
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session ownership is blocked until the backend reloads its durable state', 503)
     if (session.ownerToken !== undefined && session.ownerExpiresAt > this.now()) {
       if (requestedOwnerToken === session.ownerToken
         && (requestedOwnerEpoch === undefined || requestedOwnerEpoch === session.ownerEpoch)) {
@@ -383,6 +437,7 @@ class FormalSessionStore {
   }
 
   assertOwnerToken(session, ownerToken, ownerEpoch) {
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session writes are blocked until the backend reloads its durable state', 503)
     if (typeof ownerToken !== 'string' || session.ownerToken !== ownerToken
       || (ownerEpoch !== undefined && ownerEpoch !== session.ownerEpoch)) {
       throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
@@ -395,9 +450,12 @@ class FormalSessionStore {
   }
 
   beginHandoff(session, ownerToken, ownerEpoch, handoffId, checkpoint) {
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session writes are blocked until the backend reloads its durable state', 503)
     const existing = this.findHandoff(session, handoffId)
     if (existing !== undefined) {
-      if (ownerToken !== existing.receipt.previous.ownerToken && ownerToken !== existing.receipt.next.ownerToken) {
+      if (session.ownerEpoch !== existing.receipt.ownerEpoch
+        || ownerEpoch !== existing.receipt.previousOwnerEpoch
+        || !matchesOwnerTokenDigest(ownerToken, existing.previousOwnerTokenDigest)) {
         throw new BackendError('SESSION_OWNERSHIP_LOST', 'handoff retry does not identify either owner', 409)
       }
       if (existing.fingerprint !== checkpointFingerprint(checkpoint)) {
@@ -423,14 +481,18 @@ class FormalSessionStore {
     session.ownerExpiresAt = this.now() + this.ownerLeaseMs
     const receipt = {
       sessionId: session.id,
-      previous,
-      next,
+      previousOwnerEpoch: previous.ownerEpoch,
+      ownerEpoch: next.ownerEpoch,
       checkpoint: clone(checkpoint),
       handoffId,
       durabilityReceipt: `durable-${session.id}-${session.events.length - 1}`,
     }
-    session.handoffs.set(handoffId, { fingerprint: checkpointFingerprint(checkpoint), receipt })
-    return { replayed: false, receipt, previous }
+    session.handoffs.set(handoffId, {
+      fingerprint: checkpointFingerprint(checkpoint),
+      previousOwnerTokenDigest: ownerTokenDigest(ownerToken),
+      receipt,
+    })
+    return { replayed: false, receipt, owner: next, previous }
   }
 
   rollbackHandoff(session, previous, handoffId) {
@@ -452,17 +514,27 @@ class FormalSessionStore {
       ownerEpoch: session.ownerEpoch,
       handoffs: Object.fromEntries(session.handoffs),
     }
+    let published = false
     try {
       if (this.failFlush?.(session) === true) throw new BackendError('E2E_INJECTED_SESSION_FLUSH_FAILURE', 'E2E injected Session flush failure', 503)
       await writeFile(temporary, `${JSON.stringify(record)}\n`, 'utf8')
       const file = await open(temporary, 'r+')
       try { await file.sync() } finally { await file.close() }
       await rename(temporary, target)
+      published = true
+      if (this.failFlushAfterRename?.(session) === true) {
+        throw new BackendError('E2E_INJECTED_SESSION_POST_RENAME_FAILURE', 'E2E injected failure after Session file publish', 503)
+      }
       const directory = await open(this.sessionsDir, 'r')
       try { await directory.sync() } finally { await directory.close() }
     } catch (error) {
       await rm(temporary, { force: true })
-      throw new BackendError('DURABILITY_FAILED', `Session flush failed: ${String(error)}`, 503)
+      if (published) session.writeBlocked = true
+      throw new BackendError(
+        published ? 'DURABILITY_UNKNOWN' : 'DURABILITY_FAILED',
+        `Session flush ${published ? 'outcome is unknown after file publish' : 'failed before file publish'}: ${String(error)}`,
+        503,
+      )
     }
     session.durableThroughSeq = record.durableThroughSeq
     return `durable-${session.id}-${session.durableThroughSeq}`
@@ -565,24 +637,27 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
       const result = store.beginHandoff(session, body.ownerToken, body.ownerEpoch, handoffId, checkpoint)
       if (result.replayed) {
         return sessionResponse(session, {
-          owner: result.receipt.next,
+          owner: null,
           handoffId,
+          ownerEpoch: result.receipt.ownerEpoch,
           checkpoint: clone(result.receipt.checkpoint),
           durabilityReceipt: result.receipt.durabilityReceipt,
           replayed: true,
+          credentialStatus: 'not-replayed',
         })
       }
       try {
         const durabilityReceipt = await store.flush(session)
         return sessionResponse(session, {
-          owner: result.receipt.next,
+          owner: result.owner,
           handoffId,
+          ownerEpoch: result.receipt.ownerEpoch,
           checkpoint: clone(result.receipt.checkpoint),
           durabilityReceipt,
           replayed: false,
         })
       } catch (error) {
-        store.rollbackHandoff(session, result.previous, handoffId)
+        if (error?.code !== 'DURABILITY_UNKNOWN') store.rollbackHandoff(session, result.previous, handoffId)
         throw error
       }
     }
@@ -1698,6 +1773,7 @@ export async function createBrowserNativeV2Server(options) {
     ownerLeaseMs: options.ownerLeaseMs,
     now: options.testHooks?.now,
     failFlush: options.testHooks?.failSessionFlush,
+    failFlushAfterRename: options.testHooks?.failSessionFlushAfterRename,
   })
   await store.load()
   const workspaces = new WorkspaceStore(options.dataDir, {
@@ -1853,7 +1929,12 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
-        sendJson(response, 200, await sessionOperation(store, operation, body, options.testHooks))
+        const result = await sessionOperation(store, operation, body, options.testHooks)
+        if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
+          response.destroy()
+          return
+        }
+        sendJson(response, 200, result)
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/llm') {

@@ -10,6 +10,8 @@ description: "规划 Browser-Native DSH 下一批会话目录、只读观察、�
 
 本批不把分页目录、观察者游标或 PoC backend 的 handoff 角色写成生产多实例 HA、云端 Durable Worker 或跨服务事务。每个验证面都保留 `Session seq`、owner epoch、Workspace revision 和 request/handoff id 的独立含义。
 
+后续复核发现原 M1 的 handoff 幂等与安全点不完整：receipt 重放可泄露新 bearer，rename 后失败也未区分 unknown durability。当前 handoff 语义和修复以[handoff 安全与恢复计划](next-handoff-security-and-recovery-plan.md)为准；本计划中的 catalog、observer 和 payload 目标仍独立有效。
+
 ## 候选范围
 
 | 候选验证点 | 价值 | 本批决定 | 需要证明的风险 |

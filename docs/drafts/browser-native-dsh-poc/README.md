@@ -533,9 +533,9 @@ DSH_POC_BROWSER=chrome DSH_POC_LONG_SESSION_TURNS=64 \
 
 [Session 适配与执行交接验证计划](next-session-adapter-and-handoff-validation-plan.md)及[进度记录](next-session-adapter-and-handoff-validation-progress.md)把 dsh-TUI 的四项可迁移纪律落到 Browser-Native PoC：history 完成后才接收 live event、取消/销毁保留 `unknown`、能力必须经过 probe 才发布，以及 Browser Worker 到云端执行者必须显式 handoff 并提升 fencing。它们不把现有 Workspace writer lease 测试改名为 Agent handoff。
 
-当前实现包含四个 PoC-local 适配器：Session cursor 的连续 seq/去重/identity 检查、execution lifecycle 的 `confirmed`/`unknown`/`failed` settlement、capability publication 的 `live + probe + permission` roster，以及 Session backend 的 owner epoch handoff。默认 Browser profile 的 LLM wire 请求现在只序列化 9 个已发布工具；真实 Chrome handoff E2E 在 DSH Worker 完成一次 `write` 后交接 Session，旧 owner append 返回 409，新 owner 可以继续追加，backend 重启后 epoch 继续递增。
+当前实现包含四个 PoC-local 适配器：Session cursor 的连续 seq/去重/identity 检查、execution lifecycle 的 `confirmed`/`unknown`/`failed` settlement、capability publication 的 `live + probe + permission` roster，以及 Session backend 的 owner epoch handoff。handoff 是 Session 写权协议，不会启动 Cloud Host 或转移 Workspace lease、插件状态、模型流和 HITL Promise。最新的[handoff 安全与恢复验证](next-handoff-security-and-recovery-plan.md)修复了旧 owner 重放取回新 token、receipt 落盘 bearer 和 rename 后失败错误回滚的问题；handoff 现在要求 pending operation/execution 为空，旧 token replay 只返回不含 owner credential 的 receipt，rename 后 durability unknown 会封锁该 Session 直到 backend 重载。
 
-复跑本批验证：
+上一批 Session 适配、能力发布和初次 handoff 证据仍可按[原进度记录](next-session-adapter-and-handoff-validation-progress.md)查看；它证明旧协议曾通过测试，不代表凭据恢复安全。复跑 handoff 安全与恢复验证：
 
 ```sh
 pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
@@ -545,16 +545,16 @@ pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.t
   docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts
 node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs
-node docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs
 ```
 
-这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 的“云端”是 PoC backend 中的新 owner 协议角色；它没有启动真正的云执行进程，也没有复制 Worker 内存状态。Safari/WebKit、自然 eviction、OS crash 和真实 LLM handoff 未执行。
+这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 使用真实 Chrome Dedicated Worker 调用同源 Session backend，验证提交后响应丢失、旧 token 重试不获凭据、租约过期后新 owner 重新 claim，以及旧 token 写入被拒绝；新 owner 仍是协议测试角色，没有启动真实 Cloud Agent。Safari/WebKit、自然 eviction、OS/磁盘 crash、生产授权和真实 LLM handoff 未执行。
 
 ## 会话目录、观察者与交接幂等验证
 
 [本批计划](next-catalog-observer-bridge-validation-plan.md)及[进度记录](next-catalog-observer-bridge-validation-progress.md)把 `dsh-TUI` 的 Session projection、单写者挂载和有界 dispatch 经验转成四个 Browser-Native 验证面：handoff 响应丢失后的幂等重试与严格 checkpoint、Session catalog 有界分页、只读观察者与单写 owner、跨边界 Session 载荷预算。它们不修改正式 Agent Loop 或 Session format。
 
-当前 checkout 已实现 backend 合同层：同一 `handoffId` 的相同 checkpoint 重试不会再次提升 owner epoch，flush 在发布前失败会恢复旧 owner；Session list 按稳定 id 游标分页，read 返回 `nextSeq`、`hasMore`、`durableThroughSeq` 和 `ownerEpoch`，append/read 超过预算时显式拒绝。真实 Chrome 双页面验收还会确认观察者能看到同一 Session 的追加事件但没有写权；这些证据不等于多实例 HA、跨设备同步或生产查询服务。
+当前 checkout 已实现 backend 合同层：同一 `handoffId` 的相同 checkpoint 重试不会再次提升 owner epoch，且 receipt 不含 raw bearer token；只有 rename 前确定失败才恢复旧 owner，rename 后 unknown 会封锁 Session 写入直到 backend 重载。新 handoff 拒绝非空 pending operation/execution；Session list 按稳定 id 游标分页，read 返回 `nextSeq`、`hasMore`、`durableThroughSeq` 和 `ownerEpoch`，append/read 超过预算时显式拒绝。真实 Chrome 双页面验收确认观察者能看到同一 Session 的追加事件但没有写权；这些证据不等于多实例 HA、跨设备同步或生产查询服务。
 
 复跑本批模型无关验收：
 
@@ -626,7 +626,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 ## Scope
 
-backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；`flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；backend 重启只读取已 flush 事件。owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
+backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
 
 Session 与 Workspace metadata 的本地 JSON store 不是 PostgreSQL、HA 或生产多租户实现；它不提供跨进程 owner lease、跨重启 mutation replay、跨主机复制、备份保证或灾备 RPO/RTO。MinIO E2E 只验证 S3-compatible blob 操作，不把 metadata、Session 或 lease 迁移到对象存储。当前 browser-native E2E 只证明一次 Worker、单个同源 backend、正式 Session provider、真实 `ctx.agentLoop` 和 scripted/real LLM route 的闭环。
 

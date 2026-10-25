@@ -8,16 +8,18 @@ description: "记录 Browser-Native DSH 会话目录、只读观察、handoff �
 
 状态：M1–M4 的 PoC 验证已完成，文档和回归检查收尾中。本批直接在 `research` 主工作区实施；工作区开始时已有 Browser-Native 与 `dsh-TUI` 参考文档 WIP，未清理无关修改。
 
+后续复核表明，原 M1 只证明同一 `handoffId` 不重复提升 epoch 和 rename 前 flush 失败回滚；它未证明凭据不泄露，也未测试 rename 后失败。原结论的安全含义由新的[handoff 安全与恢复验证](next-handoff-security-and-recovery-progress.md)取代，catalog、observer 和载荷测试结果不受影响。
+
 ## 里程碑
 
 | 里程碑 | 状态 | 证据 | 下一步 |
 | --- | --- | --- | --- |
 | M0：候选范围与设计 | `complete` | 计划文档和 TUI 源码阅读 | 实施 M1 |
-| M1：handoff 幂等与安全点 | `complete` | backend 合同测试通过；同一 `handoffId` 重试不提升 epoch，重启后可重放 receipt，flush 失败保留旧 owner | 继续回归已有 handoff E2E |
+| M1：原始 handoff 幂等与安全点 | `superseded` | backend 合同测试通过，但只覆盖 receipt 重放和 rename 前失败；未验证 bearer 凭据隔离或 unknown durability | 以新的 handoff 安全与恢复验证为准 |
 | M2：Session catalog 分页 | `complete` | backend 合同测试覆盖稳定 id cursor、页边界和无效 cursor | 后续若接入真实目录 UI，再验证 stale/incomplete 呈现 |
 | M3：多观察者单写者 | `complete` | `session-observers.e2e.mjs` 真实 Chrome 双页面通过；观察者可读追加事件但 append 返回 409 | 保持 observer 与 owner 协议分离 |
 | M4：跨边界载荷预算 | `complete` | backend 合同测试覆盖 append 字节预算和 read 页大小上限；超限显式拒绝 | 后续另行设计 blob 引用/工具结果分页 |
-| M5：回归、文档和提交 | `pending` | 尚未开始 | 运行聚焦测试、文档门禁并提交 `research` |
+| M5：回归、文档和提交 | `complete` | README、兼容矩阵、目录索引与 change ledger 已更新；相关 backend/Chrome 回归及 docs quick/doc-sync 通过 | handoff 凭据安全与 unknown durability 的后续结论见新验证记录 |
 
 ## 证据边界
 

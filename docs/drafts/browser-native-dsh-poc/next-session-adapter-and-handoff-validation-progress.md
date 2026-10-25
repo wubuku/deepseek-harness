@@ -8,6 +8,8 @@ description: "记录 Browser-Native DSH Session 适配、取消销毁、能力�
 
 状态：M1–M4 的 PoC-local 验证已完成，文档和回归仍在收尾。目标、候选范围和证据边界见[验证计划](next-session-adapter-and-handoff-validation-plan.md)。本批直接在 `research` 主工作区进行，不创建隔离 worktree；开始时工作区已有 TUI 参考备忘及其目录登记 WIP，本批未覆盖或清理这些修改。
 
+后续安全复核发现，原 M4 测试没有验证旧 token 对相同 `handoffId` 的重放，也没有覆盖 rename 后 durability unknown；旧 receipt 会持久化并重放新 owner bearer token。原 M4 的通过记录仅描述当时执行的路径，不再支持“handoff 安全”的结论；修复与新增证据见[handoff 安全与恢复验证](next-handoff-security-and-recovery-progress.md)。
+
 ## 里程碑
 
 | 里程碑 | 状态 | 证据 | 下一步 |
@@ -16,8 +18,8 @@ description: "记录 Browser-Native DSH Session 适配、取消销毁、能力�
 | M1：Session adapter conformance | `complete` | `browser-native-session-adapter.spec.ts` 3/3 | history-before-live、连续 seq、重复事件去重、gap、数据冲突和执行 identity 变更均 fail closed |
 | M2：cancel/dispose settlement | `complete` | `browser-native-execution-lifecycle.spec.ts` 3/3 | `confirmed`/`unknown`/`failed`、重复 cancel/dispose、owner lost 和 late callback 均有确定语义；helper 仍由 PoC adapter 调用方显式接入 |
 | M3：capability publication/preflight | `complete` | capability Vitest 与默认 profile Chrome | 只有 `live` 且带 probe 的能力进入 9 项模型 roster；staged、degraded、denied 能力不发布 |
-| M4：Browser-to-Cloud handoff | `complete` | backend 26/26；`session-owner-handoff.e2e.mjs` Chrome 通过 | Worker 完成 DSH write 后提交 checkpoint；新 owner epoch 为 2，旧 append 返回 409，新 owner 可继续；backend 重启后 epoch 继续递增 |
-| M5：回归、文档和提交 | `in-progress` | typecheck、preview build、聚焦 Vitest、backend 和两项 Chrome E2E 已通过 | 更新 README、索引、change ledger，运行文档门禁并复查全部 diff |
+| M4：原始 PoC Session owner handoff | `superseded` | 原 backend 与 Chrome 测试通过，但未测试 bearer replay 和 post-rename unknown；见上方复核注记 | 以新的 handoff 安全与恢复验证为准 |
+| M5：回归、文档和提交 | `complete` | README、索引、change ledger 与文档门禁已在后续 handoff 安全批次收尾；该批次的 handoff 安全结论由新进度记录取代 | 参考[handoff 安全与恢复验证](next-handoff-security-and-recovery-progress.md) |
 
 ## 已实施的 PoC 适配器
 

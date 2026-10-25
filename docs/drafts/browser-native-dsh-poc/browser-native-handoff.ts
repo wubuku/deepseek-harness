@@ -30,7 +30,7 @@ export interface BrowserNativeHandoffReceipt {
 }
 
 export class BrowserNativeHandoffError extends Error {
-  constructor(readonly code: 'OWNER_ACTIVE' | 'OWNER_STALE' | 'CHECKPOINT_INVALID' | 'SESSION_MISMATCH', message: string) {
+  constructor(readonly code: 'OWNER_ACTIVE' | 'OWNER_STALE' | 'CHECKPOINT_INVALID' | 'HANDOFF_BUSY' | 'SESSION_MISMATCH', message: string) {
     super(message)
     this.name = 'BrowserNativeHandoffError'
   }
@@ -79,6 +79,9 @@ export class BrowserNativeHandoffCoordinator {
     }
     assertCounter(checkpoint.nextSessionSeq, 'nextSessionSeq')
     assertCounter(checkpoint.workspaceRevision, 'workspaceRevision')
+    if (checkpoint.pendingOperationIds.length > 0 || checkpoint.pendingExecutionIds.length > 0) {
+      throw new BrowserNativeHandoffError('HANDOFF_BUSY', 'Handoff requires all operations and executions to be settled')
+    }
     if (nextOwnerId.length === 0) throw new BrowserNativeHandoffError('CHECKPOINT_INVALID', 'nextOwnerId is required')
     const next = Object.freeze({
       sessionId: this.sessionId,
