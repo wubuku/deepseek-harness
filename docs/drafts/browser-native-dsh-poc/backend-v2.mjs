@@ -1064,6 +1064,7 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     { marker: 'BROWSER_NATIVE_TIMED_HITL_REFRESH', callId: 'browser-native-timed-hitl-refresh' },
     { marker: 'BROWSER_NATIVE_TIMED_HITL_REPLY_REFRESH', callId: 'browser-native-timed-hitl-reply-refresh' },
     { marker: 'BROWSER_NATIVE_TIMED_HITL_STOP', callId: 'browser-native-timed-hitl-stop' },
+    { marker: 'BROWSER_NATIVE_LEGACY_HITL_STOP', callId: 'browser-native-legacy-hitl-stop' },
   ]
   const timedQuestionCase = timedQuestionCases.find(item => hasUserMarker(messages, item.marker))
   if (timedQuestionCase !== undefined) {

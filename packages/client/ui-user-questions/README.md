@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The Web client shows an agent's question beside the chat input. Users choose options, enter text, skip questions, and submit one answer batch. A timed card counts down; focus pauses it, editing or `Take time` holds it, and expiry lets the agent continue while the question stays answerable. Closing a card linked to a tool call hides it; its tool row reopens it and later shows recorded answers. The Host preserves the question across restart, while this browser preserves unfinished input across reload.
+The Web client shows an agent's question beside the chat input. Users choose options, enter text, skip questions, and submit one answer batch. Timed cards pause while focused or edited, then let the agent continue after expiry while keeping late answers available. While the Session runs and a card owns the live answer waterfall, Stop cancels the current DSH turn without answering it. Continued questions cannot stop another turn. Closing a tool-linked card hides it; the tool row reopens it. The Host preserves questions across restart; this browser preserves unfinished input across reload.
 
 ## Table of Contents
 
@@ -31,6 +31,8 @@ When the agent asks a question, the attached card temporarily occupies the compo
 
 A multi-select draft keeps its selected labels while the user opens or edits the custom answer, so its submitted item may carry both `selected` and `custom`; a single-select custom answer remains exclusive. Question detail reuses the assistant-output `MarkdownText` primitive, including its GFM rendering and untrusted-content policy. The capped card keeps its title, navigation, and submission actions fixed while long detail and choices share an internal scroll region. "Skip" retains other drafts and emits the existing blank `{ selected: [] }` result for that item. Close is not an answer: a question the Host named by tool call only leaves the composer seat, and its `ask_user_question` tool call row brings the panel back; a request that carries no tool call has no row to return from, so closing it rejects the whole wait as `ASK_CANCELLED`.
 
+Stop is separate from closing or answering. It calls the current Session's scoped `conversation.cancel()` only while the question still has a live waterfall and the Session is running. DSH owns cancellation and tool/turn settlement; Stop does not undo a side effect that already committed. If cancellation fails, the card remains and reports a localized failure.
+
 ### Reading a settled question back
 
 Each late reply is shown once, including when it opens a new Turn. Replies follow normal Chat process grouping and whole-Turn folding. Expand the containing Turn and work group to read a reply that has been folded away.
@@ -39,7 +41,7 @@ A question that already settled opens as a read-only card: the same pager over t
 
 ### The plan-review card
 
-A `plan-review` intent — set by `dsh-plan-mode` on the `exit_plan_mode` review — renders a compact approval card: a `Plan review` strip with a `View full plan` link, the plan title and a two-line plain-text summary, and `Request changes` / `Approve` actions. The strip uses the shared warning dot and changes it to the ongoing loader while either action settles. The complete plan opens in the sidebar through the link or its permanent Chat card. Approve answers with the asker's approval label; `Request changes` rejects the wait as `ASK_CANCELLED`, returning the composer for the user's feedback without submitting an approval. The card has no separate refusal button.
+A `plan-review` intent — set by `dsh-plan-mode` on the `exit_plan_mode` review — renders a compact approval card: a `Plan review` strip with a `View full plan` link and Stop control, the plan title and a two-line plain-text summary, and `Request changes` / `Approve` actions. The strip uses the shared warning dot and changes it to the ongoing loader while an action settles. The complete plan opens in the sidebar through the link or its permanent Chat card. Approve answers with the asker's approval label; `Request changes` rejects the wait as `ASK_CANCELLED`, returning the composer for the user's feedback without submitting an approval. Stop cancels the running Session turn and does not submit a decision. The card has no separate refusal button.
 
 ### Failure and recovery
 

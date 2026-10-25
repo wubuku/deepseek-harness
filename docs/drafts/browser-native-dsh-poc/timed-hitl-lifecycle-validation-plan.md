@@ -66,7 +66,7 @@ Browser-Native PoC 目前用 DSH 默认 legacy `ask_user_question` 验证同步�
 ### M5：面板关闭、停止可用性与文档
 
 - 对 open timed wait 关闭卡片并刷新，检查 Worker 重建后官方 UI 从 Session projection 恢复同一 callId，提交答案后只产生一条迟答消息。
-- 检查活动 timed question 期间是否呈现 Stop 按钮，并通过官方 Escape stop shortcut 验证是否能取消该 turn。若 UI 抑制取消，记录精确源码条件、Session 结果和产品限制，不将它描述为已验证的 Stop settlement。
+- 检查活动 timed question 期间是否呈现 Stop 按钮，并通过官方 Escape stop shortcut 验证是否能取消该 turn。原 UI 没有 Stop 且 Escape 被 pending-interaction guard 抑制；后续显式 Stop 实现及其 Session settlement 证据见[活动 HITL Stop 验证](active-hitl-stop-validation-plan.md)。
 - 更新 PoC README、兼容矩阵、本计划和进度、`docs/drafts/README.md`；更正既有文档中把 timed late-answer 说成未实现的表述，说明旧证据仅覆盖 legacy schema。
 
 ## 验收矩阵

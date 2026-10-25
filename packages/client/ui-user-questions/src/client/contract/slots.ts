@@ -569,6 +569,9 @@ export type QuestionComposerProps =
   PropsRuntime<'conversation.composer'>
   & PropsStore<ReturnType<typeof createQuestionDraftStore>>
   & PropsRenderSlots<'conversation.plan-review.actions'>
-  & InjectFace<{ keyedHooks: { questionCard: (key: string) => PendingQuestion | undefined } }>
+  & InjectFace<{
+    keyedHooks: { questionCard: (key: string) => PendingQuestion | undefined }
+    cancelTurn: () => Promise<void>
+  }>
   & { matched: QuestionWait }
   & PropsLocale<'question'>

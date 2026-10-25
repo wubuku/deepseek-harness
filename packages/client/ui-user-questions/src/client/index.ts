@@ -386,7 +386,14 @@ export function apply(ctx: ClientContext): void {
         pendingInteraction instanceof PendingQuestion ? pendingInteraction : null,
       locale: NS,
       store: questionDraftStore,
-      inject: () => ({ keyedHooks: { questionCard: (key: string) => cards.source(key) } }),
+      inject: sessionId => ({
+        keyedHooks: { questionCard: (key: string) => cards.source(key) },
+        cancelTurn: () => {
+          const conversation = ctx.sessions.scope(sessionId)?.get('conversation')
+          if (conversation === undefined) throw new Error('ui-user-questions: conversation service unavailable in Session scope')
+          return conversation.cancel()
+        },
+      }),
       children: { 'conversation.plan-review.actions': { kind: 'list', scope: 'session' } },
     },
     QuestionComposer,

@@ -17,7 +17,7 @@ if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 3 || timeoutSecond
   throw new Error('DSH_POC_TIMED_QUESTION_TIMEOUT must be an integer from 3 through 30 seconds')
 }
 const selectedScenario = process.env.DSH_POC_TIMED_HITL_SCENARIO ?? 'in-time'
-const scenarios = ['in-time', 'late-answer', 'refresh-before-answer', 'refresh-after-answer', 'hide-refresh', 'stop-unavailable']
+const scenarios = ['in-time', 'late-answer', 'refresh-before-answer', 'refresh-after-answer', 'hide-refresh', 'stop-timed', 'stop-legacy']
 if (!scenarios.includes(selectedScenario)) {
   throw new Error(`DSH_POC_TIMED_HITL_SCENARIO must be one of: ${scenarios.join(', ')}`)
 }
@@ -157,21 +157,23 @@ async function waitForTerminal(sessionId, turn, predicate = () => true) {
   }, `terminal Session event for turn ${turn}`, 60_000)
 }
 
-async function launchQuestion(marker) {
+async function launchQuestion(marker, timed = true) {
   const run = await openScenario(marker)
   const asked = await waitForAsk(run.sessionId)
   const schema = modelRequests.findLast(request => request?.purpose === undefined
     && JSON.stringify(request?.messages).includes(marker))?.tools ?? []
   const questionTool = schema.find(tool => (tool.function?.name ?? tool.name) === 'ask_user_question')
-  assert.ok(questionTool, 'timed question must be present in the real Worker model schema')
-  assert.ok(JSON.stringify(questionTool).includes('timeout'), 'timed tool schema must expose its timeout parameter')
+  assert.ok(questionTool, 'question tool must be present in the real Worker model schema')
+  if (timed) assert.ok(JSON.stringify(questionTool).includes('timeout'), 'timed tool schema must expose its timeout parameter')
   const cards = await waitForQuestionCard(run.page)
   await run.page.getByText(`Answer the ${marker} decision.`, { exact: true }).waitFor()
   return { ...run, asked, cards }
 }
 
 try {
-  image = await createRuntimeValidationDist({ roster: 'original', timedQuestionTimeout: timeoutSeconds })
+  image = await createRuntimeValidationDist(selectedScenario === 'stop-legacy'
+    ? { roster: 'original' }
+    : { roster: 'original', timedQuestionTimeout: timeoutSeconds })
   app = await createBrowserNativeV2Server({
     dataDir,
     distRoot: image.distRoot,
@@ -231,6 +233,8 @@ try {
       return pendingResult(result) && terminal?.data.reason.kind === 'completed'
         ? { session, call, result, terminal } : undefined
     }, 'timed question timeout followed by independent Agent continuation', (timeoutSeconds + 60) * 1000)
+    assert.equal(await late.page.getByRole('button', { name: /^(Stop the current agent run|停止当前 Agent 操作)$/ }).count(), 0,
+      'a continued question must not expose Stop for a different or already-ended turn')
     assert.match(assistantText(latePending.session, latePending.terminal.data.turn), /BROWSER_NATIVE_TIMED_HITL_LATE_REPLY_CONTINUED_WITHOUT_ANSWER/)
     assert.equal(eventsOf(latePending.session).filter(event => event.type === 'tool/call'
       && event.data.name === 'write').length, 0, 'Agent must not perform the gated write before the late answer')
@@ -392,30 +396,30 @@ try {
     await hidden.context.close()
   }
 
-  if (selectedScenario === 'stop-unavailable') {
-    phase = 'stop-availability-during-question'
-    const waiting = await launchQuestion('BROWSER_NATIVE_TIMED_HITL_STOP')
+  if (selectedScenario === 'stop-timed' || selectedScenario === 'stop-legacy') {
+    phase = selectedScenario === 'stop-timed' ? 'cancel-active-timed-question' : 'cancel-active-legacy-question'
+    const marker = selectedScenario === 'stop-timed'
+      ? 'BROWSER_NATIVE_TIMED_HITL_STOP'
+      : 'BROWSER_NATIVE_LEGACY_HITL_STOP'
+    const waiting = await launchQuestion(marker, selectedScenario === 'stop-timed')
     const card = waiting.page.locator('[data-question-key]').last()
-    assert.equal(await waiting.page.getByRole('button', { name: /^(Stop generating|停止生成)$/ }).count(), 0,
-      'the current composer takeover does not expose a Stop button while a question is active')
-    const answerControl = card.getByRole('radio', { name: 'Yes' })
-    await answerControl.focus()
-    await answerControl.press('Escape')
-    await answerControl.press('Escape')
-    assert.equal(toolResult(await readSession(waiting.sessionId), waiting.asked.call.data.callId), undefined,
-      'Escape does not cancel a pending question while the UI session owns that interaction')
-    await submitYes(waiting.page)
-    const completed = await waitFor(async () => {
-      const session = await readSession(waiting.sessionId)
-      const result = toolResult(session, waiting.asked.call.data.callId)
-      const terminal = eventsOf(session).findLast(event => event.type === 'turn/end'
-        && event.data.turn === waiting.asked.call.data.turn)
-      return result !== undefined && terminal?.data.reason.kind === 'completed' ? { session, result, terminal } : undefined
-    }, 'answer after unavailable Stop action', 60_000)
-    assert.equal(completed.result.data.error, undefined)
-    assert.equal(questionReplyEvents(completed.session, waiting.asked.call.data.callId).length, 0)
-    assert.equal(eventsOf(completed.session).filter(event => event.type === 'tool/call'
-      && event.data.name === 'ask_user_question').length, 1)
+    const stopButton = card.getByRole('button', { name: /^(Stop the current agent run|停止当前 Agent 操作)$/ })
+    await stopButton.waitFor({ state: 'visible', timeout: 10_000 })
+    await stopButton.click()
+    const stopped = await waitForTerminal(waiting.sessionId, waiting.asked.call.data.turn,
+      terminal => terminal.data.reason.kind === 'aborted')
+    assert.equal(stopped.terminal.data.reason.kind, 'aborted')
+    const result = toolResult(stopped.session, waiting.asked.call.data.callId)
+    if (result !== undefined) {
+      assert.ok(result.data.error !== undefined || result.data.message?.isError === true,
+        'a cancelled ask tool cannot be recorded as a successful answer')
+    }
+    assert.equal(questionReplyEvents(stopped.session, waiting.asked.call.data.callId).length, 0,
+      'Stop must not create an answer or late-reply message')
+    assert.equal(eventsOf(stopped.session).filter(event => event.type === 'tool/call'
+      && event.data.name === 'write').length, 0, 'Stop must prevent later business writes')
+    assert.equal((await currentManifest(waiting.page)).revision, 0, 'Stop must not create a Workspace commit')
+    assert.equal(mainModelRequestCount(), 1, 'Stop must not start a replacement model turn')
     await waiting.context.close()
   }
 
@@ -424,7 +428,7 @@ try {
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: 'chrome',
-    scope: 'timed-HITL-in-time-late-answer-worker-recovery-reply-recovery-hide-and-stop-availability',
+    scope: 'timed-HITL-answer-timeout-refresh-hide-and-active-stop',
     timeoutSeconds,
     scenario: selectedScenario,
     llmRequestCount: modelRequests.length,

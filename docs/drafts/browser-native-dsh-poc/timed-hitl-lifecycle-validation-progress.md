@@ -4,9 +4,11 @@ description: "记录 Browser-Native DSH timed HITL 生命周期验证的基线�
 
 # Browser-Native DSH timed HITL 生命周期验证进度
 
-## 当前状态
+## 原批次状态及后续更正
 
 状态：timed HITL 的六个 Chrome 场景已执行；同轮回答、超时迟答、两类 Worker 刷新恢复和关闭面板恢复均通过。活动问答期间 UI 不提供 Stop，Escape shortcut 也被 pending-interaction guard 抑制，这是本批发现的产品限制，不是通过项。
+
+后续更正：上句记录的是原批次验证当时的 UI。官方 composer 已在[活动 HITL Stop 验证](active-hitl-stop-validation-plan.md)中增加显式 Stop；timed 与 legacy 活动问答的 Chrome E2E 均观察到 `turn/end:aborted`，无成功答案、迟答消息、Workspace write 或 revision 增加。Escape shortcut 仍忽略 pending interaction，Close 仍只隐藏问题卡。
 
 基线：`research` 分支与 `origin/research` 一致；开始时工作区干净，只有主 worktree。当前 checkout 是 DSH `v0.2.1-rc.2` 合并后的状态。PoC 默认 Browser profile 使用 legacy `tool-ask-user`；现有 `ask-user-refresh-recovery.e2e.mjs` 只验证 legacy 等待在刷新后以 `TOOL_OUTCOME_UNKNOWN` 和 interrupted turn 收束，不能说明 timed schema 不支持迟答。
 
@@ -46,6 +48,6 @@ description: "记录 Browser-Native DSH timed HITL 生命周期验证的基线�
 
 - Chrome E2E 使用真实页面、Dedicated Worker、DSH Host、Session backend、Workspace persistence 和 scripted LLM；它们证明当前 checkout 的协议/生命周期，不验证真实模型选择或答案质量。
 - 旧 legacy refresh E2E 的“刷新后不显示可回答旧问题”只适用于 legacy schema；本批 timed schema Chrome 验证了同 callId continued question 可恢复并接受迟答。
-- 活动问答期间，问答 composer 接管主输入，Stop 按钮未呈现；Escape stop shortcut 的实现因 `pendingInteraction !== undefined` 忽略该按键。用户关闭 keyed panel 只是隐藏，不会取消请求；当前只能提交答案或等待 timeout。该限制覆盖当前 DSH Web UI，不推断其他宿主 UI。
+- 原批次活动问答没有 Stop；后续专项已补足可见 Stop 并验证 DSH turn cancellation。Escape stop shortcut 仍因 `pendingInteraction !== undefined` 忽略按键；用户关闭 keyed panel 仍只是隐藏，不会取消请求。Stop 不撤销此前已经提交的副作用。
 - 新增测试使用 scripted LLM 固定 tool call 顺序；不验证真实模型是否选用 timed HITL、是否正确理解 pending 指令或摘要质量。
 - Chrome 以外的浏览器、自然 eviction、OS 级 crash、生产多实例 backend 与真实 SaaS 授权均未纳入。

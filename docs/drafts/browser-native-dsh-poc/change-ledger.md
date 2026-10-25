@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-032：活动 HITL 的显式 Stop
+
+```text
+changeId: BN-P2-032
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-26
+file: packages/client/ui-user-questions/src/client/PlanReviewPanel.module.css; packages/client/ui-user-questions/src/client/PlanReviewPanel.tsx; packages/client/ui-user-questions/src/client/QuestionComposer.tsx; packages/client/ui-user-questions/src/client/contract/slots.ts; packages/client/ui-user-questions/src/client/index.ts; packages/client/ui-user-questions/src/client/locales.ts; packages/client/ui-user-questions/tests/plan-review-panel.client.spec.tsx; packages/client/ui-user-questions/tests/user-questions-composer.client.spec.tsx; packages/client/ui-user-questions/README.md; packages/client/ui-user-questions/README.zh.md; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/active-hitl-stop-validation-plan.md; docs/drafts/browser-native-dsh-poc/active-hitl-stop-validation-progress.md; docs/drafts/browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: 当 `ui-user-questions` 接管聊天输入时，用户只能提交答案或等待 HITL timeout；关闭卡片只是隐藏，Escape stop shortcut 会因 pending interaction 被忽略。PoC overlay 无法为官方 composer 增加一个真实调用当前 DSH Session cancel 的控件，因此需要在该 UI package 提供窄的 session-scoped callback 和可见 Stop。
+existingExtensionPointsChecked: 复用 `conversation.composer` slot 的 Session scope inject、框架提供的 `useSession`/`useQuestionCard`，以及当前 Session scope 中的 `conversation.cancel()`；组件只接收 `cancelTurn()`，不接触 Cordis Context 或整个 Conversation service。未修改 Agent Loop、Session event format、默认 profile、其他聊天 UI 或 Stop shortcut 的 pending-interaction 规则。
+whyDraftOnlyWasInsufficient: UI 单测只能证明按钮及 callback；确定性 Chrome Worker/Host E2E 才能验证取消由原 DSH turn 结算、活动问题不生成成功答案、后续 tool side effect 不发生且 Workspace revision 不变。真实 LLM 普通对话另行确认更新后的 Web UI/provider 组合仍可运行，但不证明模型会选择 HITL。
+behaviorChange: 官方通用问答与 plan-review composer 仅在 Session 正运行且问题仍持有 live waterfall 时显示 Stop。点击后调用该 Session 的 `conversation.cancel()`；停止失败保留问题卡并显示本地化反馈。continued question 不提供 Stop，避免旧问题控制另一 turn；关闭问题卡仍只隐藏，Stop 不撤销已提交副作用。backend scripted fixture 增加 legacy Stop marker，使默认 schema 的 Chrome cancellation 路径可确定复现。
+directoryOutChangeReason: `packages/client/ui-user-questions` 是正式 Web UI 的问题 composer owner；PoC 目录外无法通过 preview overlay 将取消动作安全接到当前 Session 的 `ConversationController`，也不应复制一份平行问题 UI。改动是该通用 composer 的局部用户能力，不改变 Agent Loop 或后台执行模式。
+consumersUpdated: 通用问题与 plan-review composer、英文/中文 package README、两个 composer 测试、Browser-Native timed HITL backend fixture 与 Chrome E2E、验证计划/进度、兼容矩阵、PoC README、drafts 索引和本账本。
+tests: composer/plan-review Vitest 63/63；`ui-user-questions` TypeScript 检查、backend contract tests 42/42、Web preview build 均通过。真实 Chrome Worker/DSH timed 与 legacy Stop E2E 均以 `aborted` 收束且无答案、迟答消息、write 或 Workspace revision 增量；timeout 后 continued question 负例不显示 Stop。真实 Chrome + 同源 backend + `gpt-5.6-sol` smoke 完成三轮、5 次模型 HTTP 200、跨轮记忆、单次 todo 写入和 41 个 Session events；无页面异常、凭据泄露或跨源请求。详细命令和观察值见 `active-hitl-stop-validation-progress.md`。Safari、多标签页答案/Stop 竞争、模型自主选择 HITL、多实例 backend、自然 eviction 与 OS crash 未验证。
+syncReplaySteps: 上游同步后确认 `conversation.composer` 仍按 Session scope 注入，`ConversationController.cancel()` 仍取消当前 Session turn，且 `useSession(state => state.running)` 与 question-card 的 live waterfall/continued 状态仍有相同语义。若 UI Host 已提供正式的 Session-scoped stop callback，改用该 API 并删除重复读取；否则按相同窄 callback 重放 UI、locale、组件测试和双语 README。重建 `ui-user-questions` bundle 与 Web preview；运行两个 composer Vitest、package typecheck、timed/legacy/continued Chrome E2E、真实 LLM Chrome smoke 和文档门禁。不要把 scripted HITL 路径写成模型自主选择证据。
+deleteCondition: 正式 UI framework 提供可取消当前 Session turn 的 composer action，且问题 composer 的真实 Chrome 测试迁移到该接口后通过；或 Browser-Native PoC 与此产品 Stop 控件均移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-031：Session handoff 从 DSH event log 派生安全点
 
 ```text

@@ -560,7 +560,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-own
 
 Chrome 证据显示，deadline 前答案写入原工具结果并在同一 turn 继续；迟答保持原工具结果为 pending，并以 `user-question-reply` source 和原 callId 写入 Session，后续业务写只执行一次。Worker 刷新将未完成的工具调用记录为 `TOOL_OUTCOME_UNKNOWN`，timed question projection 仍可重建同一问题；答案已 durable 后刷新不会重复答案或恢复中断模型回复，显式新消息才能继续。脚本化测试只验证执行与持久化时序，不验证真实模型是否选择 timed 问答。
 
-当前 DSH Web UI 有一个明确限制：活动问答接管 composer 时不显示 Stop 按钮，Escape stop shortcut 在 `pendingInteraction` 存在时拒绝取消；关闭 timed 问题卡只隐藏面板，不会取消等待。用户只能回答或等到 timeout。该限制也影响 legacy 的活动问答交互；本 PoC 没有修改正式 UI，是否为产品补充显式取消操作仍需单独决策。
+后续[活动 HITL Stop 验证计划](active-hitl-stop-validation-plan.md)和[进度](active-hitl-stop-validation-progress.md)已在官方 `ui-user-questions` composer 加入显式 Stop。真实 Chrome Worker/DSH E2E 分别验证 timed 与默认 legacy 活动问答：点击后 turn 以 `aborted` 收束，不写入成功答案、不生成迟答消息、不执行后续 write，Workspace revision 保持不变。timed 问题 timeout 后已继续、仅保留迟答通道时不显示 Stop，避免旧问题卡取消另一个 turn。Escape shortcut 仍在 `pendingInteraction` 存在时忽略；关联工具行的 Close 仍只隐藏，不取消等待。Stop 不回滚已经提交的副作用。
 
 在 Playwright 环境中复跑：
 
@@ -573,10 +573,11 @@ DSH_POC_TIMED_QUESTION_TIMEOUT=10 DSH_POC_TIMED_HITL_SCENARIO=late-answer node d
 DSH_POC_TIMED_HITL_SCENARIO=refresh-before-answer node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
 DSH_POC_TIMED_HITL_SCENARIO=refresh-after-answer node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
 DSH_POC_TIMED_QUESTION_TIMEOUT=30 DSH_POC_TIMED_HITL_SCENARIO=hide-refresh node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
-DSH_POC_TIMED_QUESTION_TIMEOUT=30 DSH_POC_TIMED_HITL_SCENARIO=stop-unavailable node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_QUESTION_TIMEOUT=30 DSH_POC_TIMED_HITL_SCENARIO=stop-timed node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
+DSH_POC_TIMED_HITL_SCENARIO=stop-legacy node docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs
 ```
 
-这组测试不代表真实 LLM、legacy refresh 迟答、双标签答案竞争、跨设备投递、Stop settlement、OS 级崩溃或生产交互策略已验证。
+这组测试使用 scripted LLM 固定问题调用，不代表模型会自主选择 HITL；真实 LLM 普通对话另按[运行时验证说明](runtime-validation-manual.md)验证。未覆盖 legacy refresh 迟答、双标签答案竞争、跨设备投递、所有 stop/timeout 调度顺序、OS 级崩溃或生产交互策略。
 
 ## 会话目录、观察者与交接幂等验证
 

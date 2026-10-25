@@ -22,6 +22,8 @@ afterEach(cleanup)
 
 
 const SID = 's1' as SessionId
+let sessionRunning = false
+const cancelTurn = vi.fn<() => Promise<void>>()
 
 const seatOver = (dict: Record<string, string>, common: Record<string, string>): QuestionComposerProps['t'] =>
   (key => dict[key] ?? common[key] ?? key)
@@ -117,7 +119,7 @@ const kitBase: Omit<QuestionComposerProps, 'matched' | 'useStore' | 'useQuestion
   session: undefined,
   sessionId: SID,
   pendingInteraction: undefined,
-  useSession: selector => selector(sessionState),
+  useSession: selector => selector({ ...sessionState, running: sessionRunning }),
   useSessions: selector => selector(sessionList),
   usePanelInfo, useResource,
   useSessionStatus: selector => selector(attentionState),
@@ -128,6 +130,7 @@ const kitBase: Omit<QuestionComposerProps, 'matched' | 'useStore' | 'useQuestion
   useChat: selector => selector(chatState),
   useTrajectory: selector => selector(trajectoryState),
   useProjection: (() => undefined),
+  cancelTurn,
   useInput: selector => selector(inputState),
   inputActions: {
     captureInsertion: () => ({ start: 0, end: 0, draftRev: 0 }),
@@ -157,6 +160,8 @@ function QuestionComposer(props: Omit<QuestionComposerProps, 'useQuestionCard'>)
 
 beforeEach(() => {
   localStorage.clear()
+  sessionRunning = false
+  cancelTurn.mockReset().mockResolvedValue()
   const instance = createQuestionDraftStore().create(SID)
   draftInstance = instance
   const useStore: QuestionComposerProps['useStore'] = selector => useSyncExternalStore(
@@ -214,6 +219,43 @@ describe('QuestionComposer', () => {
     expect(screen.queryByText('会一直等你回答')).toBeNull()
     expect(screen.queryByRole('button', { name: '慢慢回答' })).toBeNull()
     expect(screen.getByRole('button', { name: '放弃整组问题' })).toBeTruthy()
+  })
+
+  it('stops the live Agent turn without answering or dismissing the question', async () => {
+    sessionRunning = true
+    const { carrier, answer, dismiss } = wait()
+    render(<QuestionComposer matched={carrier} {...kit} />)
+
+    fireEvent.click(screen.getByRole('button', { name: zh['nav.stop'] }))
+
+    expect(cancelTurn).toHaveBeenCalledOnce()
+    expect(answer).not.toHaveBeenCalled()
+    expect(dismiss).not.toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: zh['nav.stop'] })).toBeTruthy()
+  })
+
+  it('reports a failed Agent cancellation and restores the Stop control', async () => {
+    sessionRunning = true
+    cancelTurn.mockRejectedValueOnce(new Error('private cancellation detail'))
+    const { carrier } = wait()
+    render(<QuestionComposer matched={carrier} {...kit} />)
+
+    fireEvent.click(screen.getByRole('button', { name: zh['nav.stop'] }))
+
+    expect(await screen.findByText(zh['error.stopFailed'])).toBeTruthy()
+    expect(screen.getByRole('button', { name: zh['nav.stop'] }).hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByText('private cancellation detail')).toBeNull()
+  })
+
+  it('does not show Stop for a timed question that has continued', () => {
+    sessionRunning = true
+    const carrier = new PendingQuestion(SID, TIMED, ToolCallId('continued-no-stop'))
+    carrier.attachRpc({ answer: vi.fn(async () => true) })
+    carrier.setState('continued')
+    render(<QuestionComposer matched={carrier} {...kit} />)
+
+    expect(screen.queryByRole('button', { name: zh['nav.stop'] })).toBeNull()
+    expect(cancelTurn).not.toHaveBeenCalled()
   })
 
   it('keeps a recommended default selected without pausing a timed wait', () => {

@@ -6,7 +6,7 @@ import clsx from 'clsx'
 import {
   Button, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineRegular,
   IconChevronRightOutlineRegular, IconChevronUpOutlineRegular, IconCloseOutlineRegular,
-  IconEditOutlineRegular, MarkdownText,
+  IconEditOutlineRegular, IconStopFillRegular, MarkdownText, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { planReviewOf, type QuestionAnswer, type QuestionCardSnapshot, type QuestionComposerProps } from './contract/slots.ts'
 import type { PendingQuestion } from './contract/slots.ts'
@@ -20,7 +20,7 @@ import css from './QuestionComposer.module.css'
  * runtime failure messages (finished strings from the wire) pass through
  * verbatim.
  */
-type Feedback = { key: 'error.incomplete' | 'error.unanswered' | 'error.unavailable' | 'error.resubmit' | 'status.sent' } | { text: string }
+type Feedback = { key: 'error.incomplete' | 'error.unanswered' | 'error.unavailable' | 'error.stopFailed' | 'error.resubmit' | 'status.sent' } | { text: string }
 
 /** A removed card can remain mounted until the composer seat updates. */
 const REMOVED_CARD: QuestionCardSnapshot = {
@@ -139,24 +139,34 @@ function AnswerField(props: AnswerFieldProps) {
 export function QuestionComposer(props: QuestionComposerProps) {
   const question = props.matched
   const review = useMemo(() => planReviewOf(question.questions), [question])
+  const card = props.useQuestionCard(question.key, snapshot => snapshot ?? REMOVED_CARD)
+  const sessionRunning = props.useSession(state => state.running)
+  const canStop = sessionRunning && card.channel === 'waterfall' && question.review === undefined
   return review === undefined
     ? (
       <QuestionFlow
         key={question.key}
         pending={question}
+        card={card}
+        canStop={canStop}
+        cancelTurn={props.cancelTurn}
         t={props.t}
         useStore={props.useStore}
-        useQuestionCard={props.useQuestionCard}
         actions={props.actions}
       />
     )
-    : <PlanReviewPanel key={question.key} pending={question} review={review} t={props.t} renderSlot={props.renderSlot} />
+    : (
+      <PlanReviewPanel
+        key={question.key} pending={question} review={review} canStop={canStop}
+        cancelTurn={props.cancelTurn} t={props.t} renderSlot={props.renderSlot}
+      />
+    )
 }
 
-type QuestionFlowProps =
-  { pending: PendingQuestion } & Pick<QuestionComposerProps, 't' | 'useStore' | 'useQuestionCard' | 'actions'>
+type QuestionFlowProps = { pending: PendingQuestion; card: QuestionCardSnapshot; canStop: boolean }
+  & Pick<QuestionComposerProps, 't' | 'useStore' | 'actions' | 'cancelTurn'>
 
-function QuestionFlow({ pending, t, useStore, useQuestionCard, actions }: QuestionFlowProps) {
+function QuestionFlow({ pending, card, canStop, cancelTurn, t, useStore, actions }: QuestionFlowProps) {
   const questions = pending.questions
   // A read-only card built from a settled call's transcript: the same panel
   // over the recorded answers, with nothing left to submit.
@@ -193,9 +203,8 @@ function QuestionFlow({ pending, t, useStore, useQuestionCard, actions }: Questi
       || item.selected.some((label, labelIndex) => label !== initialDrafts[itemIndex]?.selected[labelIndex])
       || item.custom !== '' || item.skipped) === true
       ? 'editing' : undefined)
-  const [busy, setBusy] = useState<'answer' | 'cancel' | null>(null)
+  const [busy, setBusy] = useState<'answer' | 'cancel' | 'stop' | null>(null)
   const [error, setError] = useState<Feedback | null>(null)
-  const card = useQuestionCard(pending.key, snapshot => snapshot ?? REMOVED_CARD)
   const canSubmit = card.channel !== 'none'
   // The answer surface freezes while a submission is in flight, and for good on
   // a review card: its call has already settled.
@@ -311,6 +320,15 @@ function QuestionFlow({ pending, t, useStore, useQuestionCard, actions }: Questi
         setBusy(null)
         setError({ text: cause instanceof Error ? cause.message : String(cause) })
       })
+  }
+
+  const stopTurn = (): void => {
+    if (!canStop || busy !== null) return
+    setBusy('stop')
+    setError(null)
+    void cancelTurn()
+      .catch(() => { setError({ key: 'error.stopFailed' }) })
+      .finally(() => { setBusy(null) })
   }
 
   const updateDraft = (
@@ -443,6 +461,16 @@ function QuestionFlow({ pending, t, useStore, useQuestionCard, actions }: Questi
             </h2>
           </div>
           <div className={css.headerActions}>
+            {canStop && (
+              <Tooltip label={t('nav.stop')} side="bottom">
+                <button
+                  type="button" className={css.iconButton} aria-label={t('nav.stop')}
+                  data-question-stop disabled={busy !== null} onClick={stopTurn}
+                >
+                  <IconStopFillRegular />
+                </button>
+              </Tooltip>
+            )}
             {countdown !== undefined && card.waitState !== 'waiting' && card.waitState !== 'editing' && card.waitState !== 'continued' && (
               <span className={css.waitStatus}>
                 {t(countdown.running ? 'wait.countdown' : 'wait.paused', {

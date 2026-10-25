@@ -107,3 +107,7 @@
   display: flex;
   align-items: center;
 }
+
+.stopButton {
+  flex-shrink: 0;
+}

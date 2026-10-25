@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { allowAllAccess } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import {
-  createWaterfallRequest, PendingQuestion, planReviewOf, type QuestionComposerProps, type QuestionWait,
+  createWaterfallRequest, PendingQuestion, planReviewOf, type QuestionCardSnapshot, type QuestionComposerProps, type QuestionWait,
 } from '../src/client/contract/slots.ts'
 import { createQuestionDraftStore } from '../src/client/draft-store.ts'
 import { QuestionComposer } from '../src/client/QuestionComposer.tsx'
@@ -19,9 +19,16 @@ const useResource = (() => ({ status: 'none' as const, value: undefined, failure
 const usePanelInfo: GlobalStandardProps['usePanelInfo'] = selector => selector({ activePanelId: null })
 
 afterEach(cleanup)
+beforeEach(() => { cancelTurn.mockReset().mockResolvedValue() })
 
 
 const SID = 's1' as SessionId
+const cancelTurn = vi.fn<() => Promise<void>>()
+const questionCard: QuestionCardSnapshot = {
+  state: 'open', waitState: 'counting', countdown: undefined, channel: 'waterfall', closed: false,
+}
+const useQuestionCard = ((_key: string, selector?: (value: QuestionCardSnapshot | undefined) => unknown) =>
+  selector === undefined ? questionCard : selector(questionCard)) as QuestionComposerProps['useQuestionCard']
 
 const seatOver = (dict: Record<string, string>, common: Record<string, string>): QuestionComposerProps['t'] =>
   (key => dict[key] ?? common[key] ?? key)
@@ -112,7 +119,8 @@ const questionDraftStore = createQuestionDraftStore().create(SID)
 
 /** Framework standard-kit stubs: the panel consumes only the locale seat. */
 const kit: Omit<QuestionComposerProps, 'matched'> = {
-  useQuestionCard: () => { throw new Error('plan review does not read question card state') },
+  useQuestionCard,
+  cancelTurn,
   renderSlot: () => null,
   SessionProvider: ({ children }) => children,
   sessionId: SID,
@@ -297,6 +305,22 @@ describe('PlanReviewPanel', () => {
     expect(screen.getByRole('button', { name: zh['plan.discuss'] }).hasAttribute('disabled')).toBe(true)
     fireEvent.click(approve)
     expect(answer).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers Stop for a live plan approval and routes it to the Session turn', async () => {
+    const { carrier, answer, cancel } = wait()
+    render(<QuestionComposer
+      matched={carrier}
+      {...kit}
+      useSession={selector => selector({ ...sessionState, running: true })}
+    />)
+
+    fireEvent.click(screen.getByRole('button', { name: zh['nav.stop'] }))
+
+    expect(cancelTurn).toHaveBeenCalledOnce()
+    expect(answer).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+    await vi.waitFor(() => { expect(document.querySelector('[data-plan-review-key] section')?.getAttribute('aria-busy')).toBe('false') })
   })
 
   it('hides a continued plan decision after steering its reply', async () => {

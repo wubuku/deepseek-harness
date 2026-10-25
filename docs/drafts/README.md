@@ -16,7 +16,7 @@ description: "DSH 研究草稿的目录级导读：按 Agentic UI、Browser-Nati
 
 当前判断按场景分层：assistant-ui 与 CopilotKit 都完成同一复杂真实模型故事；在 DSH 默认 Loop 必须是唯一执行者的设定下，assistant-ui 目前需要维护的适配责任更窄、总接入成本更低。CopilotKit 的前端工具和 HITL 确有真实应用交互价值，但需要 DSH 专属 AG-UI 分段适配，本轮未显示它减少业务实现或测试步骤；若大量复用其应用交互能力，可再做盈亏平衡验证。DSH 原生 UI 适合愿意采用 DSH Client/Conversation/Slot 体系的产品，但没有完成等量真实模型复杂矩阵。完整证据见[统一选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)和[复杂实验评估](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)。
 
-Browser-Native 的交互恢复证据现已区分默认 legacy HITL 与临时 timed HITL：timed schema 在 Chrome 中可于刷新后按原 callId 恢复并接收迟答；但活动问答接管 composer 时，当前 DSH Web UI 隐藏 Stop 按钮，Escape stop shortcut 也忽略 pending interaction，关闭 timed 问题卡只隐藏而不取消等待。详见[timed HITL 生命周期验证](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)和[进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md)。
+Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HITL：timed schema 在 Chrome 中可于刷新后按原 callId 恢复并接收迟答；后续官方 composer 已加入显式 Stop，并用 Chrome Worker/DSH 验证 legacy 与 timed 活动等待均以 `aborted` 收束且没有后续写入。Escape stop shortcut 仍忽略 pending interaction，关闭 keyed 问题卡仍只隐藏、不取消。详见[timed HITL 生命周期验证](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)、[活动 HITL Stop 计划](browser-native-dsh-poc/active-hitl-stop-validation-plan.md)和[进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md)。
 
 ## Table of Contents
 
@@ -78,7 +78,8 @@ Browser-Native 的交互恢复证据现已区分默认 legacy HITL 与临时 tim
 21. [Browser-Native 会话目录与观察交接验证计划](browser-native-dsh-poc/next-catalog-observer-bridge-validation-plan.md)及[进度](browser-native-dsh-poc/next-catalog-observer-bridge-validation-progress.md)：验证初始 handoff receipt、Session catalog 分页、多观察者单写者和跨边界载荷预算；其中 handoff 安全结论已由第 22 项的后续复核取代，不外推为分布式 HA 或云端 Durable Worker。
 22. [Browser-Native handoff 安全与恢复验证计划](browser-native-dsh-poc/next-handoff-security-and-recovery-plan.md)及[进度](browser-native-dsh-poc/next-handoff-security-and-recovery-progress.md)：修复并验证旧 owner 重放取回新 bearer、旧 receipt 凭据迁移、未结算工作拒绝、rename 后 unknown durability、响应丢失与并发 fencing；handoff 仍只转移 PoC Session 写权，不启动 Cloud Agent。
 23. [Browser-Native handoff 安全点验证计划](browser-native-dsh-poc/next-session-handoff-safe-point-plan.md)及[进度](browser-native-dsh-poc/next-session-handoff-safe-point-progress.md)：由服务端从 DSH Session event log 判定 turn、step 与工具是否已结算；覆盖 caller 伪报 pending 列表、append/handoff 竞态和真实 Chrome Worker 活跃 turn，不宣称 Workspace/Session 双 lease 原子转移。
-24. [Browser-Native timed HITL 生命周期验证计划](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md)：真实 Chrome/Worker 验证同轮回答、超时迟答、刷新后原 callId 恢复和 durable answer 去重；确认当前 Web UI 在活动问答中不暴露 Stop，关闭只隐藏面板。
+24. [Browser-Native timed HITL 生命周期验证计划](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md)：Chrome/Worker 验证同轮回答、超时迟答、刷新后原 callId 恢复和 durable answer 去重；活动问答 Stop 的后续验证见专门计划。
+25. [Browser-Native 活动 HITL Stop 验证](browser-native-dsh-poc/active-hitl-stop-validation-plan.md)及[进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md)：官方问答 composer 的显式 Stop、legacy/timed DSH cancellation、continued question 负例和真实 LLM smoke。
 
 ### 需要实现或审查代码时
 
@@ -314,11 +315,12 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [operational-envelope-validation-plan.md](browser-native-dsh-poc/operational-envelope-validation-plan.md) / [进度](browser-native-dsh-poc/operational-envelope-validation-progress.md) | 上游 release merge 后的四个验证交付面：默认 Browser 工具清单、lazy archive 和插件兼容矩阵、Chrome 多负载容量基线、quota 与正常进程重启恢复；Safari、自然 eviction 和 OS crash 仍未验证。 |
 | [mock-and-crash-boundary-validation-plan.md](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md) / [进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md) | 局部浏览器存储丢失、Chrome `SIGKILL`、多 backend 竞争、大型工具参数和 MinIO blob 验证；记录身份恢复与共享 `dataDir` 限制，不把故障注入外推为自然 eviction、OS crash 或生产对象存储。 |
 | [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
-| [timed-hitl-lifecycle-validation-plan.md](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md) | 临时 timed schema 的截止前答案、迟答、刷新恢复、迟答去重和 close/Stop 可用性；明确默认 legacy profile 未改变，活动问题期间 Stop 当前不可用。 |
+| [timed-hitl-lifecycle-validation-plan.md](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md) | 临时 timed schema 的截止前答案、迟答、刷新恢复、迟答去重和关闭恢复；显式 Stop 由活动 HITL 专项验证。 |
+| [active-hitl-stop-validation-plan.md](browser-native-dsh-poc/active-hitl-stop-validation-plan.md) / [进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md) | 官方问答 composer 注入 Session-scoped cancel；Chrome scripted E2E 覆盖 legacy/timed 活动问答、continued 负例、Session aborted 与无 Workspace 副作用；真实 LLM smoke 单独记录。 |
 | [browser-runtime-integrity-validation-plan.md](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md) / [进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md) | 默认交互工具闭环、本地缓存清除后的 backend outage fail-closed、双标签 Worker 写权交接及既有恢复路径回归；脚本使用 scripted LLM，真实模型和生产级故障仍未验证。 |
 | [next-integrity-and-lifecycle-plan.md](browser-native-dsh-poc/next-integrity-and-lifecycle-plan.md) / [进度](browser-native-dsh-poc/next-integrity-and-lifecycle-progress.md) | 冷 hydrate 分块与增量 hash、OPFS orphan 回收、pagehide 本地 durable barrier、Session/Workspace/lease 组合恢复；包含真实 Chrome 命令和未覆盖边界。 |
 | [tests/default-interaction-tools.e2e.mjs](browser-native-dsh-poc/tests/default-interaction-tools.e2e.mjs) | Chrome 中验证用户问答、工作目录切换和相对路径文件写入进入同一 DSH turn 与 Workspace。 |
-| [tests/timed-hitl-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs) | Chrome 中验证 timed HITL 的同轮/迟答、两类刷新恢复、隐藏面板恢复，以及当前 Stop 不可用时答案仍可正常结算。 |
+| [tests/timed-hitl-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs) | Chrome 中验证 timed HITL 的同轮/迟答、两类刷新恢复、隐藏面板恢复，以及 timed/legacy 活动 Stop 和 continued-question 隔离。 |
 | [tests/workspace-cache-backend-unavailable.e2e.mjs](browser-native-dsh-poc/tests/workspace-cache-backend-unavailable.e2e.mjs) | 清除 OPFS/IndexedDB 后注入 manifest 503，验证页面与 Worker 不把空 Workspace 标成已同步。 |
 | [tests/workspace-worker-handoff.e2e.mjs](browser-native-dsh-poc/tests/workspace-worker-handoff.e2e.mjs) | 两个真实 preview Worker 交接 Workspace lease，验证 fencing token 递增、旧 token 被拒和同 Session 文件工具续接。 |
 | [tests/cold-hydrate-integrity.e2e.mjs](browser-native-dsh-poc/tests/cold-hydrate-integrity.e2e.mjs) | 真实 Chrome 验证远端 Workspace 文件冷启动按 1 MiB chunk 写入 OPFS、range backing、hash 错误 fail-closed 和低 VFS 驻留。 |
