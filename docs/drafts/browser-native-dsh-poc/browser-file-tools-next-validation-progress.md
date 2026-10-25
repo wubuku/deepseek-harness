@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 文件工具下一批验证的实现、�
 
 ## 当前状态
 
-本批次已完成实现和首轮验证。Browser Worker 的 `grep` 现在通过 `MemoryVfs.openFileSync().read()` 分块读取，目录遍历使用显式栈，`glob` 有独立结果上限，搜索 pattern 有大小和复杂度防护，非法 UTF-8/NUL 文件不会静默作为文本处理。PoC 仍不提供完整 ripgrep、完整正则复杂度保证或块级编辑。
+本批次已完成实现和首轮验证。Browser Worker 的 `grep` 通过 `MemoryVfs.openFileSync().read()` 分块读取，目录遍历使用显式栈，`glob` 有独立结果上限，搜索 pattern 有大小预算，非法 UTF-8/NUL 文件不会静默作为文本处理。其原先的正则启发式检查已由[正则隔离验证](browser-file-search-isolation-validation-progress.md)中的可终止 matcher Worker 取代。PoC 仍不提供完整 ripgrep、形式化正则复杂度保证或块级编辑。
 
 ## 里程碑
 
@@ -14,7 +14,7 @@ description: "记录 Browser-Native DSH 文件工具下一批验证的实现、�
 |---|---|---|
 | M0 候选盘点与范围冻结 | 已完成 | 见[验证计划](browser-file-tools-next-validation-plan.md)；不引入第三方 Shell/WASI runtime |
 | M1 文件工具边界实现 | 已完成 | 显式栈遍历、glob 结果上限、pattern/brace 预算、正则防护、二进制拒绝和显式文件工具名称表已实现 |
-| M2 分块搜索单测 | 已完成 | `browser-native-file-tools.spec.ts` 6/6；覆盖跨 64 KiB chunk 的 UTF-8 行、二进制、复杂 pattern、pattern 超限、glob overflow 和既有取消/编辑边界 |
+| M2 分块搜索单测 | 已完成 | `browser-native-file-tools.spec.ts` 7/7；覆盖跨 64 KiB chunk 的 UTF-8 行、二进制、pattern 超限、总行数、glob overflow 和既有取消/编辑边界；matcher Worker 的超时和协议边界由本批新增 E2E 覆盖。 |
 | M3 真实 Chrome Worker 验收 | 已完成 | 文件边界、取消后续 turn、12 MiB OPFS 外置文件闭环均通过；无 page/Worker error 或跨源请求 |
 | M4 真实 LLM 回归 | 已完成（普通文件闭环） | 真实 Chrome + 真实 `gpt-5.6-sol` 完成 `read → write → read`、刷新后同 Session read 和流式响应；不把它外推为真实模型会主动选择大文件 fallback |
 | M5 文档、门禁、提交和推送 | 已完成 | 计划、进度、README、兼容矩阵、事实核查注解和 change ledger 已更新；针对性测试、真实 Chrome/LLM 回归、文档门禁和 typecheck 已执行 |
@@ -44,13 +44,13 @@ description: "记录 Browser-Native DSH 文件工具下一批验证的实现、�
 - `grep` 不再先把所有文件路径放入数组，而是边遍历边计数、检查取消并读取文件。
 - `grep` 通过同步 range read 和流式 UTF-8 decoder 处理跨 chunk 的多字节字符与换行。
 - `glob` 超过 5,000 个结果返回 `SEARCH_RESULT_OVERFLOW`，不返回部分结果冒充完整结果。
-- 搜索 pattern 和 `include` glob 最大 4 KiB；brace expansion 最大 128 个分支；反向引用和检测到的嵌套量词返回 `SEARCH_PATTERN_TOO_COMPLEX`。
+- 搜索 pattern 和 `include` glob 最大 4 KiB；brace expansion 最大 128 个分支；正则语法编译和 matcher 执行发生在可终止子 Worker，单批 1 秒，整次搜索 30 秒；超时返回 `SEARCH_REGEX_TIMEOUT`。
 - NUL 或非法 UTF-8 文件返回 `SEARCH_BINARY_FILE`；编辑同类文件返回 `EDIT_BINARY_FILE`。
 - provider 使用 `browser-native-capabilities.ts` 的显式文件工具名称表，而不是在 waterfall 中重复内联名称数组。
 
 ## 未完成边界
 
-JavaScript `RegExp` 的有限启发式检查不是形式化 ReDoS 保证；尚未引入 RE2/WASM 或独立搜索 Worker。`edit` 仍会完整 materialize 文件，搜索只证明读取路径可分块。完整 ripgrep 语义、任意容量文件、块级 delta、跨文件事务、自然 storage eviction、OS crash、生产对象存储、多实例 backend 和 Browser-specific 正式 preset 仍未验证。真实 LLM 回归没有证明模型会主动选择本批 fallback，也没有覆盖大型 tool arguments。
+matcher Worker 的超时和终止限制单次正则工作，但不是形式化 ReDoS 保证；正式产品仍可评估 RE2/WASM。`edit` 仍会完整 materialize 文件，搜索只证明读取路径可分块。完整 ripgrep 语义、任意容量文件、块级 delta、跨文件事务、自然 storage eviction、OS crash、生产对象存储、多实例 backend 和 Browser-specific 正式 preset 仍未验证。真实 LLM 回归没有证明模型会主动选择恶意参数，也没有覆盖大型 tool arguments。
 
 ## 经验教训
 

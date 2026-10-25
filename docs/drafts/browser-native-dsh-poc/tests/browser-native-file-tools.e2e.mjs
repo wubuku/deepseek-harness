@@ -89,14 +89,20 @@ try {
     marker: 'BROWSER_NATIVE_EDIT_BOUNDARY_DONE',
     timeout: 60_000,
   })
-  const editCall = editTurn.session.events.find(event => event.type === 'tool/call' && event.data.turn === editTurn.turn)
+  const editCall = editTurn.session.events.find(event => event.type === 'tool/call'
+    && event.data.turn === editTurn.turn && event.data.name === 'edit')
   assert.equal(editCall.data.name, 'edit')
   const editResult = editTurn.session.events.find(event => event.type === 'tool/result'
     && event.data.message?.toolCallId === editCall.data.callId)
   assert.ok(editResult)
-  assert.equal(editResult.data.message.isError, true)
-  assert.match(editResult.data.message.content.map(block => block.text ?? '').join(''), /EDIT_PAYLOAD_TOO_LARGE/)
-  assert.equal(commits.length, seedCommitCount, 'rejected edit must not create a Workspace commit')
+  assert.equal(editResult.data.message.isError, false)
+  const editedFile = await testAction({ action: 'read', path: '/dsh/home/workspace/long-edit.txt' })
+  assert.equal(editedFile?.ok, true)
+  assert.equal(editedFile.content.includes('BROWSER_NATIVE_LONG_EDIT_REPLACED'), true)
+  assert.equal(editedFile.content.includes('BROWSER_NATIVE_LONG_EDIT_MARKER'), false)
+  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+    && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.dirtyCount === 0, undefined, { timeout: 60_000 })
+  assert.equal(commits.length, seedCommitCount + 1, 'the chunk-backed edit must create one Workspace commit')
 
   const continueTurn = await sendTurn({
     page,
@@ -120,7 +126,7 @@ try {
     searchToolSequence: searchCalls.map(event => event.data.name),
     invalidSearchError: invalidSearchResult.data.message.content.map(block => block.text ?? '').join(''),
     binarySearchError: binarySearchResult.data.message.content.map(block => block.text ?? '').join(''),
-    editError: editResult.data.message.content.map(block => block.text ?? '').join(''),
+    editResult: editResult.data.message.content.map(block => block.text ?? '').join(''),
     pageErrors,
     workerErrors,
     externalRequests,

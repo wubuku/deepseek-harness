@@ -57,7 +57,7 @@ node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation
 ## 发现与未完成项
 
 - Browser profile 原先暴露的 `grep` 依赖不可执行的 ripgrep 子进程；本批在 PoC provider 的 `tools/execute` 中加入有界 JavaScript fallback，并用真实 Chrome Worker 验证标准 `tool/call`/`tool/result`、匹配结果和失败后继续。它只覆盖 `/dsh/home/workspace`，使用 JavaScript regex 和有限 glob 语义，仍受扫描字节、文件数、匹配数和行长限制。
-- `edit` 必须把外置文件完整读入 VFS。一个 10 MiB 单行文件的 edit 曾导致 Session 请求体超过 backend 上限，工具结果无法结算；当前通过 4 KiB 行限制结果大小，并未修复任意超长行的结果膨胀。不能据 12 MiB 多行样本宣称超大单行可编辑。
+- `edit` 仍可能把外置文件完整读入 VFS。一个 10 MiB 单行文件的 edit 曾导致 Session 请求体超过 backend 上限，工具结果无法结算；当前 70 KiB 单行 chunk-backed edit 已通过，但 64 KiB 是搜索行上限而不是任意 edit 的容量保证。不能据此宣称任意超大单行可编辑。
 - 本批的 12 MiB 文件由 scripted LLM 固定工具选择；真实模型 E2E 使用普通大小文件。没有真实模型选择 `grep`、对超大文件自主编辑或生成大型 tool arguments 的证据。
 - 不覆盖真实模型自主选择 Browser-native 搜索、多文件工作集的 heap 峰值 SLA、二进制/非法 UTF-8/CRLF 的完整工具语义、自然 eviction、浏览器进程崩溃、Safari/WebKit、生产对象存储或多实例 backend。
 

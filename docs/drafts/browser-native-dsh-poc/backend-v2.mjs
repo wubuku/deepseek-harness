@@ -673,7 +673,7 @@ async function scriptedLlm(response, messages, tools) {
       await scriptedWorkspaceToolCall(response, {
         id: 'browser-native-boundary-grep-many',
         name: 'grep',
-        arguments: { pattern: 'BROWSER_NATIVE_BOUNDARY_MATCH', path: '/dsh/home/workspace', include: '*.txt' },
+        arguments: { pattern: 'BROWSER_NATIVE_BOUNDARY_MATCH', path: '/dsh/home/workspace/boundary.txt' },
       })
       return
     }
@@ -714,6 +714,67 @@ async function scriptedLlm(response, messages, tools) {
     return
   }
 
+  const grepIsolationMarker = 'BROWSER_NATIVE_GREP_ISOLATION_E2E'
+  if (textContent(messages).includes(grepIsolationMarker) && hasTool(tools, 'grep')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(grepIsolationMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-grep-unmatched-long-line',
+        name: 'grep',
+        arguments: { pattern: 'NOT_PRESENT', path: '/dsh/home/workspace/long-no-match.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-grep-backtracking-timeout',
+        name: 'grep',
+        arguments: { pattern: '^(SAFE_PARTIAL_MUST_NOT_ESCAPE|(a|aa)+)$', path: '/dsh/home/workspace/regex-stress.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 2) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-glob-backtracking-timeout',
+        name: 'glob',
+        arguments: { pattern: '**a**a**a**a**a**a**a**z', path: '/dsh/home/workspace' },
+      })
+      return
+    }
+    if (toolResults.length === 3) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-grep-include-backtracking-timeout',
+        name: 'grep',
+        arguments: {
+          pattern: '^SAFE_SEARCH_OK$',
+          include: '**a**a**a**a**a**a**a**z',
+          path: '/dsh/home/workspace',
+        },
+      })
+      return
+    }
+    if (toolResults.length === 4) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-grep-after-timeout',
+        name: 'grep',
+        arguments: { pattern: '^SAFE_SEARCH_OK$', path: '/dsh/home/workspace/regex-safe.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 5) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-glob-after-timeout',
+        name: 'glob',
+        arguments: { pattern: 'regex-safe.txt', path: '/dsh/home/workspace' },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_GREP_ISOLATION_COMPLETED')
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_GREP_CANCEL_CONTINUE_E2E')) {
     scriptedText(response, 'BROWSER_NATIVE_GREP_CANCEL_CONTINUE_OK')
     return
@@ -725,6 +786,14 @@ async function scriptedLlm(response, messages, tools) {
       && typeof message.content === 'string' && message.content.includes(editBoundaryMarker))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
     if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-boundary-edit-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/long-edit.txt' },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
       await scriptedWorkspaceToolCall(response, {
         id: 'browser-native-boundary-edit-long-line',
         name: 'edit',

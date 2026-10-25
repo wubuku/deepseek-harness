@@ -164,7 +164,7 @@ Chrome 终止 Worker 后可能暂时保留 OPFS sync access handle。Store 会�
 
 ## OPFS 外置大文件的 DSH 工具闭环
 
-[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep → edit → read` 中，Browser-native `grep` fallback 返回唯一 marker，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 checkout 新增的 fallback 不依赖不存在的 ripgrep 子进程；它不是完整 ripgrep 语法，也不是任意容量的搜索实现。`edit` 会完整 materialize 文件。10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限，因此结果只适用于有界 4 KiB 行样本。
+[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep → edit → read` 中，Browser-native `grep` fallback 返回唯一 marker，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 checkout 新增的 fallback 不依赖不存在的 ripgrep 子进程；它不是完整 ripgrep 语法，也不是任意容量的搜索实现。`edit` 会完整 materialize 文件。该场景使用有界 4 KiB 行；另一次 70 KiB 单行 chunk-backed edit 已通过，但 10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限。
 
 在 preview 构建后运行模型无关的大文件验收：
 
@@ -178,7 +178,7 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 ## Browser-native 文件搜索与载荷安全
 
-[本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、匹配数、命中行、参数和文件大小上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。复杂正则只做有限启发式拒绝，不能写成完整 ReDoS 防护。
+[本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、扫描行数、匹配数、结果行长、pattern 和 edit 载荷上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。内容、include 和 glob 的正则语法编译及匹配在可终止的嵌套 Worker 中执行；这限制了单次阻塞，但不是完整 ReDoS 保证。
 
 在 preview 构建后运行模型无关验收：
 
@@ -192,13 +192,13 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools-cancel.e2e.mjs
 ```
 
-`browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、二进制文件、超长编辑目标和失败后继续；`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型仍只证明普通大小文件的独立闭环；本批没有宣称真实模型会主动选择 Browser-native `grep`/`glob`。
+`browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、二进制文件、超长编辑目标和失败后继续；70 KiB 单行 chunk-backed `edit` 已在本次回归中成功并产生一次 Workspace commit。`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型此前验证普通文件闭环；本次另由真实模型自主选择 `grep` 并搜索普通文本，不覆盖恶意 pattern。
 
 ## 文件工具下一批验证
 
-[计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了对前一批 fallback 的进一步修正：目录不再先收集完整路径数组，`glob` 超过 5,000 个结果返回 `SEARCH_RESULT_OVERFLOW`，搜索 pattern 和 `include` glob 以及 brace expansion 有预算，`grep` 通过 `openFileSync().read()` 分块处理跨 chunk UTF-8，NUL/非法 UTF-8 文件不再被替换成文本。首次 Chrome 复跑暴露了“无关超长行也失败”的回归，修正为只有命中的超长行才触发结果上限；该经验已纳入进度记录。
+[计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。
 
-本批仍不把 JavaScript 正则启发式检查当作完整 ReDoS 解决方案，也不把分块读取当作块级同步或块级编辑。正式产品仍应单独验证 RE2/WASM 或独立搜索 Worker、任意容量 edit、Browser capability manifest 及正式 profile 的插件兼容性。
+Chrome scripted E2E 对内容正则、`include` 和 glob 路径正则分别触发超时，并证明同一 Agent turn 随后可继续搜索；单独取消 matcher 后 Worker 也保持可用。真实 LLM 在 Chrome 中自主选择 `grep` 完成普通搜索，但没有生成恶意 pattern。Worker timeout 是 PoC 的单批 CPU 工作量上限，不构成完整 ReDoS 形式化保证或通用 CPU quota；Safari、其他 CSP/打包部署、完整 ripgrep 语义和任意容量搜索仍未验证。分块读取也不等于块级同步或块级编辑。
 
 ## 能力预检与默认插件兼容性
 

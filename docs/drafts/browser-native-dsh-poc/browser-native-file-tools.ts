@@ -10,12 +10,17 @@ const WORKSPACE_ROOT = '/dsh/home/workspace'
 const MAX_SEARCH_FILES = 10_000
 const MAX_SEARCH_BYTES = 32 * 1024 * 1024
 const MAX_SEARCH_MATCHES = 5_000
+const MAX_SEARCH_LINES = 250_000
+const MAX_SEARCH_DURATION_MS = 30_000
 const MAX_GLOB_RESULTS = 5_000
 const MAX_SEARCH_PATTERN_BYTES = 4 * 1024
 const MAX_INCLUDE_PATTERN_BYTES = 4 * 1024
 const MAX_GLOB_ALTERNATIVES = 128
 const SEARCH_CHUNK_BYTES = 64 * 1024
 const MAX_MATCHED_LINE_BYTES = 64 * 1024
+const MAX_REGEX_BATCH_LINES = 32
+const MAX_REGEX_BATCH_BYTES = 256 * 1024
+const MAX_REGEX_BATCH_DURATION_MS = 1_000
 const MAX_EDIT_ARGUMENT_BYTES = 256 * 1024
 const MAX_EDIT_FILE_BYTES = 64 * 1024 * 1024
 const EDIT_CHUNK_BYTES = 1024 * 1024
@@ -61,8 +66,161 @@ export class BrowserNativeFileToolError extends Error {
   }
 }
 
+/** One cancellable, bounded regex execution worker used by a grep operation. */
+export interface BrowserNativeRegexMatcher {
+  /** Validate a pattern in the isolated worker without scanning workspace data. */
+  validate(pattern: string, signal: AbortSignal, timeoutMs: number): Promise<void>
+  /** Match a bounded group of decoded lines and return their matching indexes. */
+  match(pattern: string, lines: readonly string[], signal: AbortSignal, timeoutMs: number, onStarted?: () => void): Promise<readonly number[]>
+  /** Stop the matcher worker and release its message handlers. */
+  dispose(): void
+}
+
+/** Create a matcher for one validated grep pattern. */
+export type BrowserNativeRegexMatcherFactory = () => BrowserNativeRegexMatcher
+
+interface PendingRegexMatch {
+  readonly requestId: number
+  readonly lineCount: number
+  readonly signal: AbortSignal
+  readonly onStarted?: () => void
+  readonly timer: ReturnType<typeof setTimeout>
+  readonly resolve: (indices: readonly number[]) => void
+  readonly reject: (error: Error) => void
+  readonly onAbort: () => void
+  started: boolean
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+class WorkerRegexMatcher implements BrowserNativeRegexMatcher {
+  private readonly worker: Worker
+  private requestId = 0
+  private pending: PendingRegexMatch | undefined
+  private disposed = false
+
+  constructor() {
+    if (typeof Worker === 'undefined') {
+      throw new BrowserNativeFileToolError('isolated regex Workers are unavailable', 'SEARCH_REGEX_WORKER_UNAVAILABLE')
+    }
+    try {
+      this.worker = new Worker(new URL('./browser-native-regex-worker.ts', import.meta.url), {
+        type: 'module',
+        name: 'dsh-browser-native-grep-regex',
+      })
+    } catch (error) {
+      throw new BrowserNativeFileToolError(`cannot start an isolated regex Worker: ${String(error)}`, 'SEARCH_REGEX_WORKER_UNAVAILABLE')
+    }
+    this.worker.onmessage = event => { this.handleMessage(event.data) }
+    this.worker.onerror = event => {
+      event.preventDefault()
+      this.fail(new BrowserNativeFileToolError('isolated regex Worker failed', 'SEARCH_REGEX_WORKER_FAILED'))
+    }
+    this.worker.onmessageerror = () => {
+      this.fail(new BrowserNativeFileToolError('isolated regex Worker returned an unreadable response', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+    }
+  }
+
+  async validate(pattern: string, signal: AbortSignal, timeoutMs: number): Promise<void> {
+    await this.match(pattern, [], signal, timeoutMs)
+  }
+
+  match(pattern: string, lines: readonly string[], signal: AbortSignal, timeoutMs: number, onStarted?: () => void): Promise<readonly number[]> {
+    if (this.disposed) return Promise.reject(new BrowserNativeFileToolError('regex Worker is closed', 'SEARCH_REGEX_WORKER_FAILED'))
+    if (signal.aborted) return Promise.reject(new BrowserNativeFileToolError('search was aborted', 'SEARCH_ABORTED'))
+    if (this.pending !== undefined) return Promise.reject(new BrowserNativeFileToolError('regex Worker already has a request', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+    const encodedBytes = lines.reduce((total, line) => total + encoder.encode(line).byteLength, 0)
+    if (encoder.encode(pattern).byteLength > MAX_SEARCH_PATTERN_BYTES || lines.length > MAX_REGEX_BATCH_LINES
+      || encodedBytes > MAX_REGEX_BATCH_BYTES || lines.some(line => encoder.encode(line).byteLength > MAX_MATCHED_LINE_BYTES)) {
+      return Promise.reject(new BrowserNativeFileToolError('regex Worker input exceeds its message budget', 'SEARCH_REGEX_INPUT_TOO_LARGE'))
+    }
+    const requestId = ++this.requestId
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        this.finishPending(new BrowserNativeFileToolError('search was aborted', 'SEARCH_ABORTED'))
+        this.dispose()
+      }
+      const timer = setTimeout(() => {
+        this.finishPending(new BrowserNativeFileToolError('regex matching exceeded its Worker time budget', 'SEARCH_REGEX_TIMEOUT'))
+        this.dispose()
+      }, timeoutMs)
+      this.pending = { requestId, lineCount: lines.length, signal, ...(onStarted === undefined ? {} : { onStarted }), timer, resolve, reject, onAbort, started: false }
+      signal.addEventListener('abort', onAbort, { once: true })
+      try {
+        this.worker.postMessage({ type: 'match', requestId, pattern, lines })
+      } catch (error) {
+        this.fail(new BrowserNativeFileToolError(`cannot send regex work to Worker: ${String(error)}`, 'SEARCH_REGEX_WORKER_FAILED'))
+      }
+    })
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    if (this.pending !== undefined) this.finishPending(new BrowserNativeFileToolError('regex Worker was closed', 'SEARCH_REGEX_WORKER_FAILED'))
+    this.worker.onmessage = null
+    this.worker.onerror = null
+    this.worker.onmessageerror = null
+    this.worker.terminate()
+  }
+
+  private handleMessage(value: unknown): void {
+    const pending = this.pending
+    if (!isRecord(value) || pending === undefined || value.requestId !== pending.requestId) {
+      this.fail(new BrowserNativeFileToolError('regex Worker returned an invalid response', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+      return
+    }
+    if (value.type === 'started') {
+      if (pending.started) {
+        this.fail(new BrowserNativeFileToolError('regex Worker repeated its start response', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+        return
+      }
+      pending.started = true
+      try {
+        pending.onStarted?.()
+      } catch (error) {
+        this.fail(new BrowserNativeFileToolError(`matcher start observer failed: ${String(error)}`, 'SEARCH_REGEX_WORKER_FAILED'))
+      }
+      return
+    }
+    if (value.type !== 'result' || typeof value.ok !== 'boolean') {
+      this.fail(new BrowserNativeFileToolError('regex Worker returned an invalid result', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+      return
+    }
+    if (!value.ok) {
+      const code = value.errorCode === 'SEARCH_INVALID_PATTERN' ? value.errorCode : 'SEARCH_REGEX_WORKER_FAILED'
+      this.fail(new BrowserNativeFileToolError('regex Worker could not process the search pattern', code))
+      return
+    }
+    if (!Array.isArray(value.indices) || value.indices.some((index, position) =>
+      !Number.isSafeInteger(index) || Number(index) < 0 || Number(index) >= pending.lineCount
+        || (position > 0 && Number(index) <= Number(value.indices[position - 1])))) {
+      this.fail(new BrowserNativeFileToolError('regex Worker returned invalid match indexes', 'SEARCH_REGEX_PROTOCOL_ERROR'))
+      return
+    }
+    this.finishPending(undefined, value.indices.map(Number))
+  }
+
+  private finishPending(error?: Error, indices: readonly number[] = []): void {
+    const pending = this.pending
+    if (pending === undefined) return
+    this.pending = undefined
+    clearTimeout(pending.timer)
+    pending.signal.removeEventListener('abort', pending.onAbort)
+    if (error === undefined) pending.resolve(indices)
+    else pending.reject(error)
+  }
+
+  private fail(error: Error): void {
+    this.finishPending(error)
+    this.dispose()
+  }
+}
+
+function createWorkerRegexMatcher(): BrowserNativeRegexMatcher {
+  return new WorkerRegexMatcher()
 }
 
 async function yieldToWorker(signal: AbortSignal, delayMs: number): Promise<boolean> {
@@ -176,7 +334,7 @@ function expandBraces(pattern: string): string[] {
   return [pattern]
 }
 
-function globRegex(pattern: string): RegExp {
+function globRegex(pattern: string): string {
   const source = expandBraces(pattern).map(alternative => {
     let output = ''
     for (let index = 0; index < alternative.length; index += 1) {
@@ -195,7 +353,7 @@ function globRegex(pattern: string): RegExp {
     }
     return alternative.includes('/') ? output : `(?:.*/)?${output}`
   }).join('|')
-  return new RegExp(`^(?:${source})$`)
+  return `^(?:${source})$`
 }
 
 function fileBytes(vfs: MemoryVfs, path: string): Uint8Array {
@@ -241,105 +399,89 @@ async function* walkFiles(vfs: MemoryVfs, root: string, signal: AbortSignal, yie
   }
 }
 
-function isQuantifierAt(pattern: string, index: number): number {
-  const char = pattern[index]
-  if (char === '*' || char === '+' || char === '?') return 1
-  if (char !== '{') return 0
-  const end = pattern.indexOf('}', index + 1)
-  if (end < 0 || !/^\{\d+(?:,\d*)?\}$/.test(pattern.slice(index, end + 1))) return 0
-  return end - index + 1
+interface BrowserNativeSearchBudget {
+  scannedBytes: number
+  scannedLines: number
+  readonly deadline: number
 }
 
-function hasPotentiallyUnsafeRegex(pattern: string): boolean {
-  if (/\\(?:\d+|k<[^>]+>)/u.test(pattern)) return true
-  const groups: boolean[] = []
-  let inClass = false
-  let escaped = false
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === '[') {
-      inClass = true
-      continue
-    }
-    if (char === ']' && inClass) {
-      inClass = false
-      continue
-    }
-    if (inClass) continue
-    if (char === '(') {
-      groups.push(false)
-      continue
-    }
-    if (char === ')') {
-      const containsQuantifier = groups.pop() ?? false
-      const quantifierLength = isQuantifierAt(pattern, index + 1)
-      if (quantifierLength > 0 && containsQuantifier) return true
-      if (quantifierLength > 0 && groups.length > 0) groups[groups.length - 1] = true
-      continue
-    }
-    if (isQuantifierAt(pattern, index) > 0 && char !== '?' && pattern[index - 1] !== '(') {
-      for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) groups[groupIndex] = true
-    }
-  }
-  return false
+interface PendingSearchLine {
+  readonly lineNumber: number
+  readonly text: string
+  readonly bytes: number
 }
 
-function parseRegex(pattern: string): RegExp {
-  if (hasPotentiallyUnsafeRegex(pattern)) {
-    throw new BrowserNativeFileToolError('pattern contains a backreference or nested quantifier', 'SEARCH_PATTERN_TOO_COMPLEX')
-  }
-  try {
-    return new RegExp(pattern, 'u')
-  } catch (error) {
-    throw new BrowserNativeFileToolError(`pattern is not supported by the Worker regex engine: ${String(error)}`, 'SEARCH_INVALID_PATTERN')
+function assertSearchActive(signal: AbortSignal, budget: BrowserNativeSearchBudget): void {
+  if (signal.aborted) throw new BrowserNativeFileToolError('search was aborted', 'SEARCH_ABORTED')
+  if (performance.now() >= budget.deadline) {
+    throw new BrowserNativeFileToolError('search exceeded its Worker time budget', 'SEARCH_TIMEOUT')
   }
 }
 
 async function searchFile(
   vfs: MemoryVfs,
   path: string,
-  regex: RegExp,
+  pattern: string,
+  matcher: BrowserNativeRegexMatcher,
   matches: BrowserNativeGrepMatch[],
-  scannedBytes: number,
+  budget: BrowserNativeSearchBudget,
   signal: AbortSignal,
   yieldDelayMs: number,
-): Promise<{ readonly scannedBytes: number; readonly aborted: boolean }> {
+  onMatcherStarted?: () => void,
+): Promise<void> {
   const file = vfs.openFileSync(path, 'r')
   const size = file.stat().size
   const decoder = new TextDecoder('utf-8', { fatal: true })
   let position = 0
   let lineNumber = 1
   let pending = ''
-  let totalBytes = scannedBytes
+  let batch: PendingSearchLine[] = []
+  let batchBytes = 0
 
-  const consumeLine = (line: string): void => {
+  const flushBatch = async (): Promise<void> => {
+    if (batch.length === 0) return
+    assertSearchActive(signal, budget)
+    const rows = batch
+    batch = []
+    batchBytes = 0
+    const remainingMs = budget.deadline - performance.now()
+    const indexes = await matcher.match(pattern, rows.map(row => row.text), signal,
+      Math.min(MAX_REGEX_BATCH_DURATION_MS, remainingMs), onMatcherStarted)
+    assertSearchActive(signal, budget)
+    for (const index of indexes) {
+      const row = rows[index]
+      if (row === undefined) throw new BrowserNativeFileToolError('regex Worker returned an unknown line index', 'SEARCH_REGEX_PROTOCOL_ERROR')
+      matches.push({ path: relativeWorkspacePath(path), lineNumber: row.lineNumber, line: row.text })
+      if (matches.length > MAX_SEARCH_MATCHES) {
+        throw new BrowserNativeFileToolError(`search returned more than ${String(MAX_SEARCH_MATCHES)} matches`, 'SEARCH_RESULT_OVERFLOW')
+      }
+    }
+  }
+
+  const consumeLine = async (line: string): Promise<void> => {
+    assertSearchActive(signal, budget)
+    budget.scannedLines += 1
+    if (budget.scannedLines > MAX_SEARCH_LINES) {
+      throw new BrowserNativeFileToolError(`search would inspect more than ${String(MAX_SEARCH_LINES)} lines`, 'SEARCH_RESULT_OVERFLOW')
+    }
     const normalized = line.endsWith('\r') ? line.slice(0, -1) : line
-    if (!regex.test(normalized)) return
-    if (encoder.encode(normalized).byteLength > MAX_MATCHED_LINE_BYTES) {
+    const bytes = encoder.encode(normalized).byteLength
+    if (bytes > MAX_MATCHED_LINE_BYTES) {
       throw new BrowserNativeFileToolError(`matched line in ${relativeWorkspacePath(path)} exceeds the ${String(MAX_MATCHED_LINE_BYTES)}-byte result limit`, 'SEARCH_LINE_TOO_LONG')
     }
-    matches.push({ path: relativeWorkspacePath(path), lineNumber, line: normalized })
-    if (matches.length > MAX_SEARCH_MATCHES) {
-      throw new BrowserNativeFileToolError(`search returned more than ${String(MAX_SEARCH_MATCHES)} matches`, 'SEARCH_RESULT_OVERFLOW')
-    }
+    batch.push({ lineNumber, text: normalized, bytes })
+    batchBytes += bytes
+    if (batch.length >= MAX_REGEX_BATCH_LINES || batchBytes >= MAX_REGEX_BATCH_BYTES) await flushBatch()
   }
 
   try {
     while (position < size) {
-      if (signal.aborted) return { scannedBytes: totalBytes, aborted: true }
+      assertSearchActive(signal, budget)
       const bytes = file.read(position, Math.min(SEARCH_CHUNK_BYTES, size - position))
       if (bytes.byteLength === 0) break
       position += bytes.byteLength
-      totalBytes += bytes.byteLength
-      if (totalBytes > MAX_SEARCH_BYTES) {
+      budget.scannedBytes += bytes.byteLength
+      if (budget.scannedBytes > MAX_SEARCH_BYTES) {
         throw new BrowserNativeFileToolError(`search exceeded the ${String(MAX_SEARCH_BYTES)}-byte scan limit`, 'SEARCH_RESULT_OVERFLOW')
       }
       if (bytes.includes(0)) {
@@ -354,21 +496,26 @@ async function searchFile(
       pending += text
       let newline = pending.indexOf('\n')
       while (newline >= 0) {
-        consumeLine(pending.slice(0, newline))
+        await consumeLine(pending.slice(0, newline))
         pending = pending.slice(newline + 1)
         lineNumber += 1
-        if (lineNumber % 128 === 0 && await yieldToWorker(signal, yieldDelayMs)) return { scannedBytes: totalBytes, aborted: true }
+        if (lineNumber % 128 === 0 && await yieldToWorker(signal, yieldDelayMs)) {
+          throw new BrowserNativeFileToolError('search was aborted', 'SEARCH_ABORTED')
+        }
         newline = pending.indexOf('\n')
       }
-      if (await yieldToWorker(signal, yieldDelayMs)) return { scannedBytes: totalBytes, aborted: true }
+      if (encoder.encode(pending).byteLength > MAX_MATCHED_LINE_BYTES) {
+        throw new BrowserNativeFileToolError(`line in ${relativeWorkspacePath(path)} exceeds the ${String(MAX_MATCHED_LINE_BYTES)}-byte search limit`, 'SEARCH_LINE_TOO_LONG')
+      }
+      if (await yieldToWorker(signal, yieldDelayMs)) throw new BrowserNativeFileToolError('search was aborted', 'SEARCH_ABORTED')
     }
     try {
       pending += decoder.decode()
     } catch (error) {
       throw new BrowserNativeFileToolError(`cannot decode ${relativeWorkspacePath(path)} as UTF-8 text: ${String(error)}`, 'SEARCH_BINARY_FILE')
     }
-    if (pending.length > 0) consumeLine(pending)
-    return { scannedBytes: totalBytes, aborted: false }
+    if (pending.length > 0) await consumeLine(pending)
+    await flushBatch()
   } catch (error) {
     if (error instanceof BrowserNativeFileToolError) throw error
     throw new BrowserNativeFileToolError(`cannot search ${relativeWorkspacePath(path)}: ${String(error)}`, 'SEARCH_FAILED')
@@ -383,19 +530,58 @@ export async function executeBrowserNativeGrep(
   value: unknown,
   signal: AbortSignal,
   yieldDelayMs = 0,
+  options: { readonly matcherFactory?: BrowserNativeRegexMatcherFactory; readonly onMatcherStarted?: () => void } = {},
 ): Promise<{ readonly matches: readonly BrowserNativeGrepMatch[] }> {
   const input = parseGrepInput(value)
-  const regex = parseRegex(input.pattern)
   const root = absoluteWorkspacePath(input.path)
   const include = input.include === undefined ? undefined : globRegex(input.include)
   const matches: BrowserNativeGrepMatch[] = []
-  let scannedBytes = 0
-  for await (const file of walkFiles(vfs, root, signal, yieldDelayMs)) {
+  const budget: BrowserNativeSearchBudget = { scannedBytes: 0, scannedLines: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS }
+  const matcher = (options.matcherFactory ?? createWorkerRegexMatcher)()
+  let fileBatch: string[] = []
+
+  const validatePattern = async (pattern: string): Promise<void> => {
+    assertSearchActive(signal, budget)
+    await matcher.validate(pattern, signal, Math.min(MAX_REGEX_BATCH_DURATION_MS, budget.deadline - performance.now()))
+    assertSearchActive(signal, budget)
+  }
+
+  const processFileBatch = async (): Promise<void> => {
+    if (fileBatch.length === 0) return
+    const files = fileBatch
+    fileBatch = []
+    let included = new Set<number>(files.map((_file, index) => index))
+    if (include !== undefined) {
+      assertSearchActive(signal, budget)
+      const remainingMs = budget.deadline - performance.now()
+      const indexes = await matcher.match(include, files.map(relativeWorkspacePath), signal,
+        Math.min(MAX_REGEX_BATCH_DURATION_MS, remainingMs), options.onMatcherStarted)
+      included = new Set(indexes)
+    }
+    for (let index = 0; index < files.length; index += 1) {
+      assertSearchActive(signal, budget)
+      if (!included.has(index)) continue
+      const file = files[index]
+      if (file !== undefined) {
+        await searchFile(vfs, file, input.pattern, matcher, matches, budget, signal, yieldDelayMs, options.onMatcherStarted)
+      }
+    }
+  }
+
+  try {
+    await validatePattern(input.pattern)
+    if (include !== undefined) await validatePattern(include)
+    for await (const file of walkFiles(vfs, root, signal, yieldDelayMs)) {
+      assertSearchActive(signal, budget)
+      fileBatch.push(file)
+      if (fileBatch.length >= MAX_REGEX_BATCH_LINES) await processFileBatch()
+    }
+    await processFileBatch()
+  } catch (error) {
     if (signal.aborted) return { matches: [] }
-    if (include !== undefined && !include.test(relativeWorkspacePath(file))) continue
-    const result = await searchFile(vfs, file, regex, matches, scannedBytes, signal, yieldDelayMs)
-    scannedBytes = result.scannedBytes
-    if (result.aborted) return { matches: [] }
+    throw error
+  } finally {
+    matcher.dispose()
   }
   return { matches }
 }
@@ -406,23 +592,58 @@ export async function executeBrowserNativeGlob(
   value: unknown,
   signal: AbortSignal,
   yieldDelayMs = 0,
+  options: { readonly matcherFactory?: BrowserNativeRegexMatcherFactory; readonly onMatcherStarted?: () => void } = {},
 ): Promise<{ readonly root: string; readonly paths: readonly string[] }> {
   const input = parseGlobInput(value)
   const rootPath = absoluteWorkspacePath(input.path)
   const pattern = globRegex(input.pattern)
+  const budget: BrowserNativeSearchBudget = { scannedBytes: 0, scannedLines: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS }
+  const matcher = (options.matcherFactory ?? createWorkerRegexMatcher)()
   const paths: Array<{ readonly path: string; readonly mtimeMs: number }> = []
-  for await (const path of walkFiles(vfs, rootPath, signal, yieldDelayMs)) {
-    if (signal.aborted) return { root: input.path ?? '.', paths: [] }
-    if (pattern.test(relativeWorkspacePath(path))) {
+  let fileBatch: string[] = []
+
+  const validatePattern = async (): Promise<void> => {
+    assertSearchActive(signal, budget)
+    await matcher.validate(pattern, signal, Math.min(MAX_REGEX_BATCH_DURATION_MS, budget.deadline - performance.now()))
+    assertSearchActive(signal, budget)
+  }
+
+  const processFileBatch = async (): Promise<void> => {
+    if (fileBatch.length === 0) return
+    assertSearchActive(signal, budget)
+    const files = fileBatch
+    fileBatch = []
+    const remainingMs = budget.deadline - performance.now()
+    const indexes = await matcher.match(pattern, files.map(relativeWorkspacePath), signal,
+      Math.min(MAX_REGEX_BATCH_DURATION_MS, remainingMs), options.onMatcherStarted)
+    assertSearchActive(signal, budget)
+    for (const index of indexes) {
+      const path = files[index]
+      if (path === undefined) throw new BrowserNativeFileToolError('regex Worker returned an unknown path index', 'SEARCH_REGEX_PROTOCOL_ERROR')
       if (paths.length >= MAX_GLOB_RESULTS) {
         throw new BrowserNativeFileToolError(`glob returned more than ${String(MAX_GLOB_RESULTS)} paths`, 'SEARCH_RESULT_OVERFLOW')
       }
-      const stat = vfs.statSync(path)
-      paths.push({ path: relativeWorkspacePath(path), mtimeMs: Number(stat.mtimeMs) })
+      const stats = vfs.statSync(path)
+      paths.push({ path: relativeWorkspacePath(path), mtimeMs: Number(stats.mtimeMs) })
     }
   }
-  paths.sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
-  return { root: input.path ?? '.', paths: paths.map(item => item.path) }
+
+  try {
+    await validatePattern()
+    for await (const path of walkFiles(vfs, rootPath, signal, yieldDelayMs)) {
+      assertSearchActive(signal, budget)
+      fileBatch.push(path)
+      if (fileBatch.length >= MAX_REGEX_BATCH_LINES) await processFileBatch()
+    }
+    await processFileBatch()
+    paths.sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
+    return { root: input.path ?? '.', paths: paths.map(item => item.path) }
+  } catch (error) {
+    if (signal.aborted) return { root: input.path ?? '.', paths: [] }
+    throw error
+  } finally {
+    matcher.dispose()
+  }
 }
 
 /** Reject edit arguments that could create an unbounded durable diff in the PoC Session log. */

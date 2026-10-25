@@ -725,3 +725,21 @@ syncReplaySteps: 同步 upstream 后先检查 Workspace runtime 是否已有活�
 deleteCondition: Browser-Native Workspace 正式实现提供活动租约续期和 fencing、未知 commit 查询恢复、前向 IndexedDB 保护与本地导出，且迁移后的浏览器 E2E 覆盖同一时序；或 Browser-Native Workspace PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-017：隔离 Browser Worker 文件搜索的模型可控正则
+
+```text
+changeId: BN-P2-017
+upstreamBaseline: research checkout before this batch; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-regex-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-grep-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-file-search-isolation-validation-plan.md; docs/drafts/browser-native-dsh-poc/browser-file-search-isolation-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: Content grep, grep include, and glob path matching ran synchronous JavaScript RegExp inside the Agent Worker. AbortSignal could not interrupt one catastrophic backtracking call, so it could block Agent messages and cancellation.
+existingExtensionPointsChecked: Reused the Browser-native file tool adapter, DSH tool result path, VFS range reads, Worker test MessagePort, and existing Preview build. No Agent Loop, Session event format, production package, or default Web profile changes.
+whyDraftOnlyWasInsufficient: Unit tests cannot establish nested Worker termination, Vite bundling, Chrome cancellation, DSH tool settlement, and same-turn recovery together. The Chrome E2E exercises these through the actual Worker Host and scripted tool sequence; a separate real LLM run covers ordinary grep selection only.
+behaviorChange: Grep content, include, and glob path patterns execute in a disposable nested module Worker. Each matcher batch is limited to 32 values, 256 KiB and 1 second; one search is limited to 30 seconds, 250,000 lines, 32 MiB and 10,000 files. Lines above 64 KiB fail before matching, including nonmatching lines. Matcher timeout, cancellation, startup failure, and invalid response fail closed without partial results. A timed-out matcher is terminated; the Agent Worker can complete later tool calls.
+directoryOutChangeReason: None. All code, tests, and research records remain under docs/drafts; docs/drafts/README.md adds the topic to the existing index.
+consumersUpdated: Browser-native file tool adapter, Worker test seam, scripted backend scenario, Vitest coverage, Chrome DSH E2E, PoC README, operational compatibility matrix, drafts index, progress record, and this ledger.
+tests: Browser file-tools Vitest 7/7; preview build passed with existing warnings; typecheck 5/5; scripted Chrome E2E timed out long-line, grep-content, glob, and include cases then completed safe grep/glob in the same turn; Chrome real-LLM E2E selected grep for an ordinary marker; existing file-tools, cancellation, and 12 MiB OPFS E2E passed. No extra Workspace commits, page/Worker errors, or cross-origin requests were observed. Safari/WebKit, alternative CSP deployment, production workload, formal ReDoS guarantees, natural eviction, OS crash, and ripgrep compatibility remain unverified.
+syncReplaySteps: After upstream sync, check whether the Browser Worker runtime provides a supported nested-worker policy, cancellation API, or bounded regex implementation. Keep fail-closed behavior if matcher startup is unavailable; rerun the focused Vitest, preview build, typecheck, scripted/real-LLM Chrome isolation E2E, and existing file-tool/OPFS regressions. Do not replace the DSH tool result with a parallel model loop or claim ripgrep compatibility.
+deleteCondition: A supported Browser-native search provider supplies equivalent bounded and cancellable matching with the same DSH tool result semantics, or the Browser-Native file tool fallback is removed.
+status: implemented
+```

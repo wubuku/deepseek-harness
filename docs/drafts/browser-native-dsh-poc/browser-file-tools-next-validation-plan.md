@@ -15,7 +15,7 @@ description: "Browser-Native DSH 下一批文件工具与 capability 验证计�
 | 有界目录遍历 | 先收集完整文件数组会延迟取消并放大内存 | 选择，改为显式栈和边扫描限制 |
 | `glob` 结果上限 | 文件数上限不等于模型结果上限 | 选择，增加独立结果上限和结构化错误 |
 | 流式/range `grep` | 整文件读取造成 Worker heap 峰值 | 选择，用 `openFileSync().read()` 分块读取并验证跨块行语义 |
-| 正则复杂度 | JavaScript `RegExp` 单次匹配不可中断 | 选择，增加长度、反向引用和嵌套量词的 fail-closed 防护；完整 ReDoS 证明保留为未完成项 |
+| 正则复杂度 | JavaScript `RegExp` 单次匹配不可中断 | 本批仅保留输入预算；后续[正则隔离验证](browser-file-search-isolation-validation-plan.md)已将语法编译和匹配移到可终止 matcher Worker。 |
 | 文本/二进制语义 | 默认 UTF-8 替换可能把二进制误报成文本 | 选择，非法 UTF-8 或 NUL 文件返回明确二进制错误 |
 | Browser file capability roster | 工具名条件分支容易继续堆叠 | 选择，先建立 PoC 内显式名称表；正式 registry 仍需后续设计 |
 | WASI Shell、Lifo、Bashkit、v86 | 集成面扩大，不能替代 DSH Session、权限和生命周期 | 不纳入本批，保持候选研究状态 |
@@ -30,11 +30,11 @@ description: "Browser-Native DSH 下一批文件工具与 capability 验证计�
 
 ### B. 分块 `grep`
 
-搜索通过 `MemoryVfs.openFileSync()` 的同步 range read 分块读取文件，使用流式 `TextDecoder` 处理 UTF-8 边界和跨块换行。扫描字节数、单行结果字节数、匹配数和文件数仍由同一组预算约束。只有命中的行超过结果预算时才 fail closed；不相关的长行可以被扫描但不会进入结果，整体读取仍受扫描字节上限约束。
+搜索通过 `MemoryVfs.openFileSync()` 的同步 range read 分块读取文件，使用流式 `TextDecoder` 处理 UTF-8 边界和跨块换行。扫描字节数、扫描行数、单行字节数、匹配数和文件数仍由同一组预算约束。超过 64 KiB 的行在进入 matcher 前 fail closed；这会拒绝不匹配的超长行，但不会让超长行进入正则 Worker。
 
 ### C. 正则与文本安全
 
-搜索拒绝超长 pattern、反向引用和检测到嵌套量词的 pattern。该检查是有限的输入防护，不是 JavaScript 正则引擎的完整复杂度证明；后续仍可评估 RE2/WASM 或独立搜索 Worker。非法 UTF-8 和包含 NUL 的文件不静默替换为文本，而是返回带路径的 `SEARCH_BINARY_FILE` 错误。
+搜索拒绝超长 pattern；正则语法编译和执行都在可终止的 matcher Worker 中完成，单批有墙钟预算，超时返回 `SEARCH_REGEX_TIMEOUT` 并终止该 Worker。该机制仍不是 JavaScript 正则引擎的形式化复杂度证明；正式产品仍可评估 RE2/WASM。非法 UTF-8 和包含 NUL 的文件不静默替换为文本，而是返回带路径的 `SEARCH_BINARY_FILE` 错误。
 
 ### D. capability roster
 
@@ -42,7 +42,7 @@ PoC 为浏览器文件工具维护显式名称表，并让 provider 使用该表
 
 ### E. 真实浏览器验收
 
-focused Vitest 覆盖边界、流式 UTF-8、二进制拒绝、复杂 pattern、glob overflow 和取消。真实 Chrome E2E 覆盖 Worker 中的搜索、超限、失败后继续和无跨源请求；已有 OPFS 外置文件 E2E 继续作为外部 range backing 回归。真实 LLM 只补充工具 roster 和普通文件闭环，不把 scripted tool selection 宣称为模型自主选择证据。
+focused Vitest 覆盖边界、流式 UTF-8、二进制拒绝、matcher 输入预算、glob overflow 和取消。真实 Chrome E2E 覆盖 Worker 中的搜索、超限、matcher timeout、失败后继续和无跨源请求；已有 OPFS 外置文件 E2E 继续作为外部 range backing 回归。真实 LLM 只补充工具 roster 和普通文件闭环，不把 scripted tool selection 宣称为模型自主选择证据。
 
 ## 退出条件
 

@@ -85,6 +85,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly lineBytes?: number
   readonly markerLine?: number
   readonly marker?: string
+  readonly pattern?: string
   readonly offset?: number
   readonly length?: number
   readonly mode?: number
@@ -107,7 +108,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
   }
   if (data.action === 'cancel-file-search') {
-    return typeof data.path === 'string' && typeof data.marker === 'string'
+    return typeof data.path === 'string' && (typeof data.pattern === 'string' || typeof data.marker === 'string')
       && Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
   }
   if (data.action === 'chunk-edit-probe' || data.action === 'reference-edit-probe') {
@@ -420,13 +421,21 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'cancel-file-search') {
       const controller = new AbortController()
+      let matcherStartedResolve: (() => void) | undefined
+      const matcherStarted = new Promise<void>(resolve => { matcherStartedResolve = resolve })
       const search = executeBrowserNativeGrep(
         workspaceRuntime.vfs,
-        { pattern: request.marker, path: request.path },
+        { pattern: request.pattern ?? request.marker, path: request.path },
         controller.signal,
         fileToolYieldDelayMs,
+        { onMatcherStarted: () => { matcherStartedResolve?.() } },
       )
-      setTimeout(() => { controller.abort() }, request.delayMs ?? 0)
+      if (request.pattern !== undefined) {
+        await matcherStarted
+        controller.abort()
+      } else {
+        setTimeout(() => { controller.abort() }, request.delayMs ?? 0)
+      }
       const result = await search
       workspaceTestResponse(request.requestId, { ok: true, canceled: result.matches.length === 0 })
       return
