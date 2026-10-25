@@ -194,6 +194,23 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 `browser-native-file-tools.e2e.mjs` 经过真实 Chrome、Dedicated Worker、真实 DSH Host 和 scripted tool selection 验证搜索边界、非法正则、二进制文件、超长编辑目标和失败后继续；70 KiB 单行 chunk-backed `edit` 已在本次回归中成功并产生一次 Workspace commit。`browser-native-file-tools-cancel.e2e.mjs` 用 Worker test seam 取消慢搜索，再用真实 DSH `grep` turn 验证 Worker/VFS 仍可用。后者不是模型自主取消，也不替代既有 Agent Loop 的 UI stop 验收。真实模型此前验证普通文件闭环；本次另由真实模型自主选择 `grep` 并搜索普通文本，不覆盖恶意 pattern。
 
+## 模型流故障与 Agent Loop 恢复
+
+[模型流故障验证计划](llm-stream-failure-validation-plan.md)和[进度记录](llm-stream-failure-validation-progress.md)覆盖了此前未闭环的四个高风险时序：文本输出一部分后断流、工具参数 JSON 半包、Worker 在模型流中终止后刷新，以及 UI Stop 对 backend/上游请求的取消传播。该批保留 DSH Agent Loop、Session 和 Workspace 为唯一事实来源，不实现第二套恢复 loop。
+
+真实 Chrome E2E `tests/llm-stream-failure.e2e.mjs` 证明：部分文本和工具半包会持久化 `assistant/attempt` 并以 `turn/end:error` 结束；半包工具不会产生 `tool/call`、`tool/result` 或 Workspace commit；Worker 流中止后刷新会将 open turn 修复为 `interrupted`，不重发原模型请求，显式新 turn 可以继续；Stop 结算为 `aborted`，backend 观察到客户端响应关闭。backend 合同测试另外使用本地 fake OpenAI-compatible upstream 证明客户端取消会中止代理的上游 fetch。
+
+复跑本批验证：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/llm-stream-failure.e2e.mjs
+```
+
+这里的 scripted fault 是真实 DSH Worker/Host 的确定性故障注入，不是独立聊天 demo，也不等同真实模型自然断流。真实 LLM 普通流的历史证据仍有效，但本批没有把外网供应商重新运行结果写成半包故障证据；自然 eviction、OS crash、Safari、生产多实例 backend 和后台 Agent 仍未验证。
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。

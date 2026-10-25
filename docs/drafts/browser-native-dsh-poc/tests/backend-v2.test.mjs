@@ -83,6 +83,15 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }
 
+async function waitUntil(predicate, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 25))
+  }
+  assert.fail(`Timed out waiting for ${label}`)
+}
+
 async function openWorkspaceIdentity(origin) {
   const response = await fetch(`${origin}/api/browser-native/workspace/identity`)
   const body = await response.json()
@@ -1123,6 +1132,68 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(fenced.code, 'SESSION_OWNERSHIP_LOST')
   })
 
+  it('injects partial scripted streams and observes client response cancellation', async () => {
+    const dataDir = await temporaryDirectory()
+    const closedBodies = []
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: {
+        scriptedLlmFault: body => {
+          const text = JSON.stringify(body.messages)
+          if (text.includes('PARTIAL_TEXT_CONTRACT_PROMPT')) return { kind: 'partial-text', text: 'PARTIAL_TEXT' }
+          if (text.includes('PARTIAL_TOOL_CONTRACT_PROMPT')) return {
+            kind: 'partial-tool-call',
+            id: 'partial-tool-contract-call',
+            name: 'write',
+            argumentsDelta: '{"file_path":"/dsh/home/workspace/partial.txt","content":"incomplete',
+          }
+          if (text.includes('CANCEL_SCRIPTED_CONTRACT_PROMPT')) return {
+            kind: 'delayed-text',
+            delayMs: 5_000,
+            text: 'CANCEL_SCRIPTED_CONTRACT_OK',
+          }
+          return undefined
+        },
+        onLlmClientClose: body => { closedBodies.push(body) },
+      },
+    })
+    const partialText = await fetch(`${origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('llm-partial-text', { messages: [{ role: 'user', content: 'PARTIAL_TEXT_CONTRACT_PROMPT' }] })),
+    })
+    const partialTextItems = await readNdjson(partialText)
+    assert.equal(partialTextItems.at(-1).kind, 'error')
+    assert.equal(partialTextItems.at(-1).error.code, 'UPSTREAM_LLM_TRUNCATED')
+    assert.equal(partialTextItems.some(item => item.chunk?.type === 'block-end'), false)
+
+    const partialTool = await fetch(`${origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('llm-partial-tool', { messages: [{ role: 'user', content: 'PARTIAL_TOOL_CONTRACT_PROMPT' }] })),
+    })
+    const partialToolItems = await readNdjson(partialTool)
+    assert.equal(partialToolItems.at(-1).kind, 'error')
+    assert.equal(partialToolItems.at(-1).error.code, 'UPSTREAM_LLM_TRUNCATED')
+    assert.equal(partialToolItems.some(item => item.chunk?.type === 'block-end'), false)
+
+    const controller = new AbortController()
+    const delayed = await fetch(`${origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('llm-cancel-scripted', { messages: [{ role: 'user', content: 'CANCEL_SCRIPTED_CONTRACT_PROMPT' }] })),
+      signal: controller.signal,
+    })
+    const reader = delayed.body.getReader()
+    const first = await reader.read()
+    assert.equal(first.done, false)
+    controller.abort()
+    await reader.cancel().catch(() => {})
+    await waitUntil(() => closedBodies.some(body => JSON.stringify(body.messages).includes('CANCEL_SCRIPTED_CONTRACT_PROMPT')), 'scripted response close')
+    assert.equal(closedBodies.length, 1)
+  })
+
   it('proxies an OpenAI-compatible stream without exposing the backend secret', async () => {
     const upstream = createServer(async (request, response) => {
       assert.equal(request.headers.authorization, 'Bearer contract-secret')
@@ -1224,6 +1295,63 @@ describe('browser-native DSH v2 backend', () => {
       assert.equal(doneWithContentItems.at(-1).chunk.type, 'finish')
       assert.equal(doneWithContentItems.at(-1).chunk.reason.kind, 'stop')
       assert.match(doneWithContentItems.map(item => item.chunk?.block?.text ?? item.chunk?.text ?? '').join(''), /DONE_WITH_CONTENT_OK/)
+    } finally {
+      await close(upstream)
+    }
+  })
+
+  it('aborts a real upstream request when the browser-side LLM response is cancelled', async () => {
+    let upstreamAborted = false
+    let resolveUpstreamAbort
+    const upstreamAbort = new Promise(resolve => { resolveUpstreamAbort = resolve })
+    const upstream = createServer(async (request, response) => {
+      request.on('aborted', () => {
+        upstreamAborted = true
+        resolveUpstreamAbort()
+      })
+      response.on('close', () => {
+        if (!response.writableEnded) {
+          upstreamAborted = true
+          resolveUpstreamAbort()
+        }
+      })
+      for await (const _chunk of request) {}
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write('data: {"choices":[{"delta":{"content":"UPSTREAM_PARTIAL"}}]}\n\n')
+    })
+    const upstreamOrigin = await listen(upstream)
+    try {
+      const envFile = await temporaryDirectory('browser-native-v2-abort-env-').then(async directory => {
+        const file = join(directory, '.env')
+        await writeFile(file, [
+          `OPENAI_NEXT_GPT_BASE_URL=${upstreamOrigin}`,
+          'OPENAI_NEXT_GPT_COMPLETIONS_PATH=/v1/chat/completions',
+          'OPENAI_NEXT_GPT_MODEL=abort-contract-model',
+          'OPENAI_NEXT_GPT_API_KEY=abort-contract-secret',
+          'HTTPS_PROXY=',
+          '',
+        ].join('\n'))
+        return file
+      })
+      const dataDir = await temporaryDirectory()
+      const { origin } = await start({ dataDir, llmMode: 'real', envFile })
+      const controller = new AbortController()
+      const response = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-upstream-abort', { messages: [{ role: 'user', content: 'ABORT_UPSTREAM_CONTRACT_PROMPT' }] })),
+        signal: controller.signal,
+      })
+      const reader = response.body.getReader()
+      const first = await reader.read()
+      assert.equal(first.done, false)
+      controller.abort()
+      await reader.cancel().catch(() => {})
+      await Promise.race([
+        upstreamAbort,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('upstream request was not aborted')), 5_000)),
+      ])
+      assert.equal(upstreamAborted, true)
     } finally {
       await close(upstream)
     }

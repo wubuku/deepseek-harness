@@ -521,7 +521,38 @@ function scriptedText(response, text) {
   response.end()
 }
 
-async function scriptedLlm(response, messages, tools) {
+async function scriptedLlm(response, messages, tools, fault, isClientClosed = () => false) {
+  if (fault?.kind === 'partial-text') {
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: fault.text ?? 'partial response' } })
+    writeStreamError(response, fault.code ?? 'UPSTREAM_LLM_TRUNCATED', fault.message ?? 'scripted stream truncated after partial text')
+    return
+  }
+  if (fault?.kind === 'partial-tool-call') {
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'tool-call' } })
+    writeStream(response, { kind: 'chunk', chunk: {
+      type: 'tool-call-delta',
+      index: 0,
+      id: fault.id ?? 'browser-native-partial-tool-call',
+      name: fault.name ?? 'write',
+      argumentsDelta: fault.argumentsDelta ?? '{"file_path":"/dsh/home/workspace/partial.txt","content":"partial',
+    } })
+    writeStreamError(response, fault.code ?? 'UPSTREAM_LLM_TRUNCATED', fault.message ?? 'scripted stream truncated during tool arguments')
+    return
+  }
+  if (fault?.kind === 'delayed-text') {
+    const text = fault.text ?? 'delayed scripted response'
+    const split = Math.max(1, Math.floor(text.length / 2))
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: fault.prefix ?? text.slice(0, split) } })
+    await new Promise(resolveDelay => setTimeout(resolveDelay, fault.delayMs ?? 5_000))
+    if (isClientClosed()) return
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text: fault.suffix ?? text.slice(split) } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
   const externalEditCrashMarker = 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
   if (textContent(messages).includes(externalEditCrashMarker) && hasTool(tools, 'edit')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
@@ -1528,7 +1559,24 @@ export async function createBrowserNativeV2Server(options) {
         }
         if (llm.mode === 'scripted') {
           response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
-          await scriptedLlm(response, body.messages, body.tools)
+          let clientClosed = false
+          const onClose = () => {
+            if (response.writableEnded) return
+            clientClosed = true
+            options.testHooks?.onLlmClientClose?.(body)
+          }
+          response.on('close', onClose)
+          try {
+            await scriptedLlm(
+              response,
+              body.messages,
+              body.tools,
+              options.testHooks?.scriptedLlmFault?.(body),
+              () => clientClosed,
+            )
+          } finally {
+            response.off('close', onClose)
+          }
         } else {
           await realLlm(response, request, llm, body)
         }

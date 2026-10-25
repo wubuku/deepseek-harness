@@ -743,3 +743,21 @@ syncReplaySteps: After upstream sync, check whether the Browser Worker runtime p
 deleteCondition: A supported Browser-native search provider supplies equivalent bounded and cancellable matching with the same DSH tool result semantics, or the Browser-Native file tool fallback is removed.
 status: implemented
 ```
+
+### BN-P2-018：模型流半包、Worker 中止与上游取消恢复验证
+
+```text
+changeId: BN-P2-018
+upstreamBaseline: clean research checkout at batch start; 2026-10-25
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/llm-stream-failure.e2e.mjs; docs/drafts/browser-native-dsh-poc/llm-stream-failure-validation-plan.md; docs/drafts/browser-native-dsh-poc/llm-stream-failure-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Browser-Native PoC 已覆盖 Workspace 与文件工具故障，但未验证模型只输出部分文本、工具参数 JSON 半包、Worker 在模型流中终止或 UI Stop 后请求取消的 Session 和副作用边界；这些时序可能造成半条回复、重复工具调用或遗留上游请求。
+existingExtensionPointsChecked: 复用 DSH Agent Loop 已有 `AssistantStreamAttempt`、Browser LLM adapter 的 NDJSON error path、Session `assistant/attempt`/`turn/end` 语义、现有 Worker crash recovery 和同源 backend；未修改正式 Agent Loop、Session format、默认 profile 或 Workspace 协议。
+whyDraftOnlyWasInsufficient: 仅读 Agent Loop 源码不能证明真实 Dedicated Worker、DSH Host、Session backend 和 UI Stop 的联合时序；仅用普通真实 LLM 也不能稳定制造半包。新增 scripted fault 仍通过真实 DSH dispatch，另用本地 fake OpenAI-compatible upstream 验证代理的 AbortController 传播。
+behaviorChange: backend 增加 PoC-only scripted partial-text、partial-tool-call、delayed-text fault，以及未正常结束响应的关闭观测。部分流仍由现有 adapter/runtime 规范化为错误 finish，Agent Loop 持久化 `assistant/attempt` 并以 `turn/end:error` 收束；未收到完整工具 block-end 时不产生 `tool/call`。取消沿用现有 abort/interrupt 语义，不新增第二套 loop 或重试原 prompt。
+directoryOutChangeReason: none; 所有代码、测试和文档均在 docs/drafts/browser-native-dsh-poc 或 docs/drafts。
+consumersUpdated: Browser-Native backend scripted/real stream contract、Chrome DSH E2E、PoC README、插件兼容矩阵、docs/drafts 导读、验证计划/进度和本账本。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 23/23；preview build 通过；Chrome `llm-stream-failure.e2e.mjs` 通过，观察到 partial text turn 1、partial tool turn 3、Worker stream turn 5 修复为 interrupted、Stop turn 7、8 个 LLM requests、2 次未正常结束响应关闭、无页面错误和跨源请求。一次初始 E2E 断言误把 compact stream record 当作 raw chunk，修正为读取 `text-chunks`；一次 turn 标识误从 `user/message` 读取，修正为 `turn/start`，均不涉及产品语义失败。真实 LLM 普通流沿用既有证据，本批未重复外网模型；Safari、自然 eviction、OS crash、真实供应商自然断流、生产 HA 和后台 Agent 未验证。
+syncReplaySteps: 上游同步后核对 `AssistantStreamAttempt` 的 compact record、LLM runtime 的异常规范化、Browser adapter 的 reader cancel 和 Session repair；若正式接口变化，迁移本 E2E 的事件断言。运行 backend contract、preview build、Chrome E2E 和既有正常流/文件工具/Workspace recovery 回归。不得把 scripted fault 或 fake upstream 结果写成真实模型能力或生产网络保证。
+deleteCondition: 正式 Browser-Native LLM adapter 和 Agent Loop 提供等价的半包 fail-closed、取消传播、Session attempt settlement 和 Worker repair 测试，且本批 E2E 已迁移；或 Browser-Native PoC 被移除。
+status: implemented
+```
