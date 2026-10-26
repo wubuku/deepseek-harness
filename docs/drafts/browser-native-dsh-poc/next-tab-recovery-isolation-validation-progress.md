@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 复制标签页恢复隔离的实施、C
 
 ## 当前状态
 
-状态：实现、Chrome/真实 LLM 验证和文档门禁已完成；提交与 push 待执行。工作位于主 worktree 的 `research` 分支，没有隔离 worktree；起始工作区干净。Safari 按当前安排暂停。候选范围与取舍见[验证计划](next-tab-recovery-isolation-validation-plan.md)。
+状态：实现、Chrome/真实 LLM 验证、文档门禁、commit 与 push 均完成。工作位于主 worktree 的 `research` 分支，没有隔离 worktree；结束时工作区干净，`origin/research` 与本地 HEAD 一致。Safari 按当前安排暂停。候选范围与取舍见[验证计划](next-tab-recovery-isolation-validation-plan.md)。
 
 本批确认了一个真实单写者风险：Chrome `window.open()` 会复制 `sessionStorage`，同一 Workspace `resumeId` 可让两个 Worker 获得相同 writer token/fencing，复制的 Session owner token 也能续租。页面现在在恢复凭据进入 Worker 前取得同源 Web Locks；冲突或没有 Web Locks 时 fail closed。backend owner 和 Workspace fencing 仍负责服务端最终写权。
 
@@ -19,7 +19,7 @@ description: "记录 Browser-Native DSH 复制标签页恢复隔离的实施、C
 | M2：恢复锁与输入校验 | `complete` | `browser-native-recovery.spec.ts` 8/8；验证无效记录拒绝、批量冲突只回滚本次新锁、卸载时取消待处理获取且晚到授权立即释放。Web TypeScript 与 preview build 通过。 | 已完成 |
 | M3：Chrome 单写、刷新与恢复续聊 | `complete` | 最终真实 Chrome E2E 覆盖 Workspace-only、Session-only、完整凭据副本、无 Web Locks、合成 persisted pagehide 持锁、原页关闭后刷新、旧 fencing 拒绝、同 Session 新 turn 单次模型请求、一次 Workspace commit，以及释放 Workspace lock 时仍保留 Session lock；页面错误和跨源请求均为零。 | 已完成 |
 | M4：真实 LLM 回归 | `complete` | 最新无代理真实 Chrome smoke 完成 3 turns、59 个 Session events、`durableThroughSeq=58`、`read → write → read` 和刷新后文件恢复；两次 Workspace commit 均 HTTP 200，8 个 LLM response status 均 HTTP 200，LLM route 同源，页面错误为零。Playwright 另记录刷新/工具探测期间的 request abort，以及可选 preview API 的 404；这些旁路观测不属于通过断言，但保留为 PoC 限制。 | 已完成 |
-| M5：文档门禁、commit、push | `in progress` | `test:docs` 21/21、`doc-sync` 43/43、`git diff --check` 通过；`change-scope --base origin/research` 确认当前仅有本批 8 个 tracked changes 与 5 个新增文件。提交、push 和远端 HEAD/干净工作区确认待执行。 | 提交并 push `research`，确认本地与远端一致 |
+| M5：文档门禁、commit、push | `complete` | `test:docs` 21/21、`doc-sync` 43/43、`git diff --check` 通过；pre-commit lint/whitespace/vendor hooks 和 pre-push TypeScript 5/5 通过。提交已 push 到 `research`；远端 ref 与本地 HEAD 一致，工作区干净，只有主 worktree。 | 已完成 |
 
 ## 执行记录
 
@@ -39,6 +39,9 @@ description: "记录 Browser-Native DSH 复制标签页恢复隔离的实施、C
 | `pnpm run doc-sync` | 43/43 通过。 |
 | `git diff --check` | 通过；没有 whitespace error。 |
 | `pnpm --silent run change-scope --base origin/research` | 通过；scope 为本批 8 个 tracked files 和 5 个 untracked files，无已提交 outgoing commit。 |
+| `git commit -m "feat(browser-native): isolate copied recovery credentials"` | 通过；staged lint、whitespace 与 vendor manifest hooks 均通过。 |
+| `git push origin research` | 通过；pre-push TypeScript 5/5 通过，`research` 已推送。 |
+| `git status --short --branch`、`git rev-parse HEAD origin/research`、`git worktree list` | 工作区干净；本地和远端 ref 指向同一 HEAD；仅保留主 worktree。 |
 
 opener E2E 使用 Playwright BrowserContext 的 `page` 事件先安装网络监听，避免 popup 请求早于 page listener 而造成零请求假通过。Session-only 负例临时从 opener storage 移除 Workspace lease 后创建 popup；完整恢复负例另行复制两种凭据。Chrome 实测表明 Web Locks 不允许 `signal` 与 `ifAvailable` 同时传入；首次加入 `signal` 后的 E2E 在首屏 45 秒超时，独立诊断观察到 `NotSupportedError`。最终仍使用非阻塞 `ifAvailable`，页面释放时以本地取消状态标记未决请求，晚到 callback 不保留锁。恢复 notice 串行处理，并在非持久 pagehide 后忽略迟到 notice。初次实现的测试恢复页缺少 Workspace lease，不能用于接管验收；分离 Session-only 负例和完整凭据接管后通过。合成 BFCache 事件只验证 `persisted` 分支，不等同真实 BFCache 往返。
 
