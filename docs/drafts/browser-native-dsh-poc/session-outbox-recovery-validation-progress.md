@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH Session 本地 outbox 与 Worker 重启�
 
 ## 当前状态
 
-状态：实现、Chrome 故障 E2E、真实 LLM 冒烟和 preview 构建已通过；文档门禁、提交与推送待完成。
+状态：本批实现、Chrome 故障 E2E、真实 LLM 冒烟、文档门禁、提交与推送均已完成。
 
 基线：`research` 分支，起始提交与 `origin/research` 同步；起始工作区干净；仅有默认主 worktree。本轮源码核对确认 DSH `session/event` 是同步 post-commit 通知，`session/flush` 是可等待的 durability checkpoint；当前 Browser Session `pendingLive` 位于 Worker 内存。
 
@@ -21,7 +21,7 @@ description: "记录 Browser-Native DSH Session 本地 outbox 与 Worker 重启�
 | M2：远程 writer 接入与恢复对账 | `complete` | 远端 append 前 journal；只有 backend `durableThroughSeq` 覆盖后才清理。新 writer 按 seq 和完整事件内容核对、补齐连续尾部并 flush | Session log 继续作为唯一权威，禁止自动重放 prompt、工具和 HITL |
 | M3：Chrome 故障 E2E | `complete` | [Session outbox E2E](tests/session-outbox-recovery.e2e.mjs)覆盖 Worker 终止、丢失 durable flush response、IDB abort、旧 writer fencing、容量拒绝、schema migration 与 Workspace receipt 恢复 | 不外推为 OS crash、自然 eviction 或多实例 backend |
 | M4：真实 LLM 与构建回归 | `complete` | Chrome 真实模型完成 `read → write → read`、刷新后的 Session 记忆恢复和 durable Workspace 文件恢复；8 个 LLM 请求均返回 HTTP 200，Session watermark 覆盖 seq 58 | 普通内存 Workspace 对照在刷新后文件缺失；只有 durable Workspace 模式验证文件恢复 |
-| M5：文档、门禁、commit、push | `in progress` | README、兼容矩阵、变更账本和 drafts 索引已更新；定向测试与 preview build 通过 | 运行文档门禁、复核 diff、提交并推送 `research` |
+| M5：文档、门禁、commit、push | `complete` | README、兼容矩阵、变更账本和 drafts 索引已更新；`test:docs` 21/21、`doc-sync` 43/43；代码与进度记录已推送到 `origin/research`，工作区干净且仅有主 worktree | 依据 DSH-TUI 启发评估下一批高价值验证 |
 
 ## 执行记录
 
@@ -37,6 +37,7 @@ description: "记录 Browser-Native DSH Session 本地 outbox 与 Worker 重启�
 | 2026-10-26 | `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-receipt-recovery.e2e.mjs`; `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-transport-resilience.e2e.mjs` | 两项通过；Workspace commit 与 receipt 各一次，刷新后恢复原 operation receipt；Session 40 events 连续、`durableThroughSeq=39`，提交后丢失 response 正确对账，三次 append 503 阻止失败 prompt 到达 LLM，显式新 turn 可继续 | 通过真实 LLM smoke 确认 Worker/Host 闭环 |
 | 2026-10-26 | `DSH_POC_BROWSER=chrome DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs` | Chrome 真实模型完成 3 个 turn；首轮按 `read → write → read` 记录 tool/result，刷新后第二轮从同一 Session 回忆 token，第三轮对原路径执行 `read`。8 个 LLM 请求尝试中 7 个返回 HTTP 200，刷新取消的活动请求为 `ERR_ABORTED`；Session 共 56 个事件且 `durableThroughSeq=55`，无页面异常或跨源请求。未启用 durable Workspace，因此刷新后文件不存在；本次 smoke 不证明 Workspace 文件恢复 | 运行文档门禁并提交 |
 | 2026-10-26 | `DSH_POC_BROWSER=chrome DSH_POC_LLM=real DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_FILE=docs/drafts/.env node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs` | Chrome 真实模型完成 3 个 turn；首轮执行 `read → write → read`，刷新后 Session 回忆 token 且 durable Workspace 的 DSH `read` 找回原文件。8/8 模型请求 HTTP 200，Workspace commits 两次均 HTTP 200，Session 共 59 个事件且 `durableThroughSeq=58`；无页面异常或跨源请求。该结果不代表生产对象存储或 OS crash | 运行文档门禁并提交 |
+| 2026-10-26 | `pnpm run test:docs`; `pnpm run doc-sync`; `git commit -m "feat(browser-native): persist session event outbox"`; `git push origin research`; `git fetch origin research`; `git rev-parse HEAD origin/research`; `git status --short --branch`; `git worktree list` | 首次 `test:docs` 暴露 progress 中裸 commit hash，替换为分支同步描述后 21/21 通过；`doc-sync` 43/43 通过；提交钩子 lint/whitespace/vendor guard 通过；推送前 5/5 host/client typecheck gates 通过；本地和远端 ref 同步，工作区干净且没有隔离 worktree | 开始下一批候选评估 |
 
 ## 证据与限制
 
