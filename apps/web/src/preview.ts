@@ -16,6 +16,11 @@ const browserNative = searchParams.get('browser-native') === '1'
 const browserNativeDurable = browserNative && searchParams.get('browser-native-durable') === '1'
 const browserNativeWorkspaceLease = browserNative && searchParams.get('browser-native-workspace-lease') === '1'
 const browserNativeWorkspaceTest = browserNative && searchParams.get('browser-native-test') === 'workspace-recovery'
+const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
+const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
+const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
+  ? requestedProbeFault
+  : undefined
 const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
@@ -68,6 +73,57 @@ function browserNativeTestUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+async function probeBrowserNativeWorker(currentWorker: Worker): Promise<void> {
+  const channel = new MessageChannel()
+  const requestId = browserNativeTestUuid()
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      channel.port1.removeEventListener('message', onMessage)
+      channel.port1.removeEventListener('messageerror', onMessageError)
+      currentWorker.removeEventListener('error', onWorkerError)
+      channel.port1.close()
+      if (error === undefined) resolve()
+      else reject(error)
+    }
+    const onMessage = (event: MessageEvent<Record<string, unknown>>): void => {
+      if (event.data.type !== 'browser-native-runtime-probe-result' || event.data.requestId !== requestId) return
+      if (event.data.ok === true) {
+        finish()
+        return
+      }
+      const failures = Array.isArray(event.data.failures) ? event.data.failures : []
+      const codes = failures.flatMap(failure => failure !== null && typeof failure === 'object'
+        && typeof (failure as Record<string, unknown>).code === 'string'
+        ? [String((failure as Record<string, unknown>).code)]
+        : [])
+      finish(new Error(`browser-native startup blocked: ${codes.length === 0 ? 'PROBE_PROTOCOL_INVALID' : codes.join(',')}`))
+    }
+    const onMessageError = (): void => finish(new Error('browser-native startup blocked: PROBE_PROTOCOL_INVALID'))
+    const onWorkerError = (event: ErrorEvent): void => finish(new Error(`browser-native startup blocked: WORKER_ERROR (${event.message})`))
+    const timeout = window.setTimeout(() => finish(new Error('browser-native startup blocked: PROBE_TIMEOUT')), 10_000)
+    channel.port1.addEventListener('message', onMessage)
+    channel.port1.addEventListener('messageerror', onMessageError)
+    currentWorker.addEventListener('error', onWorkerError, { once: true })
+    channel.port1.start()
+    try {
+      currentWorker.postMessage({
+        type: 'browser-native-runtime-probe',
+        requestId,
+        durableWorkspace: browserNativeDurable,
+        ...(browserNativeRuntimeProbeTest && browserNativeProbeFault !== undefined
+          ? { testFault: browserNativeProbeFault }
+          : {}),
+      }, [channel.port2])
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error('browser-native startup blocked: PROBE_POST_FAILED'))
+    }
+  })
+}
+
 declare global {
   interface Window {
     __DSH_BROWSER_NATIVE_WORKSPACE_TEST__?:
@@ -88,7 +144,7 @@ try {
   if (!browserNative || !pageLifecycle.unloading) {
     const currentWorker = new DshWorker({ name: 'dsh-host' })
     worker = currentWorker
-    if (browserNativeWorkspaceTest) {
+    if (browserNativeWorkspaceTest || browserNativeRuntimeProbeTest) {
       const channel = new MessageChannel()
       const pending = new Map<string, (response: BrowserNativeWorkspaceTestResponse) => void>()
       channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestResponse & { requestId: string }>) => {
@@ -106,6 +162,7 @@ try {
     if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
     if (browserNativeWorkspaceLease) currentWorker.postMessage({ type: 'browser-native-workspace-lease-init' })
     if (browserNative) connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
+    if (browserNative) await probeBrowserNativeWorker(currentWorker)
     await connectWorkerHost(currentWorker, {
       image,
       overlays: browserNative

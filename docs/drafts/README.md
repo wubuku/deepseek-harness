@@ -81,6 +81,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 24. [Browser-Native timed HITL 生命周期验证计划](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md)：Chrome/Worker 验证同轮回答、超时迟答、刷新后原 callId 恢复和 durable answer 去重；活动问答 Stop 的后续验证见专门计划。
 25. [Browser-Native 活动 HITL Stop 验证](browser-native-dsh-poc/active-hitl-stop-validation-plan.md)及[进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md)：官方问答 composer 的显式 Stop、legacy/timed DSH cancellation、continued question 负例和真实 LLM smoke。
 26. [Browser-Native Session 传输可靠性验证](browser-native-dsh-poc/session-transport-resilience-validation-plan.md)及[进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md)：验证 append 限额切批、已提交响应丢失后的 seq 对账、连续 503 后恢复、Workspace receipt 单次结算与真实 LLM 冒烟；不宣称 pending outbox、Worker 终止恢复或 Session/Workspace 原子事务。
+27. [Browser-Native Worker 启动前运行期能力探测](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md)：Chrome 验证 IndexedDB outbox、同源 backend 和可选 OPFS 的实际可用性；必要探测失败时不创建 Host、不发送 Session/LLM 请求，恢复后继续 scripted turn，并另行记录真实 LLM smoke。
 
 ### 需要实现或审查代码时
 
@@ -340,6 +341,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [next-session-sustainability-validation-plan.md](browser-native-dsh-poc/next-session-sustainability-validation-plan.md) / [进度](browser-native-dsh-poc/next-session-sustainability-validation-progress.md) | Browser profile compaction 组合、显式模型 context window、大工具结果裁剪、摘要/append 故障恢复、真实 LLM sentinel 回忆和 64 轮冷 hydrate；不证明分页、生产 SLA、自然 eviction 或 Safari。 |
 | [session-transport-resilience-validation-plan.md](browser-native-dsh-poc/session-transport-resilience-validation-plan.md) / [进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md) | Browser Session append 限额切批、提交后响应丢失 seq reconciliation、连续 503 后恢复、Workspace receipt 去重和真实 LLM smoke；明确没有浏览器 durable Session outbox 或 Worker 终止恢复。 |
 | [session-outbox-recovery-validation-plan.md](browser-native-dsh-poc/session-outbox-recovery-validation-plan.md) / [进度](browser-native-dsh-poc/session-outbox-recovery-validation-progress.md) | IndexedDB journal、Worker 终止后的 Session watermark 对账、writer fencing、容量与 schema migration、Workspace receipt 协调；真实模型证明 Session 恢复，不证明普通内存 Workspace 文件刷新恢复。 |
+| [runtime-capability-probe-validation-plan.md](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md) / [进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md) | Worker Host 启动前检查 outbox IndexedDB transaction、同源 backend readiness 和 durable Workspace 的 Worker OPFS 能力；Chrome 故障矩阵与真实模型恢复证据，不代表自然 eviction、启动后依赖持续可用或生产 HA。 |
+| [tests/runtime-capability-probes.e2e.mjs](browser-native-dsh-poc/tests/runtime-capability-probes.e2e.mjs) | Chrome 检查 backend 503/协议错误、IndexedDB abort、OPFS probe seam 故障、memory 模式跳过 OPFS、无敏感响应泄露及恢复后单轮执行。 |
 
 ### v2 实现和测试入口
 

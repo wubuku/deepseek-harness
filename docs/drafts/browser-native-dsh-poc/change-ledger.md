@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-034：Worker Host 启动前运行期能力探测
+
+```text
+changeId: BN-P2-034
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-26
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-outbox.ts; docs/drafts/browser-native-dsh-poc/browser-native-runtime-probes.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/runtime-capability-probes.e2e.mjs; docs/drafts/browser-native-dsh-poc/runtime-capability-probe-validation-plan.md; docs/drafts/browser-native-dsh-poc/runtime-capability-probe-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: Browser-Native preview 此前只在静态 profile preflight 后创建 DSH Worker Host；Session outbox、同源 backend 或可选 durable Workspace 仍可能在 Host 与 Agent Loop 启动后才失败。
+existingExtensionPointsChecked: 复用 Worker 持有的 IndexedDB Session outbox、`/api/browser-native/health`、`/api/browser-native/config`、Worker 专用 OPFS SyncAccessHandle、Worker 消息通道和 `connectWorkerHost()` 调用顺序。`preview.ts` 创建 Worker 并发起 Host handshake，因此必须先等待 Worker probe。未修改 Agent Loop、Session format、backend 响应 schema、正式 profile 或 package API。
+whyDraftOnlyWasInsufficient: 源码阅读和单测无法确认真实 Worker 能否提交 outbox transaction、从自身执行上下文访问 OPFS、校验同源 backend 响应，以及页面是否会在探测失败后仍发送 Host init。Chrome E2E 观察实际资源及阻止启动时没有 Session/LLM 流量。
+behaviorChange: Worker Host 创建前先验证 Session outbox 的 IndexedDB readwrite transaction 和同源 backend 的 health/config 响应；只有选择 durable Workspace 时才验证 OPFS SyncAccessHandle。preview 等待 probe 成功后才发送 Host init，Worker 在 init 时再次 fail closed。诊断只输出稳定错误类别，不包含 backend response body。
+directoryOutChangeReason: `apps/web/src/preview.ts` 负责创建 `DshWorker` 并调用 `connectWorkerHost()`，必须在发送通用 Host init frame 前等待 Worker probe；PoC 目录内的代码无法控制页面侧调用顺序。probe 协议和检查逻辑仍位于本草稿目录。
+consumersUpdated: 更新 preview 接线、Worker、outbox、PoC README、运行兼容矩阵、验证计划/进度和 drafts 索引；新增 probe 单测与 Chrome E2E。
+tests: runtime probe 单测 4/4、backend contract tests 43/43、Chrome probe E2E、Session outbox recovery E2E、preview build、Web typecheck、真实 LLM durable Workspace smoke、`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43 和 `git diff --check` 均通过。Chrome probe E2E 覆盖 backend 503/协议错误、真实 IndexedDB abort、durable OPFS probe seam 故障、memory Workspace 跳过 OPFS；启动失败时没有 Session/LLM 请求，恢复后 scripted turn 只有一次模型请求。E2E 注入的 `PROBE_SECRET_MUST_NOT_LEAK` 未进入诊断，外部请求为 0。具体命令和真实模型计数见进度文档。
+syncReplaySteps: 同步上游后，确认 preview 入口仍负责 Worker 创建与 `connectWorkerHost()` 顺序。若 Browser-Native boot entry 移入 PoC package，将 probe 调用随入口迁移并删除 `preview.ts` 接线。readiness 检查只适用于 Browser-Native profile，不得要求无关 Web preview 提供 `/api/browser-native/*`。重跑 outbox 单测/E2E、运行期探测 Chrome E2E、preview build、durable Workspace 真实 Chrome LLM smoke 和文档门禁。
+deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前检查同等 IndexedDB、backend 和可选 OPFS 能力；或 Browser-Native PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-033：Session IndexedDB outbox 与 Worker 终止恢复
 
 ```text

@@ -28,6 +28,11 @@ import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
+import {
+  probeBrowserNativeRuntime,
+  type BrowserNativeRuntimeProbeFailureCode,
+  type BrowserNativeRuntimeProbeReport,
+} from './browser-native-runtime-probes.ts'
 import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
 import {
   createSyncAccessChunkBackedFile,
@@ -72,6 +77,9 @@ let localPersistBarrier: 'before' | 'after' | undefined
 let localPersistReached: 'before' | 'after' | undefined
 let releaseLocalPersist: (() => void) | undefined
 let sessionOutboxAppendsToAbort = 0
+let sessionOutboxProbesToAbort = 0
+let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
+let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
 const pending: unknown[] = []
 const sessionOutbox = new BrowserNativeSessionOutbox({
   abortNextAppend: () => {
@@ -79,7 +87,76 @@ const sessionOutbox = new BrowserNativeSessionOutbox({
     sessionOutboxAppendsToAbort -= 1
     return true
   },
+  abortNextProbe: () => {
+    if (sessionOutboxProbesToAbort === 0) return false
+    sessionOutboxProbesToAbort -= 1
+    return true
+  },
 })
+
+interface BrowserNativeRuntimeProbeRequest {
+  readonly type: 'browser-native-runtime-probe'
+  readonly requestId: string
+  readonly durableWorkspace: boolean
+  readonly testFault?: 'outbox-abort' | 'opfs-unavailable'
+}
+
+function isRuntimeProbeRequest(value: unknown): value is BrowserNativeRuntimeProbeRequest {
+  if (value === null || typeof value !== 'object') return false
+  const data = value as Record<string, unknown>
+  return data.type === 'browser-native-runtime-probe'
+    && typeof data.requestId === 'string' && data.requestId.length > 0
+    && typeof data.durableWorkspace === 'boolean'
+    && (data.testFault === undefined || data.testFault === 'outbox-abort' || data.testFault === 'opfs-unavailable')
+}
+
+function failedProbeReport(
+  check: 'session-outbox' | 'backend' | 'workspace-opfs',
+  code: BrowserNativeRuntimeProbeFailureCode,
+): BrowserNativeRuntimeProbeReport {
+  return {
+    ok: false,
+    checks: {
+      'session-outbox': check === 'session-outbox' ? 'failed' : 'not-run',
+      backend: check === 'backend' ? 'failed' : 'not-run',
+      'workspace-opfs': check === 'workspace-opfs' ? 'failed' : 'not-run',
+    },
+    failures: [{ check, code }],
+  }
+}
+
+async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, port: MessagePort): Promise<void> {
+  if (runtimeProbePromise !== undefined || host !== undefined) {
+    port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: request.requestId,
+      ...failedProbeReport('backend', 'BACKEND_RESPONSE_INVALID') })
+    return
+  }
+  if (request.durableWorkspace !== durableWorkspace) {
+    const report = failedProbeReport('backend', 'BACKEND_RESPONSE_INVALID')
+    runtimeProbeReport = report
+    runtimeProbePromise = Promise.resolve(report)
+    port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: request.requestId, ...report })
+    return
+  }
+  if (request.testFault !== undefined && workspaceTestPort === undefined) {
+    const report = failedProbeReport('backend', 'BACKEND_RESPONSE_INVALID')
+    runtimeProbeReport = report
+    runtimeProbePromise = Promise.resolve(report)
+    port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: request.requestId, ...report })
+    return
+  }
+  if (request.testFault === 'outbox-abort') sessionOutboxProbesToAbort = 1
+  runtimeProbePromise = probeBrowserNativeRuntime({
+    backendOrigin: self.location.origin,
+    durableWorkspace,
+    probeSessionOutbox: async () => await sessionOutbox.probe(),
+    ...(request.testFault === 'opfs-unavailable' ? {
+      probeWorkspaceOpfs: async () => { throw new Error('injected OPFS probe failure') },
+    } : {}),
+  })
+  runtimeProbeReport = await runtimeProbePromise
+  port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: request.requestId, ...runtimeProbeReport })
+}
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
@@ -901,6 +978,17 @@ self.addEventListener('message', (event: MessageEvent) => {
     workspaceTestPort.start()
     return
   }
+  if (isRuntimeProbeRequest(data)) {
+    const port = event.ports[0]
+    if (port === undefined) throw new Error('browser-native worker: runtime probe needs a MessagePort')
+    void handleRuntimeProbe(data, port).catch(() => {
+      const report = failedProbeReport('backend', 'BACKEND_UNAVAILABLE')
+      runtimeProbeReport = report
+      runtimeProbePromise = Promise.resolve(report)
+      port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: data.requestId, ...report })
+    })
+    return
+  }
   if (isWorkspaceTestRequest(data)) {
     void handleWorkspaceTestRequest(data)
     return
@@ -978,6 +1066,9 @@ self.addEventListener('message', (event: MessageEvent) => {
     return
   }
   if (host === undefined && data !== null && typeof data === 'object' && data.t === 'init') {
+    if (runtimeProbePromise !== undefined && runtimeProbeReport?.ok !== true) {
+      throw new Error('browser-native worker: runtime capability probes did not pass')
+    }
     if (typeof data.image !== 'string') {
       throw new Error('browser-native worker: init frame needs a string image url')
     }

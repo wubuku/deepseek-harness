@@ -236,6 +236,7 @@ export class BrowserNativeSessionOutbox {
     readonly maxTotalPendingEvents?: number
     readonly maxTotalPendingBytes?: number
     readonly abortNextAppend?: () => boolean
+    readonly abortNextProbe?: () => boolean
   } = {}) {
     this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME
     this.maxTrackedSessions = options.maxTrackedSessions ?? MAX_TRACKED_SESSIONS
@@ -261,6 +262,32 @@ export class BrowserNativeSessionOutbox {
       throw error
     })
     return this.databasePromise
+  }
+
+  /**
+   * Verify that this Worker can commit a readwrite transaction in the outbox database.
+   * @returns Settlement after a temporary metadata row has been written and removed atomically.
+   * @throws BrowserNativeSessionOutboxError when the database cannot be opened or the transaction aborts.
+   */
+  async probe(): Promise<void> {
+    try {
+      const database = await this.database()
+      const transaction = database.transaction(META_STORE, 'readwrite')
+      const completed = transactionDone(transaction)
+      const key = `probe:${crypto.randomUUID()}`
+      const metadata = transaction.objectStore(META_STORE)
+      metadata.put({ key, probe: true })
+      metadata.delete(key)
+      if (this.options.abortNextProbe?.() === true) transaction.abort()
+      await completed
+    } catch (cause) {
+      if (cause instanceof BrowserNativeSessionOutboxError) throw cause
+      throw new BrowserNativeSessionOutboxError(
+        'SESSION_OUTBOX_UNAVAILABLE',
+        'browser-native Session outbox: IndexedDB write probe did not commit',
+        { cause },
+      )
+    }
   }
 
   /**
