@@ -27,6 +27,8 @@
           suffix: Reply in the user's language.
       - id: tool-fs
         name: '@deepseek-ai/dsh-tool-fs'
+        config:
+          readImage: false
       - id: tool-fs-search
         name: '@deepseek-ai/dsh-tool-fs-search'
         config:
@@ -63,4 +65,4 @@
       name: './browser-native-session-persistence.js'
     - id: llm-browser-native
       name: './browser-native-llm.js'
-      inject: [llm]
+      inject: [llm, agents]

@@ -70,4 +70,4 @@
 
     - id: llm-browser-native
       name: './browser-native-llm.js'
-      inject: [llm]
+      inject: [llm, agents]

@@ -1591,6 +1591,100 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const capabilityBashMarker = 'BROWSER_NATIVE_CAPABILITY_BASH_E2E'
+  if (latestUserText.includes(capabilityBashMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(capabilityBashMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'bash')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-capability-bash-write',
+        name: 'bash',
+        arguments: {
+          command: "printf 'BROWSER_NATIVE_CAPABILITY_BASH_DURABLE\\n' > /dsh/home/workspace/capability-bash.txt",
+          description: 'Write a Workspace file through the Worker shell',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 1 ? 'BROWSER_NATIVE_CAPABILITY_BASH_DONE'
+      : 'BROWSER_NATIVE_CAPABILITY_BASH_UNEXPECTED_ROSTER')
+    return
+  }
+
+  const capabilityCloudPendingMarker = 'BROWSER_NATIVE_CAPABILITY_CLOUD_PENDING_E2E'
+  if (latestUserText.includes(capabilityCloudPendingMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(capabilityCloudPendingMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'write')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-capability-cloud-pending-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/capability-cloud-pending.txt',
+          content: 'local durable bytes remain available while cloud commit is pending\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 1 && hasTool(tools, 'write')
+      ? 'BROWSER_NATIVE_CAPABILITY_CLOUD_PENDING_DONE'
+      : 'BROWSER_NATIVE_CAPABILITY_CLOUD_PENDING_UNEXPECTED_ROSTER')
+    return
+  }
+
+  const capabilityWithdrawalMarker = 'BROWSER_NATIVE_CAPABILITY_WITHDRAWAL_E2E'
+  if (latestUserText.includes(capabilityWithdrawalMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(capabilityWithdrawalMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'write')) {
+      await scriptedWorkspaceToolCalls(response, [
+        {
+          id: 'browser-native-capability-quota-write',
+          name: 'write',
+          arguments: {
+            file_path: '/dsh/home/workspace/capability-quota-attempt.txt',
+            content: 'the injected quota failure must prevent local durability\n',
+          },
+        },
+        {
+          id: 'browser-native-capability-late-write',
+          name: 'write',
+          arguments: {
+            file_path: '/dsh/home/workspace/capability-late-attempt.txt',
+            content: 'the second call must be denied before dispatch\n',
+          },
+        },
+      ])
+      return
+    }
+    scriptedText(response, toolResults.length === 2 && !hasTool(tools, 'write')
+      ? 'BROWSER_NATIVE_CAPABILITY_WITHDRAWAL_DONE'
+      : 'BROWSER_NATIVE_CAPABILITY_WITHDRAWAL_UNEXPECTED_ROSTER')
+    return
+  }
+
+  const capabilityRecoveryMarker = 'BROWSER_NATIVE_CAPABILITY_RECOVERY_E2E'
+  if (latestUserText.includes(capabilityRecoveryMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(capabilityRecoveryMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'read')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-capability-recovered-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/capability-baseline.txt' },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 1 && hasTool(tools, 'write')
+      ? 'BROWSER_NATIVE_CAPABILITY_RECOVERY_DONE'
+      : 'BROWSER_NATIVE_CAPABILITY_RECOVERY_UNEXPECTED_ROSTER')
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_QUOTA_GUARD_E2E') && hasTool(tools, 'write')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
       && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_QUOTA_GUARD_E2E'))

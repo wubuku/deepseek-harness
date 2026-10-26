@@ -82,6 +82,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 25. [Browser-Native 活动 HITL Stop 验证](browser-native-dsh-poc/active-hitl-stop-validation-plan.md)及[进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md)：官方问答 composer 的显式 Stop、legacy/timed DSH cancellation、continued question 负例和真实 LLM smoke。
 26. [Browser-Native Session 传输可靠性验证](browser-native-dsh-poc/session-transport-resilience-validation-plan.md)及[进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md)：验证 append 限额切批、已提交响应丢失后的 seq 对账、连续 503 后恢复、Workspace receipt 单次结算与真实 LLM 冒烟；不宣称 pending outbox、Worker 终止恢复或 Session/Workspace 原子事务。
 27. [Browser-Native Worker 启动前运行期能力探测](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md)：Chrome 验证 IndexedDB outbox、同源 backend 和可选 OPFS 的实际可用性；必要探测失败时不创建 Host、不发送 Session/LLM 请求，恢复后继续 scripted turn，并另行记录真实 LLM smoke。
+28. [Browser-Native 运行期能力发布与撤销](browser-native-dsh-poc/runtime-capability-publication-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-publication-validation-progress.md)：验证 DSH Session request header 与模型 schema 一致、本地 Workspace durability 失败后撤销工具并拒绝迟到调用、云端 commit pending 与本地失败的区分，以及刷新后由新 Worker 恢复工具；quota 故障时序使用 scripted Chrome E2E，另有真实 LLM 普通读写烟测。
 
 ### 需要实现或审查代码时
 

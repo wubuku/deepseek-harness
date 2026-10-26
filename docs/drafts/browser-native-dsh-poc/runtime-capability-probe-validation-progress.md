@@ -6,7 +6,7 @@ description: "记录 Browser-Native 运行期能力探测批次的实施状态�
 
 ## 当前状态
 
-状态：运行期探针、Worker 启动门、Chrome 故障矩阵、真实 LLM 冒烟和文档门禁已完成；本批 commit 与 push 待完成。
+状态：运行期探针、Worker 启动门、Chrome 故障矩阵、真实 LLM 冒烟和文档门禁已完成。提交状态以 Git 历史为准，不在验证进度中维护。
 
 基线：`research` 分支与 `origin/research` 同步；Session outbox 批次已提交推送；工作区干净且只有主 worktree。Safari/WebKit 暂停，本批只运行 Chrome。
 

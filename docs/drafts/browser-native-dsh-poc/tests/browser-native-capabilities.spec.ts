@@ -6,6 +6,10 @@ import {
   publishBrowserNativeTools,
   type BrowserNativeProfileManifest,
 } from '../browser-native-capabilities.ts'
+import {
+  assertBrowserNativeToolSchemas,
+  BrowserNativeCapabilityPublication,
+} from '../browser-native-capability-publication.ts'
 
 describe('browser-native capability preflight', () => {
   it('accepts the checked-in Browser-Native profile and exposes only adapted tools', () => {
@@ -88,5 +92,59 @@ describe('browser-native capability preflight', () => {
     const preflight = evaluateBrowserNativeProfile(staged, stagedCapabilities)
     expect(preflight.ok).toBe(false)
     expect(preflight.issues).toEqual([expect.objectContaining({ kind: 'unpublished-tool', toolName: 'staged_tool' })])
+  })
+
+  it('publishes only after activation and withdraws every Workspace-backed tool on local durability loss', () => {
+    const publication = new BrowserNativeCapabilityPublication()
+    const transitions: string[][] = []
+    const unsubscribe = publication.subscribe(() => {
+      transitions.push([...publication.publishedToolNames()].sort())
+    })
+
+    expect(publication.publishedToolNames()).toEqual(new Set())
+    publication.activate()
+    expect(publication.publishedToolNames()).toEqual(new Set([
+      'bash', 'read', 'write', 'edit', 'grep', 'glob', 'todo_write', 'ask_user_question', 'working_directory',
+    ]))
+    expect(publication.unavailableWorkspaceToolNames()).toEqual([])
+
+    publication.degradeWorkspace()
+    expect(publication.unavailableWorkspaceToolNames().sort()).toEqual([
+      'bash', 'edit', 'glob', 'grep', 'read', 'working_directory', 'write',
+    ])
+    expect(publication.publishedToolNames()).toEqual(new Set(['todo_write', 'ask_user_question']))
+    expect(publication.isToolPublished('write')).toBe(false)
+    expect(publication.isToolPublished('todo_write')).toBe(true)
+    expect(transitions).toHaveLength(2)
+
+    publication.degradeWorkspace()
+    expect(transitions).toHaveLength(2)
+    unsubscribe()
+  })
+
+  it('rejects duplicate, unknown, and withdrawn schemas instead of silently filtering them', () => {
+    const publication = new BrowserNativeCapabilityPublication()
+    publication.activate()
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'read' }], publication)).not.toThrow()
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'read' }, { name: 'read' }], publication))
+      .toThrow('duplicate tool schema "read"')
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'unknown' }], publication))
+      .toThrow('tool schema "unknown" is not currently published')
+
+    publication.degradeWorkspace()
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'write' }], publication))
+      .toThrow('tool schema "write" is not currently published')
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'todo_write' }], publication)).not.toThrow()
+  })
+
+  it('keeps pre-activation Workspace degradation latched when startup probes later pass', () => {
+    const publication = new BrowserNativeCapabilityPublication()
+    publication.degradeWorkspace()
+    publication.activate()
+
+    expect(publication.publishedToolNames()).toEqual(new Set(['todo_write', 'ask_user_question']))
+    expect(publication.unavailableWorkspaceToolNames().sort()).toEqual([
+      'bash', 'edit', 'glob', 'grep', 'read', 'working_directory', 'write',
+    ])
   })
 })

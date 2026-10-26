@@ -976,3 +976,21 @@ syncReplaySteps: After upstream sync, compare backend append limits with the sha
 deleteCondition: A product Browser Session provider replaces this PoC adapter and provides bounded append batches, single-flight ordered retries, unknown-outcome reconciliation and verified durable acknowledgements with maintained product tests; or the Browser-Native PoC is removed.
 status: implemented
 ```
+
+### BN-P2-021：运行期 Workspace 能力发布与撤销
+
+```text
+changeId: BN-P2-021
+upstreamBaseline: research checkout at batch start; 2026-10-26; 起始工作区干净，仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-capability-publication.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts; docs/drafts/browser-native-dsh-poc/tests/runtime-capability-publication.e2e.mjs; docs/drafts/browser-native-dsh-poc/runtime-capability-publication-validation-plan.md; docs/drafts/browser-native-dsh-poc/runtime-capability-publication-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/runtime-capability-probe-validation-progress.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Worker 启动探测只说明启动时依赖可用；之后 OPFS 写入失败仍可能让 Workspace 工具留在后续模型 schema 中。本地已 durable、只有云端 commit 返回 503 时又不能错误撤销这些工具。还需要核对 DSH request/header 与实际模型 schema 是否一致。
+existingExtensionPointsChecked: 复用 agent-scoped tool restriction/guard、Worker runtime probe、Session request/header、LLM adapter、Workspace local flush 与 operation retry；未修改正式 package、应用源码、根依赖或其他 PoC。
+whyDraftOnlyWasInsufficient: 静态检查不能确认真实 DSH turn 是否撤销工具 schema、在 dispatch 前拒绝同批迟到调用、保留 Session 结算，并在真实 Chrome Worker 刷新后重新构建 roster；真实 provider 运行也必须烟测改动后的 LLM adapter。
+behaviorChange: Worker-local publication 状态统一控制模型 schema 与工具 dispatch。Host init 要求 runtime probe 成功；未知、重复或已撤销的 schema 在发送 backend 请求前 fail closed。本地 Workspace flush 失败会撤销 Workspace 工具组；本地 durable 成功而云端 commit 503 时保留工具并使用既有 operationId 重试。新 Worker 重新探测后才能发布工具。
+directoryOutChangeReason: 唯一目录外改动是 docs/drafts/README.md，用于登记本批计划与进度；未修改共享 app、正式 package 或根依赖。
+consumersUpdated: Browser Worker、PoC profile image、scripted backend、能力单测、Chrome E2E、PoC README、兼容矩阵、上一批运行期探测进度和 drafts 索引。
+tests: 能力发布 Vitest 7/7、Web TypeScript 检查和 preview build 通过。真实 Chrome scripted E2E 检查 Session header/wire schema 一致、缺 probe 时 Host init 被拒、Bash durable write、云端 commit 503 以同 operationId 重试、本地 quota failure、同批迟到 write 被拒、后续 schema 撤销、刷新不重放 prompt、新 Worker 恢复 roster；无页面错误或跨源请求。最终代码的真实 Chrome LLM smoke 完成 3 turns、8/8 HTTP 200，覆盖 read/write/read 与同 Session 刷新恢复。首次 LLM 尝试超过默认 60 秒 deadline；成功重试显式使用 180 秒 upstream timeout 和 32,768-token context，并出现一条 validation profile compaction headroom warning。真实 LLM 未执行故障注入；故障顺序由 scripted E2E 控制。`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43、`git diff --check` 和 `pnpm run change-scope --base origin/research` 通过。初次文档门禁误把记录的基线 commit hash 标为不允许引用；删除 hash 后重跑通过。推送前增量 typecheck 由 Git hook 执行。
+syncReplaySteps: 上游同步后检查 `tools.restrict()`/`tools.guard()`、Session request/header 时序、runtime probe 顺序、Workspace local flush 与云端 operation replay。运行能力 Vitest、backend tests、Web TypeScript、preview build、`runtime-capability-publication.e2e.mjs`、scripted runtime regression、真实 LLM 普通文件 smoke、文档门禁和相关 pre-push 检查。保留本地 durability 失败与云端 commit pending 的区别；不要在同一 Worker 未重新确认本地 durability 时恢复已撤销 roster。
+deleteCondition: 正式 Browser runtime capability service 提供等价依赖探测、schema 发布和 dispatch 授权，并有维护中的 Chrome 故障/恢复测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

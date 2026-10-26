@@ -589,6 +589,10 @@ node docs/drafts/browser-native-dsh-poc/tests/session-outbox-recovery.e2e.mjs
 env DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_REFRESH_CYCLES=1 DSH_POC_TURN_TIMEOUT_MS=600000 node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 ```
 
+## 运行期能力发布与撤销
+
+[本批计划](runtime-capability-publication-validation-plan.md)和[验证进度](runtime-capability-publication-validation-progress.md)记录启动探测、DSH `request/header` 与实际 LLM 工具 schema 的一致性，以及本地 Workspace durable 失败后的能力撤销。真实 Chrome E2E 验证 OPFS quota 失败后同批迟到写被 dispatch guard 拒绝、后续 schema 移除 Workspace 工具、刷新后新 Worker 重新探测并恢复工具；本地已 durable、仅云端 commit 返回 503 时，工具保持可用并以原 operationId 重试。普通文件 `read → write → read` 另有真实 LLM smoke；故障顺序由 scripted E2E 控制，不代表真实模型处理 quota 故障。
+
 ## Session 与 Workspace 执行写权交接
 
 [执行写权交接计划](execution-owner-handoff-validation-plan.md)和[进度记录](execution-owner-handoff-validation-progress.md)验证同一 DSH Session 在两个 Dedicated Worker 之间切换时的顺序与未知结果恢复。协调器先 flush Workspace 云端 revision 和本地 snapshot，再 flush Session outbox 并核对 `durableThroughSeq`，随后转移 Session owner，最后释放旧 Workspace lease；Session 与 Workspace 仍不是跨存储事务。

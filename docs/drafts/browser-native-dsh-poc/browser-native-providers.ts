@@ -54,9 +54,12 @@ import {
   isBrowserWorkspacePath,
 } from './browser-native-file-tools.ts'
 import {
-  BROWSER_NATIVE_PUBLISHED_TOOL_NAMES,
   isBrowserNativeFileToolName,
 } from './browser-native-capabilities.ts'
+import {
+  assertBrowserNativeToolSchemas,
+  BrowserNativeCapabilityPublication,
+} from './browser-native-capability-publication.ts'
 import { readSessionPages } from './browser-native-session-read.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
@@ -592,6 +595,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
 function createRemoteSessionPersistenceClass(
   workspace: BrowserNativeWorkspaceRuntime,
   sessionOutbox: BrowserNativeSessionOutbox,
+  publication: BrowserNativeCapabilityPublication,
 ): typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistence {
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
@@ -646,7 +650,8 @@ function createRemoteSessionPersistenceClass(
         if (errors.length > 0) throw new AggregateError(errors, 'browser-native session persistence dispose failed')
       }, 'session-persistence-browser-native open handles')
       ctx.on('tools/execute', async (exec, next) => {
-        if (!isBrowserNativeFileToolName(exec.name) || exec.agent === undefined) return await next()
+        const isWorkspaceTool = isBrowserNativeFileToolName(exec.name) || exec.name === 'bash'
+        if (!isWorkspaceTool || exec.agent === undefined) return await next()
         workspace.assertLocalWorkspaceUsable()
         await workspace.ensureWriterLease()
         if (exec.name === 'grep') {
@@ -667,7 +672,7 @@ function createRemoteSessionPersistenceClass(
           if (readDelayMs > 0) await new Promise<void>(resolve => { setTimeout(resolve, readDelayMs) })
           return await next()
         }
-        if (!['write', 'edit'].includes(exec.name)) return await next()
+        if (!['write', 'edit', 'bash'].includes(exec.name)) return await next()
         const session = exec.agent.session
         const call = session.snapshotEvents().findLast(event => event.type === 'tool/call' && event.data.callId === exec.callId)
         if (call === undefined || call.type !== 'tool/call') return await next()
@@ -725,14 +730,7 @@ function createRemoteSessionPersistenceClass(
                   version: runtimeFs().FsVersion(browserNativeFsVersion(workspace.vfs, targetPath)),
                 }, exec)
                 if (!directResult.isError) {
-                  try {
-                    await workspace.flushLocalWorkspace()
-                  } catch (error) {
-                    throw new Error(
-                      `browser-native local Workspace persistence was not confirmed; the file change may remain only in volatile Worker memory (${String(error)})`,
-                      { cause: error },
-                    )
-                  }
+                  await flushLocalWorkspaceOrDegrade(workspace, publication)
                   try {
                     await workspace.flushWorkspace()
                   } catch (error) {
@@ -749,20 +747,11 @@ function createRemoteSessionPersistenceClass(
           }
         }
         const result = await workspace.runToolOperation(operation, next)
-        if (!result.isError) {
-          try {
-            await workspace.flushLocalWorkspace()
-          } catch (error) {
-            throw new Error(
-              `browser-native local Workspace persistence was not confirmed; the file change may remain only in volatile Worker memory (${String(error)})`,
-              { cause: error },
-            )
-          }
-          try {
-            await workspace.flushWorkspace()
-          } catch (error) {
-            ctx.logger.warn(`browser-native Workspace commit for tool call "${String(exec.callId)}" remains pending: ${String(error)}`)
-          }
+        await flushLocalWorkspaceOrDegrade(workspace, publication)
+        try {
+          await workspace.flushWorkspace()
+        } catch (error) {
+          ctx.logger.warn(`browser-native Workspace commit for tool call "${String(exec.callId)}" remains pending: ${String(error)}`)
         }
         return result
       })
@@ -889,7 +878,7 @@ function createRemoteSessionPersistenceClass(
           if (!Number.isSafeInteger(nextSeq) || !Number.isSafeInteger(durableThroughSeq)) {
             throw new Error('browser-native Session read returned invalid durability cursors')
           }
-          await workspace.flushLocalWorkspace()
+          await flushLocalWorkspaceOrDegrade(workspace, publication)
           return {
             ownerEpoch: required(owner, 'owner').ownerEpoch,
             nextSeq,
@@ -1026,15 +1015,34 @@ function toWireMessage(message: RequestMessage): WireMessage {
   }
 }
 
-function toWireTools(tools: readonly ToolSchema[] | undefined): readonly unknown[] | undefined {
+async function flushLocalWorkspaceOrDegrade(
+  workspace: BrowserNativeWorkspaceRuntime,
+  publication: BrowserNativeCapabilityPublication,
+): Promise<void> {
+  try {
+    await workspace.flushLocalWorkspace()
+  } catch (error) {
+    publication.degradeWorkspace()
+    throw new Error(
+      `browser-native local Workspace persistence was not confirmed; the file change may remain only in volatile Worker memory (${String(error)})`,
+      { cause: error },
+    )
+  }
+}
+
+function toWireTools(
+  tools: readonly ToolSchema[] | undefined,
+  publication: BrowserNativeCapabilityPublication,
+): readonly unknown[] | undefined {
   if (tools === undefined) return undefined
-  return tools.filter(tool => BROWSER_NATIVE_PUBLISHED_TOOL_NAMES.has(tool.name)).map(tool => ({
+  assertBrowserNativeToolSchemas(tools, publication)
+  return tools.map(tool => ({
     type: 'function',
     function: { name: tool.name, description: tool.description, parameters: tool.parameters },
   }))
 }
 
-function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
+function createRemoteLlmAdapterClass(publication: BrowserNativeCapabilityPublication): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
   const Base = runtimeLlm().LlmAdapter
   return class RemoteLlmAdapter extends Base {
     private configPromise: Promise<BrowserNativeConfigResponse> | undefined
@@ -1086,7 +1094,7 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
         model: options.model,
         ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
         messages: options.messages.map(toWireMessage),
-        tools: toWireTools(options.tools),
+        tools: toWireTools(options.tools, publication),
         temperature: options.temperature,
         maxTokens: options.maxTokens,
         reasoningEffort: options.reasoningEffort,
@@ -1149,23 +1157,59 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
   }
 }
 
-function createSessionModule(workspace: BrowserNativeWorkspaceRuntime, sessionOutbox: BrowserNativeSessionOutbox): unknown {
+function createSessionModule(
+  workspace: BrowserNativeWorkspaceRuntime,
+  sessionOutbox: BrowserNativeSessionOutbox,
+  publication: BrowserNativeCapabilityPublication,
+): unknown {
   let module: unknown
   return () => {
-    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace, sessionOutbox)
+    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace, sessionOutbox, publication)
     module ??= { default: RemoteSessionPersistence, RemoteSessionPersistence }
     return module
   }
 }
 
-function createLlmModule(): unknown {
+function createLlmModule(publication: BrowserNativeCapabilityPublication): unknown {
   let module: unknown
   return () => {
-    const RemoteLlmAdapter = createRemoteLlmAdapterClass()
+    const RemoteLlmAdapter = createRemoteLlmAdapterClass(publication)
     module ??= {
       default: (ctx: Context): void => {
         const adapter = new RemoteLlmAdapter()
         ctx.effect(() => ctx.llm.registerAdapter(['browser-native'], adapter))
+        const controlledAgents = new Set<string>()
+        const installAgentControls = (agent: NonNullable<ReturnType<typeof ctx.agents.get>>): void => {
+          const agentId = String(agent.id)
+          if (controlledAgents.has(agentId)) return
+          agent.ctx.effect(() => {
+            let disposeRestriction: (() => void) | undefined
+            const refreshRestriction = (): void => {
+              disposeRestriction?.()
+              const registeredNames = new Set(agent.ctx.tools.schemas(agent).map(tool => tool.name))
+              const denied = publication.unavailableWorkspaceToolNames().filter(name => registeredNames.has(name))
+              disposeRestriction = denied.length === 0
+                ? undefined
+                : agent.ctx.tools.restrict({ deny: denied })
+            }
+            const unsubscribe = publication.subscribe(refreshRestriction)
+            const disposeGuard = agent.ctx.tools.guard(({ name }) => publication.isToolPublished(name)
+              ? undefined
+              : 'browser-native capability is not currently published')
+            refreshRestriction()
+            return () => {
+              unsubscribe()
+              disposeRestriction?.()
+              disposeGuard()
+            }
+          }, 'browser-native capability publication')
+          controlledAgents.add(agentId)
+        }
+        ctx.on('agent/created', ({ agent }) => { installAgentControls(agent) })
+        ctx.on('agent/disposed', ({ agent }) => {
+          controlledAgents.delete(String(agent.id))
+        })
+        for (const agent of ctx.agents.list()) installAgentControls(agent)
       },
       RemoteLlmAdapter,
     }
@@ -1177,9 +1221,10 @@ function createLlmModule(): unknown {
 export function createBrowserNativeStaticModules(
   workspace: BrowserNativeWorkspaceRuntime,
   sessionOutbox: BrowserNativeSessionOutbox,
+  publication: BrowserNativeCapabilityPublication,
 ): Readonly<Record<string, StaticModuleFactory>> {
   return {
-    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace, sessionOutbox),
-    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(),
+    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace, sessionOutbox, publication),
+    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication),
   }
 }

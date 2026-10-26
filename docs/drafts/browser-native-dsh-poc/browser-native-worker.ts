@@ -51,6 +51,7 @@ import {
   evaluateBrowserNativeProfile,
   formatBrowserNativePreflightFailure,
 } from './browser-native-capabilities.ts'
+import { BrowserNativeCapabilityPublication } from './browser-native-capability-publication.ts'
 import {
   publishBrowserNativePagehideAck,
   setBrowserNativeControlPort,
@@ -84,6 +85,7 @@ let sessionOutboxAppendsToAbort = 0
 let sessionOutboxProbesToAbort = 0
 let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
 let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
+const capabilityPublication = new BrowserNativeCapabilityPublication()
 const pending: unknown[] = []
 const sessionOutbox = new BrowserNativeSessionOutbox({
   abortNextAppend: () => {
@@ -159,6 +161,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
     } : {}),
   })
   runtimeProbeReport = await runtimeProbePromise
+  if (runtimeProbeReport.ok) capabilityPublication.activate()
   port.postMessage({ type: 'browser-native-runtime-probe-result', requestId: request.requestId, ...runtimeProbeReport })
 }
 
@@ -1177,9 +1180,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     return
   }
   if (host === undefined && data !== null && typeof data === 'object' && data.t === 'init') {
-    if (runtimeProbePromise !== undefined && runtimeProbeReport?.ok !== true) {
-      throw new Error('browser-native worker: runtime capability probes did not pass')
-    }
+    if (runtimeProbeReport?.ok !== true) throw new Error('browser-native worker: runtime capability probes did not pass')
     if (typeof data.image !== 'string') {
       throw new Error('browser-native worker: init frame needs a string image url')
     }
@@ -1211,7 +1212,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     })
     workspaceRuntime = workspace
     const created = createWorkerHost({
-      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace, sessionOutbox) },
+      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace, sessionOutbox, capabilityPublication) },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,
