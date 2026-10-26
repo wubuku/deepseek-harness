@@ -223,6 +223,8 @@ Chrome scripted E2E 对内容正则、`include` 和 glob 路径正则分别触�
 
 Stop 在 `grep-match` 和 `copy-prefix` 阶段均让原 turn 以 `aborted` 收束；编辑源文件 hash、Workspace revision 和 receipt 保持不变，同一 Session 随后可启动新 turn。Worker 在 edit 的 `copy-prefix` 阶段被终止后，刷新将未结算调用记录为 `TOOL_OUTCOME_UNKNOWN`，不重发模型请求，清理遗留 staging，再允许同 Session 新 turn。8 MiB 文件样本的 Stop-to-terminal 观测值为 134 ms 和 137 ms，三次场景的最大动画帧间隔为 16.8–33.224 ms；这些单机采样不是性能 SLA。
 
+独立真实 LLM Chrome smoke 完成普通文件 `read → write → read`，刷新后同一 Session 恢复记忆与 Workspace 文件；这不表示真实模型参与了 Stop、取消或 Worker 终止场景，具体请求和 Session 计数见[本批进度](next-worker-tool-cancellation-validation-progress.md)。
+
 运行模型无关的 Chrome 验收：
 
 ```sh
