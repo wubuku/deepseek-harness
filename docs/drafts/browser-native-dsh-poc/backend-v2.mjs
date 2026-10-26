@@ -12,14 +12,13 @@ import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/p
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WORKSPACE_BLOB_CHUNK_BYTES, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
+import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_EVENTS = 100_000
-const MAX_SESSION_APPEND_EVENTS = 1_024
-const MAX_SESSION_APPEND_BYTES = 1 * 1024 * 1024
 const MAX_SESSION_READ_EVENTS = 2_048
 const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
 const MAX_CATALOG_PAGE_SIZE = 100
@@ -783,7 +782,12 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
         : undefined
       session.ownerToken = undefined
       session.ownerExpiresAt = 0
-      return sessionResponse(session, { closed: true, ...(durabilityReceipt === undefined ? {} : { durabilityReceipt }) })
+      return sessionResponse(session, {
+        closed: true,
+        durable: true,
+        durableThroughSeq: session.durableThroughSeq,
+        ...(durabilityReceipt === undefined ? {} : { durabilityReceipt }),
+      })
     }
     if (operation === 'handoff') {
       const handoffId = boundedString(body.handoffId, 'handoffId', MAX_HANDOFF_ID_LENGTH)
@@ -832,8 +836,8 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
       if (body.expectedNextSeq !== session.events.length || !Array.isArray(body.events)) {
         throw new BackendError('SEQ_CONFLICT', 'append does not continue the visible log', 409)
       }
-      if (body.events.length > MAX_SESSION_APPEND_EVENTS) throw new BackendError('REQUEST_TOO_LARGE', 'Session append event count exceeds the request limit', 413)
-      if (jsonBytes(body.events) > MAX_SESSION_APPEND_BYTES) throw new BackendError('REQUEST_TOO_LARGE', 'Session append exceeds the request byte budget', 413)
+      if (body.events.length > SESSION_APPEND_MAX_EVENTS) throw new BackendError('REQUEST_TOO_LARGE', 'Session append event count exceeds the request limit', 413)
+      if (jsonBytes(body.events) > SESSION_APPEND_MAX_BYTES) throw new BackendError('REQUEST_TOO_LARGE', 'Session append exceeds the request byte budget', 413)
       if (session.events.length + body.events.length > MAX_EVENTS) throw new BackendError('REQUEST_TOO_LARGE', 'Session event limit exceeded', 413)
       body.events.forEach((event, index) => {
         if (event === null || typeof event !== 'object' || Array.isArray(event) || event.seq !== body.expectedNextSeq + index) {
@@ -2183,6 +2187,10 @@ export async function createBrowserNativeV2Server(options) {
         const body = await readBody(request)
         const result = await sessionOperation(store, operation, body, options.testHooks)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
+          response.destroy()
+          return
+        }
+        if (operation === 'append' && options.testHooks?.dropSessionAppendResponse?.(body, result) === true) {
           response.destroy()
           return
         }

@@ -529,6 +529,24 @@ DSH_POC_BROWSER=chrome DSH_POC_LONG_SESSION_TURNS=64 \
 
 真实模型测试只验证当前 provider/model、Chrome 和当前摘要提示；不会把真实模型凭据写入浏览器或测试输出。自然 eviction、OS crash、Safari/WebKit、Session 本地 outbox 和跨设备恢复仍未验证。
 
+## Session 远程写入可靠性验证
+
+[Session 传输可靠性计划](session-transport-resilience-validation-plan.md)及[进度记录](session-transport-resilience-validation-progress.md)验证 Browser Worker 的远程 Session append 如何处理 backend 限额、提交后响应丢失、短时连续 503、Workspace receipt 与 durable acknowledgement。provider 和 backend 共用 PoC 协议中的 append 限额：每批最多 1,024 个事件、1 MiB UTF-8 JSON；live event 共享一个 drain，失败批次保留原序，`SEQ_CONFLICT` 后读取相同 seq 范围并逐事件核对。
+
+当前 Chrome E2E 在 DSH `write` 工具已提交 Workspace 后丢弃 Session receipt append 的成功响应；重试通过 seq 对账认领同一 receipt，没有重复 Workspace commit。另注入 3 次连续 503：未持久化的用户输入不会送入模型，DSH 将该 turn 以错误收束；刷新后显式开启的新 turn 可以继续。系统不会宣称原 prompt 自动恢复。真实模型 `gpt-5.6-sol` 的 compaction、刷新和 sentinel 回忆 smoke 通过；单独的真实 `read → write → read` 流程实际完成三次工具调用，但最终回答请求返回空流并以 `UPSTREAM_LLM_EMPTY` 结束，因此不宣称完整真实模型文件 E2E 通过。
+
+复跑本批验证：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-session-transport.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-transport-resilience.e2e.mjs
+DSH_POC_CONTEXT_WINDOW=32768 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/compaction-real.e2e.mjs
+```
+
+这些限制仍然存在：单个超出 1 MiB 的 Session event 会明确失败，且不能截断；活动 Worker 的 pending events 没有独立的 OPFS/IndexedDB durable outbox，整个 Session backlog 也没有总字节上限；Worker 或页面终止后，尚未 append 到 backend 的事件不能恢复。append 成功只表示 backend 接收，只有 flush/close 回执覆盖末尾 seq 才表示该前缀 durable；Session 与 Workspace 不是原子事务。故障 turn 的原 prompt 不会自动重放，用户需要显式重新提交；永久断网、OS crash 和生产 backend 未验证。
+
 ## Session 适配、能力发布与执行交接验证
 
 [Session 适配与执行交接验证计划](next-session-adapter-and-handoff-validation-plan.md)及[进度记录](next-session-adapter-and-handoff-validation-progress.md)把 dsh-TUI 的四项可迁移纪律落到 Browser-Native PoC：history 完成后才接收 live event、取消/销毁保留 `unknown`、能力必须经过 probe 才发布，以及 Browser Worker 到云端执行者必须显式 handoff 并提升 fencing。它们不把现有 Workspace writer lease 测试改名为 Agent handoff。

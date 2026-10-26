@@ -368,6 +368,47 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(read.eventState, 'shared-frozen')
   })
 
+  it('can lose the response after accepting a Session append', async () => {
+    const dataDir = await temporaryDirectory()
+    let dropped = false
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: {
+        dropSessionAppendResponse: () => {
+          dropped = true
+          return true
+        },
+      },
+    })
+    const id = 'session-append-response-lost'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('response-lost-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const event = { seq: 0, type: 'user/message', payload: { content: 'accepted before response loss' } }
+    await assert.rejects(fetch(`${origin}/api/browser-native/session/append`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('response-lost-append', {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        ownerEpoch: created.owner.ownerEpoch,
+        expectedNextSeq: 0,
+        events: [event],
+      })),
+    }))
+    assert.equal(dropped, true)
+    const read = await post(origin, '/api/browser-native/session/read', envelope('response-lost-read', {
+      sessionId: id,
+      offset: 0,
+    }))
+    assert.deepEqual(read.events, [event])
+    assert.equal(read.nextSeq, 1)
+    assert.equal(read.durableThroughSeq, -1)
+  })
+
   it('hands Session ownership to a new execution owner and fences the old owner', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })
@@ -2048,6 +2089,9 @@ describe('browser-native DSH v2 backend', () => {
       ownerToken: durable.owner.ownerToken,
     }))
     assert.match(closed.durabilityReceipt, /^durable-durable-session-0$/)
+    assert.equal(closed.durable, true)
+    assert.equal(closed.durableThroughSeq, 0)
+    assert.equal(closed.closed, true)
 
     const transientId = 'transient-session'
     const transient = await post(first.origin, '/api/browser-native/session/create', envelope('transient-create', {

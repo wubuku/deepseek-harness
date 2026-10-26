@@ -80,6 +80,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 23. [Browser-Native handoff 安全点验证计划](browser-native-dsh-poc/next-session-handoff-safe-point-plan.md)及[进度](browser-native-dsh-poc/next-session-handoff-safe-point-progress.md)：由服务端从 DSH Session event log 判定 turn、step 与工具是否已结算；覆盖 caller 伪报 pending 列表、append/handoff 竞态和真实 Chrome Worker 活跃 turn，不宣称 Workspace/Session 双 lease 原子转移。
 24. [Browser-Native timed HITL 生命周期验证计划](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md)：Chrome/Worker 验证同轮回答、超时迟答、刷新后原 callId 恢复和 durable answer 去重；活动问答 Stop 的后续验证见专门计划。
 25. [Browser-Native 活动 HITL Stop 验证](browser-native-dsh-poc/active-hitl-stop-validation-plan.md)及[进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md)：官方问答 composer 的显式 Stop、legacy/timed DSH cancellation、continued question 负例和真实 LLM smoke。
+26. [Browser-Native Session 传输可靠性验证](browser-native-dsh-poc/session-transport-resilience-validation-plan.md)及[进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md)：验证 append 限额切批、已提交响应丢失后的 seq 对账、连续 503 后恢复、Workspace receipt 单次结算与真实 LLM 冒烟；不宣称 pending outbox、Worker 终止恢复或 Session/Workspace 原子事务。
 
 ### 需要实现或审查代码时
 
@@ -337,6 +338,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [durable-metadata-and-blob-lifecycle-validation-plan.md](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/durable-metadata-and-blob-lifecycle-validation-progress.md) | Workspace metadata 冷加载 fail-closed、全 Workspace manifest/pending 引用扫描、文件与 MinIO orphan GC、过期/损坏 staging 处置和 unknown-commit 回归；不证明跨主机 GC 或生产对象存储。 |
 | [next-deep-runtime-validation-plan.md](browser-native-dsh-poc/next-deep-runtime-validation-plan.md) / [进度](browser-native-dsh-poc/next-deep-runtime-validation-progress.md) | 长 Session 冷 hydrate、同 turn 并行只读工具、`assistant/attempt` append 503 后重试与错误收束，以及标准大文件写入和 external/chunk backing 的真实 Chrome 证据；不证明 compaction、离线 outbox 或生产 HA。 |
 | [next-session-sustainability-validation-plan.md](browser-native-dsh-poc/next-session-sustainability-validation-plan.md) / [进度](browser-native-dsh-poc/next-session-sustainability-validation-progress.md) | Browser profile compaction 组合、显式模型 context window、大工具结果裁剪、摘要/append 故障恢复、真实 LLM sentinel 回忆和 64 轮冷 hydrate；不证明分页、生产 SLA、自然 eviction 或 Safari。 |
+| [session-transport-resilience-validation-plan.md](browser-native-dsh-poc/session-transport-resilience-validation-plan.md) / [进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md) | Browser Session append 限额切批、提交后响应丢失 seq reconciliation、连续 503 后恢复、Workspace receipt 去重和真实 LLM smoke；明确没有浏览器 durable Session outbox 或 Worker 终止恢复。 |
 
 ### v2 实现和测试入口
 

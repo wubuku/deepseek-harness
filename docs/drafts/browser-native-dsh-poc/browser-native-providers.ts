@@ -58,6 +58,7 @@ import {
   isBrowserNativeFileToolName,
 } from './browser-native-capabilities.ts'
 import { readSessionPages } from './browser-native-session-read.ts'
+import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -79,6 +80,9 @@ interface SessionResponse {
   readonly eventState?: SessionHandleReadResult['eventState']
   readonly revision?: string
   readonly nextSeq?: number
+  readonly durable?: boolean
+  readonly durableThroughSeq?: number
+  readonly closed?: boolean
   readonly hasMore?: boolean
   readonly owner?: BrowserNativeOwner
   readonly snapshots?: readonly SessionPersistenceSnapshot[]
@@ -234,6 +238,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   private renewTimer: ReturnType<typeof setTimeout> | undefined
   private liveRetryTimer: ReturnType<typeof setTimeout> | undefined
   private liveRetryAttempt = 0
+  private liveDrain: Promise<void> | undefined
   private nextSeq: number
   private readonly pendingLive: SessionEvent[] = []
   private writeChain: Promise<void> = Promise.resolve()
@@ -302,51 +307,64 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
   }
 
   private async appendEvents(events: readonly SessionEvent[], signal?: AbortSignal): Promise<void> {
+    const batches = [...splitSessionAppendBatches(events)]
+    for (const batch of batches) {
+      await this.appendBatch(batch, signal)
+    }
+  }
+
+  private async appendBatch(events: readonly SessionEvent[], signal?: AbortSignal): Promise<void> {
     if (events.length === 0) return
-    const owner = this.ownerBody()
-    const persistedEvents = this.persistedEvents(events)
-    const result = await sessionRequest('append', {
-      sessionId: this.id,
-      ...owner,
-      expectedNextSeq: this.nextSeq,
-      events: persistedEvents,
-    }, signal)
-    this.nextSeq = required(result.nextSeq, 'nextSeq')
+    const expectedNextSeq = this.nextSeq
+    try {
+      const result = await sessionRequest('append', {
+        sessionId: this.id,
+        ...this.ownerBody(),
+        expectedNextSeq,
+        events,
+      }, signal)
+      const nextSeq = required(result.nextSeq, 'nextSeq')
+      if (!Number.isSafeInteger(nextSeq) || nextSeq !== expectedNextSeq + events.length) {
+        throw new Error(`browser-native Session append acknowledged invalid nextSeq ${String(nextSeq)}`)
+      }
+      this.nextSeq = nextSeq
+    } catch (error) {
+      const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
+      if (code === 'SEQ_CONFLICT' && await this.reconcileEvents(events)) return
+      throw error
+    }
   }
 
-  private persistedEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
-    return events.map(event => event.type === 'browser-native/workspace-receipt'
-      ? { ...event, ignorable: true as const }
-      : event)
-  }
-
-  private async reconcileLiveEvents(events: readonly SessionEvent[]): Promise<boolean> {
+  private async reconcileEvents(events: readonly SessionEvent[]): Promise<boolean> {
     if (events.length === 0) return true
     const result = await sessionRequest('read', {
       sessionId: this.id,
       offset: events[0].seq,
       length: events.length,
     })
-    const persistedEvents = this.persistedEvents(events)
-    if (result.events.length !== persistedEvents.length
-      || result.events.some((event, index) => JSON.stringify(event) !== JSON.stringify(persistedEvents[index]))) {
+    if (result.events.length !== events.length
+      || result.events.some((event, index) => JSON.stringify(event) !== JSON.stringify(events[index]))) {
       return false
     }
-    this.nextSeq = Math.max(this.nextSeq, required(result.nextSeq, 'nextSeq'))
+    const nextSeq = required(result.nextSeq, 'nextSeq')
+    if (!Number.isSafeInteger(nextSeq) || nextSeq < events[0].seq + events.length) return false
+    this.nextSeq = Math.max(this.nextSeq, nextSeq)
     return true
   }
 
   private async drainLiveNow(): Promise<void> {
-    if (this.pendingLive.length === 0) return
-    const events = this.pendingLive.splice(0)
-    try {
-      await this.appendEvents(events)
-    } catch (error) {
-      const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
-      if (code === 'SEQ_CONFLICT' && await this.reconcileLiveEvents(events)) return
-      this.pendingLive.unshift(...events)
-      throw error
+    while (this.pendingLive.length > 0) {
+      const events = splitSessionAppendBatches(this.pendingLive).next().value
+      if (events === undefined) return
+      this.pendingLive.splice(0, events.length)
+      try {
+        await this.appendBatch(events)
+      } catch (error) {
+        this.pendingLive.unshift(...events)
+        throw error
+      }
     }
+    this.liveRetryAttempt = 0
   }
 
   private scheduleLiveRetry(report: (error: unknown) => void): void {
@@ -356,16 +374,23 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     this.liveRetryAttempt += 1
     this.liveRetryTimer = setTimeout(() => {
       this.liveRetryTimer = undefined
-      this.startLiveDrain(report)
+      this.startLiveDrain(report, true)
     }, delayMs)
   }
 
-  private startLiveDrain(report: (error: unknown) => void): void {
-    void this.enqueueWrite(() => this.drainLiveNow()).then(() => {
-      this.liveRetryAttempt = 0
-    }, error => {
+  private startLiveDrain(report: (error: unknown) => void, retry = false): void {
+    if (this.liveDrain !== undefined || (!retry && this.liveRetryAttempt >= 5)
+      || this.closed || this.ownershipLost || this.pendingLive.length === 0) return
+    const drain = this.enqueueWrite(() => this.drainLiveNow())
+    this.liveDrain = drain
+    void drain.then(() => undefined, error => {
       report(error)
       this.scheduleLiveRetry(report)
+    }).finally(() => {
+      if (this.liveDrain === drain) this.liveDrain = undefined
+      if (this.pendingLive.length > 0 && this.liveRetryTimer === undefined && this.liveRetryAttempt === 0) {
+        this.startLiveDrain(report)
+      }
     })
   }
 
@@ -422,7 +447,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
         this.assertOpen('flush')
         await this.drainLiveNow()
         const result = await sessionRequest('flush', { sessionId: this.id, ...this.ownerBody() }, options?.signal)
-        this.nextSeq = Math.max(this.nextSeq, required(result.nextSeq, 'nextSeq'))
+        this.assertDurableThrough(result, 'flush')
       })
     } catch (error) {
       mapSessionError(error, this.id, 'flush')
@@ -441,7 +466,9 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
         try {
           await this.enqueueWrite(async () => {
             await this.drainLiveNow()
-            await sessionRequest('close', { sessionId: this.id, ...this.owner }, undefined)
+            const result = await sessionRequest('close', { sessionId: this.id, ...this.owner }, undefined)
+            if (result.closed !== true) throw new Error('browser-native Session close was not acknowledged')
+            this.assertDurableThrough(result, 'close')
           })
         } catch (error) {
           mapSessionError(error, this.id, 'close')
@@ -455,6 +482,13 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close()
+  }
+
+  private assertDurableThrough(result: SessionResponse, operation: string): void {
+    const durableThroughSeq = required(result.durableThroughSeq, 'durableThroughSeq')
+    if (result.durable !== true || !Number.isSafeInteger(durableThroughSeq) || durableThroughSeq < this.nextSeq - 1) {
+      throw new Error(`browser-native Session ${operation} did not confirm durability through seq ${this.nextSeq - 1}`)
+    }
   }
 }
 
