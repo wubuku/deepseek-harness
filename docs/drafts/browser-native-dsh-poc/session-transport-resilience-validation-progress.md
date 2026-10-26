@@ -23,7 +23,7 @@ description: "记录 Browser-Native DSH Session 远程写入可靠性验证的�
 | M2：未知 append 与持续 503 Chrome E2E | `complete` | Chrome E2E 丢弃已提交 receipt append 的 response，并验证连续 503 使未持久化输入的 turn fail closed、模型未收到该 prompt；刷新后显式新 turn 可继续 | 不外推 retry budget exhaustion 后继续原 turn、永久断网或 Worker 终止恢复 |
 | M3：Workspace receipt 联合恢复 | `complete` | 同一 Chrome E2E 中 Workspace 只提交一次、Session receipt 只出现一次，刷新后同 Session 继续 | 不宣称 Session/Workspace 原子事务 |
 | M4：真实 LLM 冒烟 | `partial` | 本轮复跑真实 Chrome compaction/刷新/sentinel 回忆通过；严格 `read → write → read` 真实模型 E2E 执行完三个工具，但最终模型响应为空流而失败 | 保留上游空响应作为单独失败证据；不将 scripted 结果说成真实模型文件流程通过 |
-| M5：文档、门禁、commit 与 push | `in-progress` | preview build、Chrome 故障 E2E、真实 LLM compaction smoke 和 `doc-sync` 已通过；提交与远端核验待完成 | 提交并推送后核对远端和干净状态 |
+| M5：文档、门禁、commit 与 push | `complete` | preview build、Chrome 故障 E2E、真实 LLM compaction smoke、`doc-sync`、提交与推送均完成；本地和 `origin/research` 指向同一提交，工作区干净且无隔离 worktree | 无 |
 
 ## 执行记录
 
@@ -46,6 +46,8 @@ description: "记录 Browser-Native DSH Session 远程写入可靠性验证的�
 | 2026-10-26 | `DSH_POC_CONTEXT_WINDOW=32768 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/compaction-real.e2e.mjs` | preview build 后复跑通过；真实 `gpt-5.6-sol` 生成 summary、刷新后恢复并回忆 sentinel，22 个 compact 后事件，3 次 LLM 请求，无页面错误或外部请求 | 仅作为真实模型 smoke；真实文件流程的空最终响应仍是未通过项 |
 | 2026-10-26 | `pnpm run test:docs` | 首次失败：repository references gate 拒绝进度页中的裸 commit hash；已改为描述起始分支同步状态 | 修正后运行完整 `doc-sync` |
 | 2026-10-26 | `pnpm run doc-sync` | 43/43 gates 通过，包含 doc-typecheck、文档构建、Markdown links/wrap、translation pairing 和 repository references | 提交前检查变更范围与工作区 |
+| 2026-10-26 | `git commit -m "test(browser-native): harden session transport recovery"`; `git push origin research`; pre-push hook | 提交并推送成功；5/5 host/client typecheck gates 通过，远端更新至本地提交 | 获取远端 ref 并确认工作区状态 |
+| 2026-10-26 | `git fetch origin research`; `git rev-parse HEAD origin/research`; `git status --short --branch`; `git worktree list --porcelain` | 本地和远端 ref 相同；`research` 工作区干净；只有默认主 worktree | 本批完成 |
 
 ## 当前证据与限制
 
