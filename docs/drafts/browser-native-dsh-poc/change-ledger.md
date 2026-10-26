@@ -84,6 +84,24 @@ deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前�
 status: implemented
 ```
 
+### BN-P2-038：Worker 页面控制通道连续性
+
+```text
+changeId: BN-P2-038
+upstreamBaseline: research checkout at batch start; 2026-10-27; 起始工作区只包含本批未提交 WIP
+file: apps/web/src/browser-native-control-channel.ts; apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts; docs/drafts/browser-native-dsh-poc/tests/control-channel-conformance.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-control-channel-conformance-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-control-channel-conformance-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: dsh-TUI 的 channel baseline、live/replay continuity 和失序拒绝原则适用于 Browser-Native 页面控制状态。原有 MessagePort 直接发送 owner、Workspace、lease 和 pagehide notice，没有共同的协议版本、channel identity、seq 去重或跳号诊断，页面可能把迟到或缺失状态当作当前写权。
+existingExtensionPointsChecked: 复用现有 page-owned MessageChannel、Worker control init、owner/sessionStorage 恢复、Workspace status/lease/pagehide publishers、DSH Session event log 和既有 Worker test port。没有把控制帧写入 Session，也没有修改 Agent Loop、Session format、正式 package 或根依赖。
+whyDraftOnlyWasInsufficient: 源码阅读不能证明真实页面会在控制帧失序后停止投影、刷新后建立新 channel，或不重复写入 lease/owner 状态。单测不能覆盖真实 Worker/page MessagePort、页面生命周期、同源请求和真实 DSH 文件闭环。
+behaviorChange: Worker 绑定 control port 后发送 `control-ready`（协议版本、随机 `channelId`、`seq=0`）；owner、Workspace、lease 和 pagehide ack 统一发送递增 `control-frame`。页面端验证 baseline、协议、channel、连续 seq 和 payload；同帧重复忽略，同序不同内容、跳号、通道变化和非法帧使 receiver fail closed。PoC test port 仅增加 duplicate/gap/conflict 注入。
+directoryOutChangeReason: `apps/web/src/browser-native-page-control.ts` 创建实际 MessageChannel 并投影页面状态；共享协议模块也必须位于 `apps/web/src`，因为 Web 项目的 `rootDir` 不允许从 `docs/drafts` 导入源文件。将类型和 validator 放在应用源码可让 Web TypeScript 检查覆盖协议本身，Worker PoC 再导入同一模块；未改其他 apps/packages。
+consumersUpdated: Worker control publishers、preview page control、PoC Worker test request union、控制通道单测、真实 Chrome E2E、PoC README、兼容矩阵、drafts index、验证计划/进度和本账本。
+tests: 控制通道与既有能力 Vitest 13/13，`pnpm exec tsc -p apps/web/tsconfig.json --noEmit`、`node --check`、preview build、`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43 和 `git diff --check` 通过。真实 Chrome E2E 通过 `control-ready`、连续状态、duplicate 去重、gap/conflict invalid、三次刷新新 channel、page/worker error=0 和 external request=0。最新真实 LLM smoke 在 Chrome Worker 完成普通 `read → write → read` 和刷新恢复，59 个 Session events、`durableThroughSeq=58`、8/8 LLM requests HTTP 200；日志中的刷新 `ERR_ABORTED` 和可选 Web route 404 已记录但不改变 smoke 结果。Safari、自然 MessagePort 丢失、OS crash、后台 Agent、Cloud handoff 和跨存储原子事务未验证。
+syncReplaySteps: 上游同步后检查 page control listener 是否仍是实际 preview 入口，MessagePort 是否仍在 Worker Host init 前绑定，owner/sessionStorage 与 Workspace lease resume 的通知字段是否兼容。重跑 control channel Vitest、preview build、Chrome conformance E2E 和真实 LLM runtime smoke；不要把 control frame 当成 Session event 或后台执行协议。
+deleteCondition: 正式 Browser runtime 提供等价的版本化页面/Worker control channel、连续性验证、去重、失序诊断和刷新重建测试后迁移该验收；或 Browser-Native PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-033：Session IndexedDB outbox 与 Worker 终止恢复
 
 ```text

@@ -1,26 +1,21 @@
-export interface BrowserNativeOwnerNotice {
-  readonly type: 'owner' | 'released' | 'unavailable'
-  readonly sessionId: string
-  readonly ownerToken?: string
-  readonly ownerEpoch?: number
-  readonly message?: string
-}
+import {
+  BROWSER_NATIVE_CONTROL_PROTOCOL_VERSION,
+  type BrowserNativeControlFrame,
+  type BrowserNativeControlNotice,
+  type BrowserNativeOwnerNotice,
+  type BrowserNativePagehideAck,
+  type BrowserNativeWorkspaceLease,
+  type BrowserNativeWorkspaceStatus,
+} from '../../../apps/web/src/browser-native-control-channel.ts'
 
-export interface BrowserNativeWorkspaceStatus {
-  readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict' | 'local-corrupt' | 'lease-conflict'
-  readonly workspaceId?: string
-  readonly revision?: number
-  readonly dirtyCount: number
-  readonly message?: string
-  readonly retryAfterMs?: number
-}
-
-export interface BrowserNativeWorkspaceLease {
-  readonly workspaceId: string
-  readonly writerToken: string
-  readonly fencingToken: number
-}
+export type {
+  BrowserNativeControlFrame,
+  BrowserNativeControlNotice,
+  BrowserNativeOwnerNotice,
+  BrowserNativePagehideAck,
+  BrowserNativeWorkspaceLease,
+  BrowserNativeWorkspaceStatus,
+} from '../../../apps/web/src/browser-native-control-channel.ts'
 
 export interface BrowserNativeWorkspaceLeaseResume extends BrowserNativeWorkspaceLease {
   readonly resumeId: string
@@ -30,16 +25,10 @@ export type BrowserNativeWorkspaceLeaseNotice =
   | ({ readonly type: 'workspace-lease' } & BrowserNativeWorkspaceLease)
   | { readonly type: 'workspace-lease-released'; readonly workspaceId: string }
 
-/** Result sent after the Worker handles a page-leave local persistence request. */
-export interface BrowserNativePagehideAck {
-  readonly type: 'pagehide-ack'
-  readonly requestId: string
-  readonly localPersisted: boolean
-  readonly writerReleased: boolean
-  readonly error?: string
-}
-
 let controlPort: MessagePort | undefined
+let controlChannelId: string | undefined
+let controlSeq = 0
+let lastControlFrame: BrowserNativeControlFrame | undefined
 const resumeOwnerTokens = new Map<string, string>()
 const resumeWorkspaceLeases = new Map<string, BrowserNativeWorkspaceLeaseResume>()
 
@@ -47,7 +36,16 @@ const resumeWorkspaceLeases = new Map<string, BrowserNativeWorkspaceLeaseResume>
 export function setBrowserNativeControlPort(port: MessagePort): void {
   controlPort?.close()
   controlPort = port
+  controlChannelId = crypto.randomUUID()
+  controlSeq = 0
+  lastControlFrame = {
+    type: 'control-ready',
+    protocolVersion: BROWSER_NATIVE_CONTROL_PROTOCOL_VERSION,
+    channelId: controlChannelId,
+    seq: 0,
+  }
   controlPort.start()
+  controlPort.postMessage(lastControlFrame)
 }
 
 export function setBrowserNativeResumeOwner(sessionId: string, ownerToken: string): void {
@@ -79,17 +77,17 @@ export function takeBrowserNativeResumeWorkspaceLease(workspaceId: string): Brow
 
 /** Publish the current write owner to the page without using the DSH event log. */
 export function publishBrowserNativeOwner(notice: BrowserNativeOwnerNotice): void {
-  controlPort?.postMessage(notice)
+  publishBrowserNativeControlNotice(notice)
 }
 
 /** Publish the current Workspace synchronization state to the owning page. */
 export function publishBrowserNativeWorkspaceStatus(notice: BrowserNativeWorkspaceStatus): void {
-  controlPort?.postMessage(notice)
+  publishBrowserNativeControlNotice(notice)
 }
 
 /** Send the current or released Workspace lease to the owning page. */
 export function publishBrowserNativeWorkspaceLease(notice: BrowserNativeWorkspaceLeaseNotice): void {
-  controlPort?.postMessage(notice)
+  publishBrowserNativeControlNotice(notice)
 }
 
 /**
@@ -97,5 +95,47 @@ export function publishBrowserNativeWorkspaceLease(notice: BrowserNativeWorkspac
  * @param notice - Persistence and lease-release result sent to the page.
  */
 export function publishBrowserNativePagehideAck(notice: BrowserNativePagehideAck): void {
-  controlPort?.postMessage(notice)
+  publishBrowserNativeControlNotice(notice)
+}
+
+function publishBrowserNativeControlNotice(notice: BrowserNativeControlNotice): void {
+  if (controlPort === undefined || controlChannelId === undefined) return
+  const frame: BrowserNativeControlFrame = {
+    type: 'control-frame',
+    protocolVersion: BROWSER_NATIVE_CONTROL_PROTOCOL_VERSION,
+    channelId: controlChannelId,
+    seq: ++controlSeq,
+    notice,
+  }
+  lastControlFrame = frame
+  controlPort.postMessage(frame)
+}
+
+/** Inject a duplicate, gap, or same-sequence conflict for PoC fault tests. */
+export function publishBrowserNativeControlTestFrame(kind: 'duplicate' | 'gap' | 'conflict'): void {
+  if (controlPort === undefined || controlChannelId === undefined || lastControlFrame?.type !== 'control-frame') {
+    throw new Error('browser-native control test frame requires a published notice')
+  }
+  const base = lastControlFrame
+  if (kind === 'duplicate') {
+    controlPort.postMessage(base)
+    return
+  }
+  if (kind === 'gap') {
+    controlPort.postMessage({ ...base, seq: controlSeq + 2 })
+    return
+  }
+  const notice = base.notice
+  const conflictingNotice: BrowserNativeControlNotice = notice.type === 'workspace'
+    ? { ...notice, dirtyCount: notice.dirtyCount + 1 }
+    : notice.type === 'owner'
+      ? { ...notice, message: notice.message === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
+      : notice.type === 'unavailable'
+        ? { ...notice, message: notice.message === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
+        : notice.type === 'workspace-lease'
+          ? { ...notice, writerToken: `${notice.writerToken}-conflict` }
+          : notice.type === 'workspace-lease-released'
+            ? { ...notice, workspaceId: `${notice.workspaceId}-conflict` }
+            : { ...notice, error: notice.error === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
+  controlPort.postMessage({ ...base, notice: conflictingNotice })
 }

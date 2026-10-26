@@ -83,6 +83,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 26. [Browser-Native Session 传输可靠性验证](browser-native-dsh-poc/session-transport-resilience-validation-plan.md)及[进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md)：验证 append 限额切批、已提交响应丢失后的 seq 对账、连续 503 后恢复、Workspace receipt 单次结算与真实 LLM 冒烟；不宣称 pending outbox、Worker 终止恢复或 Session/Workspace 原子事务。
 27. [Browser-Native Worker 启动前运行期能力探测](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md)：Chrome 验证 IndexedDB outbox、同源 backend 和可选 OPFS 的实际可用性；必要探测失败时不创建 Host、不发送 Session/LLM 请求，恢复后继续 scripted turn，并另行记录真实 LLM smoke。
 28. [Browser-Native 运行期能力发布与撤销](browser-native-dsh-poc/runtime-capability-publication-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-publication-validation-progress.md)：验证 DSH Session request header 与模型 schema 一致、本地 Workspace durability 失败后撤销工具并拒绝迟到调用、云端 commit pending 与本地失败的区分，以及刷新后由新 Worker 恢复工具；quota 故障时序使用 scripted Chrome E2E，另有真实 LLM 普通读写烟测。
+29. [Browser-Native Worker 控制通道连续性验证](browser-native-dsh-poc/next-control-channel-conformance-validation-plan.md)及[进度](browser-native-dsh-poc/next-control-channel-conformance-validation-progress.md)：验证页面与 Worker 控制帧的 `control-ready` 基线、连续 `channelId/seq`、重复去重、跳号/同序冲突 fail-closed 和刷新后的新通道；真实 LLM 只做普通文件 smoke，不把控制通道当作 Session event log。
 
 ### 需要实现或审查代码时
 
@@ -346,6 +347,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [session-outbox-recovery-validation-plan.md](browser-native-dsh-poc/session-outbox-recovery-validation-plan.md) / [进度](browser-native-dsh-poc/session-outbox-recovery-validation-progress.md) | IndexedDB journal、Worker 终止后的 Session watermark 对账、writer fencing、容量与 schema migration、Workspace receipt 协调；真实模型证明 Session 恢复，不证明普通内存 Workspace 文件刷新恢复。 |
 | [runtime-capability-probe-validation-plan.md](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md) / [进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md) | Worker Host 启动前检查 outbox IndexedDB transaction、同源 backend readiness 和 durable Workspace 的 Worker OPFS 能力；Chrome 故障矩阵与真实模型恢复证据，不代表自然 eviction、启动后依赖持续可用或生产 HA。 |
 | [tests/runtime-capability-probes.e2e.mjs](browser-native-dsh-poc/tests/runtime-capability-probes.e2e.mjs) | Chrome 检查 backend 503/协议错误、IndexedDB abort、OPFS probe seam 故障、memory 模式跳过 OPFS、无敏感响应泄露及恢复后单轮执行。 |
+| [next-control-channel-conformance-validation-plan.md](browser-native-dsh-poc/next-control-channel-conformance-validation-plan.md) / [进度](browser-native-dsh-poc/next-control-channel-conformance-validation-progress.md) | 页面与 Worker 控制帧的基线、连续 `channelId/seq`、重复去重、跳号/同序冲突 fail-closed 和刷新新通道；不替代 Session event log。 |
+| [tests/control-channel-conformance.e2e.mjs](browser-native-dsh-poc/tests/control-channel-conformance.e2e.mjs) | 真实 Chrome 验证控制通道正常投影、故障帧注入、刷新恢复、页面/Worker 错误和跨源请求边界。 |
 | [execution-owner-handoff-validation-plan.md](browser-native-dsh-poc/execution-owner-handoff-validation-plan.md) / [进度](browser-native-dsh-poc/execution-owner-handoff-validation-progress.md) | Session 与 Workspace 双写权有序交接、响应未知后的恢复、旧 owner fencing；Chrome scripted 故障矩阵和真实 LLM 同 Session 双 Worker 文件续接。 |
 | [tests/execution-owner-handoff.e2e.mjs](browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs) | Chrome 验证正常双 Worker handoff、Session handoff response loss、Workspace release response loss、旧 token fencing 和身份 cookie 不发送给 LLM route。 |
 | [principal-scoped-session-isolation-plan.md](browser-native-dsh-poc/principal-scoped-session-isolation-plan.md) / [进度](browser-native-dsh-poc/principal-scoped-session-isolation-progress.md) | PoC principal 授权、Session durable owner、同源身份切换时 OPFS/IndexedDB 隔离；Chrome A→B→A 刷新恢复、handoff 回归与真实 LLM smoke，明确不是生产认证或多租户安全证明。 |
@@ -357,6 +360,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 |---|---|
 | [browser-native-worker.ts](browser-native-dsh-poc/browser-native-worker.ts) | 在 Dedicated Worker 中启动真实 DSH Host。 |
 | [browser-native-page-control.ts](../../apps/web/src/browser-native-page-control.ts) | preview 主线程保存 Worker Session owner token、刷新续租，并在 pagehide 请求关闭 Session。 |
+| [browser-native-control-channel.ts](../../apps/web/src/browser-native-control-channel.ts) | 定义页面/Worker 控制帧、`control-ready` 基线、连续序列验证和重复去重。 |
 | [browser-native-providers.ts](browser-native-dsh-poc/browser-native-providers.ts) | Worker 侧远程 `SessionPersistence` 和 `LlmAdapter` provider。 |
 | [backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) | 当前 v2 的实际 Session/LLM 字段、durability、进程内 owner token 校验和 30 秒 lease 过期；没有请求去重账本或跨进程 owner epoch。 |
 | [run-v2.mjs](browser-native-dsh-poc/run-v2.mjs) | 构建产物上的 v2 launcher。 |

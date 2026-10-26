@@ -5,51 +5,17 @@ import {
   browserNativeWorkspaceRetryCopy,
   browserNativeWorkspaceStatusCopy,
 } from './locales/browser-native-workspace.ts'
+import {
+  BrowserNativeControlReceiver,
+  type BrowserNativeControlNotice,
+  type BrowserNativePagehideAck,
+  type BrowserNativeWorkspaceStatus,
+} from './browser-native-control-channel.ts'
 
 const OWNER_STORAGE_PREFIX = 'dsh.browser-native.owner.'
 const WORKSPACE_LEASE_STORAGE_PREFIX = 'dsh.browser-native.workspace-lease.'
 
-interface BrowserNativeOwnerNotice {
-  readonly type: 'owner' | 'released' | 'unavailable'
-  readonly sessionId: string
-  readonly ownerToken?: string
-  readonly ownerEpoch?: number
-}
-
-interface BrowserNativeWorkspaceStatus {
-  readonly type: 'workspace'
-  readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
-    | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
-  readonly workspaceId?: string
-  readonly revision?: number
-  readonly dirtyCount: number
-  readonly message?: string
-  readonly retryAfterMs?: number
-}
-
-interface BrowserNativeWorkspaceLease {
-  readonly type: 'workspace-lease'
-  readonly workspaceId: string
-  readonly writerToken: string
-  readonly fencingToken: number
-  readonly resumeId?: string
-}
-
-interface BrowserNativeWorkspaceLeaseReleased {
-  readonly type: 'workspace-lease-released'
-  readonly workspaceId: string
-}
-
-interface BrowserNativePagehideAck {
-  readonly type: 'pagehide-ack'
-  readonly requestId: string
-  readonly localPersisted: boolean
-  readonly writerReleased: boolean
-  readonly error?: string
-}
-
-type BrowserNativePageNotice = BrowserNativeOwnerNotice | BrowserNativeWorkspaceStatus
-  | BrowserNativeWorkspaceLease | BrowserNativeWorkspaceLeaseReleased | BrowserNativePagehideAck
+type BrowserNativePageNotice = BrowserNativeControlNotice
 
 declare global {
   interface Window {
@@ -194,6 +160,7 @@ async function downloadLocalRecoveryBundle(workspaceId: string): Promise<void> {
  */
 export function connectBrowserNativePageControl(worker: Worker, options: { readonly durable?: boolean } = {}): () => void {
   const channel = new MessageChannel()
+  const receiver = new BrowserNativeControlReceiver()
   const owners = new Map<string, string>()
   const storageKey = (sessionId: string): string => `${OWNER_STORAGE_PREFIX}${encodeURIComponent(sessionId)}`
   let workspaceStatus: HTMLElement | undefined
@@ -308,8 +275,20 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
     result.textContent = browserNativeWorkspaceRecoveryResultCopy(document.documentElement.lang, success)
     workspaceStatus.append(result)
   }
-  channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativePageNotice>) => {
-    const notice = event.data
+  channel.port1.addEventListener('message', (event: MessageEvent<unknown>) => {
+    const received = receiver.receive(event.data)
+    if (received.kind === 'ready') {
+      window.dispatchEvent(new CustomEvent('dsh-browser-native-control-ready', { detail: received.frame }))
+      return
+    }
+    if (received.kind === 'duplicate') return
+    if (received.kind === 'invalid') {
+      window.dispatchEvent(new CustomEvent('dsh-browser-native-control-invalid', {
+        detail: { reason: received.reason, frame: event.data },
+      }))
+      return
+    }
+    const notice: BrowserNativePageNotice = received.frame.notice
     if (notice.type === 'pagehide-ack') {
       pagehideWaiters.get(notice.requestId)?.(notice)
       pagehideWaiters.delete(notice.requestId)

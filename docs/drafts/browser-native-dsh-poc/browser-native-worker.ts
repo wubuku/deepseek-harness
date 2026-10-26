@@ -54,6 +54,7 @@ import {
 import { BrowserNativeCapabilityPublication } from './browser-native-capability-publication.ts'
 import {
   publishBrowserNativePagehideAck,
+  publishBrowserNativeControlTestFrame,
   setBrowserNativeControlPort,
   setBrowserNativeResumeOwner,
   setBrowserNativeResumeWorkspaceLease,
@@ -174,7 +175,8 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
+  readonly controlInjection?: 'duplicate' | 'gap' | 'conflict'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -210,6 +212,9 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (value === null || typeof value !== 'object') return false
   const data = value as Record<string, unknown>
   if (data.type !== 'browser-native-workspace-test-request' || typeof data.requestId !== 'string') return false
+  if (data.action === 'control-inject') {
+    return data.controlInjection === 'duplicate' || data.controlInjection === 'gap' || data.controlInjection === 'conflict'
+  }
   if (data.action === 'abort-session-outbox-appends') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
@@ -574,6 +579,12 @@ async function runSessionOutboxMigrationProbe(sessionId: string, event: SessionE
 
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
+    if (request.action === 'control-inject') {
+      if (request.controlInjection === undefined) throw new Error('browser-native control test: injection kind is required')
+      publishBrowserNativeControlTestFrame(request.controlInjection)
+      workspaceTestResponse(request.requestId, { ok: true, controlInjection: request.controlInjection })
+      return
+    }
     if (request.action === 'abort-session-outbox-appends') {
       sessionOutboxAppendsToAbort = Number(request.count)
       workspaceTestResponse(request.requestId, { ok: true, count: sessionOutboxAppendsToAbort })
