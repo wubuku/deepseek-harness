@@ -632,6 +632,24 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-own
 
 这批证据仍不是云端 Durable Worker、生产多实例 backend、跨存储原子事务或页面关闭后的后台 Agent 证明。`session-owner-handoff.e2e.mjs` 使用真实 Chrome Dedicated Worker 调用同源 Session backend，验证活动 turn 中 handoff 被拒、原 turn 只执行一次、提交后响应丢失、旧 token 重试不获凭据、租约过期后新 owner 重新 claim，以及旧 token 写入被拒绝；新 owner 仍是协议测试角色，没有启动真实 Cloud Agent。服务端只能检查已追加到 backend 的事件，无法证明 Worker 内存队列或浏览器本地 outbox 已清空；调用方仍须停止新工作并 flush Session。Safari/WebKit、自然 eviction、OS/磁盘 crash、生产授权和真实 LLM handoff 未执行。
 
+## Session 与 Workspace principal 隔离
+
+[身份隔离计划](principal-scoped-session-isolation-plan.md)和[实施进度](principal-scoped-session-isolation-progress.md)记录当前 checkout 对 PoC principal 授权与同源存储切换的验证。Session durable record、目录 cursor 和各 Session API 按 principal 授权；没有归属的旧 Session 保留但 fail closed。Workspace 与 Session 使用不同 Path-scoped HttpOnly principal cookies，均不发送到 LLM route。
+
+Chrome 155.0.8059.85 在同一 browser context 中执行 A→B→A 身份切换，不清除 OPFS/IndexedDB。A 和 B 使用不同 Workspace ID，在相同路径写入不同内容；B 的 Session catalog、已知 A Session、Workspace manifest 与 DSH 文件读取均不能访问 A 的数据。A、B 各自刷新后都恢复自己的 Session、manifest 与 Worker 文件缓存，Workspace revision/hash 相互独立。当前身份来自 PoC 自动签发 endpoint，不是登录或生产租户授权；不能抵御 XSS、同源恶意代码、身份签发滥用或 Cookie 窃取。
+
+复跑身份隔离与真实模型回归：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/principal-scoped-session-isolation.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_FILE=docs/drafts/.env node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+真实 LLM smoke 验证 Browser Worker、普通文件工具、Session 和 Workspace refresh recovery，不是 A/B 两身份真实模型测试。多 backend、正式 SaaS identity/authorization、自然 eviction、OS crash、静态存储加密和 Safari/WebKit 未验证。
+
 ## Timed HITL 与 Worker 恢复
 
 [Timed HITL 生命周期验证计划](timed-hitl-lifecycle-validation-plan.md)及[进度记录](timed-hitl-lifecycle-validation-progress.md)使用只在临时验收镜像中启用的 `tool-ask-user mode: timed`，验证 deadline 前同一 turn 作答、timeout 后迟答、刷新后恢复原 callId、答案 durable 后再刷新，以及关闭问题卡后的恢复。默认 Browser profile 仍使用 legacy 问答；本批没有改变正式 DSH package 或默认 profile。

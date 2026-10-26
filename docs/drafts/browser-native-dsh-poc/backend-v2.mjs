@@ -28,6 +28,7 @@ const MAX_CHECKPOINT_ID_LENGTH = 200
 const DEFAULT_OWNER_LEASE_MS = 30_000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
 const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
+const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 class BackendError extends Error {
   constructor(code, message, status = 400, retryAfterMs) {
@@ -90,20 +91,31 @@ function jsonBytes(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8')
 }
 
-function catalogCursorFor(sessionId) {
-  return Buffer.from(sessionId, 'utf8').toString('base64url')
+function catalogCursorFor(principalId, sessionId) {
+  return Buffer.from(JSON.stringify({ version: 1, principalId, sessionId }), 'utf8').toString('base64url')
 }
 
-function sessionIdFromCatalogCursor(cursor) {
+function sessionIdFromCatalogCursor(cursor, principalId) {
   boundedString(cursor, 'cursor', 400)
   let value
   try {
-    value = Buffer.from(cursor, 'base64url').toString('utf8')
+    value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
   } catch {
     throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
   }
-  assertSessionId(value)
-  if (catalogCursorFor(value) !== cursor) throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
+  if (value === null || typeof value !== 'object' || Array.isArray(value)
+    || value.version !== 1 || value.principalId !== principalId) {
+    throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
+  }
+  assertSessionId(value.sessionId)
+  if (catalogCursorFor(principalId, value.sessionId) !== cursor) throw new BackendError('INVALID_REQUEST', 'cursor is invalid')
+  return value.sessionId
+}
+
+function assertPrincipalId(value) {
+  if (typeof value !== 'string' || !PRINCIPAL_ID_PATTERN.test(value)) {
+    throw new BackendError('IDENTITY_INVALID', 'Session principal id is invalid', 500)
+  }
   return value
 }
 
@@ -520,6 +532,7 @@ class FormalSessionStore {
       const raw = JSON.parse(await readFile(join(this.sessionsDir, entry.name), 'utf8'))
       const id = assertSessionId(raw.id)
       if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
+      const principalId = raw.principalId === undefined ? undefined : assertPrincipalId(raw.principalId)
       const handoffs = new Map()
       let handoffsMigrated = false
       for (const [handoffId, record] of Object.entries(raw.handoffs ?? {})) {
@@ -529,6 +542,7 @@ class FormalSessionStore {
       }
       const session = {
         id,
+        principalId,
         header: clone(raw.header),
         inheritedEventCount: raw.inheritedEventCount ?? 0,
         events: clone(raw.events),
@@ -564,11 +578,23 @@ class FormalSessionStore {
     return session
   }
 
-  create(id, header, inheritedEventCount) {
-    if (this.sessions.has(id)) throw new BackendError('SESSION_ALREADY_EXISTS', 'session already exists', 409)
+  getForPrincipal(id, principalId) {
+    const session = this.get(id)
+    if (session.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    return session
+  }
+
+  create(id, header, inheritedEventCount, principalId) {
+    assertPrincipalId(principalId)
+    const existing = this.sessions.get(id)
+    if (existing !== undefined) {
+      if (existing.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      throw new BackendError('SESSION_ALREADY_EXISTS', 'session already exists', 409)
+    }
     if (header.id !== id) throw new BackendError('INVALID_REQUEST', 'header id does not match session id')
     const session = {
       id,
+      principalId,
       header: clone(header),
       inheritedEventCount,
       events: [],
@@ -690,6 +716,7 @@ class FormalSessionStore {
     const temporary = `${target}.${randomUUID()}.tmp`
     const record = {
       id: session.id,
+      ...(session.principalId === undefined ? {} : { principalId: session.principalId }),
       header: session.header,
       inheritedEventCount: session.inheritedEventCount,
       events: session.events,
@@ -743,14 +770,17 @@ function sessionResponse(session, extra = {}) {
   }
 }
 
-async function sessionOperation(store, operation, body, testHooks = {}) {
+async function sessionOperation(store, operation, body, principalId, testHooks = {}) {
   assertProtocol(body)
+  assertPrincipalId(principalId)
   if (operation === 'list') {
     return store.exclusive('__list__', async () => {
       const limit = body.limit === undefined ? 50 : boundedInteger(body.limit, 'limit', MAX_CATALOG_PAGE_SIZE)
       if (limit === 0) throw new BackendError('INVALID_REQUEST', 'limit must be at least 1')
-      const after = body.cursor === undefined ? undefined : sessionIdFromCatalogCursor(body.cursor)
-      const sessions = [...store.sessions.values()].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+      const after = body.cursor === undefined ? undefined : sessionIdFromCatalogCursor(body.cursor, principalId)
+      const sessions = [...store.sessions.values()]
+        .filter(session => session.principalId === principalId)
+        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
       const page = sessions.filter(session => after === undefined || session.id > after).slice(0, limit)
       const snapshots = page.map(session => store.snapshot(session))
       const items = snapshots.map(snapshot => ({
@@ -766,7 +796,7 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
         items,
         hasMore: page.length > 0 && sessions.some(session => session.id > page.at(-1).id),
         ...(page.length > 0 && sessions.some(session => session.id > page.at(-1).id)
-          ? { nextCursor: catalogCursorFor(page.at(-1).id) }
+          ? { nextCursor: catalogCursorFor(principalId, page.at(-1).id) }
           : {}),
       }
     })
@@ -776,11 +806,11 @@ async function sessionOperation(store, operation, body, testHooks = {}) {
   return store.exclusive(id, async () => {
     await testHooks.beforeSessionOperation?.(operation, body)
     if (operation === 'create') {
-      const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0)
+      const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0, principalId)
       const owner = store.claim(session)
       return sessionResponse(session, { owner })
     }
-    const session = store.get(id)
+    const session = store.getForPrincipal(id, principalId)
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
       const owner = body.access === 'write' ? store.claim(session, body.ownerToken, body.ownerEpoch) : undefined
@@ -1804,6 +1834,48 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const principalWorkspaceWrites = [
+    { marker: 'BROWSER_NATIVE_PRINCIPAL_SCOPE_A', id: 'browser-native-principal-a-write', content: 'principal-A\n' },
+    { marker: 'BROWSER_NATIVE_PRINCIPAL_SCOPE_B', id: 'browser-native-principal-b-write', content: 'principal-B\n' },
+  ]
+  const principalWorkspaceWrite = principalWorkspaceWrites.find(item => latestUserText.includes(item.marker))
+  if (principalWorkspaceWrite !== undefined && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(principalWorkspaceWrite.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: principalWorkspaceWrite.id,
+        name: 'write',
+        arguments: { file_path: '/dsh/home/workspace/account-scope.txt', content: principalWorkspaceWrite.content },
+      })
+      return
+    }
+    scriptedText(response, `${principalWorkspaceWrite.marker}_DONE`)
+    return
+  }
+
+  const principalWorkspaceReadCases = [
+    { marker: 'BROWSER_NATIVE_PRINCIPAL_CROSS_READ', id: 'browser-native-principal-cross-read', done: 'BROWSER_NATIVE_PRINCIPAL_CROSS_READ_DONE' },
+    { marker: 'BROWSER_NATIVE_PRINCIPAL_RESTORE_A', id: 'browser-native-principal-restore-a-read', done: 'BROWSER_NATIVE_PRINCIPAL_RESTORE_A_DONE' },
+  ]
+  const principalWorkspaceRead = principalWorkspaceReadCases.find(item => latestUserText.includes(item.marker))
+  if (principalWorkspaceRead !== undefined && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(principalWorkspaceRead.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: principalWorkspaceRead.id,
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/account-scope.txt' },
+      })
+      return
+    }
+    scriptedText(response, principalWorkspaceRead.done)
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_WORKSPACE_EDIT_E2E')
     && ['write', 'read', 'edit'].every(name => hasTool(tools, name))) {
     const sequence = [
@@ -2216,6 +2288,7 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         if (operation === 'handoff' && body.checkpoint !== null && typeof body.checkpoint === 'object'
           && Object.hasOwn(body.checkpoint, 'durableThroughSeq')) {
           const checkpoint = body.checkpoint
@@ -2227,7 +2300,7 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, options.testHooks)
+        const result = await sessionOperation(store, operation, body, principalId, options.testHooks)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return
@@ -2248,6 +2321,9 @@ export async function createBrowserNativeV2Server(options) {
         }
         if (body.sessionId !== undefined) {
           const session = store.get(body.sessionId)
+          if (typeof body.ownerToken !== 'string' || body.ownerToken.length === 0) {
+            throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+          }
           store.assertOwner(session, body.ownerToken, body.ownerEpoch)
         }
         if (options.testHooks?.failLlmRequest?.(body) === true) {

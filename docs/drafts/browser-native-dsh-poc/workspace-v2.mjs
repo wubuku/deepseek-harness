@@ -4,7 +4,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { dirname, join } from 'node:path'
 
 const COOKIE_NAME = 'dsh-browser-native-principal'
-const HANDOFF_COOKIE_NAME = 'dsh-browser-native-handoff-principal'
+const SESSION_COOKIE_NAME = 'dsh-browser-native-session-principal'
 const COOKIE_MAX_AGE_SECONDS = 31_536_000
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
@@ -507,7 +507,7 @@ export class WorkspaceStore {
       workspaceId,
       cookies: [
         `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; ${cookieOptions}`,
-        `${HANDOFF_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session/handoff; ${cookieOptions}`,
+        `${SESSION_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session; ${cookieOptions}`,
       ],
     }
   }
@@ -540,7 +540,7 @@ export class WorkspaceStore {
   }
 
   async validateExecutionHandoff(request, { workspaceId, writerToken, fencingToken, revision }) {
-    const principalId = this.principalFromRequest(request, HANDOFF_COOKIE_NAME)
+    const principalId = this.principalFromRequest(request, SESSION_COOKIE_NAME)
     if (!Number.isSafeInteger(fencingToken) || fencingToken < 1
       || !Number.isSafeInteger(revision) || revision < 0) {
       throw new WorkspaceError('CHECKPOINT_INVALID', 'Workspace handoff cursors are invalid', 400)

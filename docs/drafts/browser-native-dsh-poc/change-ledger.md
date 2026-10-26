@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-036：Session principal 授权与同源 Workspace 隔离
+
+```text
+changeId: BN-P2-036
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-26
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/principal-scoped-session-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/principal-scoped-session-isolation-plan.md; docs/drafts/browser-native-dsh-poc/principal-scoped-session-isolation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: Workspace API 已按 PoC principal 隔离 Workspace ID，但 Session API 与目录仍以 Session ID 寻址；同源 origin 的身份切换可能访问另一 principal 的 Session 或复用错误的本地 Workspace cache。
+existingExtensionPointsChecked: 复用 WorkspaceIdentityStore 已签发的 PoC principal、现有 Workspace/Session routes、Session durable JSON、每条 Session 的 owner token/epoch、Workspace ID-keyed IndexedDB/OPFS、同源 Chrome test port 和真实 DSH Worker。未修改正式 Session format、Agent Loop、profile、根依赖或 apps/packages。
+whyDraftOnlyWasInsufficient: backend contract tests 无法验证 Path-scoped cookie 的浏览器发送规则、保留 OPFS/IndexedDB 的同源身份切换、DSH 文件工具的拒绝结果和各身份刷新后的 Worker hydrate；需要真实 Chrome 与同源 backend 观察完整路径。
+behaviorChange: Session durable record 保存创建者 principal；list/cursor 与所有 Session 单体操作按 principal 授权，无主旧 record 原样保留并拒绝访问。Workspace principal cookie 限定 `/api/browser-native/workspace`；Session principal cookie 适用于 `/api/browser-native/session`，授权 Session 操作与 handoff，但不发送至 `/api/browser-native/llm`。LLM route 继续校验 Session owner bearer/epoch。Chrome E2E 在保留本地存储的同一 browser context 中切换 A→B→A，验证两个身份分别创建 Session、写同路径文件、交叉读取拒绝并各自刷新恢复。
+directoryOutChangeReason: none; PoC 实现、测试和文档均留在 docs/drafts 内。
+consumersUpdated: 更新 backend Session fixtures、浏览器测试 helper、handoff 回归 fixture、身份隔离 E2E、PoC README、兼容矩阵、draft index、plan/progress 和本账本。
+tests: backend contract tests 47/47；Chrome principal isolation E2E 通过（Chrome 155.0.8059.85）；handoff scripted normal、Session response loss、Workspace release response loss 三场景通过；preview build 与真实 Chrome/LLM durable Workspace runtime smoke 通过。真实模型完成 read/write/read、刷新记忆与文件恢复；7 个模型请求 HTTP 200，刷新中止请求为 ERR_ABORTED；页面错误与跨源请求为 0。文档门禁及提交前检查随后补记。
+syncReplaySteps: 上游同步后确认 Workspace identity store 是否仍提供稳定 principal-to-Workspace 映射，以及正式 Session backend/schema 是否已有用户或租户归属。若有正式授权服务，移除 PoC 自动签发身份并由服务端认证 principal，保留 Session/Workspace resource authorization 测试。重新检查 cookie Path、SameSite/Secure 与 LLM 请求头；运行 backend tests、preview build、principal isolation 和 handoff Chrome E2E、真实 LLM smoke 与 docs gates。
+deleteCondition: 正式登录/租户授权与 Session/Workspace resource authorization 覆盖对象归属、legacy 数据处置和身份切换 E2E 后，迁移验收到正式接口并删除 PoC principal 身份模拟；或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-035：Session 与 Workspace 执行写权有序交接
 
 ```text

@@ -114,11 +114,11 @@ async function runScenario(name) {
       requestRecords.set(request, record)
       requests.push(record)
       if (record.path === '/api/browser-native/llm') llmRequests.push(record)
-      if (record.path === '/api/browser-native/llm' || record.path === '/api/browser-native/session/handoff') {
+      if (record.path === '/api/browser-native/llm' || record.path.startsWith('/api/browser-native/session/')) {
         cookieScopes.push(request.allHeaders().then(headers => ({
           path: record.path,
           hasWorkspaceIdentity: (headers.cookie ?? '').includes('dsh-browser-native-principal='),
-          hasHandoffIdentity: (headers.cookie ?? '').includes('dsh-browser-native-handoff-principal='),
+          hasSessionIdentity: (headers.cookie ?? '').includes('dsh-browser-native-session-principal='),
         })))
       }
       if (record.path === '/api/browser-native/workspace/commit') {
@@ -353,25 +353,20 @@ async function runScenario(name) {
     assert.equal(staleRenew.status, 409)
     assert.equal(staleRenew.body.error.code, 'WORKSPACE_OWNERSHIP_LOST')
 
-    const staleAppend = await fetch(`${origin}/api/browser-native/session/append`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        protocolVersion: 1,
-        requestId: `stale-session-${name}`,
-        sessionId: firstTurn.sessionId,
-        ownerToken: initialOwnerToken,
-        ownerEpoch: initialSession.ownerEpoch,
-        expectedNextSeq: finalSession.nextSeq,
-        events: [{
-          seq: finalSession.nextSeq,
-          type: 'assistant/message',
-          data: { message: { content: [{ type: 'text', text: 'STALE_EXECUTION_HANDOFF_MUST_NOT_APPEND' }] } },
-        }],
-      }),
+    const staleAppend = await sessionRequest(origin, 'append', {
+      requestId: `stale-session-${name}`,
+      sessionId: firstTurn.sessionId,
+      ownerToken: initialOwnerToken,
+      ownerEpoch: initialSession.ownerEpoch,
+      expectedNextSeq: finalSession.nextSeq,
+      events: [{
+        seq: finalSession.nextSeq,
+        type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text: 'STALE_EXECUTION_HANDOFF_MUST_NOT_APPEND' }] } },
+      }],
     })
     assert.equal(staleAppend.status, 409)
-    assert.equal((await staleAppend.json()).error.code, 'SESSION_OWNERSHIP_LOST')
+    assert.equal(staleAppend.error.code, 'SESSION_OWNERSHIP_LOST')
 
     const staleModelCount = llmRequests.length
     const staleModel = await secondPage.evaluate(async input => {
@@ -401,9 +396,9 @@ async function runScenario(name) {
     assert.deepEqual(externalRequests, [])
     const observedCookieScopes = await Promise.all(cookieScopes)
     assert.ok(observedCookieScopes.some(scope => scope.path === '/api/browser-native/session/handoff'
-      && !scope.hasWorkspaceIdentity && scope.hasHandoffIdentity))
+      && !scope.hasWorkspaceIdentity && scope.hasSessionIdentity))
     assert.ok(observedCookieScopes.filter(scope => scope.path === '/api/browser-native/llm')
-      .every(scope => !scope.hasWorkspaceIdentity && !scope.hasHandoffIdentity))
+      .every(scope => !scope.hasWorkspaceIdentity && !scope.hasSessionIdentity))
 
     process.stdout.write(`${JSON.stringify({
       result: 'passed',
@@ -425,7 +420,7 @@ async function runScenario(name) {
       pageErrors,
       externalRequests,
       principalCookiesOnLlmRequests: observedCookieScopes.filter(scope => scope.path === '/api/browser-native/llm')
-        .filter(scope => scope.hasWorkspaceIdentity || scope.hasHandoffIdentity).length,
+        .filter(scope => scope.hasWorkspaceIdentity || scope.hasSessionIdentity).length,
     })}\n`)
   } finally {
     await secondPage.close().catch(() => {})

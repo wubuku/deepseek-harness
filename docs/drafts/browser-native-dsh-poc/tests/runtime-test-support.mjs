@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 
+const sessionPrincipalCookies = new Map()
+
 /**
  * Send a v2 Session operation without logging owner tokens.
  * @param {string} origin - Same-origin backend URL.
@@ -10,8 +12,10 @@ import { randomUUID } from 'node:crypto'
  * @returns {Promise<object>} Parsed success or failure for explicit assertions.
  */
 export async function sessionRequest(origin, operation, body = {}) {
+  const cookie = sessionPrincipalCookies.get(body.sessionId)
+  if (cookie === undefined) throw new Error(`No browser Session principal was captured for ${String(body.sessionId)}`)
   const response = await fetch(`${origin}/api/browser-native/session/${operation}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify({ protocolVersion: 1, requestId: randomUUID(), ...body }),
   })
   return { status: response.status, ...await response.json() }
@@ -55,10 +59,9 @@ export async function openPreview(page, url) {
 export async function waitForPreview(page) {
   await page.waitForSelector('[class*="frame"]', { timeout: 45_000 })
   const notice = page.getByRole('button', { name: /^(Continue|继续)$/ }).first()
-  if (await notice.count() > 0) await notice.click({ timeout: 15_000 })
+  if (await notice.isVisible() && await notice.isEnabled()) await notice.click({ timeout: 15_000 })
   const chooser = page.getByRole('textbox', { name: /^(Choose workspace|选择工作区)$/ }).first()
-  if (await chooser.count() > 0) {
-    await chooser.waitFor({ state: 'visible', timeout: 15_000 })
+  if (await chooser.isVisible()) {
     await chooser.click()
     const dialog = page.getByRole('dialog', { name: /^(Select Workspace Directory|选择工作区目录)$/ })
     await dialog.waitFor()
@@ -139,6 +142,10 @@ export async function submitPrompt({ page, origin, requests, prompt, sessionId, 
   await send.click()
   const streamSamples = []
   sessionId ??= await waitFor(async () => requests.find(request => request.path.endsWith('/session/create'))?.body.sessionId, 'Session creation')
+  const sessionCookie = (await page.context().cookies(`${origin}/api/browser-native/session/create`))
+    .find(cookie => cookie.name === 'dsh-browser-native-session-principal')
+  assert.ok(sessionCookie, 'browser identity must authorize Session API requests')
+  sessionPrincipalCookies.set(sessionId, `${sessionCookie.name}=${sessionCookie.value}`)
   const submitted = await waitFor(async () => {
     const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
     const userIndex = [...(current.events ?? [])].findLastIndex(event => event.type === 'user/message'

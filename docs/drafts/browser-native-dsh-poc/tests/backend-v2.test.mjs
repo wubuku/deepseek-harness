@@ -10,6 +10,8 @@ import { WORKSPACE_BLOB_CHUNK_BYTES } from '../workspace-v2.mjs'
 
 const liveApps = new Set()
 const temporaryDirectories = new Set()
+const originScopes = new Map()
+const identitiesByScope = new Map()
 
 async function temporaryDirectory(prefix = 'browser-native-v2-test-') {
   const directory = await mkdtemp(join(tmpdir(), prefix))
@@ -20,6 +22,7 @@ async function temporaryDirectory(prefix = 'browser-native-v2-test-') {
 async function start(options) {
   const app = await createBrowserNativeV2Server({ port: 0, ...options })
   const origin = await app.listen()
+  originScopes.set(origin, options.dataDir === undefined ? origin : resolve(options.dataDir))
   liveApps.add(app)
   return { app, origin }
 }
@@ -28,10 +31,20 @@ function envelope(requestId, extra = {}) {
   return { protocolVersion: 1, requestId, ...extra }
 }
 
-async function post(origin, path, body) {
+async function identityFor(origin) {
+  const scope = originScopes.get(origin) ?? origin
+  let identity = identitiesByScope.get(scope)
+  if (identity === undefined) {
+    identity = await openWorkspaceIdentity(origin)
+    identitiesByScope.set(scope, identity)
+  }
+  return identity
+}
+
+async function postWithCookie(origin, path, body, cookie) {
   const response = await fetch(`${origin}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(cookie === undefined ? {} : { cookie }) },
     body: JSON.stringify(body),
   })
   const value = await response.json()
@@ -45,9 +58,23 @@ async function post(origin, path, body) {
   return value
 }
 
+async function post(origin, path, body) {
+  const identity = path.startsWith('/api/browser-native/session/') ? await identityFor(origin) : undefined
+  return await postWithCookie(origin, path, body, identity?.sessionCookie)
+}
+
 async function failure(origin, path, body) {
   try {
     await post(origin, path, body)
+  } catch (error) {
+    return error
+  }
+  assert.fail(`expected ${path} to fail`)
+}
+
+async function failureWithCookie(origin, path, body, cookie) {
+  try {
+    await postWithCookie(origin, path, body, cookie)
   } catch (error) {
     return error
   }
@@ -231,16 +258,18 @@ async function openWorkspaceIdentity(origin) {
   const setCookies = response.headers.getSetCookie()
   assert.equal(setCookies.length, 2)
   const workspaceCookie = setCookies.find(cookie => cookie.startsWith('dsh-browser-native-principal='))
-  const handoffCookie = setCookies.find(cookie => cookie.startsWith('dsh-browser-native-handoff-principal='))
+  const sessionCookie = setCookies.find(cookie => cookie.startsWith('dsh-browser-native-session-principal='))
   assert.match(workspaceCookie, /Path=\/api\/browser-native\/workspace;/)
-  assert.match(handoffCookie, /Path=\/api\/browser-native\/session\/handoff;/)
+  assert.match(sessionCookie, /Path=\/api\/browser-native\/session;/)
   assert.match(workspaceCookie, /Max-Age=31536000/)
-  assert.match(handoffCookie, /Max-Age=31536000/)
-  return {
+  assert.match(sessionCookie, /Max-Age=31536000/)
+  const identity = {
     workspaceId: body.workspaceId,
     cookie: workspaceCookie.split(';', 1)[0],
-    handoffCookie: handoffCookie.split(';', 1)[0],
+    sessionCookie: sessionCookie.split(';', 1)[0],
   }
+  identitiesByScope.set(originScopes.get(origin) ?? origin, identity)
+  return identity
 }
 
 async function postWorkspace(origin, identity, operation, body) {
@@ -254,7 +283,7 @@ async function postWorkspace(origin, identity, operation, body) {
 }
 
 async function postAuthenticatedWorkspace(origin, identity, path, body) {
-  const cookie = path === '/api/browser-native/session/handoff' ? identity.handoffCookie : identity.cookie
+  const cookie = path === '/api/browser-native/session/handoff' ? identity.sessionCookie : identity.cookie
   const response = await fetch(`${origin}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie },
@@ -407,9 +436,10 @@ describe('browser-native DSH v2 backend', () => {
       inheritedEventCount: 0,
     }))
     const event = { seq: 0, type: 'user/message', payload: { content: 'accepted before response loss' } }
+    const identity = await identityFor(origin)
     await assert.rejects(fetch(`${origin}/api/browser-native/session/append`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: identity.sessionCookie },
       body: JSON.stringify(envelope('response-lost-append', {
         sessionId: id,
         ownerToken: created.owner.ownerToken,
@@ -1095,9 +1125,10 @@ describe('browser-native DSH v2 backend', () => {
       pendingOperationIds: [],
       pendingExecutionIds: [],
     }
+    const identity = await identityFor(first.origin)
     await assert.rejects(fetch(`${first.origin}/api/browser-native/session/handoff`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: identity.sessionCookie },
       body: JSON.stringify(envelope('handoff-lost-response', {
         sessionId: id,
         ownerToken: created.owner.ownerToken,
@@ -1193,6 +1224,10 @@ describe('browser-native DSH v2 backend', () => {
     const id = 'handoff-legacy-migration-session'
     const sessionsDir = join(dataDir, 'sessions')
     await mkdir(sessionsDir, { recursive: true })
+    const seed = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(seed.origin)
+    await seed.app.close()
+    liveApps.delete(seed.app)
     const previousToken = 'legacy-previous-bearer-token'
     const nextToken = 'legacy-next-bearer-token'
     const checkpoint = {
@@ -1206,6 +1241,7 @@ describe('browser-native DSH v2 backend', () => {
     }
     await writeFile(join(sessionsDir, `${id}.json`), JSON.stringify({
       id,
+      principalId: identity.sessionCookie.split('=', 2)[1],
       header: header(id),
       inheritedEventCount: 0,
       events: [],
@@ -1238,18 +1274,18 @@ describe('browser-native DSH v2 backend', () => {
     const migrated = await readFile(join(sessionsDir, `${id}.json`), 'utf8')
     assert.equal(migrated.includes(previousToken), false)
     assert.equal(migrated.includes(nextToken), false)
-    const opened = await post(origin, '/api/browser-native/session/open', envelope('handoff-legacy-open', {
+    const opened = await postWithCookie(origin, '/api/browser-native/session/open', envelope('handoff-legacy-open', {
       sessionId: id,
       access: 'write',
-    }))
+    }), identity.sessionCookie)
     assert.equal(opened.owner.ownerEpoch, 3)
-    const staleRetry = await failure(origin, '/api/browser-native/session/handoff', envelope('handoff-legacy-retry', {
+    const staleRetry = await failureWithCookie(origin, '/api/browser-native/session/handoff', envelope('handoff-legacy-retry', {
       sessionId: id,
       ownerToken: previousToken,
       ownerEpoch: 1,
       handoffId: 'legacy',
       checkpoint,
-    }))
+    }), identity.sessionCookie)
     assert.equal(staleRetry.code, 'SESSION_OWNERSHIP_LOST')
   })
 
@@ -1279,6 +1315,170 @@ describe('browser-native DSH v2 backend', () => {
       cursor: 'not-a-cursor',
     }))
     assert.equal(invalid.code, 'INVALID_REQUEST')
+  })
+
+  it('scopes Session catalog, records, and durable restart to the issuing principal', async () => {
+    const dataDir = await temporaryDirectory()
+    let modelRequests = 0
+    const first = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: { failLlmRequest: () => { modelRequests += 1; return true } },
+    })
+    const accountA = await openWorkspaceIdentity(first.origin)
+    const accountB = await openWorkspaceIdentity(first.origin)
+    const sessionA1 = 'principal-a-session-1'
+    const sessionA2 = 'principal-a-session-2'
+    const sessionB = 'principal-b-session-1'
+
+    const createdA1 = await postWithCookie(first.origin, '/api/browser-native/session/create', envelope('principal-a-create-1', {
+      sessionId: sessionA1,
+      header: header(sessionA1),
+      inheritedEventCount: 0,
+    }), accountA.sessionCookie)
+    await postWithCookie(first.origin, '/api/browser-native/session/append', envelope('principal-a-append', {
+      sessionId: sessionA1,
+      ownerToken: createdA1.owner.ownerToken,
+      ownerEpoch: createdA1.owner.ownerEpoch,
+      expectedNextSeq: 0,
+      events: [sessionEvent(0, 'user/message', { content: 'private account A event' })],
+    }), accountA.sessionCookie)
+    await postWithCookie(first.origin, '/api/browser-native/session/flush', envelope('principal-a-flush', {
+      sessionId: sessionA1,
+      ownerToken: createdA1.owner.ownerToken,
+      ownerEpoch: createdA1.owner.ownerEpoch,
+    }), accountA.sessionCookie)
+    for (const id of [sessionA2]) {
+      const created = await postWithCookie(first.origin, '/api/browser-native/session/create', envelope(`principal-a-create-${id}`, {
+        sessionId: id,
+        header: header(id),
+        inheritedEventCount: 0,
+      }), accountA.sessionCookie)
+      await postWithCookie(first.origin, '/api/browser-native/session/flush', envelope(`principal-a-flush-${id}`, {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        ownerEpoch: created.owner.ownerEpoch,
+      }), accountA.sessionCookie)
+    }
+    const createdB = await postWithCookie(first.origin, '/api/browser-native/session/create', envelope('principal-b-create', {
+      sessionId: sessionB,
+      header: header(sessionB),
+      inheritedEventCount: 0,
+    }), accountB.sessionCookie)
+    await postWithCookie(first.origin, '/api/browser-native/session/flush', envelope('principal-b-flush', {
+      sessionId: sessionB,
+      ownerToken: createdB.owner.ownerToken,
+      ownerEpoch: createdB.owner.ownerEpoch,
+    }), accountB.sessionCookie)
+
+    const pageA = await postWithCookie(first.origin, '/api/browser-native/session/list', envelope('principal-a-list', { limit: 1 }), accountA.sessionCookie)
+    assert.deepEqual(pageA.items.map(item => item.sessionId), [sessionA1])
+    assert.equal(pageA.hasMore, true)
+    const pageB = await postWithCookie(first.origin, '/api/browser-native/session/list', envelope('principal-b-list', { limit: 10 }), accountB.sessionCookie)
+    assert.deepEqual(pageB.items.map(item => item.sessionId), [sessionB])
+    assert.equal(pageB.hasMore, false)
+
+    const crossCursor = await failureWithCookie(first.origin, '/api/browser-native/session/list', envelope('principal-b-cross-cursor', {
+      limit: 10,
+      cursor: pageA.nextCursor,
+    }), accountB.sessionCookie)
+    assert.equal(crossCursor.code, 'INVALID_REQUEST')
+    for (const operation of ['read', 'stat', 'open']) {
+      const denied = await failureWithCookie(first.origin, `/api/browser-native/session/${operation}`, envelope(`principal-b-${operation}`, {
+        sessionId: sessionA1,
+        access: 'read',
+        offset: 0,
+      }), accountB.sessionCookie)
+      assert.equal(denied.code, 'SESSION_NOT_FOUND')
+      assert.equal(denied.status, 404)
+      assert.equal(denied.message, 'session does not exist')
+    }
+    const deniedCreate = await failureWithCookie(first.origin, '/api/browser-native/session/create', envelope('principal-b-create-foreign-id', {
+      sessionId: sessionA1,
+      header: header(sessionA1),
+      inheritedEventCount: 0,
+    }), accountB.sessionCookie)
+    assert.equal(deniedCreate.code, 'SESSION_NOT_FOUND')
+
+    const rawUnauthenticated = await fetch(`${first.origin}/api/browser-native/session/list`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('principal-no-cookie-list')),
+    })
+    assert.equal(rawUnauthenticated.status, 401)
+
+    const llmWithoutOwner = await fetch(`${first.origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('principal-b-llm-without-owner', {
+        sessionId: sessionA1,
+        messages: [],
+        tools: [],
+      })),
+    })
+    assert.equal(llmWithoutOwner.status, 404)
+    assert.equal((await llmWithoutOwner.json()).error.code, 'SESSION_NOT_FOUND')
+    assert.equal(modelRequests, 0)
+
+    const durable = JSON.parse(await readFile(join(dataDir, 'sessions', `${sessionA1}.json`), 'utf8'))
+    assert.equal(durable.principalId, accountA.sessionCookie.split('=', 2)[1])
+    assert.deepEqual(durable.events, [sessionEvent(0, 'user/message', { content: 'private account A event' })])
+
+    await first.app.close()
+    liveApps.delete(first.app)
+    const second = await start({ dataDir, llmMode: 'scripted' })
+    const restoredA = await postWithCookie(second.origin, '/api/browser-native/session/list', envelope('principal-a-list-after-restart', {
+      limit: 10,
+    }), accountA.sessionCookie)
+    const restoredB = await postWithCookie(second.origin, '/api/browser-native/session/list', envelope('principal-b-list-after-restart', {
+      limit: 10,
+    }), accountB.sessionCookie)
+    assert.deepEqual(restoredA.items.map(item => item.sessionId), [sessionA1, sessionA2])
+    assert.deepEqual(restoredB.items.map(item => item.sessionId), [sessionB])
+    const restoredRead = await postWithCookie(second.origin, '/api/browser-native/session/read', envelope('principal-a-read-after-restart', {
+      sessionId: sessionA1,
+      offset: 0,
+    }), accountA.sessionCookie)
+    assert.deepEqual(restoredRead.events, durable.events)
+    const stillDenied = await failureWithCookie(second.origin, '/api/browser-native/session/read', envelope('principal-b-read-after-restart', {
+      sessionId: sessionA1,
+      offset: 0,
+    }), accountB.sessionCookie)
+    assert.equal(stillDenied.code, 'SESSION_NOT_FOUND')
+  })
+
+  it('keeps legacy Sessions without a durable principal inaccessible and unchanged', async () => {
+    const dataDir = await temporaryDirectory()
+    const sessionsDir = join(dataDir, 'sessions')
+    await mkdir(sessionsDir, { recursive: true })
+    const id = 'legacy-unowned-session'
+    const legacy = JSON.stringify({
+      id,
+      header: header(id),
+      inheritedEventCount: 0,
+      events: [sessionEvent(0, 'user/message', { content: 'legacy private event' })],
+      durableThroughSeq: 0,
+      ownerEpoch: 1,
+      handoffs: {},
+    })
+    const path = join(sessionsDir, `${id}.json`)
+    await writeFile(path, legacy)
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const list = await postWithCookie(origin, '/api/browser-native/session/list', envelope('legacy-unowned-list'), identity.sessionCookie)
+    assert.deepEqual(list.items, [])
+    const read = await failureWithCookie(origin, '/api/browser-native/session/read', envelope('legacy-unowned-read', {
+      sessionId: id,
+      offset: 0,
+    }), identity.sessionCookie)
+    assert.equal(read.code, 'SESSION_NOT_FOUND')
+    const create = await failureWithCookie(origin, '/api/browser-native/session/create', envelope('legacy-unowned-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }), identity.sessionCookie)
+    assert.equal(create.code, 'SESSION_NOT_FOUND')
+    assert.equal(await readFile(path, 'utf8'), legacy)
   })
 
   it('rejects over-budget Session append and read requests explicitly', async () => {
