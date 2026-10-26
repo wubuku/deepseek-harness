@@ -102,6 +102,24 @@ deleteCondition: 正式 Browser runtime 提供等价的版本化页面/Worker co
 status: implemented
 ```
 
+### BN-P2-039：Worker 控制帧 schema 与载荷预算
+
+```text
+changeId: BN-P2-039
+upstreamBaseline: research checkout at batch start, after Worker control-channel continuity validation
+file: apps/web/src/browser-native-control-channel.ts; apps/web/src/browser-native-page-control.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts; docs/drafts/browser-native-dsh-poc/tests/control-payload-bounds.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-control-payload-bounds-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-control-payload-bounds-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: dsh-TUI Channel 对 JSON payload 实施深度/字节预算并拒绝未知方法；Browser-Native 控制帧此前允许任意额外字段和无界文本，再用递归 stableJson 做 duplicate fingerprint。结构化克隆允许循环对象，损坏帧可能造成不受控序列化、错误页面诊断或状态投影。
+existingExtensionPointsChecked: 复用现有 versioned control frame、BrowserNativeControlReceiver、page-owned MessagePort、Worker control publisher 和 URL-gated PoC test port。没有复用 TUI wire protocol，没有把控制帧写入 DSH Session，也没有修改 Agent Loop、Session format、正式 package 或根依赖。
+whyDraftOnlyWasInsufficient: 类型声明不能验证 MessagePort 运行时载荷、UTF-8 序列化大小、循环对象、页面错误事件是否泄露原始字段或 invalid 后刷新恢复；必须在真实 Chrome Worker 与 MessagePort 上注入确定性损坏帧。
+behaviorChange: 每种 frame/notice 使用 exact-key schema；owner/session/workspace/token/text 字段有 UTF-8 byte 上限，完整 JSON frame 最大 16 KiB。unknown frame/notice、额外字段、超长字段、总 payload 超限和非法序列整数在 stableJson fingerprint 前 fail closed。invalid 页面事件只发布固定 reason code，不携带原始 frame。PoC test port 增加 max-text、oversized、escaped-size、unknown-field/notice 与 cyclic-extra 注入。
+directoryOutChangeReason: 页面 receiver 和 preview Worker bootstrap 位于 `apps/web/src`，Web TypeScript `rootDir` 不允许它们导入 `docs/drafts` 源文件；共享 schema/validator 留在 `apps/web/src/browser-native-control-channel.ts`，PoC Worker 复用同一模块。只修改该 app 的 Browser-Native preview 与控制 receiver，不改正式 packages。
+consumersUpdated: 更新 Worker publisher、页面 receiver、preview test request 类型、validator 单测、连续性 Chrome E2E 回归、载荷 Chrome E2E、PoC README、兼容矩阵、drafts 索引、计划/进度和本账本。
+tests: 控制通道单测 10/10；Web TypeScript check 和 preview build 通过；真实 Chrome 载荷 E2E 接受 4096-byte text，拒绝超长字段、escaped JSON 超 16 KiB、unknown field/notice 与 cyclic extra，每次 invalid 后刷新恢复新 channel；连续性 E2E 的 duplicate/gap/conflict 回归通过。真实 `gpt-5.6-sol` Chrome smoke 完成 `read → write → read`，59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200、刷新后文件可读。刷新中出现预期 `ERR_ABORTED`、可选 Web route 404 和既有 compaction context-capacity warning；turn 完成且无 page error。文档门禁和精确命令见进度记录。Safari、自然消息丢失、消息 flood/backpressure、Session/tool-result 载荷预算、OS crash、Cloud handoff 和生产 backend 未验证。
+syncReplaySteps: 上游同步后确认 preview 仍在 Host init 前建立控制通道，页面和 Worker 仍共享此 validator，notice 字段变化同步更新 exact-key schema 与调用者，test port 仍受 PoC query 限制。运行 control-channel Vitest、载荷 Chrome E2E、连续性 Chrome E2E、preview build、真实 LLM runtime smoke 和 docs gates；控制 frame 的 16 KiB 上限不得外推为 Session 或模型载荷上限。
+deleteCondition: 正式 Browser runtime 提供等价版本化控制协议、字段/字节限制、未知/循环 payload 拒绝、诊断脱敏与 Chrome conformance 覆盖后迁移验收；或 Browser-Native PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-033：Session IndexedDB outbox 与 Worker 终止恢复
 
 ```text

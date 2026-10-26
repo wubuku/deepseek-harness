@@ -8,7 +8,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)；随后离线 retry、CAS conflict 和过期 writer lease 的真实 Chrome 验证见[进阶恢复计划](advanced-recovery-validation-plan.md)及[进度记录](advanced-recovery-validation-progress.md)。再后的 OPFS quota 错误恢复、backend 重启租约 fencing 与同源身份存储隔离见[存储隔离计划](storage-isolation-and-restart-validation-plan.md)及[实测进度](storage-isolation-and-restart-validation-progress.md)。文件工具 durable 确认与易失状态隔离见[持久化确认计划](durable-tool-ack-validation-plan.md)、[持久化确认进度](durable-tool-ack-validation-progress.md)、[易失状态隔离计划](volatile-workspace-isolation-plan.md)和[隔离验证进度](volatile-workspace-isolation-progress.md)：本地保存失败会阻止 Agent 后续读写与搜索未确认的 Worker 内存文件，刷新后可在同 Session 显式重试。可写 chunk-backed 编辑原型、64 MiB OPFS 资源证据和当前 DSH `edit` materialize 对照见[验证计划](chunk-backed-edit-validation-plan.md)及[实施进度](chunk-backed-edit-validation-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
-最新的 [Worker 控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度](next-control-channel-conformance-validation-progress.md)记录了 dsh-TUI live/replay 纪律在页面控制通道上的 PoC 落地：`control-ready` 基线、统一 `channelId/seq`、重复去重、跳号与同序冲突 fail-closed，以及刷新后的新通道。控制通道只投影 owner、Workspace、lease 和 pagehide 状态，不取代 DSH Session event log。
+最新的 [Worker 控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度](next-control-channel-conformance-validation-progress.md)记录了 dsh-TUI live/replay 纪律在页面控制通道上的 PoC 落地：`control-ready` 基线、统一 `channelId/seq`、重复去重、跳号与同序冲突 fail-closed，以及刷新后的新通道。[载荷约束验证](next-control-payload-bounds-validation-plan.md)及[进度](next-control-payload-bounds-validation-progress.md)进一步记录 exact-key schema、4 KiB UTF-8 文本上限、16 KiB JSON frame 上限、未知/循环数据拒绝和诊断脱敏。控制通道只投影 owner、Workspace、lease 和 pagehide 状态，不取代 DSH Session event log。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
@@ -618,7 +618,7 @@ env DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env DS
 
 ## Worker 控制通道连续性
 
-[控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度记录](next-control-channel-conformance-validation-progress.md)把 dsh-TUI 的基线、连续序列和失序 fail-closed 经验用于页面与 Dedicated Worker 的旁路控制通道。Worker 绑定 `MessagePort` 后先发送 `control-ready`，随后 owner、Workspace、lease 和 pagehide ack 都使用同一 `channelId` 和递增 `seq`。页面只有在协议版本、通道身份、序列连续性和 payload 通过 `BrowserNativeControlReceiver` 检查后才更新状态；同帧重复被去重，同序冲突、跳号或非法帧会锁定当前 receiver。
+[控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度记录](next-control-channel-conformance-validation-progress.md)把 dsh-TUI 的基线、连续序列和失序 fail-closed 经验用于页面与 Dedicated Worker 的旁路控制通道。Worker 绑定 `MessagePort` 后先发送 `control-ready`，随后 owner、Workspace、lease 和 pagehide ack 都使用同一 `channelId` 和递增 `seq`。页面只有在协议版本、通道身份、序列连续性和 payload 通过 `BrowserNativeControlReceiver` 检查后才更新状态；notice 使用 exact-key schema，文本字段最多 4 KiB UTF-8，序列化 JSON frame 最多 16 KiB。未知字段/notice、过大字段、循环 extra、同序冲突或跳号会锁定当前 receiver；invalid 事件只带固定 reason code，不广播未经验证的原始 payload。
 
 真实 Chrome E2E 已验证三次刷新建立不同通道，duplicate 不产生 invalid，gap/conflict 分别产生 `CONTROL_SEQUENCE_GAP`/`CONTROL_SEQUENCE_CONFLICT`，无页面或 Worker 错误、无跨源请求。真实 LLM 另以同域 backend 完成普通 `read → write → read` smoke 和刷新恢复；它只证明接线没有破坏 Agent Loop，不证明真实模型生成控制故障。控制通道失效不会自动恢复 Session、模型流、工具调用、HITL 或后台 Agent。
 
@@ -629,6 +629,7 @@ pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.t
   docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts
 pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/control-channel-conformance.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/control-payload-bounds.e2e.mjs
 ```
 
 [执行写权交接计划](execution-owner-handoff-validation-plan.md)和[进度记录](execution-owner-handoff-validation-progress.md)验证同一 DSH Session 在两个 Dedicated Worker 之间切换时的顺序与未知结果恢复。协调器先 flush Workspace 云端 revision 和本地 snapshot，再 flush Session outbox 并核对 `durableThroughSeq`，随后转移 Session owner，最后释放旧 Workspace lease；Session 与 Workspace 仍不是跨存储事务。

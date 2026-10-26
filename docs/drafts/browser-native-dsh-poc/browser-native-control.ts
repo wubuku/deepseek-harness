@@ -1,4 +1,5 @@
 import {
+  BROWSER_NATIVE_CONTROL_MAX_TEXT_BYTES,
   BROWSER_NATIVE_CONTROL_PROTOCOL_VERSION,
   type BrowserNativeControlFrame,
   type BrowserNativeControlNotice,
@@ -31,6 +32,11 @@ let controlSeq = 0
 let lastControlFrame: BrowserNativeControlFrame | undefined
 const resumeOwnerTokens = new Map<string, string>()
 const resumeWorkspaceLeases = new Map<string, BrowserNativeWorkspaceLeaseResume>()
+
+/** Deterministic malformed or boundary cases accepted by the PoC test port. */
+export type BrowserNativeControlTestInjection =
+  | 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
+  | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
 
 /** Attach the page-owned lifecycle channel before the Worker boots DSH. */
 export function setBrowserNativeControlPort(port: MessagePort): void {
@@ -111,8 +117,11 @@ function publishBrowserNativeControlNotice(notice: BrowserNativeControlNotice): 
   controlPort.postMessage(frame)
 }
 
-/** Inject a duplicate, gap, or same-sequence conflict for PoC fault tests. */
-export function publishBrowserNativeControlTestFrame(kind: 'duplicate' | 'gap' | 'conflict'): void {
+/** Inject a control protocol case through the PoC test port.
+ * @param kind The deterministic frame condition to send.
+ * @returns No value; the case is delivered asynchronously to the page.
+ */
+export function publishBrowserNativeControlTestFrame(kind: BrowserNativeControlTestInjection): void {
   if (controlPort === undefined || controlChannelId === undefined || lastControlFrame?.type !== 'control-frame') {
     throw new Error('browser-native control test frame requires a published notice')
   }
@@ -125,17 +134,65 @@ export function publishBrowserNativeControlTestFrame(kind: 'duplicate' | 'gap' |
     controlPort.postMessage({ ...base, seq: controlSeq + 2 })
     return
   }
-  const notice = base.notice
-  const conflictingNotice: BrowserNativeControlNotice = notice.type === 'workspace'
-    ? { ...notice, dirtyCount: notice.dirtyCount + 1 }
-    : notice.type === 'owner'
-      ? { ...notice, message: notice.message === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
-      : notice.type === 'unavailable'
-        ? { ...notice, message: notice.message === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
-        : notice.type === 'workspace-lease'
-          ? { ...notice, writerToken: `${notice.writerToken}-conflict` }
-          : notice.type === 'workspace-lease-released'
-            ? { ...notice, workspaceId: `${notice.workspaceId}-conflict` }
-            : { ...notice, error: notice.error === 'control-test-conflict' ? 'control-test-conflict-2' : 'control-test-conflict' }
-  controlPort.postMessage({ ...base, notice: conflictingNotice })
+  if (kind === 'max-text') {
+    publishBrowserNativeWorkspaceStatus({
+      type: 'workspace',
+      state: 'dirty',
+      workspaceId: 'control-test',
+      revision: 0,
+      dirtyCount: 0,
+      message: 'x'.repeat(BROWSER_NATIVE_CONTROL_MAX_TEXT_BYTES),
+    })
+    return
+  }
+  if (kind === 'conflict') {
+    const notice = base.notice
+    let conflictingNotice: BrowserNativeControlNotice
+    if (notice.type === 'workspace') conflictingNotice = { ...notice, dirtyCount: notice.dirtyCount + 1 }
+    else if (notice.type === 'owner') conflictingNotice = { ...notice, ownerEpoch: notice.ownerEpoch + 1 }
+    else if (notice.type === 'released') conflictingNotice = { ...notice, sessionId: `${notice.sessionId}-conflict` }
+    else if (notice.type === 'unavailable') {
+      conflictingNotice = { ...notice, message: `${notice.message}-conflict` }
+    } else if (notice.type === 'workspace-lease') {
+      conflictingNotice = { ...notice, writerToken: `${notice.writerToken}-conflict` }
+    } else if (notice.type === 'workspace-lease-released') {
+      conflictingNotice = { ...notice, workspaceId: `${notice.workspaceId}-conflict` }
+    } else {
+      conflictingNotice = { ...notice, error: `${notice.error ?? ''}-conflict` }
+    }
+    controlPort.postMessage({ ...base, notice: conflictingNotice })
+    return
+  }
+  const seq = controlSeq + 1
+  if (kind === 'oversized-text') {
+    controlPort.postMessage({
+      ...base,
+      seq,
+      notice: { type: 'workspace', state: 'dirty', workspaceId: 'control-test', dirtyCount: 0, message: 'x'.repeat(BROWSER_NATIVE_CONTROL_MAX_TEXT_BYTES + 1) },
+    })
+    return
+  }
+  if (kind === 'escaped-frame-overflow') {
+    controlPort.postMessage({
+      ...base,
+      seq,
+      notice: { type: 'workspace', state: 'dirty', workspaceId: 'control-test', dirtyCount: 0, message: '\0'.repeat(BROWSER_NATIVE_CONTROL_MAX_TEXT_BYTES) },
+    })
+    return
+  }
+  if (kind === 'unknown-field') {
+    controlPort.postMessage({ ...base, seq, diagnosticSecret: 'CONTROL_TEST_SECRET' })
+    return
+  }
+  if (kind === 'unknown-notice') {
+    controlPort.postMessage({
+      ...base,
+      seq,
+      notice: { type: 'future-required-notice', diagnosticSecret: 'CONTROL_TEST_SECRET' },
+    })
+    return
+  }
+  const cyclicExtra: Record<string, unknown> = { diagnosticSecret: 'CONTROL_TEST_SECRET' }
+  cyclicExtra.self = cyclicExtra
+  controlPort.postMessage({ ...base, seq, cyclicExtra })
 }

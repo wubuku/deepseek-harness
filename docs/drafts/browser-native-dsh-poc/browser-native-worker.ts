@@ -55,6 +55,7 @@ import { BrowserNativeCapabilityPublication } from './browser-native-capability-
 import {
   publishBrowserNativePagehideAck,
   publishBrowserNativeControlTestFrame,
+  type BrowserNativeControlTestInjection,
   setBrowserNativeControlPort,
   setBrowserNativeResumeOwner,
   setBrowserNativeResumeWorkspaceLease,
@@ -176,7 +177,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
   readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
-  readonly controlInjection?: 'duplicate' | 'gap' | 'conflict'
+  readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -214,6 +215,9 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.type !== 'browser-native-workspace-test-request' || typeof data.requestId !== 'string') return false
   if (data.action === 'control-inject') {
     return data.controlInjection === 'duplicate' || data.controlInjection === 'gap' || data.controlInjection === 'conflict'
+      || data.controlInjection === 'max-text' || data.controlInjection === 'oversized-text'
+      || data.controlInjection === 'escaped-frame-overflow' || data.controlInjection === 'unknown-field'
+      || data.controlInjection === 'unknown-notice' || data.controlInjection === 'cyclic-extra'
   }
   if (data.action === 'abort-session-outbox-appends') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100

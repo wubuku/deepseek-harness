@@ -284,7 +284,7 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
     if (received.kind === 'duplicate') return
     if (received.kind === 'invalid') {
       window.dispatchEvent(new CustomEvent('dsh-browser-native-control-invalid', {
-        detail: { reason: received.reason, frame: event.data },
+        detail: { reason: received.reason },
       }))
       return
     }
