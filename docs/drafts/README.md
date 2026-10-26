@@ -85,6 +85,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 28. [Browser-Native 运行期能力发布与撤销](browser-native-dsh-poc/runtime-capability-publication-validation-plan.md)及[进度](browser-native-dsh-poc/runtime-capability-publication-validation-progress.md)：验证 DSH Session request header 与模型 schema 一致、本地 Workspace durability 失败后撤销工具并拒绝迟到调用、云端 commit pending 与本地失败的区分，以及刷新后由新 Worker 恢复工具；quota 故障时序使用 scripted Chrome E2E，另有真实 LLM 普通读写烟测。
 29. [Browser-Native Worker 控制通道连续性验证](browser-native-dsh-poc/next-control-channel-conformance-validation-plan.md)及[进度](browser-native-dsh-poc/next-control-channel-conformance-validation-progress.md)：验证页面与 Worker 控制帧的 `control-ready` 基线、连续 `channelId/seq`、重复去重、跳号/同序冲突 fail-closed 和刷新后的新通道；真实 LLM 只做普通文件 smoke，不把控制通道当作 Session event log。
 30. [Browser-Native 控制通道载荷约束验证](browser-native-dsh-poc/next-control-payload-bounds-validation-plan.md)及[进度](browser-native-dsh-poc/next-control-payload-bounds-validation-progress.md)：验证 exact-key schema、4 KiB UTF-8 文本与 16 KiB JSON frame 上限、未知/循环数据拒绝、诊断脱敏及坏帧后的新 Worker 状态恢复；真实 LLM 只验证普通 DSH 文件闭环未受影响。
+31. [Browser-Native 复制标签页恢复隔离验证](browser-native-dsh-poc/next-tab-recovery-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/next-tab-recovery-isolation-validation-progress.md)：Chrome 复现并阻断 opener 复制 Workspace-only、Session-only 和完整恢复凭据；验证无 Web Locks fail-closed、刷新接管、旧 fencing 拒绝及同 Session 单次续聊。BFCache 只测合成 `pagehide.persisted`，不替代真实往返；真实 LLM smoke 单独验证普通文件恢复。
 
 ### 需要实现或审查代码时
 
@@ -364,6 +365,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [browser-native-worker.ts](browser-native-dsh-poc/browser-native-worker.ts) | 在 Dedicated Worker 中启动真实 DSH Host。 |
 | [browser-native-page-control.ts](../../apps/web/src/browser-native-page-control.ts) | preview 主线程保存 Worker Session owner token、刷新续租，并在 pagehide 请求关闭 Session。 |
 | [browser-native-control-channel.ts](../../apps/web/src/browser-native-control-channel.ts) | 定义页面/Worker 控制帧、`control-ready` 基线、连续序列验证和重复去重。 |
+| [browser-native-recovery.ts](../../apps/web/src/browser-native-recovery.ts) | 校验 tab-scoped Session/Workspace 恢复记录，并通过 Web Locks 协调同源页面的 writer 恢复。 |
 | [browser-native-providers.ts](browser-native-dsh-poc/browser-native-providers.ts) | Worker 侧远程 `SessionPersistence` 和 `LlmAdapter` provider。 |
 | [backend-v2.mjs](browser-native-dsh-poc/backend-v2.mjs) | 当前 v2 的实际 Session/LLM 字段、durability、进程内 owner token 校验和 30 秒 lease 过期；没有请求去重账本或跨进程 owner epoch。 |
 | [run-v2.mjs](browser-native-dsh-poc/run-v2.mjs) | 构建产物上的 v2 launcher。 |
@@ -374,6 +376,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [tests/runtime-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-lifecycle.e2e.mjs) | scripted Chrome 生命周期复测；历史 WebKit 结果仅作对照，覆盖刷新、Stop、失败恢复、backend 重启、lease 冲突和 Worker terminate。 |
 | [tests/runtime-real-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs) | 真实模型 Chrome Stop、`aborted → completed` 恢复、durable Session 和密钥流向检查；历史 WebKit 结果不在本轮复测。 |
 | [tests/session-outbox-recovery.e2e.mjs](browser-native-dsh-poc/tests/session-outbox-recovery.e2e.mjs) | Chrome Worker 终止、append/flush response 窗口、IDB abort、writer fencing、容量迁移及 Workspace receipt 恢复。 |
+| [tests/browser-native-recovery.spec.ts](browser-native-dsh-poc/tests/browser-native-recovery.spec.ts) | 恢复记录校验、Web Lock 冲突、部分获取回滚和不支持 API 的单测。 |
+| [tests/tab-recovery-duplication.e2e.mjs](browser-native-dsh-poc/tests/tab-recovery-duplication.e2e.mjs) | 真实 Chrome opener popup 复制 Session/Workspace 凭据、无 Web Locks fail-closed、刷新接管、旧 fencing 拒绝和同 Session 续聊。 |
 | [tests/runtime-streaming.e2e.mjs](browser-native-dsh-poc/tests/runtime-streaming.e2e.mjs) | 真实 Chrome 长回复的逐步 DOM、输入草稿、Stop、滚动和主线程 long-task 观测。 |
 
 ### assistant-ui 增量 PoC 入口

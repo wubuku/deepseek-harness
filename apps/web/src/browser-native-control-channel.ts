@@ -26,7 +26,7 @@ export type BrowserNativeOwnerNotice =
 export interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
   readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
-    | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
+    | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict' | 'recovery-unavailable'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
@@ -129,7 +129,7 @@ function isNotice(value: unknown): value is BrowserNativeControlNotice {
   if (value.type === 'workspace') {
     return hasExactKeys(value, ['type', 'state', 'dirtyCount'], ['workspaceId', 'revision', 'message', 'retryAfterMs'])
       && typeof value.state === 'string'
-      && ['loading', 'synced', 'dirty', 'syncing', 'error', 'conflict', 'local-corrupt', 'local-newer-version', 'lease-conflict'].includes(value.state)
+      && ['loading', 'synced', 'dirty', 'syncing', 'error', 'conflict', 'local-corrupt', 'local-newer-version', 'lease-conflict', 'recovery-conflict', 'recovery-unavailable'].includes(value.state)
       && typeof value.dirtyCount === 'number' && Number.isSafeInteger(value.dirtyCount) && value.dirtyCount >= 0
       && hasBoundedOptionalString(value, 'workspaceId', MAX_IDENTIFIER_BYTES)
       && hasBoundedOptionalInteger(value, 'revision', 0)

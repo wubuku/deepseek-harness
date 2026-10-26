@@ -175,7 +175,7 @@ try {
     }
     if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
     if (browserNativeWorkspaceLease) currentWorker.postMessage({ type: 'browser-native-workspace-lease-init' })
-    if (browserNative) connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
+    if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
     if (browserNative) await probeBrowserNativeWorker(currentWorker)
     await connectWorkerHost(currentWorker, {
       image,
@@ -189,6 +189,7 @@ try {
   const message = error instanceof Error ? error.message : String(error)
   const workspaceStatus = window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state
   const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
-    || workspaceStatus === 'local-newer-version')
+    || workspaceStatus === 'local-newer-version' || workspaceStatus === 'recovery-conflict'
+    || workspaceStatus === 'recovery-unavailable')
   if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
 }

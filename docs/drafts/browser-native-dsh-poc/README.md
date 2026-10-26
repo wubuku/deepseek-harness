@@ -429,7 +429,7 @@ Workspace mirror 仍默认使用内存模式；`browser-native-durable=1` 才启
 
 同源 [`backend-v2.mjs`](backend-v2.mjs) 提供 `/api/browser-native/session/*` 和 `/api/browser-native/llm`。Session 事件以正式 DSH event DTO 写入本地 JSON 文件；`append` 只更新当前 backend 的内存状态，`flush` 或 `close` 才通过临时文件、文件 `fsync`、原子替换和父目录 `fsync` 建立本地 durability receipt。Workspace manifest、身份、lease 和 operation receipt 也存于本地 JSON `dataDir`；默认 blob store 使用本地文件，测试可注入 PoC-only S3 adapter。real LLM provider 的 base URL、model 和 API key 只由 Node backend 从 `--env-file` 读取；页面和 Worker 只看到同源 route。
 
-`session/list` 同时返回 Session Persistence 使用的 `snapshots` 和 Client Session Controller 使用的 `items`；新增 `items` 不替换原有持久化字段。`items` 是 PoC 用于恢复的最小目录投影：`updatedAt` 暂用 header 的 `createdAt`，`agentAvailable` 和 `running` 固定为 `false`，`blank` 由事件数计算，不代表真实活动状态。Session Controller 用该列表判断已保存的 Session 是否可 retain。assistant-ui PoC 和原生 preview 都在页面刷新时重连同一 Session；前者由 `dsh-client.ts` 负责 owner 通知和卸载处理，后者由 [`browser-native-page-control.ts`](../../../apps/web/src/browser-native-page-control.ts) 通过 Worker `MessagePort` 收取 owner token、保存在 tab-scoped `sessionStorage`，并在 `pagehide` 发送 close beacon、终止页面拥有的 Worker。真实 Chrome 与 Playwright WebKit 验证同一 Session 刷新后可以继续；浏览器不保证在强制关闭或崩溃时完成卸载请求。
+`session/list` 同时返回 Session Persistence 使用的 `snapshots` 和 Client Session Controller 使用的 `items`；新增 `items` 不替换原有持久化字段。`items` 是 PoC 用于恢复的最小目录投影：`updatedAt` 暂用 header 的 `createdAt`，`agentAvailable` 和 `running` 固定为 `false`，`blank` 由事件数计算，不代表真实活动状态。Session Controller 用该列表判断已保存的 Session 是否可 retain。assistant-ui PoC 和原生 preview 都在页面刷新时重连同一 Session；前者由 `dsh-client.ts` 负责 owner 通知和卸载处理，后者由 [`browser-native-page-control.ts`](../../../apps/web/src/browser-native-page-control.ts) 通过 Worker `MessagePort` 收取 owner token、保存在 tab-scoped `sessionStorage`，并先取得 [`browser-native-recovery.ts`](../../../apps/web/src/browser-native-recovery.ts) 提供的 per-resource Web Lock，再允许恢复凭据进入 Worker。pagehide 会发送 close beacon、终止页面拥有的 Worker并按生命周期释放锁。真实 Chrome 验证 opener 副本被拒及原页面关闭后刷新接管；浏览器不保证在强制关闭或崩溃时完成卸载请求。
 
 v2 要求非空 `requestId`，但没有基于它的请求去重或结果重放账本。写 owner 是当前 backend 进程内的随机 token，通过 claim、定时 `renew` 和 `close` 维护；默认 lease 为 30 秒，Worker 每 10 秒续租。页面正常卸载时，assistant-ui 和原生 preview 会尝试用 owner 凭据请求 `close`/flush；浏览器崩溃、强制结束 Worker 或进程被终止时，写权会在 lease 到期后释放，backend 重启也会清空内存中的 owner 并恢复已落盘数据。原生 preview 使用 `sessionStorage` 交接同一 tab 的 token；生命周期 E2E 也验证 Worker 被强制终止后，旧 owner lease 到期、重新 claim 和继续对话。assistant-ui 在无法取得写权时禁用发送、保留草稿并提供重新连接入口；这不等于实现了跨进程 owner epoch、请求重放或生产级 HA。刷新、backend restart、lease 到期和 stale owner reclaim 不恢复未落盘操作。这些限制不同于[旧版协议实验](protocol.md)的 replay 规则，也不满足 [v2 规划](browser-native-dsh-plan-v2.md)中的完整恢复目标。
 
@@ -631,6 +631,23 @@ pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/control-channel-conformance.e2e.mjs
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/control-payload-bounds.e2e.mjs
 ```
+
+## 复制标签页恢复凭据隔离
+
+[验证计划](next-tab-recovery-isolation-validation-plan.md)与[进度](next-tab-recovery-isolation-validation-progress.md)记录了 opener popup 复制 `sessionStorage` 后 Session owner token 与 Workspace lease 可能被两个 Worker 共用的风险。页面在恢复前先为每个 Session/Workspace resource 取得 Web Lock；资源冲突、锁 API 不可用或恢复存储不可写时，页面停止 Worker，不发送 Browser-Native backend 请求。真实 Chrome 分别验证 Workspace-only、Session-only 和完整凭据副本；原页面关闭后，完整副本刷新并恢复同一 Session，模型只收到一次新 prompt，旧 Workspace fencing token 被拒，Workspace 修改只提交一次。Web Locks 使用非阻塞 `ifAvailable`；Chrome 不允许它与 `signal` 同用，因此 adapter 用本地取消状态处理卸载时尚未回调的请求，单测另验证晚到授权立即释放及批量失败只回滚新锁。
+
+这只是同 origin/storage partition 内协作页面的单写者保护，不能替代 backend fencing 或身份授权。无 Web Locks 时当前 Browser-Native Host fail closed。`pagehide.persisted` 仅以合成事件触发验证；pending lock 的晚到 callback 由单测验证，真实页面卸载与原生 callback 的精确调度竞争、BFCache 往返、首次 claim 并发、后台标签冻结、跨设备、多 backend 和生产授权未验证。
+
+复跑本批检查：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-recovery.spec.ts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/tab-recovery-duplication.e2e.mjs
+```
+
+[browser-native-recovery.ts](../../../apps/web/src/browser-native-recovery.ts)实现恢复记录校验和 Web Locks 管理；对应页面接线在 [browser-native-page-control.ts](../../../apps/web/src/browser-native-page-control.ts)。
 
 [执行写权交接计划](execution-owner-handoff-validation-plan.md)和[进度记录](execution-owner-handoff-validation-progress.md)验证同一 DSH Session 在两个 Dedicated Worker 之间切换时的顺序与未知结果恢复。协调器先 flush Workspace 云端 revision 和本地 snapshot，再 flush Session outbox 并核对 `durableThroughSeq`，随后转移 Session owner，最后释放旧 Workspace lease；Session 与 Workspace 仍不是跨存储事务。
 

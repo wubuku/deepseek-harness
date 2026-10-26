@@ -1,4 +1,5 @@
 import {
+  browserNativeRecoveryErrorCopy,
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
   browserNativeWorkspaceRecoveryWarningCopy,
@@ -6,14 +7,18 @@ import {
   browserNativeWorkspaceStatusCopy,
 } from './locales/browser-native-workspace.ts'
 import {
+  BrowserNativeRecoveryLocks,
+  browserNativeOwnerStorageKey,
+  browserNativeWorkspaceLeaseStorageKey,
+  readBrowserNativeRecoveryState,
+  type BrowserNativeRecoveryResource,
+} from './browser-native-recovery.ts'
+import {
   BrowserNativeControlReceiver,
   type BrowserNativeControlNotice,
   type BrowserNativePagehideAck,
   type BrowserNativeWorkspaceStatus,
 } from './browser-native-control-channel.ts'
-
-const OWNER_STORAGE_PREFIX = 'dsh.browser-native.owner.'
-const WORKSPACE_LEASE_STORAGE_PREFIX = 'dsh.browser-native.workspace-lease.'
 
 type BrowserNativePageNotice = BrowserNativeControlNotice
 
@@ -156,16 +161,20 @@ async function downloadLocalRecoveryBundle(workspaceId: string): Promise<void> {
  * Keep the browser-native Session write lease across a normal page reload.
  * @param worker - Dedicated Worker receiving the Browser-Native DSH Host.
  * @param options - Lifecycle options for the page-owned Worker.
- * @returns A function that detaches page listeners and closes the page-side port.
+ * @returns A promise for a disposer that detaches listeners and closes the page port. It keeps locks; detach does not stop the Worker.
  */
-export function connectBrowserNativePageControl(worker: Worker, options: { readonly durable?: boolean } = {}): () => void {
+export async function connectBrowserNativePageControl(worker: Worker, options: { readonly durable?: boolean } = {}): Promise<() => void> {
   const channel = new MessageChannel()
   const receiver = new BrowserNativeControlReceiver()
   const owners = new Map<string, string>()
-  const storageKey = (sessionId: string): string => `${OWNER_STORAGE_PREFIX}${encodeURIComponent(sessionId)}`
+  const recoveryLocks = new BrowserNativeRecoveryLocks(typeof navigator.locks === 'undefined' ? undefined : navigator.locks)
+  let recoveryStorage: Storage | undefined
   let workspaceStatus: HTMLElement | undefined
   let retryTimer: number | undefined
   const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
+  let failedClosed = false
+  let pageLeaving = false
+  let noticeQueue: Promise<void> = Promise.resolve()
   const clearRetryTimer = (): void => {
     if (retryTimer === undefined) return
     window.clearInterval(retryTimer)
@@ -204,7 +213,8 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
     )
     workspaceStatus.dataset.state = notice.state
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
-      || notice.state === 'local-corrupt' || notice.state === 'local-newer-version' ? '#f87171'
+      || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
+      || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
     if (notice.state === 'local-corrupt' || notice.state === 'local-newer-version') {
       const warning = document.createElement('span')
@@ -236,7 +246,7 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
       })
       workspaceStatus.append(warning, button)
     }
-    if (notice.state === 'lease-conflict') {
+    if (notice.state === 'lease-conflict' || notice.state === 'recovery-conflict') {
       const button = document.createElement('button')
       button.type = 'button'
       button.dataset.browserNativeWorkspaceRetry = ''
@@ -275,6 +285,160 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
     result.textContent = browserNativeWorkspaceRecoveryResultCopy(document.documentElement.lang, success)
     workspaceStatus.append(result)
   }
+  const publishLocalStatus = (state: BrowserNativeWorkspaceStatus['state'], message?: string): void => {
+    const notice: BrowserNativeWorkspaceStatus = {
+      type: 'workspace',
+      state,
+      dirtyCount: 0,
+      ...(message === undefined ? {} : { message }),
+    }
+    window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ = notice
+    showWorkspaceStatus(notice)
+    window.dispatchEvent(new CustomEvent('dsh-browser-native-workspace-status', { detail: notice }))
+  }
+  const stopWorker = (): void => {
+    if (failedClosed) return
+    failedClosed = true
+    worker.terminate()
+    channel.port1.close()
+    clearRetryTimer()
+    recoveryLocks.releaseAll()
+  }
+  let recoveryOwners: ReturnType<typeof readBrowserNativeRecoveryState>['owners'] = []
+  let recoveryWorkspaces: (ReturnType<typeof readBrowserNativeRecoveryState>['workspaces'][number] & { readonly resumeId: string })[] = []
+  try {
+    recoveryStorage = window.sessionStorage
+    const recoveryState = readBrowserNativeRecoveryState(recoveryStorage)
+    recoveryOwners = recoveryState.owners
+    recoveryWorkspaces = recoveryState.workspaces.map(workspace => ({
+      ...workspace,
+      resumeId: workspace.resumeId ?? globalThis.crypto.randomUUID(),
+    }))
+    if (recoveryState.invalidKeys.length > 0) {
+      window.dispatchEvent(new CustomEvent('dsh-browser-native-recovery-invalid', {
+        detail: { reason: 'RECOVERY_RECORD_INVALID', count: recoveryState.invalidKeys.length },
+      }))
+    }
+    if (!recoveryLocks.supported) {
+      publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+      throw new Error('browser-native recovery: Web Locks is required before starting the writable DSH Host')
+    }
+    const resources: BrowserNativeRecoveryResource[] = [
+      ...recoveryOwners.map(owner => ({ kind: 'session' as const, id: owner.sessionId })),
+      ...recoveryWorkspaces.map(workspace => ({ kind: 'workspace' as const, id: workspace.workspaceId })),
+    ]
+    if (!await recoveryLocks.acquireResources(resources)) {
+      publishLocalStatus('recovery-conflict')
+      throw new Error('browser-native recovery: another tab owns a saved writer credential')
+    }
+    recoveryWorkspaces = recoveryWorkspaces.map((workspace) => {
+      recoveryStorage?.setItem(browserNativeWorkspaceLeaseStorageKey(workspace.workspaceId), JSON.stringify({
+        workspaceId: workspace.workspaceId,
+        writerToken: workspace.writerToken,
+        fencingToken: workspace.fencingToken,
+        resumeId: workspace.resumeId,
+      }))
+      return workspace
+    })
+  } catch (error) {
+    recoveryLocks.releaseAll()
+    channel.port1.close()
+    channel.port2.close()
+    if (window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state !== 'recovery-conflict'
+      && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state !== 'recovery-unavailable') {
+      publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+    }
+    throw error
+  }
+  const persistRecoveryRecord = (key: string, value: string): boolean => {
+    try {
+      if (recoveryStorage === undefined) throw new Error('sessionStorage is unavailable')
+      recoveryStorage.setItem(key, value)
+      return true
+    } catch {
+      publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+      return false
+    }
+  }
+  const removeRecoveryRecord = (key: string): void => {
+    try {
+      recoveryStorage?.removeItem(key)
+    } catch {
+      publishLocalStatus('error', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+    }
+  }
+  const handleNotice = async (notice: BrowserNativePageNotice): Promise<void> => {
+    if (failedClosed || pageLeaving) return
+    if (notice.type === 'workspace') {
+      window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ = notice
+      showWorkspaceStatus(notice)
+      window.dispatchEvent(new CustomEvent('dsh-browser-native-workspace-status', { detail: notice }))
+      return
+    }
+    if (notice.type === 'workspace-lease' && typeof notice.workspaceId === 'string'
+      && typeof notice.writerToken === 'string' && Number.isSafeInteger(notice.fencingToken)) {
+      const resource = { kind: 'workspace', id: notice.workspaceId } as const
+      if (recoveryLocks.supported && !await recoveryLocks.acquireResource(resource)) {
+        if (pageLeaving) return
+        publishLocalStatus('recovery-conflict')
+        stopWorker()
+        return
+      }
+      if (pageLeaving) {
+        recoveryLocks.releaseResource(resource)
+        return
+      }
+      if (!recoveryLocks.supported) {
+        publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+        stopWorker()
+        return
+      }
+      if (!persistRecoveryRecord(browserNativeWorkspaceLeaseStorageKey(notice.workspaceId), JSON.stringify({
+        workspaceId: notice.workspaceId,
+        writerToken: notice.writerToken,
+        fencingToken: notice.fencingToken,
+        resumeId: globalThis.crypto.randomUUID(),
+      }))) stopWorker()
+      return
+    }
+    if (notice.type === 'workspace-lease-released' && typeof notice.workspaceId === 'string') {
+      removeRecoveryRecord(browserNativeWorkspaceLeaseStorageKey(notice.workspaceId))
+      recoveryLocks.releaseResource({ kind: 'workspace', id: notice.workspaceId })
+      return
+    }
+    if (notice.type === 'owner') {
+      const resource = { kind: 'session', id: notice.sessionId } as const
+      if (recoveryLocks.supported && !await recoveryLocks.acquireResource(resource)) {
+        if (pageLeaving) return
+        publishLocalStatus('recovery-conflict')
+        stopWorker()
+        return
+      }
+      if (pageLeaving) {
+        recoveryLocks.releaseResource(resource)
+        return
+      }
+      owners.set(notice.sessionId, notice.ownerToken)
+      if (!recoveryLocks.supported) {
+        publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+        stopWorker()
+        return
+      }
+      if (!persistRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId), notice.ownerToken)) stopWorker()
+      return
+    }
+    if (notice.type === 'released' || notice.type === 'unavailable') {
+      owners.delete(notice.sessionId)
+      removeRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId))
+      recoveryLocks.releaseResource({ kind: 'session', id: notice.sessionId })
+    }
+  }
+  const enqueueNotice = (notice: BrowserNativePageNotice): void => {
+    noticeQueue = noticeQueue.then(() => handleNotice(notice)).catch(() => {
+      if (!failedClosed) publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
+      stopWorker()
+    })
+  }
   channel.port1.addEventListener('message', (event: MessageEvent<unknown>) => {
     const received = receiver.receive(event.data)
     if (received.kind === 'ready') {
@@ -294,89 +458,30 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
       pagehideWaiters.delete(notice.requestId)
       return
     }
-    if (notice.type === 'workspace') {
-      window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ = notice
-      showWorkspaceStatus(notice)
-      window.dispatchEvent(new CustomEvent('dsh-browser-native-workspace-status', { detail: notice }))
-      return
-    }
-    if (notice.type === 'workspace-lease' && typeof notice.workspaceId === 'string'
-      && typeof notice.writerToken === 'string' && Number.isSafeInteger(notice.fencingToken)) {
-      window.sessionStorage.setItem(
-        `${WORKSPACE_LEASE_STORAGE_PREFIX}${encodeURIComponent(notice.workspaceId)}`,
-        JSON.stringify({
-          workspaceId: notice.workspaceId,
-          writerToken: notice.writerToken,
-          fencingToken: notice.fencingToken,
-          resumeId: globalThis.crypto.randomUUID(),
-        }),
-      )
-      return
-    }
-    if (notice.type === 'workspace-lease-released' && typeof notice.workspaceId === 'string') {
-      window.sessionStorage.removeItem(`${WORKSPACE_LEASE_STORAGE_PREFIX}${encodeURIComponent(notice.workspaceId)}`)
-      return
-    }
-    if (notice.type === 'owner') {
-      if (typeof notice.ownerToken === 'string') {
-        owners.set(notice.sessionId, notice.ownerToken)
-        window.sessionStorage.setItem(storageKey(notice.sessionId), notice.ownerToken)
-      }
-      return
-    }
-    if (notice.type === 'released' || notice.type === 'unavailable') {
-      owners.delete(notice.sessionId)
-      window.sessionStorage.removeItem(storageKey(notice.sessionId))
-    }
+    enqueueNotice(notice)
   })
   channel.port1.start()
   worker.postMessage({ type: 'browser-native-control-init' }, [channel.port2])
-
-  const storedKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
-  for (const key of storedKeys) {
-    if (key !== null && key.startsWith(WORKSPACE_LEASE_STORAGE_PREFIX)) {
-      const rawLease = window.sessionStorage.getItem(key)
-      try {
-        const lease: unknown = rawLease === null ? undefined : JSON.parse(rawLease)
-        if (lease !== null && typeof lease === 'object'
-          && 'workspaceId' in lease && typeof lease.workspaceId === 'string'
-          && 'writerToken' in lease && typeof lease.writerToken === 'string'
-          && key === `${WORKSPACE_LEASE_STORAGE_PREFIX}${encodeURIComponent(lease.workspaceId)}`
-          && 'fencingToken' in lease && Number.isSafeInteger(lease.fencingToken)) {
-          const resumeId = 'resumeId' in lease && typeof lease.resumeId === 'string'
-            && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(lease.resumeId)
-            ? lease.resumeId
-            : globalThis.crypto.randomUUID()
-          window.sessionStorage.setItem(key, JSON.stringify({
-            workspaceId: lease.workspaceId,
-            writerToken: lease.writerToken,
-            fencingToken: lease.fencingToken,
-            resumeId,
-          }))
-          worker.postMessage({
-            type: 'browser-native-control-resume-workspace-lease',
-            workspaceId: lease.workspaceId,
-            writerToken: lease.writerToken,
-            fencingToken: lease.fencingToken,
-            resumeId,
-          })
-        } else {
-          window.sessionStorage.removeItem(key)
-        }
-      } catch {
-        window.sessionStorage.removeItem(key)
-      }
-      continue
-    }
-    if (key === null || !key.startsWith(OWNER_STORAGE_PREFIX)) continue
-    const ownerToken = window.sessionStorage.getItem(key)
-    if (ownerToken === null) continue
-    const sessionId = decodeURIComponent(key.slice(OWNER_STORAGE_PREFIX.length))
-    worker.postMessage({ type: 'browser-native-control-resume-owner', sessionId, ownerToken })
+  for (const workspace of recoveryWorkspaces) {
+    worker.postMessage({
+      type: 'browser-native-control-resume-workspace-lease',
+      workspaceId: workspace.workspaceId,
+      writerToken: workspace.writerToken,
+      fencingToken: workspace.fencingToken,
+      resumeId: workspace.resumeId,
+    })
+  }
+  for (const owner of recoveryOwners) {
+    worker.postMessage({
+      type: 'browser-native-control-resume-owner',
+      sessionId: owner.sessionId,
+      ownerToken: owner.ownerToken,
+    })
   }
 
   const handlePageHide = (event: PageTransitionEvent): void => {
     if (event.persisted) return
+    pageLeaving = true
     if (options.durable === true) {
       const requestId = globalThis.crypto.randomUUID()
       const settled = new Promise<BrowserNativePagehideAck>((resolve) => { pagehideWaiters.set(requestId, resolve) })
@@ -395,6 +500,7 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
       ]).then(() => {
         pagehideWaiters.delete(requestId)
         worker.terminate()
+        recoveryLocks.releaseAll()
       })
     }
     for (const [sessionId, ownerToken] of owners) {
@@ -413,6 +519,7 @@ export function connectBrowserNativePageControl(worker: Worker, options: { reado
         keepalive: true,
       }).catch((error: unknown) => { console.warn('browser-native DSH: page unload could not release Session write access', error) })
     }
+    if (options.durable !== true) recoveryLocks.releaseAll()
   }
   window.addEventListener('pagehide', handlePageHide)
 

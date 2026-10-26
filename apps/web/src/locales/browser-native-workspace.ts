@@ -1,5 +1,6 @@
 type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
-  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
+  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict'
+  | 'recovery-unavailable'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -12,6 +13,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'local-corrupt': 'Local Workspace state is corrupt',
     'local-newer-version': 'Local Workspace uses a newer unsupported format',
     'lease-conflict': 'Another tab currently owns Workspace write access',
+    'recovery-conflict': 'Another tab is already using these DSH recovery credentials',
+    'recovery-unavailable': 'Safe DSH writer recovery is unavailable in this browser context',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -23,6 +26,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'local-corrupt': '本地工作区状态损坏',
     'local-newer-version': '本地工作区格式版本较新，当前版本无法读取',
     'lease-conflict': '另一个标签页正在写入工作区',
+    'recovery-conflict': '另一个标签页正在使用这组 DSH 恢复凭据',
+    'recovery-unavailable': '当前浏览器上下文无法安全恢复 DSH 写入权',
   },
 }
 
@@ -59,6 +64,16 @@ export function browserNativeWorkspaceRetryCopy(language: string, remainingMs: n
     return remainingMs > 0 ? `等待 ${String(Math.ceil(remainingMs / 1000))} 秒后重试` : '重新获取写权限'
   }
   return remainingMs > 0 ? `Retry in ${String(Math.ceil(remainingMs / 1000))}s` : 'Retry write access'
+}
+
+/** Explain why saved writer recovery is unavailable in the current browser context.
+ * @param language - Page language tag.
+ * @returns Localized recovery limitation text.
+ */
+export function browserNativeRecoveryErrorCopy(language: string): string {
+  return language.startsWith('zh')
+    ? '当前浏览器无法安全协调同源标签页的写入恢复。请使用支持 Web Locks 的安全上下文。'
+    : 'This browser cannot safely coordinate same-origin writer recovery. Use a secure context with Web Locks support.'
 }
 
 /** Format the warning shown before a local recovery bundle download.
