@@ -428,6 +428,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     return this.receiptOutbox.filter(receipt => receipt.operation?.sessionId === sessionId)
   }
 
+  get pendingReceiptCount(): number {
+    return this.receiptOutbox.length
+  }
+
   async acknowledgeReceipt(operationId: string): Promise<void> {
     const index = this.receiptOutbox.findIndex(receipt => receipt.operationId === operationId)
     if (index < 0) return
@@ -443,6 +447,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   getWorkspaceId(): string | undefined {
     return this.workspaceId
+  }
+
+  getRevision(): number | undefined {
+    return this.revision
   }
 
   isDurableWorkspace(): boolean {
@@ -1213,6 +1221,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly runToolOperation: <T>(operation: WorkspaceToolOperation, run: () => Promise<T>) => Promise<T>
   /** Read unacknowledged receipts belonging to one DSH Session. */
   readonly pendingReceipts: (sessionId: string) => readonly WorkspaceReceipt[]
+  /** Return the number of unacknowledged receipts across all Sessions. */
+  readonly pendingReceiptCount: () => number
   /** Remove a receipt after its Session event is durable. */
   readonly acknowledgeReceipt: (operationId: string) => Promise<void>
   /** Wait until the local durable snapshot has been written. */
@@ -1237,6 +1247,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly getFileToolYieldDelayMs: () => number
   /** Return the current Workspace identity after preparation. */
   readonly getWorkspaceId: () => string | undefined
+  /** Return the current remote manifest revision after preparation. */
+  readonly getRevision: () => number | undefined
   /** Whether this runtime has a local durable store for external file backing. */
   readonly isDurableWorkspace: () => boolean
 }
@@ -1281,6 +1293,7 @@ export function createBrowserNativeWorkspaceRuntime(
     flushWorkspace: async () => await mirror.flushAndRequireDurable(),
     runToolOperation: async (operation, run) => await mirror.runToolOperation(operation, run),
     pendingReceipts: sessionId => mirror.pendingReceipts(sessionId),
+    pendingReceiptCount: () => mirror.pendingReceiptCount,
     acknowledgeReceipt: async operationId => await mirror.acknowledgeReceipt(operationId),
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
     assertLocalWorkspaceUsable: () => mirror.assertLocalWorkspaceUsable(),
@@ -1290,6 +1303,7 @@ export function createBrowserNativeWorkspaceRuntime(
     releaseWriter: async () => await mirror.releaseWriter(),
     getFileToolYieldDelayMs: () => options.testHooks?.fileToolYieldDelayMs?.() ?? 0,
     getWorkspaceId: () => mirror.getWorkspaceId(),
+    getRevision: () => mirror.getRevision(),
     isDurableWorkspace: () => mirror.isDurableWorkspace(),
   }
 }

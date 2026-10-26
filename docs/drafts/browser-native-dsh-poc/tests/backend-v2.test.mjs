@@ -228,10 +228,19 @@ async function openWorkspaceIdentity(origin) {
   const response = await fetch(`${origin}/api/browser-native/workspace/identity`)
   const body = await response.json()
   assert.equal(response.ok, true, JSON.stringify(body))
-  const setCookie = response.headers.get('set-cookie')
-  assert.equal(typeof setCookie, 'string')
-  assert.match(setCookie, /Max-Age=31536000/)
-  return { workspaceId: body.workspaceId, cookie: setCookie.split(';', 1)[0] }
+  const setCookies = response.headers.getSetCookie()
+  assert.equal(setCookies.length, 2)
+  const workspaceCookie = setCookies.find(cookie => cookie.startsWith('dsh-browser-native-principal='))
+  const handoffCookie = setCookies.find(cookie => cookie.startsWith('dsh-browser-native-handoff-principal='))
+  assert.match(workspaceCookie, /Path=\/api\/browser-native\/workspace;/)
+  assert.match(handoffCookie, /Path=\/api\/browser-native\/session\/handoff;/)
+  assert.match(workspaceCookie, /Max-Age=31536000/)
+  assert.match(handoffCookie, /Max-Age=31536000/)
+  return {
+    workspaceId: body.workspaceId,
+    cookie: workspaceCookie.split(';', 1)[0],
+    handoffCookie: handoffCookie.split(';', 1)[0],
+  }
 }
 
 async function postWorkspace(origin, identity, operation, body) {
@@ -245,9 +254,10 @@ async function postWorkspace(origin, identity, operation, body) {
 }
 
 async function postAuthenticatedWorkspace(origin, identity, path, body) {
+  const cookie = path === '/api/browser-native/session/handoff' ? identity.handoffCookie : identity.cookie
   const response = await fetch(`${origin}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: identity.cookie },
+    headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify(body),
   })
   const value = await response.json()
@@ -258,6 +268,15 @@ async function postAuthenticatedWorkspace(origin, identity, path, body) {
     throw error
   }
   return value
+}
+
+async function failureAuthenticatedWorkspace(origin, identity, path, body) {
+  try {
+    await postAuthenticatedWorkspace(origin, identity, path, body)
+  } catch (error) {
+    return error
+  }
+  assert.fail(`expected ${path} to fail`)
 }
 
 async function uploadWorkspaceBlob(origin, identity, bytes) {
@@ -544,6 +563,93 @@ describe('browser-native DSH v2 backend', () => {
       checkpoint: { ...checkpoint, workspaceRevision: 1 },
     }))
     assert.equal(conflict.code, 'HANDOFF_CONFLICT')
+  })
+
+  it('binds an execution handoff receipt to durable Session and Workspace cursors', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const lease = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(lease.response.ok, true, JSON.stringify(lease.value))
+    const id = 'handoff-execution-checkpoint-session'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('handoff-execution-checkpoint-create', {
+      sessionId: id,
+      header: header(id),
+      inheritedEventCount: 0,
+    }))
+    const checkpoint = {
+      sessionId: id,
+      ownerId: 'browser-worker-1',
+      epoch: created.owner.ownerEpoch,
+      nextSessionSeq: 0,
+      durableThroughSeq: -1,
+      workspaceId: identity.workspaceId,
+      workspaceRevision: 0,
+      workspaceFencingToken: lease.value.fencingToken,
+      pendingWorkspaceReceipts: 0,
+      pendingSessionEvents: 0,
+      pendingOperationIds: [],
+      pendingExecutionIds: [],
+    }
+    const pending = await failureAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-pending', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint: { ...checkpoint, pendingWorkspaceReceipts: 1 },
+      workspaceWriterToken: lease.value.writerToken,
+    }))
+    assert.equal(pending.code, 'HANDOFF_BUSY')
+
+    const behind = await failureAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-behind', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint: { ...checkpoint, durableThroughSeq: -2 },
+      workspaceWriterToken: lease.value.writerToken,
+    }))
+    assert.equal(behind.code, 'CHECKPOINT_INVALID')
+
+    const staleRevision = await failureAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-stale-workspace', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint: { ...checkpoint, workspaceRevision: 1 },
+      workspaceWriterToken: lease.value.writerToken,
+    }))
+    assert.equal(staleRevision.code, 'WORKSPACE_REVISION_CONFLICT')
+    const staleLease = await failureAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-stale-lease', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint,
+      workspaceWriterToken: 'stale-workspace-token',
+    }))
+    assert.equal(staleLease.code, 'WORKSPACE_OWNERSHIP_LOST')
+
+    const transferred = await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-valid', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint,
+      workspaceWriterToken: lease.value.writerToken,
+    }))
+    assert.equal(transferred.owner.ownerEpoch, created.owner.ownerEpoch + 1)
+    assert.deepEqual(transferred.checkpoint, checkpoint)
+
+    const changedWorkspace = await failureAuthenticatedWorkspace(origin, identity, '/api/browser-native/session/handoff', envelope('handoff-execution-conflict', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      ownerEpoch: created.owner.ownerEpoch,
+      handoffId: 'execution-handoff',
+      checkpoint: { ...checkpoint, ownerId: 'browser-worker-2' },
+      workspaceWriterToken: lease.value.writerToken,
+    }))
+    assert.equal(changedWorkspace.code, 'HANDOFF_CONFLICT')
   })
 
   it('rejects unsettled work before changing Session ownership', async () => {
@@ -2524,5 +2630,27 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(queryBody.found, true)
     assert.equal(queryBody.receipt.operationId, operationId)
     assert.equal(queryBody.receipt.revision, 1)
+  })
+
+  it('expires Workspace writer leases against the injected clock', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = 1_800_000_000_000
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: { workspaceWriterLeaseMs: 300, workspaceNow: () => now },
+    })
+    const identity = await openWorkspaceIdentity(origin)
+    const first = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(first.response.ok, true, JSON.stringify(first.value))
+    now += 301
+    const staleRenew = await postWorkspace(origin, identity, 'lease', {
+      operation: 'renew', writerToken: first.value.writerToken, fencingToken: first.value.fencingToken,
+    })
+    assert.equal(staleRenew.response.status, 409)
+    assert.equal(staleRenew.value.error.code, 'WORKSPACE_OWNERSHIP_LOST')
+    const reclaimed = await postWorkspace(origin, identity, 'lease', { operation: 'claim' })
+    assert.equal(reclaimed.response.ok, true, JSON.stringify(reclaimed.value))
+    assert.equal(reclaimed.value.fencingToken, first.value.fencingToken + 1)
   })
 })

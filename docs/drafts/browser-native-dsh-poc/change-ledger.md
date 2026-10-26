@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-035：Session 与 Workspace 执行写权有序交接
+
+```text
+changeId: BN-P2-035
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-26
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-execution-handoff.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-outbox.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-execution-handoff.spec.ts; docs/drafts/browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/execution-owner-handoff-validation-plan.md; docs/drafts/browser-native-dsh-poc/execution-owner-handoff-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: Session owner handoff 与 Workspace writer lease 原本各自提供 fencing，但没有共同 flush/transfer 顺序；两个 store 也没有跨存储事务。Worker 内部 checkpoint 与既有 Session wire 字段不同，且 handoff 验证 Workspace writer 时需要同源身份授权。
+existingExtensionPointsChecked: 复用 Cordis `ctx.sessions.flush()`、Session IndexedDB outbox、Workspace `flushWorkspace()`/本地 snapshot/lease、既有 `/session/handoff` endpoint、同源 Workspace identity 和 Browser-Native Worker test port。没有修改 Agent Loop、Session event format、正式 package API、根依赖、标准 Web profile 或正式 backend。
+whyDraftOnlyWasInsufficient: 需要真实 Chrome Dedicated Worker 同时观察 Session owner epoch、Workspace fencing、DSH tool/result、Workspace receipt 和两个独立 backend 持久化结果；Node 单测不能验证实际 cookie Path、preview Worker wire 字段、Worker termination 和第二个 Worker 恢复同一 Session。还需要真实 LLM 确认同一执行历史可跨 Worker 续接。
+behaviorChange: 新增 PoC-local 有序 coordinator：Workspace 云端 revision 与本地 snapshot durable 后 flush Session/outbox 并检查 receipt，再提升 Session owner epoch，最后释放 Workspace lease。结果携带稳定 `handoffId`，区分 preparation failure、明确 Session reject、Session response unknown、Workspace release unknown 和 complete。Worker adapter 将内部 `ownerEpoch` 映射到现有 Session handoff wire 字段 `epoch`。Workspace identity cookie 保持 Workspace API 路径；新增只匹配 `/api/browser-native/session/handoff` 的 handoff cookie，LLM route 不接收两个 principal cookie。preview test-port 类型加入执行交接控制消息。
+directoryOutChangeReason: `apps/web/src/preview.ts` 定义页面侧 Browser-Native workspace test-port 的 request/response 联合类型；真实页面需要把新 Worker action 加入该类型才能在 Chrome E2E 调用，不应在 `docs/drafts` 下复制 preview 页面或绕过其现有 postMessage 通道。其他运行时、backend、cookie、测试和文档实现均保留在 PoC 目录。
+consumersUpdated: 更新 preview test-port 类型、Worker adapter、Session durability bridge、Workspace/backend handoff 校验、backend cookie scope、协调器单测、Chrome 双 Worker E2E、PoC README、兼容矩阵、drafts 索引、实施计划/进度和本账本。
+tests: coordinator Vitest 6/6，backend contract tests 45/45，`pnpm run typecheck` 5/5，preview build 通过。Chrome scripted 正常、Session response loss、Workspace release response loss 三场景均通过；每个场景 2 个 DSH write、2 个 receipt 和 2 次 Workspace commit，旧 Session append/LLM 与旧 Workspace renew 均 409。真实 Chrome LLM 同 Session `write → read → handoff → read → write → read` 通过，5 个 tool call、2 次 commit/receipt；Session epoch 和 Workspace fencing 均递增。Chrome request headers 显示 LLM route 不带 principal cookies；页面错误与跨源请求均为 0。具体命令见 `execution-owner-handoff-validation-progress.md`。文档门禁和 pre-push checks 以提交前实跑结果补记。
+syncReplaySteps: 上游同步后确认 Worker handoff API 的 checkpoint 仍用 `epoch`，Cordis `ctx.sessions.flush()` 仍等待当前 Session persistence listeners，Workspace flush/release 和 fencing API 的顺序未改变；确认 preview 仍拥有 Worker test-port 类型。保留两个路径 cookie 的 least-privilege scope，若 Session/backend 路由移动则同步路径和真实 Chrome header assertions。重跑 coordinator Vitest、backend tests、preview build、typecheck、三场 scripted Chrome 场景、真实 Chrome LLM smoke 和文档门禁。
+deleteCondition: 正式 runtime 提供具备等价 Session/Workspace durable safe point、unknown settlement、单写者 fencing 和可验证交接 receipt 的协调接口，且 Browser E2E 迁移到该接口后通过；或 Browser-Native PoC 的双 Worker 交接验证被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-034：Worker Host 启动前运行期能力探测
 
 ```text

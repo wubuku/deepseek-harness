@@ -4,6 +4,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { dirname, join } from 'node:path'
 
 const COOKIE_NAME = 'dsh-browser-native-principal'
+const HANDOFF_COOKIE_NAME = 'dsh-browser-native-handoff-principal'
 const COOKIE_MAX_AGE_SECONDS = 31_536_000
 const MAX_ENTRIES = 2_000
 const MAX_PATH_LENGTH = 512
@@ -471,8 +472,8 @@ export class WorkspaceStore {
     await atomicWrite(this.workspacePath(workspace.id), JSON.stringify(value))
   }
 
-  principalFromRequest(request) {
-    const principalId = parseCookies(request.headers.cookie).get(COOKIE_NAME)
+  principalFromRequest(request, cookieName = COOKIE_NAME) {
+    const principalId = parseCookies(request.headers.cookie).get(cookieName)
     if (principalId === undefined || !this.identities.has(principalId)) {
       throw new WorkspaceError('UNAUTHENTICATED', 'workspace identity is missing or expired', 401)
     }
@@ -501,8 +502,14 @@ export class WorkspaceStore {
     }
     const workspaceId = this.identities.get(principalId)
     if (workspaceId === undefined) throw new WorkspaceError('IDENTITY_NOT_FOUND', 'workspace identity does not exist', 401)
-    const cookie = `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
-    return { workspaceId, cookie }
+    const cookieOptions = `Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
+    return {
+      workspaceId,
+      cookies: [
+        `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; ${cookieOptions}`,
+        `${HANDOFF_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session/handoff; ${cookieOptions}`,
+      ],
+    }
   }
 
   requireWorkspace(principalId, workspaceId) {
@@ -530,6 +537,23 @@ export class WorkspaceStore {
   manifest(request, workspaceId) {
     const principalId = this.principalFromRequest(request)
     return this.snapshot(this.requireWorkspace(principalId, workspaceId))
+  }
+
+  async validateExecutionHandoff(request, { workspaceId, writerToken, fencingToken, revision }) {
+    const principalId = this.principalFromRequest(request, HANDOFF_COOKIE_NAME)
+    if (!Number.isSafeInteger(fencingToken) || fencingToken < 1
+      || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new WorkspaceError('CHECKPOINT_INVALID', 'Workspace handoff cursors are invalid', 400)
+    }
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      this.assertWriter(workspace, writerToken, fencingToken)
+      if (workspace.revision !== revision) {
+        throw new WorkspaceError('WORKSPACE_REVISION_CONFLICT', 'Workspace revision changed before Session handoff', 409)
+      }
+      workspace.writerExpiresAt = this.now() + this.writerLeaseMs
+      return this.writerLease(workspace)
+    })
   }
 
   async putBlob(request, workspaceId, hash, bytes) {
@@ -835,7 +859,7 @@ export class WorkspaceStore {
     }
     return await this.exclusive(workspaceId, async () => {
       const workspace = this.requireWorkspace(principalId, workspaceId)
-      const now = Date.now()
+      const now = this.now()
       if (operation === 'release') {
         this.assertWriter(workspace, body.writerToken, body.fencingToken)
         workspace.writerToken = undefined
@@ -908,7 +932,7 @@ export class WorkspaceStore {
 
   assertWriter(workspace, writerToken, fencingToken) {
     if (typeof writerToken !== 'string' || writerToken !== workspace.writerToken
-      || fencingToken !== workspace.writerEpoch || workspace.writerExpiresAt <= Date.now()) {
+      || fencingToken !== workspace.writerEpoch || workspace.writerExpiresAt <= this.now()) {
       throw new WorkspaceError('WORKSPACE_OWNERSHIP_LOST', 'Workspace writer lease is no longer valid', 409)
     }
   }

@@ -24,10 +24,14 @@ import { installCryptoGlobals } from '../../../packages/experimental/webworker-r
 import { isShellStartFrame } from '../../../packages/experimental/webworker-runtime/src/shell/process/protocol.ts'
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
-import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
+import { createBrowserNativeStaticModules, flushBrowserNativeSession } from './browser-native-providers.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
+import {
+  handoffBrowserNativeExecution,
+  type BrowserNativeExecutionHandoffCheckpoint,
+} from './browser-native-execution-handoff.ts'
 import {
   probeBrowserNativeRuntime,
   type BrowserNativeRuntimeProbeFailureCode,
@@ -161,7 +165,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -184,9 +188,11 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly newText?: string
   readonly failStage?: ChunkEditStage
   readonly sessionId?: string
+  readonly ownerId?: string
   readonly ownerToken?: string
   readonly ownerEpoch?: number
   readonly handoffId?: string
+  readonly terminateAfter?: boolean
   readonly checkpoint?: Readonly<Record<string, unknown>>
 }
 
@@ -226,6 +232,13 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && Number.isSafeInteger(data.ownerEpoch) && Number(data.ownerEpoch) > 0
       && typeof data.handoffId === 'string' && data.handoffId.length > 0
       && data.checkpoint !== null && typeof data.checkpoint === 'object' && !Array.isArray(data.checkpoint)
+  }
+  if (data.action === 'execution-handoff') {
+    return typeof data.sessionId === 'string' && typeof data.ownerToken === 'string'
+      && Number.isSafeInteger(data.ownerEpoch) && Number(data.ownerEpoch) > 0
+      && typeof data.ownerId === 'string' && data.ownerId.length > 0
+      && typeof data.handoffId === 'string' && data.handoffId.length > 0
+      && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
   return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
@@ -715,6 +728,104 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         status: response.status,
         value: await response.json(),
       })
+      return
+    }
+    if (request.action === 'execution-handoff') {
+      const sessionId = request.sessionId!
+      const ownerToken = request.ownerToken!
+      const ownerEpoch = request.ownerEpoch!
+      const handoff = await handoffBrowserNativeExecution({
+        sessionId,
+        ownerId: request.ownerId!,
+        handoffId: request.handoffId!,
+        ownerEpoch,
+        flushWorkspace: async () => {
+          if (!workspaceRuntime.isDurableWorkspace()) throw new Error('durable Workspace is required for execution handoff')
+          const workspaceId = workspaceRuntime.getWorkspaceId()
+          const revision = workspaceRuntime.getRevision()
+          const lease = workspaceRuntime.getWriterLease()
+          if (workspaceId === undefined || revision === undefined || lease === undefined) {
+            throw new Error('Workspace identity, revision, or writer lease is unavailable')
+          }
+          await workspaceRuntime.flushWorkspace()
+          await workspaceRuntime.flushLocalWorkspace()
+          return {
+            workspaceId,
+            revision: workspaceRuntime.getRevision() ?? revision,
+            fencingToken: lease.fencingToken,
+          }
+        },
+        flushSession: async () => {
+          return await flushBrowserNativeSession(sessionId)
+        },
+        handoffSession: async (checkpoint: BrowserNativeExecutionHandoffCheckpoint, handoffId: string) => {
+          const lease = workspaceRuntime.getWriterLease()
+          if (lease === undefined) throw new Error('Workspace writer lease is unavailable')
+          const response = await fetch('/api/browser-native/session/handoff', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              protocolVersion: 1,
+              requestId: crypto.randomUUID(),
+              sessionId,
+              ownerToken,
+              ownerEpoch,
+              handoffId,
+              checkpoint: {
+                sessionId: checkpoint.sessionId,
+                ownerId: checkpoint.ownerId,
+                epoch: checkpoint.ownerEpoch,
+                nextSessionSeq: checkpoint.nextSessionSeq,
+                durableThroughSeq: checkpoint.durableThroughSeq,
+                workspaceId: checkpoint.workspaceId,
+                workspaceRevision: checkpoint.workspaceRevision,
+                workspaceFencingToken: checkpoint.workspaceFencingToken,
+                pendingWorkspaceReceipts: checkpoint.pendingWorkspaceReceipts,
+                pendingSessionEvents: checkpoint.pendingSessionEvents,
+                pendingOperationIds: checkpoint.pendingOperationIds,
+                pendingExecutionIds: checkpoint.pendingExecutionIds,
+              },
+              workspaceWriterToken: lease.writerToken,
+            }),
+          })
+          const value: unknown = await response.json()
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+            throw new Error('Session handoff returned an invalid response')
+          }
+          const result = value as Record<string, unknown>
+          if (!response.ok) {
+            const detail = result.error !== null && typeof result.error === 'object' && !Array.isArray(result.error)
+              ? result.error as Record<string, unknown>
+              : undefined
+            const code = typeof detail?.code === 'string'
+              ? detail.code
+              : typeof result.code === 'string' ? result.code : undefined
+            const message = typeof detail?.message === 'string'
+              ? detail.message
+              : typeof result.error === 'string' ? result.error : code ?? 'Session handoff failed'
+            const error = new Error(message) as Error & {
+              code?: string
+              outcome?: 'rejected' | 'unknown'
+            }
+            error.code = code
+            error.outcome = error.code === 'DURABILITY_UNKNOWN' ? 'unknown' : 'rejected'
+            throw error
+          }
+          const next = result.owner
+          if (next === null || typeof next !== 'object' || typeof next.ownerToken !== 'string'
+            || !Number.isSafeInteger(next.ownerEpoch)) {
+            const error = new Error('Session handoff response did not include a new owner') as Error & { outcome?: 'unknown' }
+            error.outcome = 'unknown'
+            throw error
+          }
+          return { ownerToken: next.ownerToken, ownerEpoch: Number(next.ownerEpoch) }
+        },
+        releaseWorkspace: async () => await workspaceRuntime.releaseWriter(),
+        classifySessionHandoffError: error => error !== null && typeof error === 'object'
+          && 'outcome' in error && error.outcome === 'rejected' ? 'rejected' : 'unknown',
+      })
+      workspaceTestResponse(request.requestId, { ok: true, executionHandoff: handoff })
+      if (request.terminateAfter === true) setTimeout(() => self.close(), 0)
       return
     }
     if (request.action === 'flush-local') {

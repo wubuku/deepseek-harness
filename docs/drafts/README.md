@@ -343,6 +343,8 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [session-outbox-recovery-validation-plan.md](browser-native-dsh-poc/session-outbox-recovery-validation-plan.md) / [进度](browser-native-dsh-poc/session-outbox-recovery-validation-progress.md) | IndexedDB journal、Worker 终止后的 Session watermark 对账、writer fencing、容量与 schema migration、Workspace receipt 协调；真实模型证明 Session 恢复，不证明普通内存 Workspace 文件刷新恢复。 |
 | [runtime-capability-probe-validation-plan.md](browser-native-dsh-poc/runtime-capability-probe-validation-plan.md) / [进度](browser-native-dsh-poc/runtime-capability-probe-validation-progress.md) | Worker Host 启动前检查 outbox IndexedDB transaction、同源 backend readiness 和 durable Workspace 的 Worker OPFS 能力；Chrome 故障矩阵与真实模型恢复证据，不代表自然 eviction、启动后依赖持续可用或生产 HA。 |
 | [tests/runtime-capability-probes.e2e.mjs](browser-native-dsh-poc/tests/runtime-capability-probes.e2e.mjs) | Chrome 检查 backend 503/协议错误、IndexedDB abort、OPFS probe seam 故障、memory 模式跳过 OPFS、无敏感响应泄露及恢复后单轮执行。 |
+| [execution-owner-handoff-validation-plan.md](browser-native-dsh-poc/execution-owner-handoff-validation-plan.md) / [进度](browser-native-dsh-poc/execution-owner-handoff-validation-progress.md) | Session 与 Workspace 双写权有序交接、响应未知后的恢复、旧 owner fencing；Chrome scripted 故障矩阵和真实 LLM 同 Session 双 Worker 文件续接。 |
+| [tests/execution-owner-handoff.e2e.mjs](browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs) | Chrome 验证正常双 Worker handoff、Session handoff response loss、Workspace release response loss、旧 token fencing 和身份 cookie 不发送给 LLM route。 |
 
 ### v2 实现和测试入口
 

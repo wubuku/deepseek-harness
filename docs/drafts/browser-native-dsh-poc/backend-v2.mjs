@@ -116,6 +116,11 @@ function checkpointFingerprint(checkpoint) {
     workspaceRevision: checkpoint.workspaceRevision,
     pendingOperationIds: checkpoint.pendingOperationIds,
     pendingExecutionIds: checkpoint.pendingExecutionIds,
+    durableThroughSeq: checkpoint.durableThroughSeq,
+    workspaceId: checkpoint.workspaceId,
+    workspaceFencingToken: checkpoint.workspaceFencingToken,
+    pendingWorkspaceReceipts: checkpoint.pendingWorkspaceReceipts,
+    pendingSessionEvents: checkpoint.pendingSessionEvents,
   })
 }
 
@@ -161,6 +166,8 @@ function normalizeHandoffRecord(handoffId, record) {
 function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, requireCurrent = true) {
   assertRecord(checkpoint, 'checkpoint')
   const expectedKeys = new Set(['sessionId', 'ownerId', 'epoch', 'nextSessionSeq', 'workspaceRevision', 'pendingOperationIds', 'pendingExecutionIds'])
+  const optionalKeys = ['durableThroughSeq', 'workspaceId', 'workspaceFencingToken', 'pendingWorkspaceReceipts', 'pendingSessionEvents']
+  for (const key of optionalKeys) expectedKeys.add(key)
   for (const key of Object.keys(checkpoint)) {
     if (!expectedKeys.has(key)) throw new BackendError('CHECKPOINT_INVALID', `checkpoint field ${key} is not supported`)
   }
@@ -170,6 +177,25 @@ function validateHandoffCheckpoint(session, checkpoint, ownerToken, ownerEpoch, 
   boundedInteger(checkpoint.nextSessionSeq, 'checkpoint.nextSessionSeq', MAX_EVENTS)
   if (requireCurrent && checkpoint.nextSessionSeq !== session.events.length) throw new BackendError('CHECKPOINT_INVALID', 'checkpoint nextSessionSeq is not the current Session cursor')
   boundedInteger(checkpoint.workspaceRevision, 'checkpoint.workspaceRevision', Number.MAX_SAFE_INTEGER)
+  const hasExecutionCheckpoint = optionalKeys.some(key => Object.hasOwn(checkpoint, key))
+  if (hasExecutionCheckpoint) {
+    if (!Number.isSafeInteger(checkpoint.durableThroughSeq) || checkpoint.durableThroughSeq < -1
+      || checkpoint.durableThroughSeq >= MAX_EVENTS) {
+      throw new BackendError('CHECKPOINT_INVALID', 'checkpoint.durableThroughSeq is invalid')
+    }
+    if (checkpoint.durableThroughSeq !== checkpoint.nextSessionSeq - 1) {
+      throw new BackendError('CHECKPOINT_INVALID', 'checkpoint Session durability watermark does not cover its cursor')
+    }
+    boundedString(checkpoint.workspaceId, 'checkpoint.workspaceId', MAX_CHECKPOINT_ID_LENGTH)
+    if (!Number.isSafeInteger(checkpoint.workspaceFencingToken) || checkpoint.workspaceFencingToken < 1) {
+      throw new BackendError('CHECKPOINT_INVALID', 'checkpoint.workspaceFencingToken is invalid')
+    }
+    boundedInteger(checkpoint.pendingWorkspaceReceipts, 'checkpoint.pendingWorkspaceReceipts', MAX_CHECKPOINT_IDS)
+    boundedInteger(checkpoint.pendingSessionEvents, 'checkpoint.pendingSessionEvents', MAX_CHECKPOINT_IDS)
+    if (checkpoint.pendingWorkspaceReceipts > 0 || checkpoint.pendingSessionEvents > 0) {
+      throw new BackendError('HANDOFF_BUSY', 'checkpoint has pending Workspace receipts or Session outbox events', 409)
+    }
+  }
   for (const name of ['pendingOperationIds', 'pendingExecutionIds']) {
     const values = checkpoint[name]
     if (!Array.isArray(values) || values.length > MAX_CHECKPOINT_IDS) throw new BackendError('CHECKPOINT_INVALID', `${name} must contain at most ${MAX_CHECKPOINT_IDS} ids`)
@@ -2059,7 +2085,7 @@ export async function createBrowserNativeV2Server(options) {
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/identity') {
         const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
-        sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookie })
+        sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookies })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/manifest') {
@@ -2165,7 +2191,12 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/lease') {
         const body = await readBody(request)
         assertProtocol(body)
-        sendJson(response, 200, await workspaces.lease(request, body))
+        const result = await workspaces.lease(request, body)
+        if (body.operation === 'release' && options.testHooks?.dropWorkspaceLeaseReleaseResponse?.(body, result) === true) {
+          response.destroy()
+          return
+        }
+        sendJson(response, 200, result)
         return
       }
       if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/operation\/[0-9a-f-]{36}$/i.test(url.pathname)) {
@@ -2185,6 +2216,17 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
+        if (operation === 'handoff' && body.checkpoint !== null && typeof body.checkpoint === 'object'
+          && Object.hasOwn(body.checkpoint, 'durableThroughSeq')) {
+          const checkpoint = body.checkpoint
+          const writerToken = boundedString(body.workspaceWriterToken, 'workspaceWriterToken', 200)
+          await workspaces.validateExecutionHandoff(request, {
+            workspaceId: boundedString(checkpoint.workspaceId, 'checkpoint.workspaceId', MAX_CHECKPOINT_ID_LENGTH),
+            writerToken,
+            fencingToken: checkpoint.workspaceFencingToken,
+            revision: checkpoint.workspaceRevision,
+          })
+        }
         const result = await sessionOperation(store, operation, body, options.testHooks)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()

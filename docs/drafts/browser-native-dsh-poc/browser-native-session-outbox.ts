@@ -22,6 +22,13 @@ export interface BrowserNativeSessionOutboxSnapshot {
   readonly pendingBytes: number
 }
 
+/** Non-secret pending-event summary used to block an execution handoff before owner rotation. */
+export interface BrowserNativeSessionOutboxPendingSummary {
+  readonly ownerEpoch?: number
+  readonly pendingEvents: number
+  readonly pendingBytes: number
+}
+
 /** Failure raised when the local Session outbox cannot safely accept or recover events. */
 export class BrowserNativeSessionOutboxError extends Error {
   override readonly name = 'BrowserNativeSessionOutboxError'
@@ -546,6 +553,31 @@ export class BrowserNativeSessionOutbox {
       writerId,
       pendingEvents: records.map(record => record.event),
       pendingBytes: byteLength,
+    }
+  }
+
+  /**
+   * Inspect pending local events without returning the Worker writer identifier or event payloads.
+   * @param sessionId - DSH Session identifier.
+   * @returns The stored owner epoch and pending counts, or an empty summary when no row exists.
+   */
+  async inspectPending(sessionId: string): Promise<BrowserNativeSessionOutboxPendingSummary> {
+    if (sessionId.length === 0) throw new TypeError('browser-native Session outbox: session id is empty')
+    const database = await this.database()
+    const transaction = database.transaction(SESSIONS_STORE, 'readonly')
+    const completed = transactionDone(transaction)
+    const request = transaction.objectStore(SESSIONS_STORE).get(sessionId)
+    const value = await new Promise<unknown>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('browser-native Session outbox: metadata read failed'))
+    })
+    await completed
+    if (value === undefined) return { pendingEvents: 0, pendingBytes: 0 }
+    assertStoredSession(value, sessionId)
+    return {
+      ownerEpoch: value.ownerEpoch,
+      pendingEvents: value.eventCount,
+      pendingBytes: value.pendingBytes,
     }
   }
 

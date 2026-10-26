@@ -589,6 +589,24 @@ node docs/drafts/browser-native-dsh-poc/tests/session-outbox-recovery.e2e.mjs
 env DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_REFRESH_CYCLES=1 DSH_POC_TURN_TIMEOUT_MS=600000 node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 ```
 
+## Session 与 Workspace 执行写权交接
+
+[执行写权交接计划](execution-owner-handoff-validation-plan.md)和[进度记录](execution-owner-handoff-validation-progress.md)验证同一 DSH Session 在两个 Dedicated Worker 之间切换时的顺序与未知结果恢复。协调器先 flush Workspace 云端 revision 和本地 snapshot，再 flush Session outbox 并核对 `durableThroughSeq`，随后转移 Session owner，最后释放旧 Workspace lease；Session 与 Workspace 仍不是跨存储事务。
+
+Chrome scripted E2E 覆盖正常交接、Session handoff 已提交但响应丢失、Workspace release 响应丢失，以及旧 owner 的 Session append、LLM request 和 Workspace renew 被 fencing。真实 LLM E2E 在同一个 Session 完成 `write → read → handoff → read → write → read`，核对 5 个 DSH tool call、2 个 Workspace commit/receipt 和两个 owner epoch/fencing token 的递增。LLM 请求不携带 Workspace principal cookie；handoff checkpoint 在 Worker adapter 中将内部 `ownerEpoch` 映射为现有 API 字段 `epoch`。
+
+handoff 只转移 Session 与 Workspace 写权，不迁移 Worker Host、插件内存、活动模型流或 HITL Promise，也不启动后台 Agent。未知结果不自动重放 prompt 或副作用；页面关闭、OS crash、多 backend 和生产身份授权仍需单独验证。
+
+复跑本批测试：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-execution-handoff.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs
+DSH_POC_LLM_MODE=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/execution-owner-handoff.e2e.mjs
+```
+
 ## Session 适配、能力发布与执行交接验证
 
 [Session 适配与执行交接验证计划](next-session-adapter-and-handoff-validation-plan.md)及[进度记录](next-session-adapter-and-handoff-validation-progress.md)把 dsh-TUI 的四项可迁移纪律落到 Browser-Native PoC：history 完成后才接收 live event、取消/销毁保留 `unknown`、能力必须经过 probe 才发布，以及 Browser Worker 到云端执行者必须显式 handoff 并提升 fencing。它们不把现有 Workspace writer lease 测试改名为 Agent handoff。

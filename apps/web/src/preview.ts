@@ -25,7 +25,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -37,6 +37,12 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly offset?: number
   readonly length?: number
   readonly mode?: number
+  readonly sessionId?: string
+  readonly ownerId?: string
+  readonly ownerToken?: string
+  readonly ownerEpoch?: number
+  readonly handoffId?: string
+  readonly terminateAfter?: boolean
 }
 
 interface BrowserNativeWorkspaceTestResponse {
@@ -62,6 +68,11 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly logicalBytes?: number
   readonly residentBytes?: number
   readonly receipts?: readonly Record<string, unknown>[]
+  readonly executionHandoff?: {
+    readonly state: string
+    readonly checkpoint?: Readonly<Record<string, unknown>>
+    readonly nextOwner?: { readonly ownerToken: string; readonly ownerEpoch: number }
+  }
 }
 
 function browserNativeTestUuid(): string {

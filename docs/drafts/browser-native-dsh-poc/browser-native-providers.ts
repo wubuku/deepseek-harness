@@ -69,6 +69,31 @@ const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
 const activeSessionOwners = new Map<string, { readonly ownerToken: string; readonly ownerEpoch: number }>()
+const activeSessionFlushers = new Map<string, () => Promise<{
+  readonly ownerEpoch: number
+  readonly nextSeq: number
+  readonly durableThroughSeq: number
+  readonly pendingEvents: number
+  readonly pendingWorkspaceReceipts: number
+}>>()
+
+/**
+ * Flush one live DSH Session through its Cordis durability listeners.
+ * @param sessionId - DSH Session identifier owned by this Worker.
+ * @returns Durable Session cursors and remaining local outbox/Workspace receipt counts.
+ * @throws when the Session is not live, lacks a durability listener, or any flush fails.
+ */
+export async function flushBrowserNativeSession(sessionId: string): Promise<{
+  readonly ownerEpoch: number
+  readonly nextSeq: number
+  readonly durableThroughSeq: number
+  readonly pendingEvents: number
+  readonly pendingWorkspaceReceipts: number
+}> {
+  const flush = activeSessionFlushers.get(sessionId)
+  if (flush === undefined) throw new Error(`browser-native Session "${sessionId}" has no live writer`)
+  return await flush()
+}
 
 interface ErrorPayload {
   readonly error?: { readonly code?: string; readonly message?: string; readonly retryAfterMs?: number }
@@ -571,7 +596,7 @@ function createRemoteSessionPersistenceClass(
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
     override readonly name = 'session-persistence-browser-native'
-    static inject = ['fs', 'workingDirectory']
+    static inject = ['fs', 'workingDirectory', 'sessions']
     private readonly handles = new Set<RemoteSessionHandle>()
     private readonly writers = new Map<SessionId, RemoteSessionHandle>()
     private readonly receiptWrites = new Map<SessionId, Promise<void>>()
@@ -801,7 +826,10 @@ function createRemoteSessionPersistenceClass(
 
     private untrack(handle: RemoteSessionHandle): void {
       this.handles.delete(handle)
-      if (this.writers.get(handle.id) === handle) this.writers.delete(handle.id)
+      if (this.writers.get(handle.id) === handle) {
+        this.writers.delete(handle.id)
+        activeSessionFlushers.delete(String(handle.id))
+      }
     }
 
     private async track(response: SessionResponse, id: SessionId, access: SessionAccess): Promise<SessionHandle> {
@@ -845,6 +873,32 @@ function createRemoteSessionPersistenceClass(
           this.untrack(handle)
         },
       )
+      if (access === 'write') {
+        activeSessionFlushers.set(String(id), async () => {
+          const session = this.ctx.sessions.get(id)
+          if (session === undefined) throw new Error(`browser-native Session "${String(id)}" is no longer live`)
+          const participated = await this.ctx.sessions.flush(session)
+          if (!participated) throw new Error('browser-native Session flush had no durability listener')
+          const state = await sessionRequest('read', { sessionId: id, offset: 0, length: 1 })
+          const pending = await sessionOutbox.inspectPending(String(id))
+          if (pending.ownerEpoch !== undefined && pending.ownerEpoch !== owner?.ownerEpoch) {
+            throw new Error('browser-native Session outbox belongs to a different owner epoch')
+          }
+          const nextSeq = required(state.nextSeq, 'nextSeq')
+          const durableThroughSeq = required(state.durableThroughSeq, 'durableThroughSeq')
+          if (!Number.isSafeInteger(nextSeq) || !Number.isSafeInteger(durableThroughSeq)) {
+            throw new Error('browser-native Session read returned invalid durability cursors')
+          }
+          await workspace.flushLocalWorkspace()
+          return {
+            ownerEpoch: required(owner, 'owner').ownerEpoch,
+            nextSeq,
+            durableThroughSeq,
+            pendingEvents: pending.pendingEvents,
+            pendingWorkspaceReceipts: workspace.pendingReceiptCount(),
+          }
+        })
+      }
       if (access === 'write') {
         try {
           await handle.recoverOutbox()
