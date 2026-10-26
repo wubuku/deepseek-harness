@@ -4,6 +4,7 @@ import {
   createSyncAccessChunkBackedFile,
   replaceUtf8CopyOnWriteAsync,
   type ChunkBackedFile,
+  type ChunkEditStage,
 } from './browser-native-chunk-editor.ts'
 
 const WORKSPACE_ROOT = '/dsh/home/workspace'
@@ -780,12 +781,21 @@ function mapChunkEditError(error: unknown, path: string): BrowserNativeFileToolE
   return new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)}: ${error.message}`, 'FS_IO_ERROR')
 }
 
-/** Edit a Workspace file with bounded copy-on-write and publish a reference mutation. */
+/** Edit a Workspace file with bounded copy-on-write and publish a reference mutation.
+ * @param vfs - Worker-local VFS containing the source file.
+ * @param value - Untrusted model arguments parsed before editing.
+ * @param signal - DSH tool cancellation signal.
+ * @param workspaceId - Workspace that owns the temporary edit directory.
+ * @param hooks - Optional PoC test delay and edit-stage observer.
+ * @returns The bounded before/after content projection for the edited file.
+ * @throws {BrowserNativeFileToolError} If validation, cancellation, I/O, or version checks reject the edit.
+ */
 export async function executeBrowserNativeEdit(
   vfs: MemoryVfs,
   value: unknown,
   signal: AbortSignal,
   workspaceId: string,
+  hooks: { readonly yieldDelayMs?: number; readonly onStage?: (stage: ChunkEditStage) => void } = {},
 ): Promise<BrowserNativeEditResult> {
   const input = parseEditInput(value)
   const path = absoluteWorkspacePath(input.filePath)
@@ -812,7 +822,8 @@ export async function executeBrowserNativeEdit(
       metrics = await replaceUtf8CopyOnWriteAsync(source, editTarget.file, input.oldString, input.newString, input.replaceAll, {
         chunkBytes: EDIT_CHUNK_BYTES,
         signal,
-        yieldToCaller: async () => { await yieldToWorker(signal, 0) },
+        onStage: hooks.onStage,
+        yieldToCaller: async () => { await yieldToWorker(signal, hooks.yieldDelayMs ?? 0) },
       })
     } catch (error) {
       throw mapChunkEditError(error, path)

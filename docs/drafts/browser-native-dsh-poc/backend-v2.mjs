@@ -996,6 +996,11 @@ function hasUserMarker(messages, marker) {
   return messages.some(message => message.role === 'user' && typeof message.content === 'string' && message.content.includes(marker))
 }
 
+function lastUserMessageText(messages) {
+  return [...messages].reverse().find(message => message.role === 'user'
+    && typeof message.content === 'string' && !message.content.startsWith('Current runtime context.'))?.content ?? ''
+}
+
 function questionReplyForCall(messages, callId) {
   for (const message of [...messages].reverse()) {
     if (message.role !== 'user' || typeof message.content !== 'string') continue
@@ -1412,6 +1417,95 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
       return
     }
     scriptedText(response, 'BROWSER_NATIVE_FILE_TOOL_BOUNDARY_DONE')
+    return
+  }
+
+  const workerToolInterruptionCases = [
+    {
+      marker: 'BROWSER_NATIVE_TOOL_STOP_GREP_E2E',
+      id: 'browser-native-stop-grep',
+      name: 'grep',
+      arguments: { pattern: 'BROWSER_NATIVE_STOP_GREP_TARGET', path: '/dsh/home/workspace/stop-grep.txt' },
+    },
+    {
+      marker: 'BROWSER_NATIVE_TOOL_STOP_EDIT_E2E',
+      id: 'browser-native-stop-edit',
+      name: 'edit',
+      arguments: {
+        file_path: '/dsh/home/workspace/stop-edit.txt',
+        old_string: 'BROWSER_NATIVE_STOP_EDIT_TARGET',
+        new_string: 'BROWSER_NATIVE_STOP_EDIT_REPLACED',
+      },
+    },
+    {
+      marker: 'BROWSER_NATIVE_EDIT_STAGE_CRASH_E2E',
+      id: 'browser-native-edit-stage-crash',
+      name: 'edit',
+      arguments: {
+        file_path: '/dsh/home/workspace/crash-edit.txt',
+        old_string: 'BROWSER_NATIVE_CRASH_EDIT_TARGET',
+        new_string: 'BROWSER_NATIVE_CRASH_EDIT_REPLACED',
+      },
+    },
+  ]
+  const latestPrompt = lastUserMessageText(messages)
+  const workerToolInterruption = workerToolInterruptionCases.find(item => latestPrompt.includes(item.marker))
+  if (workerToolInterruption !== undefined && hasTool(tools, workerToolInterruption.name)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(workerToolInterruption.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      if (workerToolInterruption.name === 'edit') {
+        await scriptedWorkspaceToolCall(response, {
+          id: `${workerToolInterruption.id}-read`,
+          name: 'read',
+          arguments: { file_path: workerToolInterruption.arguments.file_path },
+        })
+        return
+      }
+    }
+    if (toolResults.length === (workerToolInterruption.name === 'edit' ? 1 : 0)) {
+      await scriptedWorkspaceToolCall(response, workerToolInterruption)
+      return
+    }
+    scriptedText(response, `${workerToolInterruption.marker}_TOOL_SETTLED`)
+    return
+  }
+
+  const workerToolContinuationCases = [
+    {
+      marker: 'BROWSER_NATIVE_STOP_GREP_CONTINUE_E2E',
+      id: 'browser-native-stop-grep-continue',
+      path: '/dsh/home/workspace/stop-grep.txt',
+      pattern: 'BROWSER_NATIVE_STOP_GREP_TARGET',
+    },
+    {
+      marker: 'BROWSER_NATIVE_STOP_EDIT_CONTINUE_E2E',
+      id: 'browser-native-stop-edit-continue',
+      path: '/dsh/home/workspace/stop-edit.txt',
+      pattern: 'BROWSER_NATIVE_STOP_EDIT_TARGET',
+    },
+    {
+      marker: 'BROWSER_NATIVE_CRASH_EDIT_CONTINUE_E2E',
+      id: 'browser-native-crash-edit-continue',
+      path: '/dsh/home/workspace/crash-edit.txt',
+      pattern: 'BROWSER_NATIVE_CRASH_EDIT_TARGET',
+    },
+  ]
+  const workerToolContinuation = workerToolContinuationCases.find(item => latestPrompt.includes(item.marker))
+  if (workerToolContinuation !== undefined && hasTool(tools, 'grep')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(workerToolContinuation.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: workerToolContinuation.id,
+        name: 'grep',
+        arguments: { pattern: workerToolContinuation.pattern, path: workerToolContinuation.path },
+      })
+      return
+    }
+    scriptedText(response, workerToolContinuation.marker.replace('_E2E', '_DONE'))
     return
   }
 

@@ -655,7 +655,9 @@ function createRemoteSessionPersistenceClass(
         workspace.assertLocalWorkspaceUsable()
         await workspace.ensureWriterLease()
         if (exec.name === 'grep') {
-          const value = await executeBrowserNativeGrep(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
+          const value = await executeBrowserNativeGrep(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs(), {
+            onMatcherStarted: () => workspace.reportFileToolStage('grep-match'),
+          })
           return { isError: false, value } as ToolExecutionResult
         }
         if (exec.name === 'glob') {
@@ -712,6 +714,10 @@ function createRemoteSessionPersistenceClass(
                         { ...exec.arguments, file_path: targetPath },
                         exec.signal,
                         workspaceId,
+                        {
+                          yieldDelayMs: workspace.getFileToolYieldDelayMs(),
+                          onStage: stage => workspace.reportFileToolStage(stage),
+                        },
                       ),
                     } as ToolExecutionResult
                   } catch (error) {

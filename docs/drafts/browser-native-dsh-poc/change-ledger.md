@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-037：真实文件工具取消、OPFS 编辑中断与 Session 恢复
+
+```text
+changeId: BN-P2-037
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-26; 起始于 research/origin-research 一致且工作区干净的主 worktree
+file: apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-cancellation.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-worker-tool-cancellation-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-worker-tool-cancellation-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: helper-level cancellation 不能证明官方 UI Stop 能沿真实 DSH Agent Loop 的 AbortSignal 中止运行中的 `grep`/OPFS copy-on-write `edit`。Worker 被意外终止时还需确认旧工具不会被误报成功、重放或留下可发布的临时文件。
+existingExtensionPointsChecked: 复用 DSH `ToolDispatchExecution.signal`、Browser-native `grep`/chunk-backed edit、OPFS staging cleanup、Session terminal/unknown recovery、Workspace durable receipt 和现有 Worker test port。只在 PoC test port 增加阶段观察与受控 yield；未修改 Agent Loop、Session format、正式 packages、根依赖或 Browser profile。
+whyDraftOnlyWasInsufficient: 需要在真实 Chrome 的页面 UI 点击 Stop，同时观察真实 Dedicated Worker 中的 DSH tool call/result、Session terminal event、OPFS staging、源文件 hash 和 Workspace commit/receipt；页面外的 Worker terminate 还需刷新同一 Session 才能检查 unknown settlement 与后续 turn。静态测试无法暴露固定状态提示覆盖 Stop 按钮的问题。
+behaviorChange: PoC file-tool hooks 可在 grep matcher 开始和 chunk edit 各阶段报告测试检查点，并按测试设置在 cooperative yield 处延迟。Chrome scripted 场景证明 UI Stop 在 grep/edit 运行期间将 turn 结算为 `aborted`；copy-on-write 发布前源文件不变，且无额外 revision/receipt。Worker 在 edit copy-prefix 期间被终止后，刷新将原 call 结算为 `TOOL_OUTCOME_UNKNOWN`，不重发旧 prompt，清理 staging，并允许同一 Session 开新 turn。页面 Workspace 状态提示不再拦截其覆盖区域的点击；其中恢复按钮仍可点击。
+directoryOutChangeReason: `apps/web/src/browser-native-page-control.ts` 是官方 preview 页面 Stop 与状态提示的共享页面控制器。真实 UI Stop E2E 首次发现固定状态提示的容器命中层会遮住 Stop；给提示容器设置 `pointer-events: none`，并给其恢复按钮显式恢复 `pointer-events: auto`，是验证用户可执行 Stop 所必需的最小页面修复。其余实现、测试和文档均留在 PoC 目录。
+consumersUpdated: 更新 Worker/Workspace file-tool test hooks、真实 Chrome 中断 E2E、runtime test helper、PoC README、兼容矩阵、drafts 索引、计划/进度和本账本；不需要翻译配对，PoC 目录已列入局部翻译检查豁免。
+tests: browser-native-file-tools Vitest 7/7；文件工具、执行生命周期与 Workspace Vitest 22/22；backend contract tests 47/47；`pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 和 preview build 通过。Chrome 155.0.8059.85 的 stop-grep、stop-edit、crash-edit E2E 均通过，使用 8 MiB 文件；Stop 到测试观察持久化 turn terminal 为 134/137 ms，最大动画帧间隔为 16.8/33.224/16.8 ms。三个场景均无 page/worker error 或跨源请求；两项 Stop 无工具成功结果、额外 Workspace commit 或 receipt，crash 刷新为 `TOOL_OUTCOME_UNKNOWN` 且不重发 LLM 请求。既有 grep helper cancellation Chrome 回归也通过。性能数值仅是单机观测，不是 SLA。真实 LLM smoke 两次未通过：一次因未设置既定上游 timeout 返回 60 秒 `UPSTREAM_LLM_TIMEOUT`；按手册重试时本机 `127.0.0.1:9981` 代理端口拒绝连接并收到 `UPSTREAM_LLM_UNAVAILABLE`/502，因此本批真实 LLM 未验证。`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43、`git diff --check` 和 `pnpm run change-scope --base origin/research` 均通过；repository-reference gate 首次拒绝 progress 中的基线 commit hash，删除后复跑通过。Push 时由 Git pre-push hook 执行增量 typecheck。
+syncReplaySteps: 上游同步后检查 `ToolDispatchExecution.signal`、Browser file-tool hooks、chunk editor staging 的发布/清理时序、open Session recovery 与 UI Stop 按钮的可点击性。保留测试 seam 只通过 PoC test port 暴露，不加入正式工具/API。运行三项 `browser-native-tool-cancellation.e2e.mjs` Chrome 场景、相关文件工具/生命周期/Workspace Vitest、backend contract tests、Web typecheck、preview build、真实 LLM runtime smoke 和 docs gates。真实 smoke 先确认用户代理 `127.0.0.1:9981` 可连接，再设置 `DSH_POC_LLM_TIMEOUT_MS=180000` 与 `DSH_POC_TURN_TIMEOUT_MS=600000`。若上游 UI 重构状态提示，应重跑实际按钮点击 E2E。当前真实模型证据未通过，不得沿用旧的真实模型成功记录代替本批回归。
+deleteCondition: 正式 Browser runtime 为工具取消、atomic edit staging cleanup、unknown settlement 和 Session continuation 提供等价的产品路径与维护测试后，迁移这些验收并删除 PoC-only hooks；页面状态提示修复保留到新的 UI 命中布局不再有遮挡问题；或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-036：Session principal 授权与同源 Workspace 隔离
 
 ```text

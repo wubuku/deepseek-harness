@@ -155,7 +155,7 @@ export async function submitPrompt({ page, origin, requests, prompt, sessionId, 
   }, `user message for ${prompt.slice(0, 80)}`, timeout)
   const runningProbe = probeWhileRunning === undefined
     ? undefined
-    : await probeWhileRunning({ page, requests, submittedAt, timeout })
+    : await probeWhileRunning({ page, requests, sessionId, submittedAt, timeout })
   const session = await waitFor(async () => {
     const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
     const completed = (current.events ?? []).some((event, index) => index > submitted.userIndex && event.type === 'turn/end')

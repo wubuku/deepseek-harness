@@ -4,6 +4,7 @@ import type {
   VfsMutationSink,
   VfsSeedOptions,
 } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
+import type { ChunkEditStage } from './browser-native-chunk-editor.ts'
 import {
   publishBrowserNativeWorkspaceLease,
   publishBrowserNativeWorkspaceStatus,
@@ -86,6 +87,9 @@ export interface BrowserNativeWorkspaceWriterLease {
   readonly writerToken: string
   readonly fencingToken: number
 }
+
+/** A file-tool checkpoint observable through the PoC Worker test channel. */
+export type BrowserNativeFileToolStage = 'grep-match' | ChunkEditStage
 
 type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
@@ -1245,6 +1249,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly releaseWriter: () => Promise<void>
   /** Return the PoC-only delay inserted at cooperative file-search yields. */
   readonly getFileToolYieldDelayMs: () => number
+  /** Report a file-tool checkpoint to an enabled PoC test observer. */
+  readonly reportFileToolStage: (stage: BrowserNativeFileToolStage) => void
   /** Return the current Workspace identity after preparation. */
   readonly getWorkspaceId: () => string | undefined
   /** Return the current remote manifest revision after preparation. */
@@ -1270,6 +1276,7 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
     readonly beforeLocalPersist?: () => Promise<void>
     readonly afterLocalPersist?: () => Promise<void>
     readonly fileToolYieldDelayMs?: () => number
+    readonly onFileToolStage?: (stage: BrowserNativeFileToolStage) => void
   }
 }
 
@@ -1302,6 +1309,7 @@ export function createBrowserNativeWorkspaceRuntime(
     getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),
     getFileToolYieldDelayMs: () => options.testHooks?.fileToolYieldDelayMs?.() ?? 0,
+    reportFileToolStage: stage => options.testHooks?.onFileToolStage?.(stage),
     getWorkspaceId: () => mirror.getWorkspaceId(),
     getRevision: () => mirror.getRevision(),
     isDurableWorkspace: () => mirror.isDurableWorkspace(),

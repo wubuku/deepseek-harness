@@ -217,6 +217,23 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules
 
 Chrome scripted E2E 对内容正则、`include` 和 glob 路径正则分别触发超时，并证明同一 Agent turn 随后可继续搜索；单独取消 matcher 后 Worker 也保持可用。真实 LLM 在 Chrome 中自主选择 `grep` 完成普通搜索，但没有生成恶意 pattern。Worker timeout 是 PoC 的单批 CPU 工作量上限，不构成完整 ReDoS 形式化保证或通用 CPU quota；Safari、其他 CSP/打包部署、完整 ripgrep 语义和任意容量搜索仍未验证。分块读取也不等于块级同步或块级编辑。
 
+## 真实文件工具期间的 Stop 与中断恢复
+
+[本批计划](next-worker-tool-cancellation-validation-plan.md)和[进度](next-worker-tool-cancellation-validation-progress.md)验证 UI Stop 是否能取消真实 DSH `grep` 和 chunk-backed `edit`，以及 Worker 在 OPFS copy-on-write 暂存期间终止后的刷新恢复。三条 Chrome E2E 都运行真实 Dedicated Worker、DSH Host/Agent Loop、Session 与 durable Workspace；scripted LLM 只固定工具调用和中断窗口，不替代被测 Worker 或文件工具。
+
+Stop 在 `grep-match` 和 `copy-prefix` 阶段均让原 turn 以 `aborted` 收束；编辑源文件 hash、Workspace revision 和 receipt 保持不变，同一 Session 随后可启动新 turn。Worker 在 edit 的 `copy-prefix` 阶段被终止后，刷新将未结算调用记录为 `TOOL_OUTCOME_UNKNOWN`，不重发模型请求，清理遗留 staging，再允许同 Session 新 turn。8 MiB 文件样本的 Stop-to-terminal 观测值为 134 ms 和 137 ms，三次场景的最大动画帧间隔为 16.8–33.224 ms；这些单机采样不是性能 SLA。
+
+运行模型无关的 Chrome 验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_TOOL_CANCELLATION_SCENARIO=stop-grep node docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-cancellation.e2e.mjs
+DSH_POC_TOOL_CANCELLATION_SCENARIO=stop-edit node docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-cancellation.e2e.mjs
+DSH_POC_TOOL_CANCELLATION_SCENARIO=crash-edit node docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-cancellation.e2e.mjs
+```
+
+此验证不涵盖 OS/磁盘崩溃、自然 eviction 或 Safari/WebKit。真实 LLM 普通文件 smoke 本批因上游不可达而未通过；scripted 场景不能代替该证据。
+
 ## 能力预检与默认插件兼容性
 
 [能力预检计划](browser-capability-preflight-plan.md)和[实施进度](browser-capability-preflight-progress.md)记录本批对 Browser-Native profile 的系统性验证：PoC capability manifest 现在集中描述 Worker VFS、结构化文件工具、受限 Shell、同源 Session/LLM backend、问答、todo、工作目录，以及主机子进程、`fs.watch`、原生 addon 和后台进程等明确不支持的能力。Worker 在创建 Workspace 和 Worker Host 前执行 fail-closed 预检；缺少 capability 时，诊断包含具体插件和能力，不留下半启动 Host。
