@@ -25,6 +25,9 @@ import { isShellStartFrame } from '../../../packages/experimental/webworker-runt
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules } from './browser-native-providers.ts'
+import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
 import {
   createSyncAccessChunkBackedFile,
@@ -68,12 +71,20 @@ let fileToolYieldDelayMs = 0
 let localPersistBarrier: 'before' | 'after' | undefined
 let localPersistReached: 'before' | 'after' | undefined
 let releaseLocalPersist: (() => void) | undefined
+let sessionOutboxAppendsToAbort = 0
 const pending: unknown[] = []
+const sessionOutbox = new BrowserNativeSessionOutbox({
+  abortNextAppend: () => {
+    if (sessionOutboxAppendsToAbort === 0) return false
+    sessionOutboxAppendsToAbort -= 1
+    return true
+  },
+})
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe'
   readonly stage?: 'before' | 'after'
   readonly path?: string
   readonly from?: string
@@ -106,6 +117,10 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (value === null || typeof value !== 'object') return false
   const data = value as Record<string, unknown>
   if (data.type !== 'browser-native-workspace-test-request' || typeof data.requestId !== 'string') return false
+  if (data.action === 'abort-session-outbox-appends') {
+    return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
+  }
+  if (data.action === 'session-outbox-probe') return true
   if (data.action === 'abort-metadata-transactions') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
@@ -370,8 +385,231 @@ async function runReferenceEditProbe(request: BrowserNativeWorkspaceTestRequest)
   }
 }
 
+async function runSessionOutboxMigrationProbe(sessionId: string, event: SessionEvent): Promise<boolean> {
+  const databaseName = `dsh-browser-native-session-outbox-migration-${crypto.randomUUID()}`
+  const oldWriterId = crypto.randomUUID()
+  const byteLength = new TextEncoder().encode(JSON.stringify(event)).byteLength
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 1)
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('events', { keyPath: ['sessionId', 'seq'] })
+      request.result.createObjectStore('sessions', { keyPath: 'sessionId' })
+    }
+    request.onerror = () => reject(request.error ?? new Error('legacy Session outbox open failed'))
+    request.onsuccess = () => {
+      const database = request.result
+      const transaction = database.transaction(['events', 'sessions'], 'readwrite')
+      transaction.objectStore('events').put({
+        sessionId,
+        seq: Number(event.seq),
+        ownerEpoch: 4,
+        writerId: oldWriterId,
+        byteLength,
+        event,
+      })
+      transaction.objectStore('sessions').put({
+        sessionId,
+        ownerEpoch: 4,
+        writerId: oldWriterId,
+        eventCount: 1,
+        pendingBytes: byteLength,
+        firstSeq: Number(event.seq),
+        lastSeq: Number(event.seq),
+      })
+      transaction.oncomplete = () => {
+        database.close()
+        resolve()
+      }
+      transaction.onerror = () => reject(transaction.error ?? new Error('legacy Session outbox seed failed'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('legacy Session outbox seed aborted'))
+    }
+  })
+
+  const outbox = new BrowserNativeSessionOutbox({ databaseName })
+  const writerId = crypto.randomUUID()
+  await outbox.claim(sessionId, 5, writerId)
+  const recovered = await outbox.read(sessionId, 5, writerId)
+  const appended: SessionEvent = {
+    seq: (Number(event.seq) + 1) as SessionSeq,
+    time: Date.now(),
+    type: 'turn/start',
+    data: { turn: 2 },
+  }
+  await outbox.append(sessionId, 5, writerId, [appended])
+  let totals: unknown
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 2)
+    request.onerror = () => reject(request.error ?? new Error('migrated Session outbox open failed'))
+    request.onsuccess = () => {
+      const database = request.result
+      const transaction = database.transaction('meta', 'readonly')
+      const totalsRequest = transaction.objectStore('meta').get('totals')
+      totalsRequest.onsuccess = () => { totals = totalsRequest.result }
+      transaction.oncomplete = () => {
+        database.close()
+        resolve()
+      }
+      transaction.onerror = () => reject(transaction.error ?? new Error('migrated Session outbox totals read failed'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('migrated Session outbox totals read aborted'))
+    }
+  })
+  return recovered.pendingEvents.length === 1 && JSON.stringify(recovered.pendingEvents[0]) === JSON.stringify(event)
+    && typeof totals === 'object' && totals !== null && 'eventCount' in totals && totals.eventCount === 2
+    && 'pendingBytes' in totals && totals.pendingBytes === byteLength
+      + new TextEncoder().encode(JSON.stringify(appended)).byteLength
+}
+
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
+    if (request.action === 'abort-session-outbox-appends') {
+      sessionOutboxAppendsToAbort = Number(request.count)
+      workspaceTestResponse(request.requestId, { ok: true, count: sessionOutboxAppendsToAbort })
+      return
+    }
+    if (request.action === 'session-outbox-probe') {
+      const probePrefix = `outbox-probe-${crypto.randomUUID()}`
+      const probeOutbox = new BrowserNativeSessionOutbox({
+        databaseName: `dsh-browser-native-session-outbox-probe-${crypto.randomUUID()}`,
+        maxTrackedSessions: 2,
+      })
+      const sessionId = `outbox-probe-${crypto.randomUUID()}`
+      const oldWriterId = crypto.randomUUID()
+      const newWriterId = crypto.randomUUID()
+      const createEvent = (seq: number, turn: number): SessionEvent => ({
+        seq: seq as SessionSeq,
+        time: Date.now(),
+        type: 'turn/start',
+        data: { turn },
+      })
+      const first = createEvent(0, 1)
+      const second = createEvent(1, 2)
+      await probeOutbox.claim(sessionId, 1, oldWriterId)
+      await probeOutbox.append(sessionId, 1, oldWriterId, [first])
+      await probeOutbox.append(sessionId, 1, oldWriterId, [first])
+      const duplicate = await probeOutbox.read(sessionId, 1, oldWriterId)
+      let gapRejected = false
+      try {
+        await probeOutbox.append(sessionId, 1, oldWriterId, [createEvent(2, 3)])
+      } catch (error) {
+        gapRejected = error instanceof Error && error.message.includes('do not continue')
+      }
+      await probeOutbox.claim(sessionId, 2, newWriterId)
+      let staleWriterRejected = false
+      try {
+        await probeOutbox.append(sessionId, 1, oldWriterId, [second])
+      } catch (error) {
+        staleWriterRejected = error instanceof Error && error.message.includes('fenced')
+      }
+      const claimed = await probeOutbox.read(sessionId, 2, newWriterId)
+      await probeOutbox.append(sessionId, 2, newWriterId, [first])
+      let conflictRejected = false
+      try {
+        await probeOutbox.append(sessionId, 2, newWriterId, [createEvent(0, 99)])
+      } catch (error) {
+        conflictRejected = error instanceof Error && error.message.includes('different event data')
+      }
+      await probeOutbox.append(sessionId, 2, newWriterId, [second])
+      await probeOutbox.acknowledgeThrough(sessionId, 2, newWriterId, 0)
+      const afterAcknowledgement = await probeOutbox.read(sessionId, 2, newWriterId)
+      await probeOutbox.acknowledgeThrough(sessionId, 2, newWriterId, 1)
+      let fencedAfterDrain = false
+      try {
+        await probeOutbox.append(sessionId, 1, oldWriterId, [createEvent(2, 3)])
+      } catch (error) {
+        fencedAfterDrain = error instanceof Error && error.message.includes('fenced')
+      }
+      const fenceOutbox = new BrowserNativeSessionOutbox({
+        databaseName: `dsh-browser-native-session-fence-probe-${crypto.randomUUID()}`,
+        maxTrackedSessions: 2,
+      })
+      const fenceA = `${probePrefix}-fence-a`
+      const fenceB = `${probePrefix}-fence-b`
+      const fenceC = `${probePrefix}-fence-c`
+      const fenceD = `${probePrefix}-fence-d`
+      const fenceAWriter = crypto.randomUUID()
+      const fenceBWriter = crypto.randomUUID()
+      const fenceCWriter = crypto.randomUUID()
+      const fenceDWriter = crypto.randomUUID()
+      await fenceOutbox.claim(fenceA, 1, fenceAWriter)
+      await fenceOutbox.claim(fenceB, 1, fenceBWriter)
+      await fenceOutbox.claim(fenceC, 1, fenceCWriter)
+      let emptyFenceEvicted = false
+      try {
+        await fenceOutbox.append(fenceA, 1, fenceAWriter, [createEvent(0, 1)])
+      } catch (error) {
+        emptyFenceEvicted = error instanceof Error && error.message.includes('no local claim')
+      }
+      await fenceOutbox.append(fenceB, 1, fenceBWriter, [createEvent(0, 2)])
+      await fenceOutbox.claim(fenceD, 1, fenceDWriter)
+      await fenceOutbox.append(fenceD, 1, fenceDWriter, [createEvent(0, 3)])
+      let pendingCapacityRejected = false
+      try {
+        await fenceOutbox.claim(`${probePrefix}-over-capacity`, 1, crypto.randomUUID())
+      } catch (error) {
+        pendingCapacityRejected = error instanceof Error && error.message.includes('active or pending')
+      }
+      const capacityRejected = emptyFenceEvicted && pendingCapacityRejected
+      const totalBudgetOutbox = new BrowserNativeSessionOutbox({
+        databaseName: `dsh-browser-native-session-total-budget-probe-${crypto.randomUUID()}`,
+        maxTotalPendingBytes: 32,
+      })
+      const totalBudgetSession = `${probePrefix}-total-budget`
+      const totalBudgetWriter = crypto.randomUUID()
+      await totalBudgetOutbox.claim(totalBudgetSession, 1, totalBudgetWriter)
+      let totalByteCapacityRejected = false
+      try {
+        await totalBudgetOutbox.append(totalBudgetSession, 1, totalBudgetWriter, [createEvent(0, 1_000_000)])
+      } catch (error) {
+        totalByteCapacityRejected = error instanceof Error && error.message.includes('pending event capacity exceeded')
+      }
+      const afterTotalLimit = await totalBudgetOutbox.read(totalBudgetSession, 1, totalBudgetWriter)
+      const migrationEvent = createEvent(0, 1)
+      const migrationPreserved = await runSessionOutboxMigrationProbe(`${probePrefix}-migration`, migrationEvent)
+      const largeSession = `outbox-large-${crypto.randomUUID()}`
+      const largeWriter = crypto.randomUUID()
+      await probeOutbox.claim(largeSession, 1, largeWriter)
+      let bytesLimitRejected = false
+      const largeEvent: SessionEvent = {
+        seq: 0 as SessionSeq,
+        time: Date.now(),
+        type: 'tool/call',
+        data: {
+          turn: 1,
+          step: 1,
+          callId: 'outbox-large-call' as ToolCallId,
+          name: 'write',
+          arguments: JSON.stringify({ content: 'x'.repeat(16 * 1024 * 1024) }),
+        },
+      }
+      try {
+        await probeOutbox.append(largeSession, 1, largeWriter, [largeEvent])
+      } catch (error) {
+        bytesLimitRejected = error instanceof Error && error.message.includes('pending event capacity exceeded')
+      }
+      const afterLargeEvent = await probeOutbox.read(largeSession, 1, largeWriter)
+      workspaceTestResponse(request.requestId, {
+        ok: staleWriterRejected && conflictRejected && claimed.pendingEvents.length === 1
+          && afterAcknowledgement.pendingEvents.length === 1 && afterAcknowledgement.pendingEvents[0].seq === 1
+          && fencedAfterDrain && gapRejected && duplicate.pendingEvents.length === 1
+          && capacityRejected && totalByteCapacityRejected && afterTotalLimit.pendingEvents.length === 0
+          && bytesLimitRejected && afterLargeEvent.pendingEvents.length === 0 && migrationPreserved,
+        staleWriterRejected,
+        fencedAfterDrain,
+        gapRejected,
+        duplicateCount: duplicate.pendingEvents.length,
+        trackedSessionCapacityRejected: capacityRejected,
+        emptyFenceEvicted,
+        pendingSessionCapacityRejected: pendingCapacityRejected,
+        totalPendingByteCapacityRejected: totalByteCapacityRejected,
+        versionOneMigrationPreservedPendingEvents: migrationPreserved,
+        pendingByteCapacityRejected: bytesLimitRejected,
+        pendingAfterRejectedLargeEvent: afterLargeEvent.pendingEvents.length,
+        conflictRejected,
+        claimedPendingEvents: claimed.pendingEvents.length,
+        remainingSeq: afterAcknowledgement.pendingEvents.map(event => Number(event.seq)),
+      })
+      return
+    }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
     if (request.action === 'chunk-edit-probe') {
       workspaceTestResponse(request.requestId, await runChunkEditProbe(request))
@@ -771,7 +1009,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     })
     workspaceRuntime = workspace
     const created = createWorkerHost({
-      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace) },
+      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace, sessionOutbox) },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,

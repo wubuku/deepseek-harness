@@ -508,7 +508,7 @@ DSH_POC_OPFS_FILE_BYTES=8388608 node docs/drafts/browser-native-dsh-poc/tests/op
 DSH_POC_REFERENCE_EDIT_BYTES=16777216 DSH_POC_REFERENCE_EDIT_CHUNK_BYTES=1048576 node docs/drafts/browser-native-dsh-poc/tests/reference-backed-edit.e2e.mjs
 ```
 
-本批没有证明 Session 分页、永久 append 故障后的用户界面、自然 eviction、OS/磁盘崩溃、多实例 backend、生产对象存储、Safari/WebKit 或真实 LLM 生成大型 tool args。`RemoteSessionHandle` 的 live retry 达到上限后保留 pending events 并报告错误；这不是离线 outbox，也不是跨存储事务。标准 `write`/`edit` 仍可能完整驻留文件，external/chunk 路径是 PoC-local 原型。
+本批没有验证自然 eviction、OS/磁盘崩溃、多实例 backend、生产对象存储、Safari/WebKit 或真实 LLM 生成大型 tool args。该批的 pending events 仍只在 Worker 内存中；后续 Session outbox 故障恢复见[专门验证](session-outbox-recovery-validation-plan.md)。标准 `write`/`edit` 仍可能完整驻留文件，external/chunk 路径是 PoC-local 原型。
 
 ## 长会话可持续性与上下文压缩验证
 
@@ -545,7 +545,30 @@ DSH_POC_CONTEXT_WINDOW=32768 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=c
   node docs/drafts/browser-native-dsh-poc/tests/compaction-real.e2e.mjs
 ```
 
-这些限制仍然存在：单个超出 1 MiB 的 Session event 会明确失败，且不能截断；活动 Worker 的 pending events 没有独立的 OPFS/IndexedDB durable outbox，整个 Session backlog 也没有总字节上限；Worker 或页面终止后，尚未 append 到 backend 的事件不能恢复。append 成功只表示 backend 接收，只有 flush/close 回执覆盖末尾 seq 才表示该前缀 durable；Session 与 Workspace 不是原子事务。故障 turn 的原 prompt 不会自动重放，用户需要显式重新提交；永久断网、OS crash 和生产 backend 未验证。
+这批验证没有覆盖 durable outbox；后续实现和当前限制见下节。单个超出 1 MiB 的 Session event 仍会明确失败且不截断；append 成功只表示 backend 接收，只有 flush/close 回执覆盖相应 seq 才表示 durable；Session 与 Workspace 不是原子事务。故障 turn 的原 prompt 不会自动重放，用户需要显式重新提交；永久断网、OS crash 和生产 backend 未验证。
+
+## Browser Session outbox 与 Worker 终止恢复
+
+[Session outbox 验证计划](session-outbox-recovery-validation-plan.md)和[进度](session-outbox-recovery-validation-progress.md)记录当前 checkout 的 IndexedDB event journal、Worker 重启后 Session 对账、writer fencing、Workspace receipt 恢复与故障矩阵。Remote Session backend 仍是事件事实来源；IndexedDB 只保存尚未被 backend durability watermark 覆盖的事件副本，不恢复 JS Promise，也不自动重放 prompt、工具或 HITL。
+
+当前 Chrome Worker 会在远端 append 前原子写入本地 outbox，并且只在 backend `flush`/`close` 返回的 `durableThroughSeq` 覆盖事件后清理记录。新 Worker 取得 writer lease 后按 seq 和完整事件内容核对 backend，补齐缺失的连续尾部，再 flush；同 seq 冲突、seq 缺口、stale writer、事务失败和容量超限均 fail closed。数据库从 v1 升至 v2 时保留旧 event rows，并从 Session metadata 重建全局计数。无 pending event 的 writer fence 可在达到 256 条上限时回收；有 pending event 的 fence 不会因容量被清除。
+
+Chrome E2E 已验证 Worker 在 append 前被终止后恢复原事件且不重发原 prompt；backend 已 durable、flush response 被拦截时刷新不会重复 append；Workspace commit 已完成而 Session receipt 尚未远端确认时，刷新后恢复同一 receipt，Workspace commit 仍只有一次。IDB abort 阻止模型请求，v1 schema migration、旧 writer fencing、单 Session 与全局预算也通过 Worker 探针。只有 IndexedDB transaction 已提交的 event rows 可保证恢复；Worker 终止时仍留在内存或未完成 transaction 中的事件可能丢失，但下一次 DSH checkpoint 会在模型请求或顶层工具副作用前等待 journal 和远端 durability。真实 `gpt-5.6-sol` Chrome smoke 在 durable Workspace 模式完成三轮：首轮 `read → write → read`，刷新后从 Session 回忆 token，并由 DSH `read` 找回 Workspace 文件；8/8 模型请求返回 HTTP 200，Workspace commit 两次均获 HTTP 200，Session `durableThroughSeq=58`。相同测试未启用 durable Workspace 时，刷新后文件确实不存在；该对照说明 Session outbox 不会替代 Workspace 持久化。凭据不进入浏览器，模型请求仅到同源 backend。
+
+outbox 上限为每 Session 8,192 events/16 MiB、整个浏览器 profile 32,768 events/64 MiB，最多跟踪 256 个带 pending event 或保留 fence 的 Session；浏览器 quota 可能先于这些限额触发。IndexedDB 仍可被用户清除或浏览器驱逐，因此它不是远端备份；没有验证自然 eviction、OS/磁盘崩溃、Safari/WebKit、生产 backend 或后台 Agent。Session 与 Workspace 仍没有跨存储事务。
+
+复跑本批验证：
+
+```sh
+pnpm exec tsc --noEmit -p packages/experimental/webworker-runtime/tsconfig.json
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-session-transport.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-outbox-recovery.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-receipt-recovery.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_LLM=real DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_FILE=docs/drafts/.env \
+  node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
 
 ## Session 适配、能力发布与执行交接验证
 

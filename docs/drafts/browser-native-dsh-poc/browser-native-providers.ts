@@ -59,6 +59,7 @@ import {
 } from './browser-native-capabilities.ts'
 import { readSessionPages } from './browser-native-session-read.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
+import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -249,6 +250,8 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     readonly access: SessionAccess,
     readonly inheritedEventCount: SessionLogOffset,
     private readonly owner: BrowserNativeOwner | undefined,
+    private readonly writerId: string | undefined,
+    private readonly sessionOutbox: BrowserNativeSessionOutbox,
     initialNextSeq: number,
     private readonly onClose: () => void,
   ) {
@@ -300,6 +303,13 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     return { ownerToken: this.owner.ownerToken, ownerEpoch: this.owner.ownerEpoch }
   }
 
+  private outboxIdentity(): { readonly ownerEpoch: number; readonly writerId: string } {
+    if (this.owner === undefined || this.writerId === undefined || this.access !== 'write') {
+      throw new (runtimePersistence().SessionReadOnlyError)(this.id, 'mutation')
+    }
+    return { ownerEpoch: this.owner.ownerEpoch, writerId: this.writerId }
+  }
+
   private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.writeChain.then(operation, operation)
     this.writeChain = task.then(() => undefined, () => undefined)
@@ -317,6 +327,8 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     if (events.length === 0) return
     const expectedNextSeq = this.nextSeq
     try {
+      const identity = this.outboxIdentity()
+      await this.sessionOutbox.append(String(this.id), identity.ownerEpoch, identity.writerId, events)
       const result = await sessionRequest('append', {
         sessionId: this.id,
         ...this.ownerBody(),
@@ -350,6 +362,59 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     if (!Number.isSafeInteger(nextSeq) || nextSeq < events[0].seq + events.length) return false
     this.nextSeq = Math.max(this.nextSeq, nextSeq)
     return true
+  }
+
+  async recoverOutbox(): Promise<void> {
+    const identity = this.outboxIdentity()
+    const snapshot = await this.sessionOutbox.read(String(this.id), identity.ownerEpoch, identity.writerId)
+    const pending = snapshot.pendingEvents
+    if (pending.length === 0) return
+    const firstSeq = Number(pending[0].seq)
+    if (this.nextSeq < firstSeq) {
+      throw new Error(`browser-native Session outbox starts at seq ${String(firstSeq)} after backend next seq ${String(this.nextSeq)}`)
+    }
+    const overlapCount = Math.min(pending.length, this.nextSeq - firstSeq)
+    if (overlapCount > 0) {
+      const stored = await this.read(firstSeq, overlapCount)
+      if (stored.events.length !== overlapCount
+        || stored.events.some((event, index) => JSON.stringify(event) !== JSON.stringify(pending[index]))) {
+        throw new Error('browser-native Session outbox conflicts with the backend event log')
+      }
+    }
+    const missing = pending.slice(overlapCount)
+    await this.enqueueWrite(async () => {
+      this.assertOpen('flush')
+      if (missing.length > 0) {
+        if (Number(missing[0].seq) !== this.nextSeq) {
+          throw new Error('browser-native Session outbox does not continue the backend event log')
+        }
+        await this.appendEvents(missing)
+      }
+      const result = await sessionRequest('flush', { sessionId: this.id, ...this.ownerBody() }, undefined)
+      const durableThroughSeq = this.assertDurableThrough(result, 'outbox recovery')
+      await this.sessionOutbox.acknowledgeThrough(String(this.id), identity.ownerEpoch, identity.writerId, durableThroughSeq)
+    })
+  }
+
+  async abandonOpenFailure(): Promise<void> {
+    clearTimeout(this.renewTimer)
+    this.renewTimer = undefined
+    clearTimeout(this.liveRetryTimer)
+    this.liveRetryTimer = undefined
+    this.closeOperation ??= (async () => {
+      try {
+        if (this.access === 'write' && this.owner !== undefined && !this.ownershipLost) {
+          await this.enqueueWrite(async () => {
+            const result = await sessionRequest('close', { sessionId: this.id, ...this.owner }, undefined)
+            if (result.closed !== true) throw new Error('browser-native Session open-failure release was not acknowledged')
+          })
+        }
+      } finally {
+        this.closed = true
+        this.onClose()
+      }
+    })()
+    await this.closeOperation
   }
 
   private async drainLiveNow(): Promise<void> {
@@ -447,7 +512,9 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
         this.assertOpen('flush')
         await this.drainLiveNow()
         const result = await sessionRequest('flush', { sessionId: this.id, ...this.ownerBody() }, options?.signal)
-        this.assertDurableThrough(result, 'flush')
+        const durableThroughSeq = this.assertDurableThrough(result, 'flush')
+        const identity = this.outboxIdentity()
+        await this.sessionOutbox.acknowledgeThrough(String(this.id), identity.ownerEpoch, identity.writerId, durableThroughSeq)
       })
     } catch (error) {
       mapSessionError(error, this.id, 'flush')
@@ -462,17 +529,21 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     clearTimeout(this.liveRetryTimer)
     this.liveRetryTimer = undefined
     this.closeOperation = (async () => {
-      if (this.access === 'write' && this.owner !== undefined && !this.ownershipLost) {
-        try {
+      try {
+        if (this.access === 'write' && this.owner !== undefined && !this.ownershipLost) {
           await this.enqueueWrite(async () => {
             await this.drainLiveNow()
             const result = await sessionRequest('close', { sessionId: this.id, ...this.owner }, undefined)
             if (result.closed !== true) throw new Error('browser-native Session close was not acknowledged')
-            this.assertDurableThrough(result, 'close')
+            const durableThroughSeq = this.assertDurableThrough(result, 'close')
+            const identity = this.outboxIdentity()
+            await this.sessionOutbox.acknowledgeThrough(String(this.id), identity.ownerEpoch, identity.writerId, durableThroughSeq)
           })
-        } catch (error) {
-          mapSessionError(error, this.id, 'close')
         }
+      } catch (error) {
+        this.closed = true
+        this.onClose()
+        mapSessionError(error, this.id, 'close')
       }
       this.closed = true
       this.onClose()
@@ -484,16 +555,18 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     await this.close()
   }
 
-  private assertDurableThrough(result: SessionResponse, operation: string): void {
+  private assertDurableThrough(result: SessionResponse, operation: string): number {
     const durableThroughSeq = required(result.durableThroughSeq, 'durableThroughSeq')
     if (result.durable !== true || !Number.isSafeInteger(durableThroughSeq) || durableThroughSeq < this.nextSeq - 1) {
       throw new Error(`browser-native Session ${operation} did not confirm durability through seq ${this.nextSeq - 1}`)
     }
+    return durableThroughSeq
   }
 }
 
 function createRemoteSessionPersistenceClass(
   workspace: BrowserNativeWorkspaceRuntime,
+  sessionOutbox: BrowserNativeSessionOutbox,
 ): typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistence {
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
@@ -731,13 +804,27 @@ function createRemoteSessionPersistenceClass(
       if (this.writers.get(handle.id) === handle) this.writers.delete(handle.id)
     }
 
-    private track(response: SessionResponse, id: SessionId, access: SessionAccess): SessionHandle {
+    private async track(response: SessionResponse, id: SessionId, access: SessionAccess): Promise<SessionHandle> {
       const owner = response.owner
       if (access === 'write' && (owner === undefined || typeof owner.ownerToken !== 'string'
         || !Number.isSafeInteger(owner.ownerEpoch) || owner.ownerEpoch < 1
         || !Number.isSafeInteger(owner.leaseDurationMs) || owner.leaseDurationMs < 300
         || !Number.isSafeInteger(owner.renewAfterMs) || owner.renewAfterMs < 1 || owner.renewAfterMs >= owner.leaseDurationMs)) {
         throw new Error('browser-native Session response is missing a valid write lease')
+      }
+      const writerId = access === 'write' ? globalThis.crypto.randomUUID() : undefined
+      if (owner !== undefined && writerId !== undefined) {
+        try {
+          await sessionOutbox.claim(String(id), owner.ownerEpoch, writerId)
+        } catch (error) {
+          try {
+            const released = await sessionRequest('close', { sessionId: id, ...owner }, undefined)
+            if (released.closed !== true) throw new Error('browser-native Session local-claim failure release was not acknowledged')
+          } catch (releaseError) {
+            throw new AggregateError([error, releaseError], 'browser-native Session outbox claim and owner release failed')
+          }
+          throw error
+        }
       }
       let handle: RemoteSessionHandle
       handle = new RemoteSessionHandle(
@@ -746,6 +833,8 @@ function createRemoteSessionPersistenceClass(
         access,
         required(response.inheritedEventCount, 'inheritedEventCount') as SessionLogOffset,
         owner,
+        writerId,
+        sessionOutbox,
         required(response.nextSeq, 'nextSeq'),
         () => {
           if (owner !== undefined && activeSessionOwners.get(id)?.ownerToken === owner.ownerToken
@@ -756,6 +845,18 @@ function createRemoteSessionPersistenceClass(
           this.untrack(handle)
         },
       )
+      if (access === 'write') {
+        try {
+          await handle.recoverOutbox()
+        } catch (error) {
+          try {
+            await handle.abandonOpenFailure()
+          } catch (releaseError) {
+            throw new AggregateError([error, releaseError], 'browser-native Session outbox recovery and owner release failed')
+          }
+          throw error
+        }
+      }
       this.handles.add(handle)
       if (access === 'write') {
         this.writers.set(id, handle)
@@ -774,7 +875,7 @@ function createRemoteSessionPersistenceClass(
           header,
           inheritedEventCount: options?.inheritedEventCount ?? 0,
         }, options?.signal)
-        return this.track(response, header.id, 'write')
+        return await this.track(response, header.id, 'write')
       } catch (error) {
         mapSessionError(error, header.id, 'create')
       }
@@ -791,7 +892,7 @@ function createRemoteSessionPersistenceClass(
               access,
               ...(resumeOwnerToken === undefined ? {} : { ownerToken: resumeOwnerToken }),
             }, options?.signal)
-            return this.track(response, id, access)
+            return await this.track(response, id, access)
           } catch (error) {
             const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
             if (code !== 'SESSION_ALREADY_OWNED' || Date.now() >= deadline) throw error
@@ -994,10 +1095,10 @@ function createRemoteLlmAdapterClass(): typeof import('@deepseek-ai/dsh-llm').Ll
   }
 }
 
-function createSessionModule(workspace: BrowserNativeWorkspaceRuntime): unknown {
+function createSessionModule(workspace: BrowserNativeWorkspaceRuntime, sessionOutbox: BrowserNativeSessionOutbox): unknown {
   let module: unknown
   return () => {
-    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace)
+    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace, sessionOutbox)
     module ??= { default: RemoteSessionPersistence, RemoteSessionPersistence }
     return module
   }
@@ -1019,9 +1120,12 @@ function createLlmModule(): unknown {
 }
 
 /** Return the static module table consumed by the custom Worker entry. */
-export function createBrowserNativeStaticModules(workspace: BrowserNativeWorkspaceRuntime): Readonly<Record<string, StaticModuleFactory>> {
+export function createBrowserNativeStaticModules(
+  workspace: BrowserNativeWorkspaceRuntime,
+  sessionOutbox: BrowserNativeSessionOutbox,
+): Readonly<Record<string, StaticModuleFactory>> {
   return {
-    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace),
+    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace, sessionOutbox),
     '@deepseek-ai/dsh-browser-native-llm': createLlmModule(),
   }
 }

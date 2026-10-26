@@ -339,6 +339,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [next-deep-runtime-validation-plan.md](browser-native-dsh-poc/next-deep-runtime-validation-plan.md) / [进度](browser-native-dsh-poc/next-deep-runtime-validation-progress.md) | 长 Session 冷 hydrate、同 turn 并行只读工具、`assistant/attempt` append 503 后重试与错误收束，以及标准大文件写入和 external/chunk backing 的真实 Chrome 证据；不证明 compaction、离线 outbox 或生产 HA。 |
 | [next-session-sustainability-validation-plan.md](browser-native-dsh-poc/next-session-sustainability-validation-plan.md) / [进度](browser-native-dsh-poc/next-session-sustainability-validation-progress.md) | Browser profile compaction 组合、显式模型 context window、大工具结果裁剪、摘要/append 故障恢复、真实 LLM sentinel 回忆和 64 轮冷 hydrate；不证明分页、生产 SLA、自然 eviction 或 Safari。 |
 | [session-transport-resilience-validation-plan.md](browser-native-dsh-poc/session-transport-resilience-validation-plan.md) / [进度](browser-native-dsh-poc/session-transport-resilience-validation-progress.md) | Browser Session append 限额切批、提交后响应丢失 seq reconciliation、连续 503 后恢复、Workspace receipt 去重和真实 LLM smoke；明确没有浏览器 durable Session outbox 或 Worker 终止恢复。 |
+| [session-outbox-recovery-validation-plan.md](browser-native-dsh-poc/session-outbox-recovery-validation-plan.md) / [进度](browser-native-dsh-poc/session-outbox-recovery-validation-progress.md) | IndexedDB journal、Worker 终止后的 Session watermark 对账、writer fencing、容量与 schema migration、Workspace receipt 协调；真实模型证明 Session 恢复，不证明普通内存 Workspace 文件刷新恢复。 |
 
 ### v2 实现和测试入口
 
@@ -355,6 +356,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [tests/durable-workspace-recovery.e2e.mjs](browser-native-dsh-poc/tests/durable-workspace-recovery.e2e.mjs) | 模型无关的真实 Chrome Worker/OPFS/IndexedDB 503 故障恢复和刷新重试。 |
 | [tests/runtime-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-lifecycle.e2e.mjs) | scripted Chrome 生命周期复测；历史 WebKit 结果仅作对照，覆盖刷新、Stop、失败恢复、backend 重启、lease 冲突和 Worker terminate。 |
 | [tests/runtime-real-lifecycle.e2e.mjs](browser-native-dsh-poc/tests/runtime-real-lifecycle.e2e.mjs) | 真实模型 Chrome Stop、`aborted → completed` 恢复、durable Session 和密钥流向检查；历史 WebKit 结果不在本轮复测。 |
+| [tests/session-outbox-recovery.e2e.mjs](browser-native-dsh-poc/tests/session-outbox-recovery.e2e.mjs) | Chrome Worker 终止、append/flush response 窗口、IDB abort、writer fencing、容量迁移及 Workspace receipt 恢复。 |
 | [tests/runtime-streaming.e2e.mjs](browser-native-dsh-poc/tests/runtime-streaming.e2e.mjs) | 真实 Chrome 长回复的逐步 DOM、输入草稿、Stop、滚动和主线程 long-task 观测。 |
 
 ### assistant-ui 增量 PoC 入口
