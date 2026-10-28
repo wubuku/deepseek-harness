@@ -93,6 +93,11 @@ export type BrowserNativeFileToolStage = 'grep-match' | ChunkEditStage
 
 type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'identity-missing' | 'identity-mismatch'
+  | 'read-only' | 'stale'
+
+type WorkspaceAccessMode = 'writer' | 'observer' | 'stale'
+
+const READ_ONLY_FILE_TOOLS = new Set(['read', 'grep', 'glob'])
 
 class WorkspaceIdentityError extends Error {
   constructor(readonly state: 'identity-missing' | 'identity-mismatch', message: string) {
@@ -215,12 +220,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private writerRenewal: Promise<void> | undefined
   private writerClaim: Promise<void> | undefined
   private activeOperation: WorkspaceToolOperation | undefined
+  private accessMode: WorkspaceAccessMode = 'writer'
 
   constructor(
     private readonly onStatus = statusMessage,
     private readonly store: DurableWorkspaceStore | undefined,
     private readonly useWriterLease = false,
     private readonly testHooks?: BrowserNativeWorkspaceRuntimeOptions['testHooks'],
+    private readonly onAccessMode?: (mode: WorkspaceAccessMode) => void,
   ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
@@ -249,22 +256,17 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         throw new WorkspaceIdentityError('identity-mismatch', 'The local Workspace cache belongs to a different browser identity')
       }
       this.workspaceId = identity.workspaceId
-      if (this.useWriterLease) await this.claimWriter()
-      if (this.useWriterLease) await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
-      const manifestResponse = await fetch(
-        `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
-        { credentials: 'same-origin' },
-      )
-      const rawManifest = await readJson(manifestResponse)
-      if (rawManifest.workspaceId !== this.workspaceId || !Number.isSafeInteger(rawManifest.revision)
-        || typeof rawManifest.revision !== 'number' || rawManifest.revision < 0) {
-        throw new Error('browser-native workspace: backend returned an invalid manifest')
+      if (this.useWriterLease) {
+        try {
+          await this.claimWriter()
+        } catch (error) {
+          if (!isRecord(error) || error.code !== 'WORKSPACE_ALREADY_OWNED') throw error
+          this.accessMode = 'observer'
+          this.onAccessMode?.(this.accessMode)
+        }
       }
-      const manifest: WorkspaceManifest = {
-        workspaceId: this.workspaceId,
-        revision: rawManifest.revision,
-        entries: manifestEntries(rawManifest.entries),
-      }
+      if (this.useWriterLease && this.accessMode === 'writer') await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
+      const manifest = await this.loadManifest()
       this.knownPaths.clear()
       this.knownBlobHashes.clear()
       for (const entry of manifest.entries) this.knownPaths.add(entry.path)
@@ -280,6 +282,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       for (const entry of files) {
         const path = assertWorkspacePath(entry.path)
         if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
+        if (this.accessMode === 'observer') {
+          vfs.seed(`${WORKSPACE_ROOT}/${path}`, await this.downloadBlob(entry.hash, entry.bytes), { mode: entry.mode })
+          this.knownBlobHashes.add(entry.hash)
+          continue
+        }
         const backing = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
         if (backing !== undefined) {
           vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
@@ -307,15 +314,17 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.knownBlobHashes.add(entry.hash)
       }
       this.revision = manifest.revision
-      const localSnapshot = await this.store?.load(this.workspaceId)
-      if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
-        await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
+      if (this.accessMode === 'writer') {
+        const localSnapshot = await this.store?.load(this.workspaceId)
+        if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
+          await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
+        }
+        if (localSnapshot !== undefined) await this.restoreLocalSnapshot(vfs, localSnapshot)
       }
-      if (localSnapshot !== undefined) await this.restoreLocalSnapshot(vfs, localSnapshot)
       this.ready = true
       const dirtyCount = this.pending.size + (this.retryBatch?.changes.length ?? 0)
-      this.onStatus(dirtyCount === 0 ? 'synced' : 'dirty', this.workspaceId, this.revision, dirtyCount)
-      if (dirtyCount > 0) this.schedule()
+      this.onStatus(this.accessMode === 'observer' ? 'read-only' : dirtyCount === 0 ? 'synced' : 'dirty', this.workspaceId, this.revision, dirtyCount)
+      if (this.accessMode === 'writer' && dirtyCount > 0) this.schedule()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.abandonWriterLease()
@@ -386,7 +395,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   async flush(): Promise<readonly WorkspaceReceipt[]> {
-    if (!this.ready || this.blocked) return []
+    if (!this.ready || this.blocked || this.accessMode !== 'writer') return []
     if (this.scheduleTimer !== undefined) {
       clearTimeout(this.scheduleTimer)
       this.scheduleTimer = undefined
@@ -431,7 +440,28 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.assertWriterLeaseUsable()
   }
 
+  async authorizeFileTool(name: string): Promise<void> {
+    if (!this.ready) throw new Error('browser-native workspace: Workspace is not ready')
+    if (this.accessMode === 'stale') throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
+    if (this.accessMode === 'observer') {
+      if (!READ_ONLY_FILE_TOOLS.has(name)) {
+        throw new Error(`browser-native workspace: observer cannot execute Workspace tool "${name}"`)
+      }
+      const revision = await this.loadManifestRevision()
+      if (revision !== this.revision) {
+        this.accessMode = 'stale'
+        this.onAccessMode?.(this.accessMode)
+        this.onStatus('stale', this.workspaceId, this.revision, 0, 'Workspace changed; refresh to load the committed revision')
+        throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
+      }
+      return
+    }
+    this.assertLocalWorkspaceUsable()
+    await this.ensureWriterLease()
+  }
+
   async ensureWriterLease(): Promise<void> {
+    if (this.accessMode !== 'writer') throw new Error('browser-native workspace: read-only observer cannot acquire writer access without a page reload')
     if (!this.useWriterLease) return
     if (this.writerLeaseState === 'unclaimed') await this.claimWriter()
     this.assertWriterLeaseUsable()
@@ -479,6 +509,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   getRevision(): number | undefined {
     return this.revision
+  }
+
+  getAccessMode(): WorkspaceAccessMode {
+    return this.accessMode
   }
 
   isDurableWorkspace(): boolean {
@@ -1230,6 +1264,34 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (await sha256(output) !== hash) throw new Error('browser-native workspace: downloaded blob failed full SHA-256 verification')
     return output
   }
+
+  private async loadManifest(): Promise<WorkspaceManifest> {
+    if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot load a manifest before identity')
+    const response = await fetch(
+      `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
+      { credentials: 'same-origin' },
+    )
+    const raw = await readJson(response)
+    if (raw.workspaceId !== this.workspaceId || !Number.isSafeInteger(raw.revision)
+      || typeof raw.revision !== 'number' || raw.revision < 0) {
+      throw new Error('browser-native workspace: backend returned an invalid manifest')
+    }
+    return { workspaceId: this.workspaceId, revision: raw.revision, entries: manifestEntries(raw.entries) }
+  }
+
+  private async loadManifestRevision(): Promise<number> {
+    if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot check a manifest before identity')
+    const response = await fetch(
+      `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
+      { credentials: 'same-origin', cache: 'no-store' },
+    )
+    const manifest = await readJson(response)
+    if (manifest.workspaceId !== this.workspaceId || !Number.isSafeInteger(manifest.revision)
+      || typeof manifest.revision !== 'number' || manifest.revision < 0) {
+      throw new Error('browser-native workspace: backend returned an invalid manifest revision')
+    }
+    return manifest.revision
+  }
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -1259,6 +1321,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly assertLocalWorkspaceUsable: () => void
   /** Renew an enabled writer lease before a file tool starts. */
   readonly ensureWriterLease: () => Promise<void>
+  /** Check Workspace access and the remote revision before executing a file tool. */
+  readonly authorizeFileTool: (name: string) => Promise<void>
   /** Return the PoC writer lease for model-independent browser tests. */
   readonly getWriterLease: () => BrowserNativeWorkspaceWriterLease | undefined
   /** Return Worker-local lease timing for model-independent browser tests. */
@@ -1279,6 +1343,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly getWorkspaceId: () => string | undefined
   /** Return the current remote manifest revision after preparation. */
   readonly getRevision: () => number | undefined
+  /** Return whether this Worker owns writes, observes read-only, or has a stale snapshot. */
+  readonly getAccessMode: () => WorkspaceAccessMode
   /** Whether this runtime has a local durable store for external file backing. */
   readonly isDurableWorkspace: () => boolean
 }
@@ -1293,6 +1359,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly onStatus?: typeof statusMessage
   /** Claim a backend writer lease before mirroring Workspace mutations. */
   readonly writerLease?: boolean
+  /** Notify tool publication when this Worker becomes a read-only observer or stale. */
+  readonly onAccessMode?: (mode: WorkspaceAccessMode) => void
   /** Inject storage faults through the PoC-only Worker test port. */
   readonly testHooks?: {
     readonly abortNextMetadataTransaction?: () => boolean
@@ -1313,7 +1381,13 @@ export function createBrowserNativeWorkspaceRuntime(
 ): BrowserNativeWorkspaceRuntime {
   let vfs: MemoryVfs
   const store = options.store ?? (options.durable === true ? createBrowserDurableWorkspaceStore(options.testHooks) : undefined)
-  const mirror = new BrowserNativeWorkspaceMirror(options.onStatus, store, options.writerLease === true, options.testHooks)
+  const mirror = new BrowserNativeWorkspaceMirror(
+    options.onStatus,
+    store,
+    options.writerLease === true,
+    options.testHooks,
+    options.onAccessMode,
+  )
   vfs = new MemoryVfs({ sink: mirror })
   return {
     vfs,
@@ -1329,6 +1403,7 @@ export function createBrowserNativeWorkspaceRuntime(
     flushLocalWorkspace: async () => await mirror.flushLocalWorkspace(),
     assertLocalWorkspaceUsable: () => mirror.assertLocalWorkspaceUsable(),
     ensureWriterLease: async () => await mirror.ensureWriterLease(),
+    authorizeFileTool: async name => await mirror.authorizeFileTool(name),
     getWriterLease: () => mirror.getWriterLease(),
     getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),
@@ -1336,6 +1411,7 @@ export function createBrowserNativeWorkspaceRuntime(
     reportFileToolStage: stage => options.testHooks?.onFileToolStage?.(stage),
     getWorkspaceId: () => mirror.getWorkspaceId(),
     getRevision: () => mirror.getRevision(),
+    getAccessMode: () => mirror.getAccessMode(),
     isDurableWorkspace: () => mirror.isDurableWorkspace(),
   }
 }

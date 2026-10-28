@@ -122,6 +122,26 @@ describe('browser-native capability preflight', () => {
     unsubscribe()
   })
 
+  it('publishes only read-only file tools for an observer and none after its snapshot becomes stale', () => {
+    const publication = new BrowserNativeCapabilityPublication()
+    publication.activate()
+    publication.setWorkspaceReadOnly()
+
+    expect(publication.publishedToolNames()).toEqual(new Set([
+      'read', 'grep', 'glob', 'todo_write', 'ask_user_question',
+    ]))
+    expect(publication.unavailableWorkspaceToolNames().sort()).toEqual([
+      'bash', 'edit', 'working_directory', 'write',
+    ])
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'read' }], publication)).not.toThrow()
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'write' }], publication))
+      .toThrow('not currently published')
+
+    publication.markWorkspaceStale()
+    expect(publication.publishedToolNames()).toEqual(new Set(['todo_write', 'ask_user_question']))
+    expect(publication.isToolPublished('read')).toBe(false)
+  })
+
   it('rejects duplicate, unknown, and withdrawn schemas instead of silently filtering them', () => {
     const publication = new BrowserNativeCapabilityPublication()
     publication.activate()

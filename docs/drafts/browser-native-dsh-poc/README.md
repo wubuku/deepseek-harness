@@ -777,6 +777,28 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-obs
 
 分页目录是查询投影，不是新的事实源；只读观察者不持有 owner token；载荷拒绝也不等于已经实现 blob 引用或大工具结果分页。真实 LLM、Safari/WebKit、自然 eviction、OS crash、跨主机 backend 和生产授权不在本批通过范围内。
 
+## 多 Session 共享 Workspace observer 验证
+
+[本批计划](shared-workspace-observer-validation-plan.md)和[实测进度](shared-workspace-observer-validation-progress.md)覆盖同一 Chrome 身份下两个独立 DSH Session 同时使用一个 Workspace：当前 writer 遇到明确的 `WORKSPACE_ALREADY_OWNED` 时，第二个 Worker 从已提交 manifest 启动为只读 observer；它不恢复或改写共享 OPFS/IndexedDB retry 数据，不取得 Workspace lease，也不生成 Workspace receipt。observer 的文件读取只发布 `read`、`grep`、`glob`；每次执行前检查远端 revision，过期后当前调用 fail closed 并撤销该 Workspace 工具组。用户显式刷新后，页面重新 hydrate 并竞争 writer lease，backend fencing 拒绝旧 token。
+
+真实 Chrome 双标签 E2E 使用 scripted DSH 响应控制 503 retry、schema 外伪造 write、stale read 和 lease 接管，核对 prompt 去重、唯一 operation、Session receipt 归属和同源网络；另跑真实 LLM 普通 `read → write → read` 与 durable 刷新恢复 smoke。两种证据范围不同，真实模型 smoke 不证明模型自主选择 observer/owner 时序。observer 每次文件工具多一次 manifest 请求；跨设备授权、多实例 backend、并发写合并、自然 eviction、OS crash 和 Safari/WebKit 未验证。
+
+复跑本批验证：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts
+node docs/drafts/browser-native-dsh-poc/tests/shared-workspace-observer.e2e.mjs
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 \
+  DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_TURN_TIMEOUT_MS=600000 \
+  node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+真实 LLM 命令要求本机 `docs/drafts/.env` 已配置；backend 读取凭据，页面与 Worker 不接收模型密钥。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

@@ -882,6 +882,7 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         ok: lease !== undefined,
         ...lease,
         ...workspaceRuntime.getWriterLeaseTestState(),
+        accessMode: workspaceRuntime.getAccessMode(),
       })
       return
     }
@@ -1242,6 +1243,10 @@ self.addEventListener('message', (event: MessageEvent) => {
     const workspace = createBrowserNativeWorkspaceRuntime({
       durable: durableWorkspace,
       writerLease: workspaceWriterLease,
+      onAccessMode: mode => {
+        if (mode === 'observer') capabilityPublication.setWorkspaceReadOnly()
+        else if (mode === 'stale') capabilityPublication.markWorkspaceStale()
+      },
       ...(workspaceTestPort === undefined ? {} : {
         testHooks: {
           abortNextMetadataTransaction: () => {

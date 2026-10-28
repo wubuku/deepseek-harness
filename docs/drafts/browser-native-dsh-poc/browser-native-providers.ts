@@ -54,9 +54,6 @@ import {
   isBrowserWorkspacePath,
 } from './browser-native-file-tools.ts'
 import {
-  isBrowserNativeFileToolName,
-} from './browser-native-capabilities.ts'
-import {
   assertBrowserNativeToolSchemas,
   BrowserNativeCapabilityPublication,
 } from './browser-native-capability-publication.ts'
@@ -650,10 +647,9 @@ function createRemoteSessionPersistenceClass(
         if (errors.length > 0) throw new AggregateError(errors, 'browser-native session persistence dispose failed')
       }, 'session-persistence-browser-native open handles')
       ctx.on('tools/execute', async (exec, next) => {
-        const isWorkspaceTool = isBrowserNativeFileToolName(exec.name) || exec.name === 'bash'
+        const isWorkspaceTool = ['read', 'read_image', 'write', 'edit', 'grep', 'glob', 'bash'].includes(exec.name)
         if (!isWorkspaceTool || exec.agent === undefined) return await next()
-        workspace.assertLocalWorkspaceUsable()
-        await workspace.ensureWriterLease()
+        await workspace.authorizeFileTool(exec.name)
         if (exec.name === 'grep') {
           const value = await executeBrowserNativeGrep(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs(), {
             onMatcherStarted: () => workspace.reportFileToolStage('grep-match'),

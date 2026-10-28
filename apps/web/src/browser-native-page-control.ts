@@ -3,6 +3,7 @@ import {
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
   browserNativeWorkspaceRecoveryWarningCopy,
+  browserNativeWorkspaceRefreshCopy,
   browserNativeWorkspaceRetryCopy,
   browserNativeWorkspaceStatusCopy,
 } from './locales/browser-native-workspace.ts'
@@ -250,7 +251,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       Object.assign(element.style, {
         position: 'fixed',
         right: '16px',
-        bottom: '16px',
+        top: '72px',
         zIndex: '2147483000',
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
@@ -276,7 +277,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
       || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable'
-      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' ? '#f87171'
+      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' || notice.state === 'stale' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
     if (notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
       || notice.state === 'identity-missing' || notice.state === 'identity-mismatch') {
@@ -298,7 +299,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
         background: '#1d4ed8',
         color: '#fff',
         cursor: 'pointer',
-        font: '600 13px/1.3 system-ui, sans-serif',
+        font: '500 13px/1.3 system-ui, sans-serif',
       })
       button.addEventListener('click', () => {
         void downloadLocalRecoveryBundle(
@@ -332,11 +333,31 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
         background: '#1d4ed8',
         color: '#fff',
         cursor: 'pointer',
-        font: '600 13px/1.3 system-ui, sans-serif',
+        font: '500 13px/1.3 system-ui, sans-serif',
       })
       button.addEventListener('click', () => { window.location.reload() })
       workspaceStatus.append(button)
       if (button.disabled) retryTimer = window.setInterval(updateRetry, 250)
+    }
+    if (notice.state === 'read-only' || notice.state === 'stale') {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.dataset.browserNativeWorkspaceRefresh = ''
+      button.textContent = browserNativeWorkspaceRefreshCopy(document.documentElement.lang, notice.state === 'stale')
+      Object.assign(button.style, {
+        display: 'block',
+        marginTop: '8px',
+        padding: '6px 10px',
+        pointerEvents: 'auto',
+        border: '1px solid #8ab4f8',
+        borderRadius: '5px',
+        background: '#1d4ed8',
+        color: '#fff',
+        cursor: 'pointer',
+        font: '600 13px/1.3 system-ui, sans-serif',
+      })
+      button.addEventListener('click', () => { window.location.reload() })
+      workspaceStatus.append(button)
     }
   }
   const showRecoveryResult = (success: boolean): void => {

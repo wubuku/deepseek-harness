@@ -1,6 +1,6 @@
 type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict'
-  | 'recovery-unavailable' | 'identity-missing' | 'identity-mismatch'
+  | 'recovery-unavailable' | 'identity-missing' | 'identity-mismatch' | 'read-only' | 'stale'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -17,6 +17,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'recovery-unavailable': 'Safe DSH writer recovery is unavailable in this browser context',
     'identity-missing': 'Local Workspace data is retained, but its browser identity is unavailable',
     'identity-mismatch': 'Local Workspace data does not match the current browser identity',
+    'read-only': 'Workspace is read-only while another tab owns write access',
+    stale: 'Workspace changed; this read-only snapshot is stale',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -32,6 +34,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'recovery-unavailable': '当前浏览器上下文无法安全恢复 DSH 写入权',
     'identity-missing': '本地工作区数据仍在，但无法确认对应的浏览器身份',
     'identity-mismatch': '本地工作区数据与当前浏览器身份不匹配',
+    'read-only': '另一个标签页持有写权限，当前工作区为只读',
+    stale: '工作区已变化；当前只读快照已过期',
   },
 }
 
@@ -68,6 +72,12 @@ export function browserNativeWorkspaceRetryCopy(language: string, remainingMs: n
     return remainingMs > 0 ? `等待 ${String(Math.ceil(remainingMs / 1000))} 秒后重试` : '重新获取写权限'
   }
   return remainingMs > 0 ? `Retry in ${String(Math.ceil(remainingMs / 1000))}s` : 'Retry write access'
+}
+
+/** Format the explicit page reload action for a Workspace observer. */
+export function browserNativeWorkspaceRefreshCopy(language: string, stale: boolean): string {
+  if (language.startsWith('zh')) return stale ? '刷新工作区' : '刷新并尝试获取写权限'
+  return stale ? 'Refresh Workspace' : 'Refresh and request write access'
 }
 
 /** Explain why saved writer recovery is unavailable in the current browser context.

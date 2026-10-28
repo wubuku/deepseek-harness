@@ -27,6 +27,113 @@ function stubWorkspaceFetch(
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('browser-native Workspace VFS sync', () => {
+  it('hydrates a lease-conflict observer from committed blobs without reading or changing local pending state', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    const localContent = new TextEncoder().encode('local pending bytes')
+    const originalSnapshot = {
+      version: 1 as const,
+      workspaceId,
+      revision: 6,
+      pending: [{ path: 'local-pending.txt', content: localContent }],
+      retryBatch: {
+        operationId: 'pending-operation',
+        baseRevision: 6,
+        changes: [{ path: 'retry-only.txt', content: localContent }],
+      },
+    }
+    await store.save(originalSnapshot)
+    const loadSnapshot = store.load.bind(store)
+    const snapshotBefore = await loadSnapshot(workspaceId)
+    const loadSpy = vi.spyOn(store, 'load')
+    const blobSpy = vi.spyOn(store, 'openBlob')
+    const cacheSpy = vi.spyOn(store, 'cacheBlob')
+    const reconcileSpy = vi.spyOn(store, 'reconcileBlobs')
+    const protocol = createWorkspaceBlobProtocolMock()
+    protocol.registerBlob(manifestHash, manifestBytes)
+    const requests: string[] = []
+    let remoteRevision = 7
+    const accessModes: string[] = []
+    const statuses: string[] = []
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      requests.push(url)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_ALREADY_OWNED', message: 'owned', retryAfterMs: 1000 },
+      }, 409)
+      if (url.includes('/manifest?')) return jsonResponse({
+        workspaceId,
+        revision: remoteRevision,
+        entries: [{ path: 'committed.txt', kind: 'file', hash: manifestHash, bytes: manifestBytes.byteLength, mode: 0o600 }],
+      })
+      throw new Error(`unexpected request ${url}`)
+    }, protocol)
+
+    const runtime = createBrowserNativeWorkspaceRuntime({
+      store,
+      writerLease: true,
+      onAccessMode: mode => { accessModes.push(mode) },
+      onStatus: state => { statuses.push(state) },
+    })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+
+    expect(runtime.getAccessMode()).toBe('observer')
+    expect(runtime.getRevision()).toBe(7)
+    expect(runtime.vfs.readFileSync('/dsh/home/workspace/committed.txt', 'utf8')).toBe('restored from cloud\n')
+    expect(runtime.vfs.existsSync('/dsh/home/workspace/local-pending.txt')).toBe(false)
+    expect(runtime.vfs.existsSync('/dsh/home/workspace/retry-only.txt')).toBe(false)
+    expect(loadSpy).not.toHaveBeenCalled()
+    expect(blobSpy).not.toHaveBeenCalled()
+    expect(cacheSpy).not.toHaveBeenCalled()
+    expect(reconcileSpy).not.toHaveBeenCalled()
+    expect(await loadSnapshot(workspaceId)).toEqual(snapshotBefore)
+    expect(accessModes).toEqual(['observer'])
+    expect(statuses).toContain('read-only')
+
+    const statusCount = statuses.length
+    const requestCount = requests.length
+    expect(await runtime.flushWorkspace()).toEqual([])
+    expect(statuses).toHaveLength(statusCount)
+    expect(requests).toHaveLength(requestCount)
+
+    await runtime.authorizeFileTool('read')
+    await expect(runtime.authorizeFileTool('write')).rejects.toThrow('observer cannot execute')
+    expect(requests.filter(url => url.includes('/manifest?'))).toHaveLength(2)
+
+    remoteRevision = 8
+    await expect(runtime.authorizeFileTool('glob')).rejects.toThrow('snapshot is stale')
+    expect(runtime.getAccessMode()).toBe('stale')
+    expect(accessModes).toEqual(['observer', 'stale'])
+    expect(statuses).toContain('stale')
+    const manifestChecks = requests.filter(url => url.includes('/manifest?')).length
+    const staleStatusCount = statuses.length
+    expect(await runtime.flushWorkspace()).toEqual([])
+    expect(statuses).toHaveLength(staleStatusCount)
+    await expect(runtime.authorizeFileTool('read')).rejects.toThrow('snapshot is stale')
+    expect(requests.filter(url => url.includes('/manifest?'))).toHaveLength(manifestChecks)
+    await expect(runtime.ensureWriterLease()).rejects.toThrow('cannot acquire writer access')
+  })
+
+  it('does not downgrade identity, transport, or unrelated lease failures to an observer', async () => {
+    const requests: string[] = []
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      requests.push(url)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_OWNERSHIP_LOST', message: 'owner token was rejected' },
+      }, 409)
+      throw new Error(`unexpected request ${url}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ writerLease: true })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow('owner token was rejected')
+    expect(requests.some(url => url.includes('/manifest?'))).toBe(false)
+    expect(runtime.getAccessMode()).toBe('writer')
+  })
+
   it('restores before runtime writes, uploads changed content, and commits a revision', async () => {
     const requests: Array<{ url: string; method: string; body?: string }> = []
     const protocol = createWorkspaceBlobProtocolMock()

@@ -42,7 +42,8 @@ describe('Browser-Native control channel', () => {
     const receiver = new BrowserNativeControlReceiver()
     expect(receiver.receive(ready()).kind).toBe('ready')
     expect(receiver.receive(frame(1)).kind).toBe('notice')
-    expect(receiver.receive(frame(2)).kind).toBe('notice')
+    expect(receiver.receive({ ...frame(2), notice: { ...frame(2).notice, state: 'read-only' } }).kind).toBe('notice')
+    expect(receiver.receive({ ...frame(3), notice: { ...frame(3).notice, state: 'stale' } }).kind).toBe('notice')
   })
 
   it('deduplicates an identical frame without applying it twice', () => {

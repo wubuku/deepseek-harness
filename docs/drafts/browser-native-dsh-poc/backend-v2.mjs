@@ -1810,6 +1810,111 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const workspaceObserverCases = [
+    {
+      marker: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_READ_E2E',
+      success: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_READ_DONE',
+      denied: false,
+    },
+    {
+      marker: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_E2E',
+      success: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_BLOCKED',
+      denied: true,
+    },
+  ]
+  const workspaceObserverCase = workspaceObserverCases.find(item => latestUserText.includes(item.marker))
+  if (workspaceObserverCase !== undefined) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(workspaceObserverCase.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'read') && !hasTool(tools, 'write') && !hasTool(tools, 'edit')
+      && !hasTool(tools, 'bash') && !hasTool(tools, 'working_directory')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: workspaceObserverCase.denied
+          ? 'browser-native-workspace-observer-stale-read'
+          : 'browser-native-workspace-observer-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/owner-committed.txt' },
+      })
+      return
+    }
+    const result = toolResults[0]
+    const resultContent = typeof result?.content === 'string' ? result.content : ''
+    const settled = workspaceObserverCase.denied
+      ? result?.isError === true && /stale/i.test(resultContent)
+      : result?.isError !== true && resultContent.includes('owner-committed-value')
+    scriptedText(response, settled && toolResults.length === 1
+      ? workspaceObserverCase.success
+      : `${workspaceObserverCase.success}_UNEXPECTED_STATE`)
+    return
+  }
+
+  const observerForgedWriteMarker = 'BROWSER_NATIVE_WORKSPACE_OBSERVER_FORGED_WRITE_E2E'
+  if (latestUserText.includes(observerForgedWriteMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(observerForgedWriteMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-observer-forged-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/observer-forged-write.txt',
+          content: 'observer must not write this file\n',
+        },
+      })
+      return
+    }
+    const resultContent = typeof toolResults[0]?.content === 'string' ? toolResults[0].content : ''
+    scriptedText(response, toolResults.length === 1 && toolResults[0]?.isError === true
+      && /capability is not currently published|observer cannot execute/i.test(resultContent)
+      ? 'BROWSER_NATIVE_WORKSPACE_OBSERVER_FORGED_WRITE_REJECTED'
+      : 'BROWSER_NATIVE_WORKSPACE_OBSERVER_FORGED_WRITE_UNEXPECTED_STATE')
+    return
+  }
+
+  const observerOwnerMarker = 'BROWSER_NATIVE_WORKSPACE_OBSERVER_OWNER_E2E'
+  if (latestUserText.includes(observerOwnerMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(observerOwnerMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'write')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-observer-owner-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/owner-committed.txt',
+          content: 'owner-committed-value\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 1 ? 'BROWSER_NATIVE_WORKSPACE_OBSERVER_OWNER_DONE'
+      : 'BROWSER_NATIVE_WORKSPACE_OBSERVER_OWNER_UNEXPECTED_STATE')
+    return
+  }
+
+  const observerAfterRefreshMarker = 'BROWSER_NATIVE_WORKSPACE_OBSERVER_AFTER_REFRESH_E2E'
+  if (latestUserText.includes(observerAfterRefreshMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(observerAfterRefreshMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'write')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-observer-after-refresh-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/observer-after-refresh.txt',
+          content: 'observer-writer-value\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 1 ? 'BROWSER_NATIVE_WORKSPACE_OBSERVER_AFTER_REFRESH_DONE'
+      : 'BROWSER_NATIVE_WORKSPACE_OBSERVER_AFTER_REFRESH_UNEXPECTED_STATE')
+    return
+  }
+
   if (hasUserMarker(messages, 'BROWSER_NATIVE_QUOTA_GUARD_E2E') && hasTool(tools, 'write')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
       && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_QUOTA_GUARD_E2E'))

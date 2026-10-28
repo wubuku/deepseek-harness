@@ -15,10 +15,13 @@ const WORKSPACE_CAPABILITIES: readonly BrowserNativeCapabilityId[] = [
 ]
 
 const WORKSPACE_CAPABILITY_FAILURE = 'LOCAL_WORKSPACE_PERSISTENCE_UNCONFIRMED'
+const READ_ONLY_WORKSPACE_TOOLS = new Set(['read', 'grep', 'glob'])
 
 /** Own the live/degraded tool roster for one Dedicated Worker lifetime. */
 export class BrowserNativeCapabilityPublication {
   private active = false
+  private workspaceReadOnly = false
+  private workspaceStale = false
   private readonly degraded = new Set<BrowserNativeCapabilityId>()
   private readonly listeners = new Set<() => void>()
 
@@ -41,9 +44,28 @@ export class BrowserNativeCapabilityPublication {
     if (changed) this.notify()
   }
 
+  /** Publish only non-mutating file tools while another Worker owns the Workspace. */
+  setWorkspaceReadOnly(): void {
+    if (this.workspaceReadOnly || this.workspaceStale) return
+    this.workspaceReadOnly = true
+    this.notify()
+  }
+
+  /** Withdraw Workspace tools after a revision check finds a stale snapshot. */
+  markWorkspaceStale(): void {
+    if (this.workspaceStale) return
+    this.workspaceStale = true
+    this.notify()
+  }
+
   /** Return the tools that are currently eligible for a DSH model request. */
   publishedToolNames(): ReadonlySet<string> {
-    return new Set(publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST, this.capabilities()).map(tool => tool.name))
+    const names = publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST, this.capabilities()).map(tool => tool.name)
+    if (this.workspaceStale || this.degraded.size > 0) {
+      return new Set(names.filter(name => !this.isWorkspaceTool(name)))
+    }
+    if (this.workspaceReadOnly) return new Set(names.filter(name => !this.isWorkspaceTool(name) || READ_ONLY_WORKSPACE_TOOLS.has(name)))
+    return new Set(names)
   }
 
   /** Test whether one tool may be published and dispatched now. */
@@ -80,6 +102,11 @@ export class BrowserNativeCapabilityPublication {
       }
     }
     return overrides
+  }
+
+  private isWorkspaceTool(name: string): boolean {
+    return BROWSER_NATIVE_PROFILE_MANIFEST.tools.some(tool => tool.name === name
+      && WORKSPACE_CAPABILITIES.includes(tool.capability))
   }
 
   private notify(): void {

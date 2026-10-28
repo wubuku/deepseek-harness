@@ -108,6 +108,24 @@ deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前�
 status: implemented
 ```
 
+### BN-P2-022：多 Session 共享 Workspace observer 与 stale revision 拒绝
+
+```text
+changeId: BN-P2-022
+upstreamBaseline: research checkout at batch start; 2026-10-28; 起始工作区干净，仅主 worktree
+file: apps/web/src/browser-native-control-channel.ts; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-capability-publication.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/shared-workspace-observer.e2e.mjs; docs/drafts/browser-native-dsh-poc/shared-workspace-observer-validation-plan.md; docs/drafts/browser-native-dsh-poc/shared-workspace-observer-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: DSH-TUI 的多观察者/单写者经验提示当前 PoC 只覆盖同一 Session 的只读观察和单 Workspace writer lease，没有验证两个独立 Agent Session 同时共享一个 Workspace。lease 冲突曾阻止第二个 Worker Host 启动；若简单显示本地缓存，observer 还可能读取活跃 writer 的未提交 snapshot 或向模型提供 stale 文件。
+existingExtensionPointsChecked: 复用 Workspace lease claim/release/fencing、远端 manifest/blob hydrate、现有 Worker capability publication 与 tools/execute guard、DSH Session writer/receipt 和页面 control channel；未改正式 Agent Loop、Session format、正式 package、根依赖或默认 DSH profile。
+whyDraftOnlyWasInsufficient: 单测不能验证两个真实 Chrome 页面启动独立 Session 时共享的 Cookie、IndexedDB、OPFS、Worker 和 UI 状态；单 Session lease handoff 也不覆盖另一 Session 的 Session log 与 receipt 归属。scripted 双标签 E2E 用于稳定控制 503、revision 变化和 lease 接管，真实模型只用于普通文件能力 smoke。
+behaviorChange: 只有初次 claim 明确返回 WORKSPACE_ALREADY_OWNED 时，Worker 才降级为 observer。observer 从已提交 manifest 建立只读 VFS，不读取/恢复/写入共享 local snapshot，不运行 blob reconciliation/GC，不申请或释放 Workspace lease；只发布 read/grep/glob，所有文件工具执行前校验 manifest revision。revision 变化后当前调用失败并撤销 Workspace 工具；用户显式刷新才重新 hydrate 并申请写权。observer/stale 的 `flushWorkspace()` 不发网络请求、不覆盖页面状态。Session prompt、tool result 和 Workspace receipt 仍各自归属发起该调用的 Session。
+directoryOutChangeReason: `apps/web/src/browser-native-control-channel.ts` 必须接受 `read-only`/`stale` 状态；`browser-native-page-control.ts` 负责展示 observer 状态和显式刷新入口；locale 文件为状态与按钮提供中英文文案。这些文件属于 Browser-Native preview 的页面控制层，PoC Worker 单独不能让用户看见只读状态或执行接管动作。只读提示移至页面上缘，避免遮挡底部聊天发送控件。
+consumersUpdated: Browser Workspace runtime、能力发布、文件工具 guard、Worker control frame、preview UI/locales、focused tests、双标签 Chrome E2E、PoC README、兼容矩阵、drafts 索引与验证进度。
+tests: Workspace/capability/control focused Vitest 32/32；preview build 通过。Chrome scripted 双标签 E2E 通过：两个独立 Session 共用同一 Workspace，owner commit 503 后同 operationId 重试成功；observer 完成只读工具调用且共享 retry snapshot 字节/metadata 未改变；只读 schema 不含 write 时，scripted upstream 仍返回 schema 外 write，Worker capability dispatch guard 记录错误 tool result，且文件、Workspace revision、dirty snapshot、commit 和 receipt 均不变；读取每次恰增加一次 manifest revision 请求；stale read 不返回旧文件、没有 Workspace commit/receipt，后续模型 schema 撤销 Workspace 工具；显式刷新后 fencing token 1→2，旧 token renew 返回 409；revision 1→2→3，成功 operation 唯一 3 个，Session receipt 数 `[1,0,0,0,1]`，五条用户 prompt 各写入一次，12 次模型请求，无 page error/跨源请求。真实 Chrome `runtime-validation.e2e.mjs` 普通 `read→write→read` 与刷新恢复通过，真实 `gpt-5.6-sol` 8/8 HTTP 200、59 Session events、durableThroughSeq 58、页面错误 0；另观察到请求中止 callbacks、compaction 无 context capacity warning 和已知 preview endpoint 404，不据此宣称多 Session 真实模型流程或 provider 故障。其余 backend/type/doc/pre-push 命令见 progress 文件。
+syncReplaySteps: 上游同步后检查 Browser Worker 是否已有正式 Workspace observer/read lease、`prepareVfs` 的 local retry restore/GC 顺序、capability registry 的运行期撤销、DSH file tool dispatch 与 Workspace writer fencing。若正式服务提供等价 reader lease，迁移 PoC observer 实现而保留双 Session 验收；否则只重放 PoC Workspace/runtime 与明确的 read-only 状态。检查 Web 页面新增 locale 是否应改由正式 Workspace UI owner 承接。重跑 Workspace/capability/control focused tests、preview build、shared-workspace-observer Chrome E2E、普通真实 LLM smoke 和文档门禁。不得把 anonymous PoC identity 当作生产授权，不得将单 writer 模式描述为协同编辑。
+deleteCondition: 正式 Browser Workspace provider 支持多个 Session 的只读已提交 revision、stale 拒绝、显式写权接管和 Session receipt 隔离，且迁移后的 Chrome E2E 覆盖相同时序；或 Browser-Native Workspace PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-038：Worker 页面控制通道连续性
 
 ```text
