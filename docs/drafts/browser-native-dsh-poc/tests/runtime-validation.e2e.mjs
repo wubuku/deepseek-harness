@@ -22,6 +22,7 @@ const browserName = process.env.DSH_POC_BROWSER ?? 'chrome'
 const envFile = process.env.DSH_POC_ENV_FILE
 const roster = process.env.DSH_POC_ROSTER ?? 'browser'
 const durableWorkspace = process.env.DSH_POC_DURABLE_WORKSPACE === '1'
+const contentDefinedUpload = process.env.DSH_POC_CONTENT_UPLOAD === '1'
 const blockWorkspaceCommitOnce = process.env.DSH_POC_BLOCK_WORKSPACE_COMMIT_ONCE === '1'
 const skipPostRefreshTurns = process.env.DSH_POC_SKIP_POST_REFRESH_TURNS === '1'
 const port = Number(process.env.DSH_POC_PORT ?? '0')
@@ -45,6 +46,7 @@ if (!['scripted', 'real'].includes(mode)) throw new Error('DSH_POC_LLM must be s
 if (!['chromium', 'chrome', 'webkit'].includes(browserName)) throw new Error('DSH_POC_BROWSER must be chromium, chrome, or webkit')
 if (!['browser', 'original'].includes(roster)) throw new Error('DSH_POC_ROSTER must be browser or original')
 if (mode === 'real' && envFile === undefined) throw new Error('DSH_POC_ENV_FILE is required for real mode')
+if (contentDefinedUpload && !durableWorkspace) throw new Error('content upload smoke requires a durable Workspace')
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('DSH_POC_PORT must be a TCP port')
 if (!Number.isInteger(turnTimeout) || turnTimeout < 1_000) throw new Error('DSH_POC_TURN_TIMEOUT_MS must be at least 1000')
 if (!Number.isInteger(refreshCycles) || refreshCycles < 1 || refreshCycles > 5) {
@@ -94,6 +96,23 @@ try {
   const launcher = browserName === 'webkit' ? webkit : chromium
   browser = await launcher.launch({ headless: true, ...(browserName === 'chrome' ? { channel: 'chrome' } : {}) })
   page = await browser.newPage({ locale: 'en-US', timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 1000 } })
+  if (contentDefinedUpload) {
+    await page.addInitScript(() => {
+      const NativeWorker = window.Worker
+      window.Worker = new Proxy(NativeWorker, {
+        construct(target, args) {
+          const worker = Reflect.construct(target, args, target)
+          const postMessage = worker.postMessage
+          worker.postMessage = (message, ...transfer) => Reflect.apply(postMessage, worker, [
+            message?.type === 'browser-native-durable-workspace-init'
+              ? { ...message, contentDefinedUpload: true } : message,
+            ...transfer,
+          ])
+          return worker
+        },
+      })
+    })
+  }
   await page.addInitScript(() => {
     const key = 'dsh-browser-native-lifecycle-trace'
     const record = (event, persisted) => {
@@ -339,6 +358,7 @@ try {
     browser: browserName,
     roster,
     durableWorkspace,
+    contentDefinedUpload,
     blockedWorkspaceCommit,
     workspaceCommitStatuses: requests.filter(request => request.path.endsWith('/workspace/commit')).map(request => request.status),
     model: app.llm.model,

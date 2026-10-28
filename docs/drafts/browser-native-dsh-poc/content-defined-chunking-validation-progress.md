@@ -81,4 +81,4 @@ description: "记录 Browser-Native Workspace 内容定义分块对照实验的�
 
 ## Dev Note
 
-本进度记录当前 checkout 的实验结果，不表示 CDC 已集成 Workspace uploader。实际操作命令、非通过运行、已知噪声和继续/停止结论均保留；构建告警与模型无关的算法证据不冒充真实模型或生产 backend 验收。
+本进度只记录算法批次，不能用作 CDC 已集成 uploader 的证据。后续[实际上传协议验证](content-upload-protocol-validation-progress.md)已接入显式 opt-in，并记录与算法估算不同的文本负结果；默认仍为固定分块。实际操作命令、非通过运行、已知噪声和继续/停止结论均保留；构建告警与模型无关的算法证据不冒充真实模型或生产 backend 验收。

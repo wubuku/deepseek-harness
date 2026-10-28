@@ -79,6 +79,7 @@ console.info('browser-native dsh: worker entry active')
 let host: { handleMessage(data: unknown): void } | undefined
 let shellRole = false
 let durableWorkspace = false
+let contentDefinedUpload = false
 let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
@@ -181,7 +182,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -292,7 +293,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -336,6 +337,80 @@ function hashWorkspacePath(path: string): { readonly bytes: number; readonly dig
     digest.update(chunk)
   }
   return { bytes, digest: digest.digestHex() }
+}
+
+async function writeContentUploadWorkload(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
+  const runtime = workspaceRuntime
+  const sourceBytes = request.byteLength
+  const kind = request.contentKind
+  const path = request.path
+  if (runtime === undefined || !runtime.isDurableWorkspace() || typeof path !== 'string'
+    || !path.startsWith('/dsh/home/workspace/') || path.includes('..')
+    || sourceBytes === undefined || !Number.isSafeInteger(sourceBytes)
+    || sourceBytes < 1024 * 1024 || sourceBytes > 64 * 1024 * 1024
+    || kind !== 'text' && kind !== 'binary'
+    || request.editKind !== undefined && !['insert', 'delete', 'replace'].includes(request.editKind)
+    || request.editPosition !== undefined && !['head', 'middle', 'tail'].includes(request.editPosition)) {
+    throw new Error('browser-native content upload workload: invalid durable file parameters')
+  }
+  const editBytes = request.editKind === 'replace' ? 4096 : 64 * 1024
+  const editOffset = request.editPosition === 'head' ? 0
+    : request.editPosition === 'tail' ? sourceBytes - editBytes : Math.floor(sourceBytes / 2)
+  const totalBytes = sourceBytes + (request.editKind === 'insert' ? editBytes : request.editKind === 'delete' ? -editBytes : 0)
+  if (totalBytes > 64 * 1024 * 1024) throw new Error('browser-native content upload workload: target exceeds 64 MiB')
+  const encoder = new TextEncoder()
+  const sourceRange = (offset: number, length: number): Uint8Array => {
+    const output = new Uint8Array(length)
+    if (kind === 'binary') {
+      for (let index = 0; index < length; index += 1) {
+        let state = (offset + index) ^ 0x31415926
+        state = Math.imul(state ^ (state >>> 16), 0x21f0aaad)
+        state = Math.imul(state ^ (state >>> 15), 0x735a2d97)
+        output[index] = (state ^ (state >>> 15)) >>> 24
+      }
+    } else {
+      for (let cursor = 0; cursor < length;) {
+        const absolute = offset + cursor
+        const row = Math.floor(absolute / 128)
+        const line = encoder.encode(`export const row${String(row).padStart(8, '0')} = { amount: ${String(row * 7919 % 100000)}, owner: 'team-${String(row % 997)}' };`.padEnd(127, ' ') + '\n')
+        const start = absolute % 128
+        const count = Math.min(128 - start, length - cursor)
+        output.set(line.subarray(start, start + count), cursor)
+        cursor += count
+      }
+    }
+    return output
+  }
+  const readRange = (offset: number, length: number): Uint8Array => {
+    const output = new Uint8Array(length)
+    for (let cursor = 0; cursor < length;) {
+      const absolute = offset + cursor
+      if (request.editKind === undefined || absolute < editOffset) {
+        const count = request.editKind === undefined ? length - cursor : Math.min(length - cursor, editOffset - absolute)
+        output.set(sourceRange(absolute, count), cursor)
+        cursor += count
+      } else if (request.editKind === 'delete') {
+        output.set(sourceRange(absolute + editBytes, length - cursor), cursor)
+        cursor = length
+      } else if (absolute < editOffset + editBytes) {
+        const count = Math.min(length - cursor, editOffset + editBytes - absolute)
+        output.fill(kind === 'text' ? 0x58 : 0xb7, cursor, cursor + count)
+        cursor += count
+      } else {
+        output.set(sourceRange(absolute - (request.editKind === 'insert' ? editBytes : 0), length - cursor), cursor)
+        cursor = length
+      }
+    }
+    return output
+  }
+  const digest = new Sha256()
+  for (let offset = 0; offset < totalBytes; offset += 1024 * 1024) {
+    digest.update(readRange(offset, Math.min(1024 * 1024, totalBytes - offset)))
+  }
+  const hash = digest.digestHex()
+  runtime.vfs.replaceExternalSync(path, { size: totalBytes, read: readRange, close: () => {} }, { hash, bytes: totalBytes })
+  await runtime.flushLocalWorkspace()
+  return { ok: true, path, bytes: totalBytes, digest: hash, durable: true, usage: runtime.vfs.usage() }
 }
 
 function fixedFileChunks(totalBytes: number, chunkBytes: number): readonly { readonly offset: number; readonly length: number }[] {
@@ -1069,6 +1144,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       return
     }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
+    if (request.action === 'write-content-workload') {
+      workspaceTestResponse(request.requestId, await writeContentUploadWorkload(request))
+      return
+    }
     if (request.action === 'chunk-edit-probe') {
       workspaceTestResponse(request.requestId, await runChunkEditProbe(request))
       return
@@ -1525,7 +1604,11 @@ self.addEventListener('message', (event: MessageEvent) => {
   }
   if (data?.type === 'browser-native-durable-workspace-init') {
     if (host !== undefined) throw new Error('browser-native worker: durable Workspace must be selected before Host init')
+    if (data.contentDefinedUpload !== undefined && typeof data.contentDefinedUpload !== 'boolean') {
+      throw new Error('browser-native worker: content upload selection must be a boolean')
+    }
     durableWorkspace = true
+    contentDefinedUpload = data.contentDefinedUpload === true
     return
   }
   if (data?.type === 'browser-native-workspace-lease-init') {
@@ -1580,6 +1663,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!preflight.ok) throw new Error(formatBrowserNativePreflightFailure(preflight))
     const workspace = createBrowserNativeWorkspaceRuntime({
       durable: durableWorkspace,
+      contentDefinedUpload,
       writerLease: workspaceWriterLease,
       onAccessMode: mode => {
         if (mode === 'observer') capabilityPublication.setWorkspaceReadOnly()

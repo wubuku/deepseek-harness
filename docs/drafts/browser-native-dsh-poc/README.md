@@ -211,7 +211,7 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DS
 
 [验证计划](content-defined-chunking-validation-plan.md)与[实施进度](content-defined-chunking-validation-progress.md)比较实验性 gear-based CDC 和现有 1 MiB 固定偏移复用。最终 Chrome Dedicated Worker/OPFS 对照覆盖 18 个合成 workload，每个策略重复 3 次；[原始结果](content-defined-chunking-chrome-results.json)包含块长分布、估算上行、descriptor、range read、hash 和 Worker 耗时。
 
-在头部/中部插入和删除的 8 个文本/二进制核心场景中，128 KiB 目标平均值配置估算上行比固定偏移少 86.3%–98.9%；但 16 MiB 文本的实际块长 mean 为 763 KiB，64 MiB 文本中 512 KiB 平均值配置约半数 chunk 达到 1 MiB 上限。16 MiB CDC target 准备约需 0.137–0.200 秒、来源索引约需 0.136–0.226 秒；64 MiB 文本分别约需 0.643–0.684 秒和 0.661–0.668 秒，来源与目标各读取约 128 MiB，页面帧探针最大间隔为 16.8 ms。结果只允许进入独立协议原型，不证明真实上传收益、backend 写放大或生产对象存储成本；当前 uploader 仍使用固定偏移协议。
+在头部/中部插入和删除的 8 个文本/二进制核心场景中，128 KiB 目标平均值配置估算上行比固定偏移少 86.3%–98.9%；但 16 MiB 文本的实际块长 mean 为 763 KiB，64 MiB 文本中 512 KiB 平均值配置约半数 chunk 达到 1 MiB 上限。16 MiB CDC target 准备约需 0.137–0.200 秒、来源索引约需 0.136–0.226 秒；64 MiB 文本分别约需 0.643–0.684 秒和 0.661–0.668 秒，来源与目标各读取约 128 MiB，页面帧探针最大间隔为 16.8 ms。该算法实验不证明真实上传收益、backend 写放大或生产对象存储成本；实际协议原型见[内容分块上传验证](content-upload-protocol-validation-progress.md)，默认 uploader 仍使用固定偏移协议。
 
 在 preview 构建后复跑算法和 Chrome 成本对照：
 
@@ -222,6 +222,23 @@ DSH_POC_BROWSER=chrome DSH_POC_RESULT_FILE=docs/drafts/browser-native-dsh-poc/co
 ```
 
 该 probe 不调用 LLM，也不经过 Workspace upload/backend blob protocol；真实 LLM smoke 独立验证原生 DSH `read → write → read` 和刷新恢复，命令见[实施进度](content-defined-chunking-validation-progress.md)。
+
+## 内容分块上传协议原型
+
+`createBrowserNativeWorkspaceRuntime({ contentDefinedUpload: true })` 显式启用实验性 CDC uploader，prepare 前核对 backend 的 `upload-capabilities`。算法标识 `dsh-gear-v1` 固定 32 KiB minimum、128 KiB average、1 MiB maximum 与 2,048 块上限；同一 operation/hash 的完整布局不可更换。默认运行不启用该选项，缺失能力不静默退回固定分块。Worker 接线使用 durable init 消息的布尔字段；验收脚本在构造 Worker 时发送该选项，普通 preview 不增加新默认行为。
+
+客户端将连续、无重叠的 hash/offset/length 布局交给同源 backend，复用当前 Workspace manifest 授权来源中相同长度/hash 的块，只 PUT 缺块。服务端验证范围、块内容和完整目标 hash，仍组装完整 blob 并经原有 manifest CAS 发布；布局 sidecar 是已校验的上传范围索引，不是块对象权威存储。`algorithm` 标识协商的客户端分块规则，server 不重新计算 gear 边界，也不会仅凭标识信任 bytes。
+
+已有 dirty upload 在固定分块与 CDC 之间切换会遭到 metadata conflict；应使用原选项恢复，不能清除 outbox 或创建新 operation 来掩盖冲突。旧文件缺少已验证 CDC 索引时，复用明确报错；本原型不在后台替旧文件补建索引。当前实现、实测流量、故障恢复与仍待验证事项分别由[规划](content-upload-protocol-validation-plan.md)和[进度](content-upload-protocol-validation-progress.md)记录。
+
+Chrome 9 场景、14 runs 的[实际 HTTP 结果](content-upload-protocol-chrome-results.json)表明：二进制中部插入/删除上行减少约 98%，64 MiB 等长修改减少 79%，文本中部插入/删除反而增加约 1%。backend 仍完整校验来源、复制 staging 和组装 blob，上行减少不等于服务端成本减少。四个响应丢失恢复阶段均通过；该协议测试不调用模型，另有 CDC opt-in 三轮真实 LLM smoke。
+
+在 preview 构建后复跑协议矩阵与真实模型：
+
+```sh
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/content-upload-protocol.e2e.mjs
+env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_CONTENT_UPLOAD=1 DSH_POC_ROSTER=original DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
 
 ## Browser-native 文件搜索与载荷安全
 

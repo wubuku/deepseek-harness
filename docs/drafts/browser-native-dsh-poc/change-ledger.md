@@ -12,6 +12,20 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-046：内容分块的实际上传与恢复协议
+
+```text
+changeId: BN-P2-046
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 起始 `research` 与远端同步且干净；仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-content-upload.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/content-upload-client.spec.ts; docs/drafts/browser-native-dsh-poc/tests/content-upload-backend.test.mjs; docs/drafts/browser-native-dsh-poc/tests/content-upload-protocol.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-blob-protocol-mock.ts; 本批计划/进度、README 和 drafts 索引
+reason: 上一批只有 CDC 算法上行估算。正式产品决策还需要实际 HTTP、来源授权、完整文件校验、布局幂等、重启恢复和后端 I/O 成本，不能据算法 probe 宣称同步成功。
+existingExtensionPointsChecked: 复用现有 Workspace upload/status/reuse/complete、OPFS range backing、IndexedDB retryBatch、manifest CAS 与 principal 身份；新布局显式 opt-in、版本和参数协商，默认固定路径保留。
+coupling: 仅 PoC 内修改；无目录外接线、正式 package、Agent Loop 或 Session 格式变更。layout sidecar 仅属于当前 PoC backend，不等同发布的生产持久化格式。
+tests: 实际命令、通过/失败与未完成事项由 content-upload-protocol-validation-progress.md 记录；不沿用上一批算法 PASS。
+upstreamReplay: 先合并本批 uploader/backend 和相应单测，再重建 preview 验证冻结算法参数、HTTP 成本、同 operation 恢复及真实 LLM；Worker/backend 需支持同一布局版本，旧端拒绝不能忽略。
+deleteWhen: 正式 Workspace provider 已拥有版本化布局、同等授权/恢复测试和真实客户端成本证据；不可仅删除恢复与完整性测试。
+```
+
 ### BN-P2-045：内容定义分块的 Worker 成本与协议准入测量
 
 ```text

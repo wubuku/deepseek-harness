@@ -5,6 +5,7 @@ import type {
   VfsSeedOptions,
 } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
 import type { ChunkEditStage } from './browser-native-chunk-editor.ts'
+import { buildContentUploadLayout, requireContentUploadCapability } from './browser-native-content-upload.ts'
 import {
   publishBrowserNativeWorkspaceLease,
   publishBrowserNativeWorkspaceStatus,
@@ -231,12 +232,18 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     private readonly useWriterLease = false,
     private readonly testHooks?: BrowserNativeWorkspaceRuntimeOptions['testHooks'],
     private readonly onAccessMode?: (mode: WorkspaceAccessMode) => void,
+    private readonly contentDefinedUpload = false,
   ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
     this.vfs = vfs
     this.onStatus('loading', undefined, undefined, 0)
     try {
+      if (this.contentDefinedUpload) {
+        requireContentUploadCapability(await readJson(await fetch(`${WORKSPACE_API}/upload-capabilities`, {
+          credentials: 'same-origin',
+        })))
+      }
       const localWorkspaceIds = await this.store?.listWorkspaceIds() ?? []
       const hasLocalWorkspaceData = localWorkspaceIds.length > 0
       const identityResponse = await fetch(`${WORKSPACE_API}/identity`, {
@@ -1199,6 +1206,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
     const uploadId = `${operationId}-${hash}`
     const uploadPath = `${WORKSPACE_API}/blob-upload/${uploadId}`
+    const layout = this.contentDefinedUpload ? await buildContentUploadLayout(totalBytes, readRange, sha256) : undefined
     const startResponse = await fetch(`${WORKSPACE_API}/blob-upload/start`, {
       method: 'POST',
       credentials: 'same-origin',
@@ -1211,18 +1219,21 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         hash,
         totalBytes,
         chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+        ...(layout === undefined ? {} : { layout }),
       }),
     })
     const started = await readJson(startResponse)
     if (started.complete === true) return
 
     if (baseHash !== undefined && baseHash !== hash && started.reusePlanned !== true) {
-      const chunkHashes: string[] = []
-      for (let offset = 0; offset < totalBytes; offset += WORKSPACE_BLOB_CHUNK_BYTES) {
-        const length = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)
-        const chunk = readRange(offset, length)
-        if (chunk.byteLength !== length) throw new Error('browser-native workspace: short range during upload hashing')
-        chunkHashes.push(await sha256(chunk))
+      const chunkHashes: string[] = layout?.chunks.map(chunk => chunk.hash) ?? []
+      if (layout === undefined) {
+        for (let offset = 0; offset < totalBytes; offset += WORKSPACE_BLOB_CHUNK_BYTES) {
+          const length = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)
+          const chunk = readRange(offset, length)
+          if (chunk.byteLength !== length) throw new Error('browser-native workspace: short range during upload hashing')
+          chunkHashes.push(await sha256(chunk))
+        }
       }
       const reuseResponse = await fetch(`${uploadPath}/reuse`, {
         method: 'POST',
@@ -1245,16 +1256,19 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     )
     const status = await readJson(statusResponse)
     if (status.complete === true) return
-    const chunkCount = Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
+    const chunkCount = layout?.chunks.length ?? Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
     if (!Array.isArray(status.missing) || status.missing.some(index => !Number.isSafeInteger(index) || index < 0 || index >= chunkCount)
       || new Set(status.missing).size !== status.missing.length) {
       throw new Error('browser-native workspace: backend returned an invalid blob upload status')
     }
     for (const index of status.missing) {
-      const offset = index * WORKSPACE_BLOB_CHUNK_BYTES
-      const chunk = readRange(offset, Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset))
-      if (chunk.byteLength === 0) throw new Error('browser-native workspace: backend requested an empty upload chunk')
+      const range = layout?.chunks[index]
+      const offset = range?.offset ?? index * WORKSPACE_BLOB_CHUNK_BYTES
+      const length = range?.length ?? Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)
+      const chunk = readRange(offset, length)
+      if (chunk.byteLength === 0 || chunk.byteLength !== length) throw new Error('browser-native workspace: invalid upload range read')
       const chunkHash = await sha256(chunk)
+      if (range !== undefined && chunkHash !== range.hash) throw new Error('browser-native workspace: immutable upload content changed')
       const response = await fetch(`${uploadPath}/${String(index)}`, {
         method: 'PUT',
         credentials: 'same-origin',
@@ -1422,6 +1436,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly onStatus?: typeof statusMessage
   /** Claim a backend writer lease before mirroring Workspace mutations. */
   readonly writerLease?: boolean
+  /** Opt in to the frozen experimental content-defined upload protocol; never falls back. */
+  readonly contentDefinedUpload?: boolean
   /** Notify tool publication when this Worker becomes a read-only observer or stale. */
   readonly onAccessMode?: (mode: WorkspaceAccessMode) => void
   /** Inject storage faults through the PoC-only Worker test port. */
@@ -1451,6 +1467,7 @@ export function createBrowserNativeWorkspaceRuntime(
     options.writerLease === true,
     options.testHooks,
     options.onAccessMode,
+    options.contentDefinedUpload === true,
   )
   vfs = new MemoryVfs({ sink: mirror })
   return {

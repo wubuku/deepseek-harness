@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { CONTENT_UPLOAD_PARAMETERS, type ContentUploadLayout } from '../browser-native-content-upload.ts'
 
 const CHUNK_BYTES = 1024 * 1024
 
@@ -8,6 +9,7 @@ interface UploadState {
   readonly chunkCount: number
   readonly chunks: Map<number, Uint8Array>
   complete: boolean
+  readonly layout?: ContentUploadLayout
   reusePlanned?: boolean
 }
 
@@ -30,6 +32,7 @@ export function createWorkspaceBlobProtocolMock() {
   const uploads = new Map<string, UploadState>()
   const remoteBlobs = new Map<string, Uint8Array>()
   const completedBlobs = new Map<string, Uint8Array>()
+  const layouts = new Map<string, ContentUploadLayout>()
   const uploadedChunks: Array<{ readonly hash: string; readonly index: number; readonly bytes: Uint8Array }> = []
 
   return {
@@ -45,6 +48,9 @@ export function createWorkspaceBlobProtocolMock() {
     ): Response | undefined {
       const url = new URL(String(input), 'http://workspace.test')
       const method = init?.method ?? 'GET'
+      if (method === 'GET' && url.pathname.endsWith('/upload-capabilities')) {
+        return jsonResponse({ contentLayout: { ...CONTENT_UPLOAD_PARAMETERS, maxChunks: 2048 } })
+      }
       const start = url.pathname.endsWith('/blob-upload/start')
       if (method === 'POST' && start) {
         const body = JSON.parse(String(init?.body)) as {
@@ -52,13 +58,18 @@ export function createWorkspaceBlobProtocolMock() {
           hash: string
           totalBytes: number
           chunkBytes: number
+          layout?: ContentUploadLayout
         }
         const id = `${body.operationId}-${body.hash}`
-        const chunkCount = Math.ceil(body.totalBytes / body.chunkBytes)
+        const chunkCount = body.layout?.chunks.length ?? Math.ceil(body.totalBytes / body.chunkBytes)
         const previous = uploads.get(id)
         if (previous !== undefined && (previous.hash !== body.hash || previous.totalBytes !== body.totalBytes
-          || previous.chunkCount !== chunkCount)) return jsonResponse({ error: { code: 'UPLOAD_ID_CONFLICT' } }, 409)
-        if (previous === undefined) uploads.set(id, { hash: body.hash, totalBytes: body.totalBytes, chunkCount, chunks: new Map(), complete: false })
+          || previous.chunkCount !== chunkCount || JSON.stringify(previous.layout) !== JSON.stringify(body.layout))) {
+          return jsonResponse({ error: { code: 'UPLOAD_ID_CONFLICT', message: 'upload id was reused with different metadata' } }, 409)
+        }
+        if (previous === undefined) uploads.set(id, {
+          hash: body.hash, totalBytes: body.totalBytes, chunkCount, chunks: new Map(), complete: false, layout: body.layout,
+        })
         return jsonResponse({ complete: uploads.get(id)?.complete === true, reusePlanned: uploads.get(id)?.reusePlanned === true })
       }
 
@@ -81,8 +92,13 @@ export function createWorkspaceBlobProtocolMock() {
         upload.reusePlanned = true
         const reused: number[] = []
         for (let index = 0; index < upload.chunkCount; index += 1) {
-          const length = Math.min(CHUNK_BYTES, upload.totalBytes - index * CHUNK_BYTES)
-          const bytes = base.subarray(index * CHUNK_BYTES, index * CHUNK_BYTES + length)
+          const range = upload.layout?.chunks[index]
+          const length = range?.length ?? Math.min(CHUNK_BYTES, upload.totalBytes - index * CHUNK_BYTES)
+          const source = range === undefined ? undefined : layouts.get(body.baseHash)?.chunks
+            .find(candidate => candidate.length === length && candidate.hash === range.hash)
+          if (range !== undefined && source === undefined) continue
+          const offset = source?.offset ?? index * CHUNK_BYTES
+          const bytes = base.subarray(offset, offset + length)
           if (bytes.byteLength === length && hashBytes(bytes) === body.chunkHashes[index]) {
             upload.chunks.set(index, bytes.slice())
             reused.push(index)
@@ -96,7 +112,7 @@ export function createWorkspaceBlobProtocolMock() {
         if (upload === undefined) return jsonResponse({ error: { code: 'UPLOAD_NOT_FOUND' } }, 404)
         const index = Number(chunk[2])
         const bytes = bytesFromBody(init?.body)
-        const expectedBytes = Math.min(CHUNK_BYTES, upload.totalBytes - index * CHUNK_BYTES)
+        const expectedBytes = upload.layout?.chunks[index]?.length ?? Math.min(CHUNK_BYTES, upload.totalBytes - index * CHUNK_BYTES)
         const chunkHash = hashBytes(bytes)
         const customResponse = beforeChunk?.(bytes.slice(), index, upload.hash)
         if (customResponse !== undefined) return customResponse
@@ -123,11 +139,12 @@ export function createWorkspaceBlobProtocolMock() {
         for (let index = 0; index < upload.chunkCount; index += 1) {
           const part = upload.chunks.get(index)
           if (part === undefined) return jsonResponse({ error: { code: 'UPLOAD_INCOMPLETE' } }, 409)
-          bytes.set(part, index * CHUNK_BYTES)
+          bytes.set(part, upload.layout?.chunks[index]?.offset ?? index * CHUNK_BYTES)
         }
         if (hashBytes(bytes) !== upload.hash) return jsonResponse({ error: { code: 'UPLOAD_BLOB_HASH_MISMATCH' } }, 409)
         upload.complete = true
         completedBlobs.set(upload.hash, bytes)
+        if (upload.layout !== undefined) layouts.set(upload.hash, upload.layout)
         return jsonResponse({ complete: true, replayed: false })
       }
 

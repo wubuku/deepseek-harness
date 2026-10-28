@@ -11,7 +11,7 @@ import { createServer } from 'node:http'
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { WORKSPACE_BLOB_CHUNK_BYTES, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
+import { WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_CONTENT_LAYOUT, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -2677,6 +2677,15 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookies })
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/upload-capabilities') {
+        for (const [key, value] of url.searchParams) {
+          if (key !== 'protocolVersion' || value !== String(PROTOCOL_VERSION)) {
+            throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported upload capability parameter')
+          }
+        }
+        sendJson(response, 200, { contentLayout: WORKSPACE_CONTENT_LAYOUT })
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/manifest') {
         if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
           throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
@@ -2751,6 +2760,16 @@ export async function createBrowserNativeV2Server(options) {
           uploadComplete[1],
           uploadComplete[2],
         ))
+        return
+      }
+      const blobLayout = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})\/layout$/i)
+      if (request.method === 'GET' && blobLayout !== null) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)
+          || [...url.searchParams.keys()].some(key => key !== 'protocolVersion' && key !== 'workspaceId')
+          || url.searchParams.getAll('protocolVersion').length !== 1 || url.searchParams.getAll('workspaceId').length !== 1) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported content layout query')
+        }
+        sendJson(response, 200, await workspaces.getContentLayout(request, url.searchParams.get('workspaceId'), blobLayout[1]))
         return
       }
       const blobChunk = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})\/chunk\/([0-9]+)$/i)
