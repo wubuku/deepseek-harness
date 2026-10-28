@@ -720,6 +720,7 @@ function createRemoteSessionPersistenceClass(
                         {
                           yieldDelayMs: workspace.getFileToolYieldDelayMs(),
                           onStage: stage => workspace.reportFileToolStage(stage),
+                          onMetrics: metrics => workspace.reportFileToolMetrics(metrics),
                           beforePublish: async () => await workspace.ensureWriterLease(),
                         },
                       ),

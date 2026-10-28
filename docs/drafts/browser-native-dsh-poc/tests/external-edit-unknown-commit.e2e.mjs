@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { openPreview, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
+import { openPreview, waitFor, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -18,7 +19,14 @@ const playwright = await import(playwrightModule)
 const { chromium } = playwright.default ?? playwright
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-browser-external-edit-unknown-')))
 const workspacePath = '/dsh/home/workspace/external-edit-crash.txt'
-const marker = 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
+const fileBytes = Number(process.env.DSH_POC_EXTERNAL_EDIT_FILE_BYTES ?? '0')
+const largeFile = fileBytes !== 0
+const marker = largeFile
+  ? 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_64M_E2E'
+  : 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
+const beforeContent = 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V1'
+const afterContent = 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V2'
+if (largeFile && fileBytes !== 64 * 1024 * 1024) throw new Error('DSH_POC_EXTERNAL_EDIT_FILE_BYTES must be 67108864')
 
 let image
 let app
@@ -37,6 +45,7 @@ const sessionFlushes = []
 const pageErrors = []
 const workerErrors = []
 const externalRequests = []
+const uploadRequests = []
 
 async function restartBackend() {
   await app.close()
@@ -46,6 +55,20 @@ async function restartBackend() {
 
 async function testAction(request) {
   return await page.evaluate(async value => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.(value), request)
+}
+
+async function readSessionWithBrowserCookie(id) {
+  const cookie = (await context.cookies(`${origin}/api/browser-native/session/read`))
+    .find(item => item.name === 'dsh-browser-native-session-principal')
+  assert.ok(cookie, 'Browser Session principal cookie is missing')
+  const response = await fetch(`${origin}/api/browser-native/session/read`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: `${cookie.name}=${cookie.value}` },
+    body: JSON.stringify({ protocolVersion: 1, requestId: randomUUID(), sessionId: id, offset: 0 }),
+  })
+  const body = await response.json()
+  assert.equal(response.ok, true, JSON.stringify(body))
+  return body
 }
 
 async function listEditTemporaryDirectories() {
@@ -58,6 +81,26 @@ async function listEditTemporaryDirectories() {
     }
     return names.sort()
   }, workspaceId)
+}
+
+async function readBlobSummary(hash) {
+  const cookie = (await context.cookies(`${origin}/api/browser-native/workspace`))
+    .find(item => item.name === 'dsh-browser-native-principal')
+  assert.ok(cookie, 'Browser Workspace principal cookie is missing')
+  const response = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${encodeURIComponent(workspaceId)}`, {
+    headers: { cookie: `${cookie.name}=${cookie.value}` },
+  })
+  assert.equal(response.status, 200)
+  const digest = createHash('sha256')
+  let bytes = 0
+  let prefix = Buffer.alloc(0)
+  for await (const chunk of response.body) {
+    const value = Buffer.from(chunk)
+    digest.update(value)
+    bytes += value.byteLength
+    if (prefix.byteLength < 16 * 1024) prefix = Buffer.concat([prefix, value]).subarray(0, 16 * 1024)
+  }
+  return { bytes, digest: digest.digest('hex'), prefix: prefix.toString('utf8') }
 }
 
 try {
@@ -89,6 +132,9 @@ try {
     try { body = request.postDataJSON() } catch { body = undefined }
     requests.push({ path: url.pathname, body })
     if (url.pathname.endsWith('/workspace/commit')) commits.push(body)
+    if (url.pathname.includes('/workspace/blob-upload/') && request.method() === 'PUT') {
+      uploadRequests.push(request.postDataBuffer()?.byteLength ?? 0)
+    }
   })
   await page.route(`${origin}/api/browser-native/session/flush`, async route => {
     const response = await route.fetch()
@@ -109,7 +155,7 @@ try {
     lostOperationId = body.operationId
     const durableSession = await waitFor(async () => {
       if (sessionId === undefined) return undefined
-      const session = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+      const session = await readSessionWithBrowserCookie(sessionId)
       return session.events.some(event => event.type === 'tool/call' && event.data.name === 'edit')
         ? session
         : undefined
@@ -132,12 +178,18 @@ try {
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
   workspaceId = await page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.workspaceId)
   assert.equal(typeof workspaceId, 'string')
-  const seeded = await testAction({ action: 'write', path: workspacePath, content: 'before\n' })
+  const seeded = largeFile
+    ? await testAction({
+      action: 'write-pattern', path: workspacePath, byteLength: fileBytes, byteValue: 0x41,
+      lineBytes: 4096, markerLine: 2, marker: beforeContent,
+    })
+    : await testAction({ action: 'write', path: workspacePath, content: 'before\n' })
   assert.equal(seeded?.ok, true, JSON.stringify(seeded))
   const seedFlush = await testAction({ action: 'flush-workspace' })
   assert.equal(seedFlush?.ok, true, JSON.stringify(seedFlush))
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 1, undefined, { timeout: 30_000 })
+  const seededUploadCount = uploadRequests.length
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForPreview(page)
@@ -145,7 +197,9 @@ try {
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 1, undefined, { timeout: 30_000 })
   loseNextCommit = true
-  await page.locator('[data-composer-input][contenteditable="true"]').last().fill(`${marker}：先读取，再把 before 编辑为 after。`)
+  await page.locator('[data-composer-input][contenteditable="true"]').last().fill(largeFile
+    ? `${marker}：先读取第二行，再把 ${beforeContent} 替换为 ${afterContent}。`
+    : `${marker}：先读取，再把 before 编辑为 after。`)
   await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click()
 
   const createRequest = await waitFor(
@@ -156,8 +210,10 @@ try {
   await waitFor(() => commitResponseLost, 'backend external edit commit before response loss', 60_000)
   assert.equal(commits.length, 2, 'the seed and external edit must each make one commit request')
   assert.equal(commits[1].operationId, lostOperationId)
+  const editUploadBytes = uploadRequests.slice(seededUploadCount).reduce((sum, bytes) => sum + bytes, 0)
+  if (largeFile) assert.equal(editUploadBytes, fileBytes, '64 MiB file-level edit must upload the complete changed blob')
 
-  const beforeReload = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+  const beforeReload = await readSessionWithBrowserCookie(sessionId)
   const editCalls = beforeReload.events.filter(event => event.type === 'tool/call' && event.data.name === 'edit')
   assert.equal(editCalls.length, 1)
   assert.equal(beforeReload.events.some(event => event.type === 'browser-native/workspace-receipt'
@@ -170,7 +226,7 @@ try {
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 2, undefined, { timeout: 45_000 })
   const recovered = await waitFor(async () => {
-    const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+    const current = await readSessionWithBrowserCookie(sessionId)
     const receipt = current.events.find(event => event.type === 'browser-native/workspace-receipt'
       && event.data.operationId === lostOperationId)
     const unknownResult = current.events.find(event => event.type === 'tool/result'
@@ -193,17 +249,30 @@ try {
   )).json(), { id: workspaceId, operationId: lostOperationId })
   assert.equal(operation.found, true)
   assert.equal(operation.receipt.revision, 2)
+  assert.equal(commits.length, 3, 'recovery must make one idempotent replay after the seed and lost-response commit')
+  assert.equal(commits[1].operationId, lostOperationId)
+  assert.equal(commits[2].operationId, lostOperationId)
+  assert.equal(commits[2].baseRevision, commits[1].baseRevision)
+  assert.deepEqual(commits[2].changes, commits[1].changes)
   const manifest = await page.evaluate(async id => await (await fetch(
     `/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`,
   )).json(), workspaceId)
   assert.equal(manifest.revision, 2)
   const entry = manifest.entries.find(item => item.path === 'external-edit-crash.txt')
   assert.ok(entry)
-  const remote = await page.evaluate(async ({ id, hash }) => {
-    const response = await fetch(`/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`)
-    return { status: response.status, content: await response.text() }
-  }, { id: workspaceId, hash: entry.hash })
-  assert.deepEqual(remote, { status: 200, content: 'after\n' })
+  const remote = largeFile
+    ? await readBlobSummary(entry.hash)
+    : await page.evaluate(async ({ id, hash }) => {
+      const response = await fetch(`/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`)
+      return { status: response.status, content: await response.text() }
+    }, { id: workspaceId, hash: entry.hash })
+  if (largeFile) {
+    assert.equal(remote.bytes, fileBytes)
+    assert.equal(remote.digest, entry.hash)
+    assert.ok(remote.prefix.includes(afterContent))
+  } else {
+    assert.deepEqual(remote, { status: 200, content: 'after\n' })
+  }
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors))
   assert.deepEqual(workerErrors, [])
   assert.deepEqual(externalRequests, [])
@@ -221,7 +290,12 @@ try {
     editToolCallCount: editCalls.length,
     unknownResultCode: recovered.unknownResult.data.error.code,
     receiptCount: recovered.current.events.filter(event => event.type === 'browser-native/workspace-receipt').length,
-    recoveredContent: remote.content,
+    recoveredContent: largeFile ? afterContent : remote.content,
+    recoveredBlobBytes: largeFile ? remote.bytes : undefined,
+    recoveredBlobHash: largeFile ? remote.digest : undefined,
+    editUploadBytes,
+    editUploadChunkCount: uploadRequests.slice(seededUploadCount).length,
+    commitOperationIds: commits.map(commit => commit.operationId),
     pageErrors,
     workerErrors,
     externalRequests,
@@ -232,7 +306,8 @@ try {
     sessionId,
     workspaceId,
     lostOperationId,
-    commits,
+    commitCount: commits.length,
+    operationIds: commits.map(commit => commit.operationId),
     requests: requests.map(request => ({ path: request.path, sessionId: request.body?.sessionId })),
     pageText: page !== undefined && !page.isClosed() ? (await page.locator('body').innerText().catch(() => '')).slice(-2500) : undefined,
     pageErrors,

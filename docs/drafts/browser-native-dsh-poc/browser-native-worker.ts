@@ -37,7 +37,10 @@ import {
   type BrowserNativeRuntimeProbeFailureCode,
   type BrowserNativeRuntimeProbeReport,
 } from './browser-native-runtime-probes.ts'
-import { executeBrowserNativeGrep } from './browser-native-file-tools.ts'
+import {
+  executeBrowserNativeGrep,
+  type BrowserNativeEditMetrics,
+} from './browser-native-file-tools.ts'
 import {
   createSyncAccessChunkBackedFile,
   hashChunkBackedFile,
@@ -81,6 +84,7 @@ let workspaceTestPort: MessagePort | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
 let fileToolYieldDelayMs = 0
+const fileToolMetrics: BrowserNativeEditMetrics[] = []
 const fileToolStageWaiters = new Map<string, {
   readonly stage: BrowserNativeFileToolStage
   readonly resolve: (observed: boolean) => void
@@ -176,7 +180,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -267,7 +271,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -982,6 +986,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, ...usage, logicalBytes: usage.bytes })
       return
     }
+    if (request.action === 'file-tool-metrics') {
+      workspaceTestResponse(request.requestId, { ok: true, metrics: fileToolMetrics.splice(0) })
+      return
+    }
     if (request.action === 'load-lazy-client-chunk') {
       const path = '/dsh/node_modules/@deepseek-ai/dsh-client-ui-sidebar-documentpreview/lib/client.pdf.js'
       if (request.path !== path) throw new Error('browser-native workspace test: lazy path is not in the approved probe list')
@@ -1266,6 +1274,7 @@ self.addEventListener('message', (event: MessageEvent) => {
           afterLocalPersist: async () => await pauseLocalPersist('after'),
           fileToolYieldDelayMs: () => fileToolYieldDelayMs,
           onFileToolStage: stage => reportFileToolStage(stage),
+          onFileToolMetrics: metrics => fileToolMetrics.push(metrics),
         },
       }),
     })

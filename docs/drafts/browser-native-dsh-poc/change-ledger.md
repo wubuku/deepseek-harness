@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-043：OPFS 标准文件工具资源包络与大文件 unknown commit
+
+```text
+changeId: BN-P2-043
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 工作区起始干净，仅主 worktree
+file: docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs; docs/drafts/browser-native-dsh-poc/opfs-standard-tool-envelope-validation-plan.md; docs/drafts/browser-native-dsh-poc/opfs-standard-tool-envelope-validation-progress.md; docs/drafts/browser-native-dsh-poc/opfs-agent-file-tools-validation-progress.md; docs/drafts/browser-native-dsh-poc/chunk-backed-edit-validation-progress.md; docs/drafts/browser-native-dsh-poc/browser-file-tools-validation-progress.md; docs/drafts/browser-native-dsh-poc/browser-file-tools-next-validation-progress.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 标准 edit 已接入 OPFS copy-on-write，但旧文档仍称其完整 materialize。正式产品前需要把 VFS 驻留、Worker heap、COW 局部计数和完整新 blob 上传分别测量，并验证 64 MiB 工作负载下的跨存储 unknown 恢复；单一 residentBytes 指标不能证明浏览器总内存有界。
+existingExtensionPointsChecked: 复用 DSH tools/execute、现有 copy-on-write stage hooks、URL-gated Worker test port、Workspace operationId/CAS、Session receipt 对账、同源 principal cookie 和临时 runtime image。不修改正式 packages、apps、Agent Loop、Session 格式或根依赖。
+whyDraftOnlyWasInsufficient: 单测无法观测真实 Dedicated Worker heap、浏览器 backing storage、OPFS 占用、网络 body 字节或 Worker/backend 重建后的 64 MiB blob 完整性。scripted LLM 只固定工具选择和故障切点，真实模型 smoke 独立验证普通文件闭环。
+behaviorChange: PoC edit 可向已启用测试端口报告 COW 计数和时间窗；默认路径不注册 metrics observer。Chrome E2E 参数化 12/64 MiB 单文件、4×16 MiB 冷工作集与 CDP 采样；unknown commit E2E 增加 64 MiB 上传与恢复 hash 校验，并携带浏览器 Session principal cookie 观察同一持久化记录。edit、Session 和 Workspace 的产品语义未改变。
+directoryOutChangeReason: 唯一 PoC 子目录外文件为 docs/drafts/README.md，用于登记本计划、进度和测试入口。
+consumersUpdated: Browser file tools/provider/workspace/Worker、scripted backend、两项 Chrome E2E、计划/进度、README、兼容矩阵、旧资源进度与 drafts 索引。
+tests: backend Node tests 48/48；chunk-editor、Workspace、durable-store 和 file-tools Vitest 合计 50/50；preview build 和三项 Node 语法检查通过。Chrome 12/64 MiB 及 4×16 MiB 工作集通过，64 MiB edit 完整上传 67,108,864 bytes，VFS residentBytes 仅增 10,589 bytes；该指标不是完整 Worker 内存。64 MiB commit 响应丢失、Worker 终止、同 dataDir backend 重启和刷新恢复通过，operationId 不变、revision 只增一次、edit call/receipt 各一份。真实 Chrome gpt-5.6-sol original roster 的普通 read/write/read、记忆和刷新恢复通过，60 events、durableThroughSeq=59、8/8 LLM HTTP 200；另观察到非致命 compaction warning、可选 preview API 404 和刷新时请求中止。文档门禁及提交结果由本批进度记录。
+syncReplaySteps: 上游同步后核对标准 edit 的 tools/execute interception、beforePublish lease 验证、external backing mutation、Session receipt 身份和 Workspace 幂等提交。运行四项 focused Vitest、backend tests、preview build、三种资源矩阵 Chrome 场景、64 MiB unknown-commit E2E 和 original roster 真实 LLM smoke，再运行文档与 pre-push 检查。保持 COW 计数不含 UTF-8 预检、定位和 Workspace 上传读取的说明；不能把 buffer 指标、CDP 采样或 scripted 工具序列写成总内存上限、块级 delta 或模型大文件能力。
+deleteCondition: 正式 Browser 文件工具提供等价资源观测、容量验收与大文件 unknown 恢复测试，并迁移本 PoC 数据和断言；或移除 Browser-Native PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-042：Session receipt 与 Workspace commit 的跨存储对账
 
 ```text

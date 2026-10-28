@@ -4,6 +4,7 @@ import {
   createSyncAccessChunkBackedFile,
   replaceUtf8CopyOnWriteAsync,
   type ChunkBackedFile,
+  type ChunkEditMetrics,
   type ChunkEditStage,
 } from './browser-native-chunk-editor.ts'
 
@@ -58,6 +59,13 @@ export interface BrowserNativeEditResult {
   readonly path: string
   readonly before: string
   readonly after: string
+}
+
+/** Copy/hash counters through COW completion; excludes text validation, lookup and Workspace upload. */
+export type BrowserNativeEditMetrics = Omit<ChunkEditMetrics, 'sourceHash' | 'resultHash'> & {
+  readonly elapsedMs: number
+  readonly startedAtEpochMs: number
+  readonly measuredThroughEpochMs: number
 }
 
 export class BrowserNativeFileToolError extends Error {
@@ -792,7 +800,7 @@ function mapChunkEditError(error: unknown, path: string): BrowserNativeFileToolE
  * @param value - Untrusted model arguments parsed before editing.
  * @param signal - DSH tool cancellation signal.
  * @param workspaceId - Workspace that owns the temporary edit directory.
- * @param hooks - Optional PoC test delay and edit-stage observer.
+ * @param hooks - Optional PoC delay, stage/COW counter observers and pre-publication lease check.
  * @returns The bounded before/after content projection for the edited file.
  * @throws {BrowserNativeFileToolError} If validation, cancellation, I/O, or version checks reject the edit.
  */
@@ -804,9 +812,12 @@ export async function executeBrowserNativeEdit(
   hooks: {
     readonly yieldDelayMs?: number
     readonly onStage?: (stage: ChunkEditStage) => void
+    readonly onMetrics?: (metrics: BrowserNativeEditMetrics) => void
     readonly beforePublish?: () => Promise<void>
   } = {},
 ): Promise<BrowserNativeEditResult> {
+  const startedAt = performance.now()
+  const startedAtEpochMs = Date.now()
   const input = parseEditInput(value)
   const path = absoluteWorkspacePath(input.filePath)
   const stat = vfs.statSync(path, { bigint: true }) as VfsBigIntStats
@@ -838,6 +849,19 @@ export async function executeBrowserNativeEdit(
     } catch (error) {
       throw mapChunkEditError(error, path)
     }
+    hooks.onMetrics?.({
+      sourceBytes: metrics.sourceBytes,
+      resultBytes: metrics.resultBytes,
+      chunkBytes: metrics.chunkBytes,
+      readCalls: metrics.readCalls,
+      writeCalls: metrics.writeCalls,
+      bytesRead: metrics.bytesRead,
+      bytesWritten: metrics.bytesWritten,
+      maxWorkingBytes: metrics.maxWorkingBytes,
+      elapsedMs: performance.now() - startedAt,
+      startedAtEpochMs,
+      measuredThroughEpochMs: Date.now(),
+    })
     if (metrics.resultBytes > MAX_EDIT_FILE_BYTES) {
       throw new BrowserNativeFileToolError(`edited file exceeds the ${String(MAX_EDIT_FILE_BYTES)}-byte browser limit`, 'EDIT_PAYLOAD_TOO_LARGE')
     }

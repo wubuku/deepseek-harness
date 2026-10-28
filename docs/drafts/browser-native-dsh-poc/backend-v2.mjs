@@ -1276,16 +1276,30 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
       return
     }
   }
-  const externalEditCrashMarker = 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
-  if (textContent(messages).includes(externalEditCrashMarker) && hasTool(tools, 'edit')) {
+  const externalEditCrashCases = [
+    {
+      marker: 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E',
+      oldString: 'before',
+      newString: 'after',
+      readArguments: { file_path: '/dsh/home/workspace/external-edit-crash.txt' },
+    },
+    {
+      marker: 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_64M_E2E',
+      oldString: 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V1',
+      newString: 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V2',
+      readArguments: { file_path: '/dsh/home/workspace/external-edit-crash.txt', offset: 2, limit: 1 },
+    },
+  ]
+  for (const editCase of externalEditCrashCases) {
+    if (!textContent(messages).includes(editCase.marker) || !hasTool(tools, 'edit') || !hasTool(tools, 'read')) continue
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
-      && typeof message.content === 'string' && message.content.includes(externalEditCrashMarker))
+      && typeof message.content === 'string' && message.content.includes(editCase.marker))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
     if (toolResults.length === 0) {
       await scriptedWorkspaceToolCall(response, {
         id: 'browser-native-external-edit-crash-read',
         name: 'read',
-        arguments: { file_path: '/dsh/home/workspace/external-edit-crash.txt' },
+        arguments: editCase.readArguments,
       })
       return
     }
@@ -1295,13 +1309,13 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
         name: 'edit',
         arguments: {
           file_path: '/dsh/home/workspace/external-edit-crash.txt',
-          old_string: 'before',
-          new_string: 'after',
+          old_string: editCase.oldString,
+          new_string: editCase.newString,
         },
       })
       return
     }
-    scriptedText(response, 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_DONE')
+    scriptedText(response, `${editCase.marker}_DONE`)
     return
   }
 
@@ -1352,12 +1366,14 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
   }
 
   const opfsAgentToolsMarker = 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_E2E'
-  if (textContent(messages).includes(opfsAgentToolsMarker)
+  const opfsAgentLargeMarker = 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_64M_E2E'
+  const opfsAgentToolMarker = textContent(messages).includes(opfsAgentLargeMarker) ? opfsAgentLargeMarker : opfsAgentToolsMarker
+  if (textContent(messages).includes(opfsAgentToolMarker)
     && ['read', 'grep', 'edit'].every(name => hasTool(tools, name))) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
-      && typeof message.content === 'string' && message.content.includes(opfsAgentToolsMarker))
+      && typeof message.content === 'string' && message.content.includes(opfsAgentToolMarker))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
-    const sequence = [
+    const sequence = opfsAgentToolMarker === opfsAgentToolsMarker ? [
       {
         id: 'browser-native-opfs-large-read-before',
         name: 'read',
@@ -1382,12 +1398,34 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
         name: 'read',
         arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
       },
+    ] : [
+      {
+        id: 'browser-native-opfs-64m-read-before',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      },
+      {
+        id: 'browser-native-opfs-64m-edit',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/opfs-agent-file.txt',
+          old_string: 'BROWSER_NATIVE_OPFS_EDIT_TARGET_V1',
+          new_string: 'BROWSER_NATIVE_OPFS_EDIT_TARGET_V2',
+        },
+      },
+      {
+        id: 'browser-native-opfs-64m-read-after',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      },
     ]
     if (toolResults.length < sequence.length) {
       await scriptedWorkspaceToolCall(response, sequence[toolResults.length])
       return
     }
-    const text = 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_DONE'
+    const text = opfsAgentToolMarker === opfsAgentToolsMarker
+      ? 'BROWSER_NATIVE_OPFS_AGENT_TOOLS_DONE'
+      : `${opfsAgentToolMarker}_DONE`
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
@@ -1415,6 +1453,67 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
     response.end()
+    return
+  }
+
+  const opfsEnvelopeWorksetMarker = 'BROWSER_NATIVE_OPFS_ENVELOPE_WORKSET_E2E'
+  const opfsEnvelopeLargeMarker = 'BROWSER_NATIVE_OPFS_ENVELOPE_64M_E2E'
+  const opfsEnvelopeScenarios = [
+    {
+      marker: opfsEnvelopeWorksetMarker,
+      path: '/dsh/home/workspace/envelope-16mib-0.txt',
+      before: 'BROWSER_NATIVE_OPFS_ENVELOPE_16M_V1',
+      after: 'BROWSER_NATIVE_OPFS_ENVELOPE_16M_V2',
+      tools: [
+        { name: 'read', arguments: { file_path: '/dsh/home/workspace/envelope-16mib-0.txt', offset: 2, limit: 1 } },
+        { name: 'grep', arguments: { pattern: 'BROWSER_NATIVE_OPFS_ENVELOPE_16M_V1', path: '/dsh/home/workspace/envelope-16mib-0.txt' } },
+        { name: 'edit', arguments: { file_path: '/dsh/home/workspace/envelope-16mib-0.txt', old_string: 'BROWSER_NATIVE_OPFS_ENVELOPE_16M_V1', new_string: 'BROWSER_NATIVE_OPFS_ENVELOPE_16M_V2' } },
+        { name: 'read', arguments: { file_path: '/dsh/home/workspace/envelope-16mib-0.txt', offset: 2, limit: 1 } },
+      ],
+    },
+    {
+      marker: opfsEnvelopeLargeMarker,
+      path: '/dsh/home/workspace/envelope-64mib.txt',
+      before: 'BROWSER_NATIVE_OPFS_ENVELOPE_64M_V1',
+      after: 'BROWSER_NATIVE_OPFS_ENVELOPE_64M_V2',
+      tools: [
+        { name: 'read', arguments: { file_path: '/dsh/home/workspace/envelope-64mib.txt', offset: 2, limit: 1 } },
+        { name: 'edit', arguments: { file_path: '/dsh/home/workspace/envelope-64mib.txt', old_string: 'BROWSER_NATIVE_OPFS_ENVELOPE_64M_V1', new_string: 'BROWSER_NATIVE_OPFS_ENVELOPE_64M_V2' } },
+        { name: 'read', arguments: { file_path: '/dsh/home/workspace/envelope-64mib.txt', offset: 2, limit: 1 } },
+      ],
+    },
+  ]
+  for (const scenario of opfsEnvelopeScenarios) {
+    if (!textContent(messages).includes(scenario.marker) || !scenario.tools.every(tool => hasTool(tools, tool.name))) continue
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(scenario.marker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length < scenario.tools.length) {
+      const tool = scenario.tools[toolResults.length]
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-opfs-envelope-${scenario.marker.toLowerCase()}-${toolResults.length}`,
+        ...tool,
+      })
+      return
+    }
+    scriptedText(response, `${scenario.marker}_DONE`)
+    return
+  }
+
+  const opfsEnvelopeAfterRefreshMarker = 'BROWSER_NATIVE_OPFS_ENVELOPE_AFTER_REFRESH_E2E'
+  if (textContent(messages).includes(opfsEnvelopeAfterRefreshMarker) && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(opfsEnvelopeAfterRefreshMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-opfs-envelope-read-after-refresh',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/opfs-agent-file.txt', offset: 2, limit: 1 },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_OPFS_ENVELOPE_AFTER_REFRESH_DONE')
     return
   }
 

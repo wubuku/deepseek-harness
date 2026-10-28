@@ -13,7 +13,10 @@ import {
 import {
   createBrowserDurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
-import { cleanupAbandonedBrowserNativeEdits } from './browser-native-file-tools.ts'
+import {
+  cleanupAbandonedBrowserNativeEdits,
+  type BrowserNativeEditMetrics,
+} from './browser-native-file-tools.ts'
 import type {
   DurableWorkspaceSnapshot,
   DurableWorkspaceStore,
@@ -1364,6 +1367,8 @@ export interface BrowserNativeWorkspaceRuntime {
   readonly getFileToolYieldDelayMs: () => number
   /** Report a file-tool checkpoint to an enabled PoC test observer. */
   readonly reportFileToolStage: (stage: BrowserNativeFileToolStage) => void
+  /** Report bounded edit counters to an enabled PoC test observer. */
+  readonly reportFileToolMetrics: (metrics: BrowserNativeEditMetrics) => void
   /** Return the current Workspace identity after preparation. */
   readonly getWorkspaceId: () => string | undefined
   /** Return the current remote manifest revision after preparation. */
@@ -1394,6 +1399,7 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
     readonly afterLocalPersist?: () => Promise<void>
     readonly fileToolYieldDelayMs?: () => number
     readonly onFileToolStage?: (stage: BrowserNativeFileToolStage) => void
+    readonly onFileToolMetrics?: (metrics: BrowserNativeEditMetrics) => void
   }
 }
 
@@ -1435,6 +1441,7 @@ export function createBrowserNativeWorkspaceRuntime(
     releaseWriter: async () => await mirror.releaseWriter(),
     getFileToolYieldDelayMs: () => options.testHooks?.fileToolYieldDelayMs?.() ?? 0,
     reportFileToolStage: stage => options.testHooks?.onFileToolStage?.(stage),
+    reportFileToolMetrics: metrics => options.testHooks?.onFileToolMetrics?.(metrics),
     getWorkspaceId: () => mirror.getWorkspaceId(),
     getRevision: () => mirror.getRevision(),
     getAccessMode: () => mirror.getAccessMode(),

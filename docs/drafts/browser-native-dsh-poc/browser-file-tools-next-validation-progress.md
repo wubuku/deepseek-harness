@@ -50,7 +50,7 @@ description: "记录 Browser-Native DSH 文件工具下一批验证的实现、�
 
 ## 未完成边界
 
-matcher Worker 的超时和终止限制单次正则工作，但不是形式化 ReDoS 保证；正式产品仍可评估 RE2/WASM。`edit` 仍会完整 materialize 文件，搜索只证明读取路径可分块。完整 ripgrep 语义、任意容量文件、块级 delta、跨文件事务、自然 storage eviction、OS crash、生产对象存储、多实例 backend 和 Browser-specific 正式 preset 仍未验证。真实 LLM 回归没有证明模型会主动选择恶意参数，也没有覆盖大型 tool arguments。
+matcher Worker 的超时和终止限制单次正则工作，但不是形式化 ReDoS 保证；正式产品仍可评估 RE2/WASM。当前标准 `edit` 已使用 OPFS copy-on-write，后续容量和恢复证据见[标准工具资源包络进度](opfs-standard-tool-envelope-validation-progress.md)；这不等于块级云端 delta。完整 ripgrep 语义、任意容量文件、跨文件事务、自然 storage eviction、OS crash、生产对象存储、多实例 backend 和 Browser-specific 正式 preset 仍未验证。真实 LLM 回归没有证明模型会主动选择恶意参数，也没有覆盖大型 tool arguments。
 
 ## 经验教训
 

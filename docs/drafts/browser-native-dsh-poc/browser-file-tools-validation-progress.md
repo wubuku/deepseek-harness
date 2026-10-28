@@ -37,4 +37,4 @@
 
 ## 证据约束
 
-Browser-native `grep`/`glob` 现在仅能写入“有界 fallback 已在真实 Chrome Worker 验证”的列表，不能写成完整 ripgrep、任意容量搜索或生产工具兼容。真实 Browser roster 的模型能力仍未由本批证明；scripted LLM 只能证明确定性状态机、故障注入和 Worker 生命周期，不证明模型自主选择工具。`edit` 仍会完整 materialize 文件，不能写成块级编辑。
+Browser-native `grep`/`glob` 现在仅能写入“有界 fallback 已在真实 Chrome Worker 验证”的列表，不能写成完整 ripgrep、任意容量搜索或生产工具兼容。真实 Browser roster 的模型能力仍未由本批证明；scripted LLM 只能证明确定性状态机、故障注入和 Worker 生命周期，不证明模型自主选择工具。当前标准 `edit` 已接入 OPFS copy-on-write，后续[资源包络进度](opfs-standard-tool-envelope-validation-progress.md)记录 64 MiB 验收；它仍不提供块级云端 delta。

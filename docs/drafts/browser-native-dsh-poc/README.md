@@ -109,13 +109,13 @@ node docs/drafts/browser-native-dsh-poc/tests/large-file-scale.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 ```
 
-`large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。分块只限制网络 body 和传输临时缓冲；`MemoryVfs` 仍持有完整 bytes，客户端下载也会组装完整文件，PoC backend 仍使用本地 `dataDir`，因此这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
+`large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。Worker test port 生成样本时，`MemoryVfs` 持有完整 bytes；当前 durable 模式的冷 hydrate 和标准 edit 可用 OPFS 外部 backing，资源证据见[标准工具资源包络进度](opfs-standard-tool-envelope-validation-progress.md)。传输仍是完整文件 blob 分块，PoC backend 使用本地 `dataDir`；这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
 
 ## 可写 chunk-backed 编辑验证
 
-[可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)验证了当前大文件路径的关键缺口：只读 OPFS range backing 已经可以降低冷 hydrate 后的 VFS 驻留，但当前 DSH `edit` 仍会完整 materialize 文件。PoC-local `ChunkBackedFile` 使用固定大小 buffer、跨 chunk UTF-8 定位和 copy-on-write 临时文件；真实 Chrome Worker/OPFS 对 64 MiB 文件完成替换，1 MiB chunk 下最大工作 buffer 为 `1,048,620` bytes，六个写入/校验/发布故障点均保持源文件 hash 不变。
+[可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)记录独立的 OPFS copy-on-write 算法原型。之后该实现已接入当前 checkout 的 DSH 标准 `edit`、Worker VFS 外部 backing 与 Workspace mirror；最新 Chrome 资源数据见[标准工具资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[进度](opfs-standard-tool-envelope-validation-progress.md)。
 
-这只是存储层原型，不是正式 DSH 文件工具能力。16 MiB 真实 DSH `read → grep → edit → read` 对照仍观察到 `residentBytes` 从 `34,493,823` 增至 `51,276,228`；本批已把 external reference 接入 experimental `MemoryVfs` mutation sink、Workspace 本地缓存、分块上传、manifest CAS 和 Session 外的 compact receipt，但还没有接入标准 `edit` 工具、正式 Session event schema 或生产 Workspace API。不能把这条测试路径称为块级 delta、零拷贝或正式工具能力。
+该接入仍是 PoC，不是已发布的正式文件系统能力。标准 `edit` 通过 1 MiB copy-on-write buffer 读取并发布 external backing，VFS 驻留量在 64 MiB 样本中仅增加 10,589 bytes；Workspace 仍上传完整的 64 MiB 新 content-addressed blob，分为 64 个 1 MiB 请求。它不是块级 delta、零拷贝或生产 Workspace API。旧进度中的 `residentBytes` 对照值描述接入之前的完整 materialize 路径，不代表当前 checkout。
 
 复跑原型和对照：
 
@@ -166,17 +166,31 @@ Chrome 终止 Worker 后可能暂时保留 OPFS sync access handle。Store 会�
 
 ## OPFS 外置大文件的 DSH 工具闭环
 
-[验证计划](opfs-agent-file-tools-validation-plan.md)与[实施进度](opfs-agent-file-tools-validation-progress.md)记录 DSH `read`、`grep`、`edit` 对冷 hydrate OPFS 外置 12 MiB 文件的 Chrome Worker 验证。scripted LLM 固定工具选择，真实 DSH Host 执行工具；`read → grep → edit → read` 中，Browser-native `grep` fallback 返回唯一 marker，edit 只产生一次 Workspace commit/receipt，模型与 Session 不含整文件 bytes，刷新后同 Session 读到修改值。当前 checkout 新增的 fallback 不依赖不存在的 ripgrep 子进程；它不是完整 ripgrep 语法，也不是任意容量的搜索实现。`edit` 会完整 materialize 文件。该场景使用有界 4 KiB 行；另一次 70 KiB 单行 chunk-backed edit 已通过，但 10 MiB 单行 edit 曾使 Session 请求体超过 PoC backend 上限。
+[早期文件工具验证](opfs-agent-file-tools-validation-plan.md)覆盖 12 MiB scripted 工具序列；本批[资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[实测进度](opfs-standard-tool-envelope-validation-progress.md)将标准 DSH 工具扩展到 64 MiB 单文件和 4×16 MiB 工作集。真实 Chrome Worker/Host 通过 12 MiB `read → grep → edit → read`、64 MiB `read → edit → read`、工作集冷 hydrate 后单文件编辑与刷新校验；编辑使用有界 copy-on-write buffer，Workspace 仍传完整变化文件。scripted handler 固定工具选择；另有真实模型普通文件 smoke，不据此宣称模型自主处理大文件。
 
 在 preview 构建后运行模型无关的大文件验收：
 
 ```sh
 pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
-DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_OPFS_ENVELOPE_SCENARIO=12m \
   node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_OPFS_ENVELOPE_SCENARIO=64m \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_OPFS_ENVELOPE_SCENARIO=workset \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_EXTERNAL_EDIT_FILE_BYTES=67108864 \
+  node docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs
 ```
 
-本批另以真实 Chrome 和真实 LLM 运行 `runtime-validation.e2e.mjs`，通过普通大小文件的 `read → write → read`、同 Session 刷新恢复与同源凭据隔离。真实模型结果不覆盖 12 MiB scripted 场景，也不证明模型会主动选择本批 Browser-native `grep`/`glob` fallback。结果、实际命令及限制见[进度记录](opfs-agent-file-tools-validation-progress.md)。
+复跑本批真实 LLM 普通文件 smoke 时，从 `docs/drafts/.env` 载入 provider，并使用 `DSH_POC_ROSTER=original`：
+
+```sh
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ROSTER=original \
+  DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+真实模型结果只覆盖普通大小文件 `read → write → read` 和刷新恢复，不覆盖大文件 scripted 场景、模型自主选择大文件工具或大型 tool arguments。`grep` 仍是有界 JavaScript fallback，不是完整 ripgrep；详细字节数、heap 采样限制、unknown commit 证据和已知 preview warning 见[资源包络进度](opfs-standard-tool-envelope-validation-progress.md)。
 
 ## Browser-native 文件搜索与载荷安全
 
