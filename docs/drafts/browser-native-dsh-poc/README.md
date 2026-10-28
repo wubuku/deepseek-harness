@@ -779,9 +779,28 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-obs
 
 ## 多 Session 共享 Workspace observer 验证
 
-[本批计划](shared-workspace-observer-validation-plan.md)和[实测进度](shared-workspace-observer-validation-progress.md)覆盖同一 Chrome 身份下两个独立 DSH Session 同时使用一个 Workspace：当前 writer 遇到明确的 `WORKSPACE_ALREADY_OWNED` 时，第二个 Worker 从已提交 manifest 启动为只读 observer；它不恢复或改写共享 OPFS/IndexedDB retry 数据，不取得 Workspace lease，也不生成 Workspace receipt。observer 的文件读取只发布 `read`、`grep`、`glob`；每次执行前检查远端 revision，过期后当前调用 fail closed 并撤销该 Workspace 工具组。用户显式刷新后，页面重新 hydrate 并竞争 writer lease，backend fencing 拒绝旧 token。
+[本批计划](shared-workspace-observer-validation-plan.md)和[实测进度](shared-workspace-observer-validation-progress.md)覆盖同一 Chrome 身份下两个独立 DSH Session 同时使用一个 Workspace：当前 writer 遇到明确的 `WORKSPACE_ALREADY_OWNED` 时，第二个 Worker 从已提交 manifest 启动为只读 observer；它不恢复或改写共享 OPFS/IndexedDB retry 数据，不取得 Workspace lease，也不生成 Workspace receipt。observer 的文件读取只发布 `read`、`grep`、`glob`；每次执行前后通过轻量 revision API 校验远端版本，过期后当前调用 fail closed 并撤销该 Workspace 工具组。用户显式刷新后，页面重新 hydrate 并竞争 writer lease，backend fencing 拒绝旧 token。
 
-真实 Chrome 双标签 E2E 使用 scripted DSH 响应控制 503 retry、schema 外伪造 write、stale read 和 lease 接管，核对 prompt 去重、唯一 operation、Session receipt 归属和同源网络；另跑真实 LLM 普通 `read → write → read` 与 durable 刷新恢复 smoke。两种证据范围不同，真实模型 smoke 不证明模型自主选择 observer/owner 时序。observer 每次文件工具多一次 manifest 请求；跨设备授权、多实例 backend、并发写合并、自然 eviction、OS crash 和 Safari/WebKit 未验证。
+真实 Chrome 双标签 E2E 使用 scripted DSH 响应控制 503 retry、schema 外伪造 write、工具执行期间的 owner commit、stale read 和 lease 接管，核对 prompt 去重、唯一 operation、Session receipt 归属和同源网络；另跑真实 LLM 普通 `read → write → read` 与 durable 刷新恢复 smoke。两种证据范围不同，真实模型 smoke 不证明模型自主选择 observer/owner 时序。每个 observer 文件工具增加两次小型 revision 请求，不再下载完整 manifest；跨设备授权、多实例 backend、并发写合并、自然 eviction、OS crash 和 Safari/WebKit 未验证。
+
+## Workspace 并发 revision 与长编辑 fencing 验证
+
+[本批计划](workspace-concurrent-revision-validation-plan.md)与[进度记录](workspace-concurrent-revision-validation-progress.md)验证 observer 异步读取与远端 commit 的竞态、revision 查询响应成本，以及 writer lease 在长 OPFS edit 中转移时的旧写者 fencing。真实 Chrome 双页面测试确认 stale read 以错误结算，旧 Workspace 内容不进入 tool result 或后续 LLM 请求；长 edit 在 lease token 从 1 提升至 2 后不能发布到旧 Worker VFS 或生成 receipt，新 owner 可提交 revision 2。
+
+backend 的 `/api/browser-native/workspace/revision` 只返回 Workspace ID 和 revision，并沿用 manifest 的 principal 校验与 `Cache-Control: no-store`。对 1,000 个目录项的 manifest，revision JSON 在合约测试中被断言至少小 100 倍；Chrome E2E 另记录每个 revision 响应的字节数和耗时。该接口与前后 revision 检查只提供工具调用区间内的读取线性化点，不构成跨 Session 原子快照；edit 发布前的 lease 复核也不构成 VFS、Session 与 Workspace 事务。旧 lease 拒绝尚未发布的 edit 时，临时 OPFS staging 会被丢弃；Session 保留完整 tool-call 参数并记录显式失败，不自动重放，用户需刷新并显式重试。当前 Browser profile 禁用 `read_image`，observer 能力也不开放该工具。
+
+复跑本批 Chrome 和定向检查：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-file-tools.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-chunk-editor.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/shared-workspace-observer.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/workspace-lease-edit-race.e2e.mjs
+```
 
 复跑本批验证：
 

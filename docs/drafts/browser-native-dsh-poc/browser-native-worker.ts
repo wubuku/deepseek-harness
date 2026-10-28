@@ -200,6 +200,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly newText?: string
   readonly failStage?: ChunkEditStage
   readonly toolStage?: BrowserNativeFileToolStage
+  readonly timeoutMs?: number
   readonly sessionId?: string
   readonly ownerId?: string
   readonly ownerToken?: string
@@ -227,15 +228,17 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'set-file-tool-delay') {
-    return Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
+    return Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 10_000
   }
   if (data.action === 'cancel-file-search') {
     return typeof data.path === 'string' && (typeof data.pattern === 'string' || typeof data.marker === 'string')
       && Number.isSafeInteger(data.delayMs) && Number(data.delayMs) >= 0 && Number(data.delayMs) <= 1_000
   }
   if (data.action === 'wait-file-tool-stage') {
-    return ['grep-match', 'copy-prefix', 'copy-suffix', 'write-replacement', 'truncate', 'hash', 'publish']
-      .includes(String(data.toolStage))
+    return (data.timeoutMs === undefined || Number.isSafeInteger(data.timeoutMs)
+      && Number(data.timeoutMs) >= 1 && Number(data.timeoutMs) <= 45_000)
+      && ['grep-match', 'copy-prefix', 'copy-suffix', 'write-replacement', 'truncate', 'hash', 'publish']
+        .includes(String(data.toolStage))
   }
   if (data.action === 'chunk-edit-probe' || data.action === 'reference-edit-probe') {
     const oldTextBytes = typeof data.oldText === 'string' ? new TextEncoder().encode(data.oldText).byteLength : 0
@@ -921,7 +924,7 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         const timer = setTimeout(() => {
           fileToolStageWaiters.delete(request.requestId)
           resolve(false)
-        }, 45_000)
+        }, request.timeoutMs ?? 45_000)
         fileToolStageWaiters.set(request.requestId, {
           stage: request.toolStage!,
           resolve,

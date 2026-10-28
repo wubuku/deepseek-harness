@@ -727,7 +727,13 @@ export async function cleanupAbandonedBrowserNativeEdits(workspaceId: string): P
   const prefix = `${EDIT_DIRECTORY_PREFIX}${workspaceId}-`
   for await (const [name, handle] of root.entries()) {
     if (handle.kind !== 'directory' || !name.startsWith(prefix) || activeEditDirectories.has(name)) continue
-    await root.removeEntry(name, { recursive: true })
+    try {
+      await root.removeEntry(name, { recursive: true })
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && 'name' in error
+        && error.name === 'NoModificationAllowedError') continue
+      throw error
+    }
   }
 }
 
@@ -795,7 +801,11 @@ export async function executeBrowserNativeEdit(
   value: unknown,
   signal: AbortSignal,
   workspaceId: string,
-  hooks: { readonly yieldDelayMs?: number; readonly onStage?: (stage: ChunkEditStage) => void } = {},
+  hooks: {
+    readonly yieldDelayMs?: number
+    readonly onStage?: (stage: ChunkEditStage) => void
+    readonly beforePublish?: () => Promise<void>
+  } = {},
 ): Promise<BrowserNativeEditResult> {
   const input = parseEditInput(value)
   const path = absoluteWorkspacePath(input.filePath)
@@ -835,6 +845,7 @@ export async function executeBrowserNativeEdit(
     if (!currentStat.isFile() || vfsFileVersion(currentStat) !== initialVersion) {
       throw new BrowserNativeFileToolError(`cannot edit ${relativeWorkspacePath(path)}: file changed while the edit was running`, 'FS_STALE_VERSION')
     }
+    await hooks.beforePublish?.()
     const reference = { hash: metrics.resultHash, bytes: metrics.resultBytes }
     vfs.replaceExternalSync(path, editTarget.backing, reference)
     published = true

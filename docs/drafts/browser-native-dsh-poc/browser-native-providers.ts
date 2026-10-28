@@ -649,26 +649,32 @@ function createRemoteSessionPersistenceClass(
       ctx.on('tools/execute', async (exec, next) => {
         const isWorkspaceTool = ['read', 'read_image', 'write', 'edit', 'grep', 'glob', 'bash'].includes(exec.name)
         if (!isWorkspaceTool || exec.agent === undefined) return await next()
-        await workspace.authorizeFileTool(exec.name)
+        const authorizedRevision = await workspace.authorizeFileTool(exec.name)
         if (exec.name === 'grep') {
           const value = await executeBrowserNativeGrep(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs(), {
             onMatcherStarted: () => workspace.reportFileToolStage('grep-match'),
           })
+          await workspace.verifyFileToolRevision(authorizedRevision)
           return { isError: false, value } as ToolExecutionResult
         }
         if (exec.name === 'glob') {
           const value = await executeBrowserNativeGlob(workspace.vfs, exec.arguments, exec.signal, workspace.getFileToolYieldDelayMs())
+          await workspace.verifyFileToolRevision(authorizedRevision)
           return { isError: false, value } as ToolExecutionResult
         }
-        if (exec.name === 'read') {
-          const delayMs = workspace.getFileToolYieldDelayMs()
-          const filePath = isRecord(exec.arguments) && typeof exec.arguments.file_path === 'string'
-            ? exec.arguments.file_path
-            : ''
-          const readDelayMs = filePath.includes('parallel-slow') ? delayMs
-            : filePath.includes('parallel-fast') ? Math.floor(delayMs * 0.6) : 0
-          if (readDelayMs > 0) await new Promise<void>(resolve => { setTimeout(resolve, readDelayMs) })
-          return await next()
+        if (exec.name === 'read' || exec.name === 'read_image') {
+          if (exec.name === 'read') {
+            const delayMs = workspace.getFileToolYieldDelayMs()
+            const filePath = isRecord(exec.arguments) && typeof exec.arguments.file_path === 'string'
+              ? exec.arguments.file_path
+              : ''
+            const readDelayMs = filePath.includes('parallel-slow') || filePath.includes('owner-committed.txt') ? delayMs
+              : filePath.includes('parallel-fast') ? Math.floor(delayMs * 0.6) : 0
+            if (readDelayMs > 0) await new Promise<void>(resolve => { setTimeout(resolve, readDelayMs) })
+          }
+          const result = await next()
+          await workspace.verifyFileToolRevision(authorizedRevision)
+          return result
         }
         if (!['write', 'edit', 'bash'].includes(exec.name)) return await next()
         const session = exec.agent.session
@@ -713,6 +719,7 @@ function createRemoteSessionPersistenceClass(
                         {
                           yieldDelayMs: workspace.getFileToolYieldDelayMs(),
                           onStage: stage => workspace.reportFileToolStage(stage),
+                          beforePublish: async () => await workspace.ensureWriterLease(),
                         },
                       ),
                     } as ToolExecutionResult

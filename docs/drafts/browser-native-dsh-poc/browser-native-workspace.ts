@@ -440,7 +440,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.assertWriterLeaseUsable()
   }
 
-  async authorizeFileTool(name: string): Promise<void> {
+  async authorizeFileTool(name: string): Promise<number | undefined> {
     if (!this.ready) throw new Error('browser-native workspace: Workspace is not ready')
     if (this.accessMode === 'stale') throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
     if (this.accessMode === 'observer') {
@@ -448,16 +448,32 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         throw new Error(`browser-native workspace: observer cannot execute Workspace tool "${name}"`)
       }
       const revision = await this.loadManifestRevision()
-      if (revision !== this.revision) {
-        this.accessMode = 'stale'
-        this.onAccessMode?.(this.accessMode)
-        this.onStatus('stale', this.workspaceId, this.revision, 0, 'Workspace changed; refresh to load the committed revision')
+      if (this.accessMode === 'stale') {
         throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
       }
-      return
+      if (revision !== this.revision) {
+        this.markObserverStale()
+      }
+      return revision
     }
     this.assertLocalWorkspaceUsable()
     await this.ensureWriterLease()
+    return undefined
+  }
+
+  async verifyFileToolRevision(authorizedRevision: number | undefined): Promise<void> {
+    if (this.accessMode === 'writer') return
+    if (this.accessMode === 'stale') {
+      throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
+    }
+    if (authorizedRevision === undefined) {
+      throw new Error('browser-native workspace: observer read has no authorized revision')
+    }
+    const revision = await this.loadManifestRevision()
+    if (this.accessMode === 'stale') {
+      throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
+    }
+    if (revision !== authorizedRevision || revision !== this.revision) this.markObserverStale()
   }
 
   async ensureWriterLease(): Promise<void> {
@@ -1282,7 +1298,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private async loadManifestRevision(): Promise<number> {
     if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot check a manifest before identity')
     const response = await fetch(
-      `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
+      `${WORKSPACE_API}/revision?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
       { credentials: 'same-origin', cache: 'no-store' },
     )
     const manifest = await readJson(response)
@@ -1291,6 +1307,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       throw new Error('browser-native workspace: backend returned an invalid manifest revision')
     }
     return manifest.revision
+  }
+
+  private markObserverStale(): never {
+    this.accessMode = 'stale'
+    this.onAccessMode?.(this.accessMode)
+    this.onStatus('stale', this.workspaceId, this.revision, 0, 'Workspace changed; refresh to load the committed revision')
+    throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
   }
 }
 
@@ -1322,7 +1345,9 @@ export interface BrowserNativeWorkspaceRuntime {
   /** Renew an enabled writer lease before a file tool starts. */
   readonly ensureWriterLease: () => Promise<void>
   /** Check Workspace access and the remote revision before executing a file tool. */
-  readonly authorizeFileTool: (name: string) => Promise<void>
+  readonly authorizeFileTool: (name: string) => Promise<number | undefined>
+  /** Reject an observer result if its Workspace revision changed during execution. */
+  readonly verifyFileToolRevision: (authorizedRevision: number | undefined) => Promise<void>
   /** Return the PoC writer lease for model-independent browser tests. */
   readonly getWriterLease: () => BrowserNativeWorkspaceWriterLease | undefined
   /** Return Worker-local lease timing for model-independent browser tests. */
@@ -1404,6 +1429,7 @@ export function createBrowserNativeWorkspaceRuntime(
     assertLocalWorkspaceUsable: () => mirror.assertLocalWorkspaceUsable(),
     ensureWriterLease: async () => await mirror.ensureWriterLease(),
     authorizeFileTool: async name => await mirror.authorizeFileTool(name),
+    verifyFileToolRevision: async authorizedRevision => await mirror.verifyFileToolRevision(authorizedRevision),
     getWriterLease: () => mirror.getWriterLease(),
     getWriterLeaseTestState: () => mirror.getWriterLeaseTestState(),
     releaseWriter: async () => await mirror.releaseWriter(),

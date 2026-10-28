@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-041：共享 Workspace revision 竞态与长 OPFS edit lease fencing
+
+```text
+changeId: BN-P2-041
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-28
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-file-tools.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/shared-workspace-observer.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-lease-edit-race.e2e.mjs; docs/drafts/browser-native-dsh-poc/workspace-concurrent-revision-validation-plan.md; docs/drafts/browser-native-dsh-poc/workspace-concurrent-revision-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: Observer 工具只在开始时检查 Workspace revision，owner 可在异步 read/grep/glob 完成前提交新快照；revision 检查还下载完整 manifest。长 OPFS edit 也可能在 staging 期间失去 writer lease，再把未授权修改发布到本地 VFS。
+existingExtensionPointsChecked: 复用 Workspace principal 校验、现有 `sendJson()` no-store 响应、observer capability withdrawal、DSH tools/execute provider、OPFS chunk editor `beforePublish` 时序、现有 Worker file-tool stage test port 和单 writer fencing。未修改正式 Agent Loop、Session format、Workspace package、Web app、profile 默认值或根依赖。
+whyDraftOnlyWasInsufficient: backend tests 无法证明两个真实 Worker/Session 的异步时序不会把旧文件内容送进 DSH tool result，也无法证明 OPFS staging 期间 lease 转移后旧 Worker 不会发布；源码单测也不能暴露真实 startup cleanup 对另一个 Worker 打开的 OPFS staging directory 的影响。
+behaviorChange: 新增 principal-scoped `GET /api/browser-native/workspace/revision`，响应体只含 protocolVersion、workspaceId 和 revision，并保持 `Cache-Control: no-store`。Observer 开放的 `read`、`grep`、`glob` 保存本次调用开始 revision，并在成功返回前复查；revision 改变时结果被拒绝、Workspace 转为 stale 并撤销工具。当前 Browser profile 禁用 `read_image`，不纳入 observer allowlist。OPFS edit 在 `MemoryVfs` publish 前续验 writer lease；旧 lease 被拒绝时，未发布的临时 staging 被丢弃，DSH Session 留存工具参数及显式错误，不自动重放；启动清理遇到由另一 Worker 持有的 OPFS staging directory 时保留该目录并继续启动。
+consumersUpdated: Browser Workspace/provider/backend、backend 与 Workspace Vitest、shared observer Chrome E2E、新增 lease/edit Chrome E2E、PoC README、兼容矩阵、docs/drafts 索引、计划/进度和本账本。
+tests: Workspace、file-tools、chunk-editor Vitest 35/35；backend tests 48/48；`pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 通过；preview build 通过并显示既有 native platform、tsdown 弃用和大 chunk 警告。Chrome observer race E2E 在两个 Session 间验证 stale read 无旧内容泄露，最终 revision 3、12 个 LLM 请求、无 page error/跨源请求；4 个 revision 响应各 87 bytes，本机 request-to-header 观测 0.11–0.50 ms，非 SLA。Chrome lease/edit E2E 用 32 MiB 文件验证 fencing token 1→2、旧 edit 在 publish 前失败、Session 保留原始参数、单次失败结算、无旧 receipt/覆盖，successor 提交 revision 2；Stop-edit 与 crash-edit E2E 也通过。真实 `gpt-5.6-sol` Chrome smoke 完成 `read → write → read` 和刷新恢复，59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200、无页面错误；凭据只由 backend 读取。初始 scripted E2E 因缺少 DSH read-before-write 和 `read.offset` 0-based 参数而失败，修正工具顺序及 1-based offset 后通过。最终完整回归、文档门禁和提交前检查见本批 progress。
+syncReplaySteps: 上游同步后检查 Workspace revision API、principal/cookie 校验和 no-store；检查 observer `read`/`grep`/`glob` dispatch 与 stale 后 capability withdrawal，保留 `read_image` 当前不属于 observer allowlist 的事实；确认 `executeBrowserNativeEdit()` 仍在 VFS publish 前调用 lease verifier，且另一 Worker 占用 staging 文件时启动清理不会删除它。运行 backend/Workspace/file-tool/chunk-editor tests、Web typecheck、preview build、shared observer 与 lease/edit Chrome E2E、Stop/crash edit E2E、真实 Chrome LLM smoke 和文档门禁。不要把前后 revision 检查描述成跨 Session 原子快照，也不要把 PoC lease 描述成跨主机 fencing。
+deleteCondition: 正式 Browser Workspace API 提供有界 revision 查询、读取一致性和 writer lease fencing，并有产品级真实浏览器测试覆盖 observer 工具与长文件编辑；迁移等价验收后删除 PoC-only route、hooks 和测试，或移除 Browser-Native PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-038：本地 Workspace 身份丢失时阻止静默创建新身份
 
 ```text

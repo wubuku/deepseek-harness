@@ -20,6 +20,7 @@ const apiRequests = []
 const roleRequests = { owner: [], observer: [] }
 const modelRequests = []
 const commits = []
+const revisionResponseMetrics = []
 const httpErrors = []
 const pageErrors = []
 const externalRequests = []
@@ -87,8 +88,8 @@ async function localSnapshot(page, workspaceId) {
   }), workspaceId)
 }
 
-function manifestRequestCount(role) {
-  return roleRequests[role].filter(item => item.path === '/api/browser-native/workspace/manifest').length
+function revisionRequestCount(role) {
+  return roleRequests[role].filter(item => item.path === '/api/browser-native/workspace/revision').length
 }
 
 try {
@@ -111,7 +112,7 @@ try {
       if (!url.pathname.startsWith('/api/browser-native/')) return
       let body = {}
       try { body = request.postDataJSON() ?? {} } catch {}
-      const item = { role, path: url.pathname, body, status: undefined }
+      const item = { role, path: url.pathname, body, status: undefined, startedAt: performance.now() }
       apiRequests.push(item)
       roleRequests[role].push(item)
       if (url.pathname === '/api/browser-native/llm') modelRequests.push(item)
@@ -123,7 +124,15 @@ try {
       }
       const request = apiRequests.findLast(item => item.role === role && item.path === new URL(response.url()).pathname
         && item.status === undefined)
-      if (request !== undefined) request.status = response.status()
+      if (request !== undefined) {
+        request.status = response.status()
+        if (request.path === '/api/browser-native/workspace/revision') {
+          request.elapsedMs = performance.now() - request.startedAt
+          revisionResponseMetrics.push(response.body().then(bytes => {
+            request.responseBytes = bytes.byteLength
+          }))
+        }
+      }
     })
   }
 
@@ -204,7 +213,7 @@ try {
   assert.ok(observerSharedSnapshot.retryBatch?.changes.some(change => change.path === 'owner-pending.txt'),
   'the writer pending Workspace mutation remains available for retry')
 
-  const manifestChecksBeforeRead = manifestRequestCount('observer')
+  const revisionChecksBeforeRead = revisionRequestCount('observer')
   const readTurn = await sendTurn({
     page: observerPage,
     origin,
@@ -215,7 +224,7 @@ try {
   })
   assert.notEqual(ownerTurn.sessionId, readTurn.sessionId)
   assertSingleUserPrompt(readTurn.session, 'BROWSER_NATIVE_WORKSPACE_OBSERVER_READ_E2E')
-  assert.equal(manifestRequestCount('observer') - manifestChecksBeforeRead, 1)
+  assert.equal(revisionRequestCount('observer') - revisionChecksBeforeRead, 2)
   const readCall = toolCalls(readTurn.session, readTurn.turn).find(call => call.data.name === 'read')
   assert.ok(readCall)
   assert.equal(toolResult(readTurn.session, readCall)?.data.message?.isError, false)
@@ -254,35 +263,52 @@ try {
   assert.equal(forgedFile.ok, false)
   assert.equal(forgedWriteTurn.session.events.some(event => event.type === 'browser-native/workspace-receipt'), false)
 
-  failOwnerCommits = false
-  await workerRequest(ownerPage, { action: 'flush-workspace' })
-  await waitFor(async () => (await workspaceManifest(ownerPage, ownerIdentity.workspaceId)).revision === 2,
-    'owner pending mutation commit')
-  assert.equal((await workspaceManifest(observerPage, ownerIdentity.workspaceId)).revision, 2)
-  const commitsBeforeStaleRead = commits.length
-  const manifestChecksBeforeStaleRead = manifestRequestCount('observer')
-  const staleTurn = await sendTurn({
+  assert.deepEqual(await workerRequest(observerPage, { action: 'set-file-tool-delay', delayMs: 5_000 })
+    .then(result => ({ ok: result?.ok, delayMs: result?.delayMs })), { ok: true, delayMs: 5_000 })
+  const revisionChecksBeforeStaleRead = revisionRequestCount('observer')
+  const staleTurnPromise = sendTurn({
     page: observerPage,
     origin,
     requests: roleRequests.observer,
-    prompt: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_E2E: attempt a file read after a remote commit.',
-    marker: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_BLOCKED',
+    prompt: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E: read while the owner commits a new revision.',
     timeout: 60_000,
   })
+  await waitFor(() => {
+    const request = roleRequests.observer.filter(item => item.path === '/api/browser-native/workspace/revision')
+      .at(-1)
+    return request?.status === 200 && revisionRequestCount('observer') === revisionChecksBeforeStaleRead + 1
+  }, 'observer pre-read revision check')
+  failOwnerCommits = false
+  await workerRequest(ownerPage, { action: 'flush-workspace' })
+  await waitFor(async () => (await workspaceManifest(ownerPage, ownerIdentity.workspaceId)).revision === 2,
+    'owner pending mutation commit during observer read')
+  const commitsAfterOwnerUpdate = commits.length
+  assert.equal((await workspaceManifest(observerPage, ownerIdentity.workspaceId)).revision, 2)
+  const staleTurn = await staleTurnPromise
   assert.equal(staleTurn.sessionId, readTurn.sessionId)
-  assertSingleUserPrompt(staleTurn.session, 'BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_E2E')
-  assert.equal(commits.length, commitsBeforeStaleRead)
-  assert.equal(manifestRequestCount('observer') - manifestChecksBeforeStaleRead, 1)
+  assertSingleUserPrompt(staleTurn.session, 'BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E')
+  assert.equal(commits.length, commitsAfterOwnerUpdate)
+  assert.equal(revisionRequestCount('observer') - revisionChecksBeforeStaleRead, 2)
   const staleCall = toolCalls(staleTurn.session, staleTurn.turn).find(call => call.data.name === 'read')
   assert.ok(staleCall)
   const staleResult = toolResult(staleTurn.session, staleCall)
+  assert.ok(assistantText(staleTurn.session, staleTurn.turn).includes('BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_REJECTED'),
+    JSON.stringify({ assistant: assistantText(staleTurn.session, staleTurn.turn), staleResult }))
   assert.equal(staleResult?.data.message?.isError, true)
   assert.match(JSON.stringify(staleResult?.data.message?.content), /stale/i)
+  assert.equal(JSON.stringify(staleResult?.data.message?.content).includes('owner-committed-value'), false)
+  const raceModelRequests = modelRequests.filter(item => item.role === 'observer'
+    && JSON.stringify(item.body.messages).includes('BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E'))
+  assert.equal(raceModelRequests.some(item => {
+    const markerIndex = item.body.messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes('BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E'))
+    return JSON.stringify(item.body.messages.slice(markerIndex + 1)).includes('owner-committed-value')
+  }), false)
   await observerPage.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'stale',
     undefined, { timeout: 15_000 })
   await waitFor(async () => {
     const request = modelRequests.findLast(item => item.role === 'observer'
-      && JSON.stringify(item.body.messages).includes('BROWSER_NATIVE_WORKSPACE_OBSERVER_STALE_E2E'))
+      && JSON.stringify(item.body.messages).includes('BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E'))
     return request !== undefined && !toolNames(request.body).includes('read')
   }, 'observer stale capability withdrawal')
   const observerLease = await workerRequest(observerPage, { action: 'lease-info' })
@@ -353,6 +379,7 @@ try {
   assert.equal(httpErrors.filter(error => error.status === 409).length, 2)
   assert.deepEqual(pageErrors, [])
   assert.deepEqual(externalRequests, [])
+  await Promise.all(revisionResponseMetrics)
 
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
@@ -364,6 +391,9 @@ try {
     sharedPendingSnapshotIgnored: true,
     observerReadTools: toolNames(readModelRequest.body),
     staleReadRejected: staleResult?.data.message?.isError === true,
+    observerReadRevisionChecks: revisionRequestCount('observer'),
+    revisionResponses: apiRequests.filter(item => item.path === '/api/browser-native/workspace/revision')
+      .map(({ role, status, responseBytes, elapsedMs }) => ({ role, status, responseBytes, elapsedMs })),
     observerWriterFencingToken: refreshedLease.fencingToken,
     finalWorkspaceRevision: 3,
     sessionReceiptCounts: [ownerReceipts.length, observerReadReceipts.length,

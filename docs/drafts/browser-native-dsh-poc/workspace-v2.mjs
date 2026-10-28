@@ -548,6 +548,12 @@ export class WorkspaceStore {
     return this.snapshot(this.requireWorkspace(principalId, workspaceId))
   }
 
+  revision(request, workspaceId) {
+    const principalId = this.principalFromRequest(request)
+    const workspace = this.requireWorkspace(principalId, workspaceId)
+    return { workspaceId: workspace.id, revision: workspace.revision }
+  }
+
   async validateExecutionHandoff(request, { workspaceId, writerToken, fencingToken, revision }) {
     const principalId = this.principalFromRequest(request, SESSION_COOKIE_NAME)
     if (!Number.isSafeInteger(fencingToken) || fencingToken < 1

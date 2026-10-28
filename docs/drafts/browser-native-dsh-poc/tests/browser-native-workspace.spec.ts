@@ -66,6 +66,7 @@ describe('browser-native Workspace VFS sync', () => {
         revision: remoteRevision,
         entries: [{ path: 'committed.txt', kind: 'file', hash: manifestHash, bytes: manifestBytes.byteLength, mode: 0o600 }],
       })
+      if (url.includes('/revision?')) return jsonResponse({ workspaceId, revision: remoteRevision })
       throw new Error(`unexpected request ${url}`)
     }, protocol)
 
@@ -97,21 +98,24 @@ describe('browser-native Workspace VFS sync', () => {
     expect(statuses).toHaveLength(statusCount)
     expect(requests).toHaveLength(requestCount)
 
-    await runtime.authorizeFileTool('read')
+    const authorizedRevision = await runtime.authorizeFileTool('read')
+    expect(authorizedRevision).toBe(7)
+    await runtime.verifyFileToolRevision(authorizedRevision)
     await expect(runtime.authorizeFileTool('write')).rejects.toThrow('observer cannot execute')
-    expect(requests.filter(url => url.includes('/manifest?'))).toHaveLength(2)
+    expect(requests.filter(url => url.includes('/manifest?'))).toHaveLength(1)
+    expect(requests.filter(url => url.includes('/revision?'))).toHaveLength(2)
 
     remoteRevision = 8
     await expect(runtime.authorizeFileTool('glob')).rejects.toThrow('snapshot is stale')
     expect(runtime.getAccessMode()).toBe('stale')
     expect(accessModes).toEqual(['observer', 'stale'])
     expect(statuses).toContain('stale')
-    const manifestChecks = requests.filter(url => url.includes('/manifest?')).length
+    const revisionChecks = requests.filter(url => url.includes('/revision?')).length
     const staleStatusCount = statuses.length
     expect(await runtime.flushWorkspace()).toEqual([])
     expect(statuses).toHaveLength(staleStatusCount)
     await expect(runtime.authorizeFileTool('read')).rejects.toThrow('snapshot is stale')
-    expect(requests.filter(url => url.includes('/manifest?'))).toHaveLength(manifestChecks)
+    expect(requests.filter(url => url.includes('/revision?'))).toHaveLength(revisionChecks)
     await expect(runtime.ensureWriterLease()).rejects.toThrow('cannot acquire writer access')
   })
 
@@ -132,6 +136,135 @@ describe('browser-native Workspace VFS sync', () => {
     await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow('owner token was rejected')
     expect(requests.some(url => url.includes('/manifest?'))).toBe(false)
     expect(runtime.getAccessMode()).toBe('writer')
+  })
+
+  it('marks an observer stale when the remote revision changes during a file tool', async () => {
+    let remoteRevision = 4
+    const requests: string[] = []
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      requests.push(url)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_ALREADY_OWNED', message: 'owned', retryAfterMs: 1_000 },
+      }, 409)
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 4, entries: [] })
+      if (url.includes('/revision?')) return jsonResponse({ workspaceId, revision: remoteRevision })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const accessModes: string[] = []
+    const runtime = createBrowserNativeWorkspaceRuntime({
+      writerLease: true,
+      onAccessMode: mode => { accessModes.push(mode) },
+    })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+
+    const authorizedRevision = await runtime.authorizeFileTool('read')
+    expect(authorizedRevision).toBe(4)
+    runtime.vfs.seed('/dsh/home/workspace/read-during-race.txt', 'old snapshot secret')
+    remoteRevision = 5
+    await expect(runtime.verifyFileToolRevision(authorizedRevision)).rejects.toThrow('snapshot is stale')
+    expect(runtime.getAccessMode()).toBe('stale')
+    expect(accessModes).toEqual(['observer', 'stale'])
+    expect(requests.filter(url => url.includes('/revision?'))).toHaveLength(2)
+    await expect(runtime.authorizeFileTool('read')).rejects.toThrow('snapshot is stale')
+    expect(requests.filter(url => url.includes('/revision?'))).toHaveLength(2)
+  })
+
+  it('rejects observer file output if the completion revision check fails', async () => {
+    let revisionChecks = 0
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_ALREADY_OWNED', message: 'owned', retryAfterMs: 1_000 },
+      }, 409)
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 4, entries: [] })
+      if (url.includes('/revision?')) {
+        revisionChecks += 1
+        return revisionChecks === 1
+          ? jsonResponse({ workspaceId, revision: 4 })
+          : jsonResponse({ error: { code: 'TEMPORARY', message: 'revision unavailable' } }, 503)
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ writerLease: true })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+
+    const authorizedRevision = await runtime.authorizeFileTool('read')
+    await expect(runtime.verifyFileToolRevision(authorizedRevision)).rejects.toThrow('revision unavailable')
+    expect(runtime.getAccessMode()).toBe('observer')
+  })
+
+  it('rejects a delayed observer result after another concurrent check marks the snapshot stale', async () => {
+    let revisionChecks = 0
+    let releaseDelayedCheck: () => void = () => {}
+    const delayedCheck = new Promise<void>(resolve => { releaseDelayedCheck = resolve })
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_ALREADY_OWNED', message: 'owned', retryAfterMs: 1_000 },
+      }, 409)
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 4, entries: [] })
+      if (url.includes('/revision?')) {
+        revisionChecks += 1
+        if (revisionChecks <= 2) return jsonResponse({ workspaceId, revision: 4 })
+        if (revisionChecks === 3) {
+          await delayedCheck
+          return jsonResponse({ workspaceId, revision: 4 })
+        }
+        return jsonResponse({ workspaceId, revision: 5 })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ writerLease: true })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+
+    const earlierRevision = await runtime.authorizeFileTool('read')
+    const laterRevision = await runtime.authorizeFileTool('grep')
+    const earlierCompletion = runtime.verifyFileToolRevision(earlierRevision)
+    await expect(runtime.verifyFileToolRevision(laterRevision)).rejects.toThrow('snapshot is stale')
+    releaseDelayedCheck()
+    await expect(earlierCompletion).rejects.toThrow('snapshot is stale')
+    expect(runtime.getAccessMode()).toBe('stale')
+    expect(revisionChecks).toBe(4)
+  })
+
+  it('rejects a delayed observer preflight after another check marks the snapshot stale', async () => {
+    let revisionChecks = 0
+    let releaseDelayedCheck: () => void = () => {}
+    const delayedCheck = new Promise<void>(resolve => { releaseDelayedCheck = resolve })
+    stubWorkspaceFetch(async input => {
+      const url = String(input)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.endsWith('/lease')) return jsonResponse({
+        error: { code: 'WORKSPACE_ALREADY_OWNED', message: 'owned', retryAfterMs: 1_000 },
+      }, 409)
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 4, entries: [] })
+      if (url.includes('/revision?')) {
+        revisionChecks += 1
+        if (revisionChecks === 1) {
+          await delayedCheck
+          return jsonResponse({ workspaceId, revision: 4 })
+        }
+        return jsonResponse({ workspaceId, revision: 5 })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ writerLease: true })
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+
+    const earlierPreflight = runtime.authorizeFileTool('read')
+    await expect(runtime.authorizeFileTool('grep')).rejects.toThrow('snapshot is stale')
+    releaseDelayedCheck()
+    await expect(earlierPreflight).rejects.toThrow('snapshot is stale')
+    expect(runtime.getAccessMode()).toBe('stale')
+    expect(revisionChecks).toBe(2)
   })
 
   it('restores before runtime writes, uploads changed content, and commits a revision', async () => {

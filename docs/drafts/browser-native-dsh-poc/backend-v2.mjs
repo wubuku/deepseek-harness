@@ -1810,6 +1810,96 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const observerRevisionRaceMarker = 'BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_E2E'
+  const leaseEditRaceMarker = 'BROWSER_NATIVE_WORKSPACE_LEASE_EDIT_RACE_E2E'
+  if (latestUserText.includes(leaseEditRaceMarker) && hasTool(tools, 'edit')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(leaseEditRaceMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-lease-edit-race-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/lease-edit-race.txt', offset: 2048, limit: 1 },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-lease-edit-race',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/lease-edit-race.txt',
+          old_string: 'BROWSER_NATIVE_LEASE_EDIT_OLD',
+          new_string: 'BROWSER_NATIVE_LEASE_EDIT_OLD_OWNER',
+        },
+      })
+      return
+    }
+    const result = toolResults[1]?.content
+    const resultText = typeof result === 'string' ? result
+      : Array.isArray(result) ? result.filter(item => item?.type === 'text' && typeof item.text === 'string')
+        .map(item => item.text).join('\n') : ''
+    scriptedText(response, toolResults.length === 2 && /writer lease.*released/i.test(resultText)
+      ? 'BROWSER_NATIVE_WORKSPACE_LEASE_EDIT_FENCED'
+      : 'BROWSER_NATIVE_WORKSPACE_LEASE_EDIT_UNEXPECTED_RESULT')
+    return
+  }
+
+  const leaseSuccessorMarker = 'BROWSER_NATIVE_WORKSPACE_LEASE_SUCCESSOR_E2E'
+  if (latestUserText.includes(leaseSuccessorMarker) && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(leaseSuccessorMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-lease-successor-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/lease-edit-race.txt', offset: 1, limit: 1 },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-lease-successor-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/lease-edit-race.txt',
+          content: 'BROWSER_NATIVE_LEASE_EDIT_NEW_OWNER\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResults.length === 2
+      ? 'BROWSER_NATIVE_WORKSPACE_LEASE_SUCCESSOR_DONE'
+      : 'BROWSER_NATIVE_WORKSPACE_LEASE_SUCCESSOR_UNEXPECTED_RESULT')
+    return
+  }
+
+  if (latestUserText.includes(observerRevisionRaceMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(observerRevisionRaceMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0 && hasTool(tools, 'read') && !hasTool(tools, 'write')
+      && !hasTool(tools, 'edit') && !hasTool(tools, 'bash')) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-workspace-observer-revision-race-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/owner-committed.txt' },
+      })
+      return
+    }
+    const resultContent = typeof toolResults[0]?.content === 'string' ? toolResults[0].content
+      : Array.isArray(toolResults[0]?.content)
+        ? toolResults[0].content.filter(item => item?.type === 'text' && typeof item.text === 'string')
+          .map(item => item.text).join('\n')
+        : ''
+    scriptedText(response, toolResults.length === 1 && /stale/i.test(resultContent)
+      ? 'BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_REJECTED'
+      : 'BROWSER_NATIVE_WORKSPACE_OBSERVER_REVISION_RACE_UNEXPECTED_RESULT')
+    return
+  }
+
   const workspaceObserverCases = [
     {
       marker: 'BROWSER_NATIVE_WORKSPACE_OBSERVER_READ_E2E',
@@ -2493,6 +2583,13 @@ export async function createBrowserNativeV2Server(options) {
           throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
         }
         sendJson(response, 200, workspaces.manifest(request, url.searchParams.get('workspaceId')))
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/revision') {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        sendJson(response, 200, workspaces.revision(request, url.searchParams.get('workspaceId')))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/blob-upload/start') {

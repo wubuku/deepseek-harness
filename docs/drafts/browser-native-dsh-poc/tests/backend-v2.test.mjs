@@ -1572,6 +1572,16 @@ describe('browser-native DSH v2 backend', () => {
     const initial = await initialResponse.json()
     assert.equal(initial.revision, 0)
     assert.deepEqual(initial.entries, [])
+    const initialRevisionResponse = await fetch(
+      `${origin}/api/browser-native/workspace/revision?protocolVersion=1&workspaceId=${identity.workspaceId}`,
+      { headers: { cookie: identity.cookie } },
+    )
+    assert.equal(initialRevisionResponse.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await initialRevisionResponse.json(), {
+      protocolVersion: 1,
+      workspaceId: identity.workspaceId,
+      revision: 0,
+    })
 
     const bytes = Buffer.from('cloud workspace ✓\n')
     const hash = createHash('sha256').update(bytes).digest('hex')
@@ -1624,10 +1634,65 @@ describe('browser-native DSH v2 backend', () => {
     })
     const manifest = await manifestResponse.json()
     assert.deepEqual(manifest.entries, [{ path: 'notes', kind: 'directory', mode: 0o755 }, { path: 'notes/daily.txt', kind: 'file', hash, bytes: bytes.byteLength, mode: 0o600 }])
+    const revisionResponse = await fetch(
+      `${origin}/api/browser-native/workspace/revision?protocolVersion=1&workspaceId=${identity.workspaceId}`,
+      { headers: { cookie: identity.cookie } },
+    )
+    assert.equal(revisionResponse.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await revisionResponse.json(), {
+      protocolVersion: 1,
+      workspaceId: identity.workspaceId,
+      revision: 1,
+    })
     const downloaded = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
       headers: { cookie: identity.cookie },
     })
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes)
+  })
+
+  it('returns an authenticated revision-only response whose size does not depend on manifest entries', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const changes = Array.from({ length: 1_000 }, (_, index) => ({
+      path: `entry-${String(index).padStart(4, '0')}`,
+      kind: 'directory',
+      mode: 0o755,
+    }))
+    const committed = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes,
+    })
+    assert.equal(committed.response.ok, true, JSON.stringify(committed.value))
+
+    const query = `protocolVersion=1&workspaceId=${identity.workspaceId}`
+    const manifestResponse = await fetch(`${origin}/api/browser-native/workspace/manifest?${query}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const manifestBytes = Buffer.byteLength(await manifestResponse.text())
+    const revisionResponse = await fetch(`${origin}/api/browser-native/workspace/revision?${query}`, {
+      headers: { cookie: identity.cookie },
+    })
+    const revisionBody = await revisionResponse.json()
+    const revisionBytes = Buffer.byteLength(JSON.stringify(revisionBody))
+    assert.equal(revisionResponse.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(revisionBody, { protocolVersion: 1, workspaceId: identity.workspaceId, revision: 1 })
+    assert.equal(manifestBytes > revisionBytes * 100, true,
+      `manifest=${manifestBytes} bytes, revision=${revisionBytes} bytes`)
+
+    const unauthenticated = await fetch(`${origin}/api/browser-native/workspace/revision?${query}`)
+    assert.equal(unauthenticated.status, 401)
+    const foreign = await openWorkspaceIdentity(origin)
+    const forbidden = await fetch(`${origin}/api/browser-native/workspace/revision?${query}`, {
+      headers: { cookie: foreign.cookie },
+    })
+    assert.equal(forbidden.status, 403)
+    const unsupported = await fetch(
+      `${origin}/api/browser-native/workspace/revision?protocolVersion=99&workspaceId=${identity.workspaceId}`,
+      { headers: { cookie: identity.cookie } },
+    )
+    assert.equal(unsupported.status, 400)
   })
 
   it('resumes chunk uploads after backend restart and fences conflicting or incomplete chunks', async () => {
@@ -1782,6 +1847,12 @@ describe('browser-native DSH v2 backend', () => {
     })
     assert.equal(denied.status, 403)
     assert.equal((await denied.json()).error.code, 'WORKSPACE_FORBIDDEN')
+    const deniedRevision = await fetch(
+      `${first.origin}/api/browser-native/workspace/revision?protocolVersion=1&workspaceId=${owner.workspaceId}`,
+      { headers: { cookie: other.cookie } },
+    )
+    assert.equal(deniedRevision.status, 403)
+    assert.equal((await deniedRevision.json()).error.code, 'WORKSPACE_FORBIDDEN')
 
     const bytes = Buffer.from('survives backend restart')
     const hash = createHash('sha256').update(bytes).digest('hex')
