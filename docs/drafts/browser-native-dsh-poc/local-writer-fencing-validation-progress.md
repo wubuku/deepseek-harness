@@ -6,7 +6,7 @@ description: "Workspace 本地写权与代际批次的实际命令、证据、�
 
 ## 当前状态
 
-实施和验收完成，正在提交推送。本批从干净的 research 主工作区开始，只有一个 worktree；无需合并或清理额外 worktree。计划见[本地写权与代际验证](local-writer-fencing-validation-plan.md)，脱敏摘要见[验收结果](local-writer-fencing-chrome-results.json)。
+实施、验收和提交推送完成，远端 research 与本地 HEAD 一致，工作区干净。pre-push 增量 typecheck 5/5 通过。本批从干净的 research 主工作区开始，只有一个 worktree；无需合并或清理额外 worktree。计划见[本地写权与代际验证](local-writer-fencing-validation-plan.md)，脱敏摘要见[验收结果](local-writer-fencing-chrome-results.json)。
 
 | 里程碑 | 状态 | 证据与下一步 |
 |---|---|---|
@@ -59,7 +59,7 @@ description: "Workspace 本地写权与代际批次的实际命令、证据、�
 
 最终模型工件为 real-final.json、real-final.stderr.log 和 real-final-data；Chrome 强杀工件为 dsh-cache-recovery-vMg36j/results.json 与截图；前向版本结果为 forward2.json。早期真实模型尝试均未伪装为故障 E2E；本批故障主测试仍使用 scripted 响应来控制时序。
 
-最终双 Host 工件为 dsh-local-writer-fencing-wK1jGs/results.json、backend-itx3kl 与四张截图，入口输出为 full-host-final3.json/stderr.log。中间一轮实际正确拒绝为“writer lease was released”，夹具只接受“local writer”字样而失败；最终断言接受明确的本地或远端写权撤销，仍拒绝仅以 snapshot 内容变化代证。各个本地 mutator 的 epoch 拒绝由 direct-store 测试独立验证。
+最终双 Host 工件为 dsh-local-writer-fencing-wK1jGs/results.json、backend-itx3kl 与两张截图，入口输出为 full-host-final3.json/stderr.log。中间一轮实际正确拒绝为“writer lease was released”，夹具只接受“local writer”字样而失败；最终断言接受明确的本地或远端写权撤销，仍拒绝仅以 snapshot 内容变化代证。各个本地 mutator 的 epoch 拒绝由 direct-store 测试独立验证。
 
 锁内授权还运行了第二组旧行为负对照：使用本批增加 authorize 参数前保存的 local-fencing-store-bundle.js，两项新断言均预期失败，证据为临时目录 dsh-store-write-concurrency-cxvcQA/before-authorized-acquire-results.json；修复后相同断言通过。它是本批捕获的旧 bundle，不是历史 checkout，也不是最终通过项。
 
