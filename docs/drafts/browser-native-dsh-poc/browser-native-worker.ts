@@ -48,6 +48,7 @@ import {
   type ChunkBackedFile,
   type ChunkEditStage,
 } from './browser-native-chunk-editor.ts'
+import { findContentChunks } from './browser-native-content-chunker.ts'
 import { Sha256 } from './browser-native-sha256.ts'
 import {
   BROWSER_NATIVE_PROFILE_MANIFEST,
@@ -180,7 +181,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -200,6 +201,13 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly count?: number
   readonly delayMs?: number
   readonly chunkBytes?: number
+  readonly contentKind?: 'text' | 'binary' | 'repetitive'
+  readonly editKind?: 'replace' | 'insert' | 'delete'
+  readonly editPosition?: 'head' | 'middle' | 'tail'
+  readonly minimumChunkBytes?: number
+  readonly averageChunkBytes?: number
+  readonly alternateAverageChunkBytes?: number
+  readonly maximumChunkBytes?: number
   readonly oldText?: string
   readonly newText?: string
   readonly failStage?: ChunkEditStage
@@ -256,6 +264,19 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && typeof data.newText === 'string'
       && newTextBytes <= 256 * 1024
       && (data.failStage === undefined || ['copy-prefix', 'copy-suffix', 'write-replacement', 'truncate', 'hash', 'publish'].includes(String(data.failStage)))
+  }
+  if (data.action === 'content-chunking-probe') {
+    return Number.isSafeInteger(data.byteLength) && Number(data.byteLength) >= 1024 * 1024
+      && Number(data.byteLength) <= 64 * 1024 * 1024
+      && ['text', 'binary', 'repetitive'].includes(String(data.contentKind))
+      && ['replace', 'insert', 'delete'].includes(String(data.editKind))
+      && ['head', 'middle', 'tail'].includes(String(data.editPosition))
+      && Number.isSafeInteger(data.minimumChunkBytes) && Number(data.minimumChunkBytes) >= 1024
+      && Number.isSafeInteger(data.averageChunkBytes) && Number(data.averageChunkBytes) >= Number(data.minimumChunkBytes)
+      && Number.isSafeInteger(data.alternateAverageChunkBytes) && Number(data.alternateAverageChunkBytes) >= Number(data.minimumChunkBytes)
+      && Number.isSafeInteger(data.maximumChunkBytes) && Number(data.maximumChunkBytes) >= Number(data.averageChunkBytes)
+      && Number(data.maximumChunkBytes) >= Number(data.alternateAverageChunkBytes)
+      && Number(data.maximumChunkBytes) <= 1024 * 1024
   }
   if (data.action === 'session-handoff') {
     return typeof data.sessionId === 'string' && typeof data.ownerToken === 'string'
@@ -315,6 +336,308 @@ function hashWorkspacePath(path: string): { readonly bytes: number; readonly dig
     digest.update(chunk)
   }
   return { bytes, digest: digest.digestHex() }
+}
+
+function fixedFileChunks(totalBytes: number, chunkBytes: number): readonly { readonly offset: number; readonly length: number }[] {
+  const chunks = []
+  for (let offset = 0; offset < totalBytes; offset += chunkBytes) {
+    chunks.push({ offset, length: Math.min(chunkBytes, totalBytes - offset) })
+  }
+  return chunks
+}
+
+interface ContentSourceIndex {
+  readonly cdc: boolean
+  readonly averageBytes: number
+  readonly chunks: readonly { readonly offset: number; readonly length: number; readonly hash: string }[]
+  readonly sourceChunkSizes: ChunkSizeStats
+  readonly sourceRangeReadBytes: number
+  readonly sourceRangeReadCalls: number
+  readonly sourceChunkingMs: number
+  readonly sourceReadAndHashMs: number
+}
+
+interface ChunkSizeStats {
+  readonly minimumBytes: number
+  readonly medianBytes: number
+  readonly meanBytes: number
+  readonly maximumBytes: number
+}
+
+type BrowserNativeSyncAccessHandle = Parameters<typeof createSyncAccessChunkBackedFile>[0]
+
+async function hashFileChunks(
+  file: ChunkBackedFile,
+  chunks: readonly { readonly offset: number; readonly length: number }[],
+): Promise<{
+  readonly chunks: readonly { readonly offset: number; readonly length: number; readonly hash: string }[]
+  readonly elapsedMs: number
+  readonly bytesRead: number
+  readonly readCalls: number
+}> {
+  const startedAt = performance.now()
+  const hashed = []
+  let bytesRead = 0
+  for (const chunk of chunks) {
+    const bytes = file.read(chunk.offset, chunk.length)
+    if (bytes.byteLength !== chunk.length) throw new Error('browser-native content chunking probe: short chunk read')
+    bytesRead += bytes.byteLength
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+    hashed.push({
+      ...chunk,
+      hash: Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join(''),
+    })
+  }
+  return { chunks: hashed, elapsedMs: performance.now() - startedAt, bytesRead, readCalls: chunks.length }
+}
+
+function contentChunkRangesAreValid(
+  fileBytes: number,
+  chunks: readonly { readonly offset: number; readonly length: number }[],
+  minimumBytes: number,
+  maximumBytes: number,
+): boolean {
+  let expectedOffset = 0
+  for (const [index, chunk] of chunks.entries()) {
+    if (chunk.offset !== expectedOffset || chunk.length < 1 || chunk.length > maximumBytes
+      || index < chunks.length - 1 && chunk.length < minimumBytes) return false
+    expectedOffset += chunk.length
+  }
+  return expectedOffset === fileBytes
+}
+
+function chunkSizeStats(chunks: readonly { readonly length: number }[]): ChunkSizeStats {
+  const lengths = chunks.map(chunk => chunk.length).sort((left, right) => left - right)
+  if (lengths.length === 0) return { minimumBytes: 0, medianBytes: 0, meanBytes: 0, maximumBytes: 0 }
+  return {
+    minimumBytes: lengths[0]!,
+    medianBytes: lengths[Math.floor(lengths.length / 2)]!,
+    meanBytes: Math.round(lengths.reduce((total, length) => total + length, 0) / lengths.length),
+    maximumBytes: lengths[lengths.length - 1]!,
+  }
+}
+
+async function runContentChunkingProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
+  const byteLength = request.byteLength
+  const contentKind = request.contentKind
+  const editKind = request.editKind
+  const editPosition = request.editPosition
+  const minimumBytes = request.minimumChunkBytes
+  const averageBytes = request.averageChunkBytes
+  const alternateAverageBytes = request.alternateAverageChunkBytes
+  const maximumBytes = request.maximumChunkBytes
+  if (byteLength === undefined || contentKind === undefined || editKind === undefined || editPosition === undefined
+    || minimumBytes === undefined || averageBytes === undefined || alternateAverageBytes === undefined || maximumBytes === undefined) {
+    throw new Error('browser-native content chunking probe: all workload and chunk limits are required')
+  }
+  const storage = globalThis.navigator?.storage
+  if (storage === undefined || typeof storage.getDirectory !== 'function') {
+    throw new Error('browser-native content chunking probe: OPFS is unavailable')
+  }
+  const root = await storage.getDirectory()
+  const directoryName = `dsh-content-chunking-${crypto.randomUUID()}`
+  const ioBytes = 256 * 1024
+  const editBytes = editKind === 'replace' ? 4096 : 64 * 1024
+  const sourceBuffer = new Uint8Array(ioBytes)
+  const repeated = new TextEncoder().encode('{"status":"active","amount":12345,"source":"web"}\n')
+  const textEncoder = new TextEncoder()
+  let directoryCreated = false
+  let randomState = 0x31415926
+  let textRow = 0
+  let sourceSync: BrowserNativeSyncAccessHandle | undefined
+  let targetSync: BrowserNativeSyncAccessHandle | undefined
+  try {
+    const directory = await root.getDirectoryHandle(directoryName, { create: true })
+    directoryCreated = true
+    const sourceHandle = await directory.getFileHandle('source', { create: true })
+    const targetHandle = await directory.getFileHandle('target', { create: true })
+    sourceSync = await sourceHandle.createSyncAccessHandle()
+    targetSync = await targetHandle.createSyncAccessHandle()
+    const source = createSyncAccessChunkBackedFile(sourceSync)
+    const target = createSyncAccessChunkBackedFile(targetSync)
+    source.truncate(byteLength)
+    for (let offset = 0; offset < byteLength; offset += ioBytes) {
+      const length = Math.min(ioBytes, byteLength - offset)
+      for (let index = 0; index < length; index += 1) {
+        if (contentKind === 'repetitive') {
+          sourceBuffer[index] = repeated[(offset + index) % repeated.byteLength]!
+        } else if (contentKind === 'binary') {
+          randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
+          sourceBuffer[index] = randomState >>> 24
+        }
+      }
+      if (contentKind === 'text') {
+        let bufferOffset = 0
+        while (bufferOffset < length) {
+          const line = textEncoder.encode(`export const row${String(textRow).padStart(8, '0')} = { status: 'active', amount: ${String((textRow * 7919) % 100000)}, owner: 'team-${String(textRow % 997)}' };\n`)
+          const lineBytes = Math.min(line.byteLength, length - bufferOffset)
+          sourceBuffer.set(line.subarray(0, lineBytes), bufferOffset)
+          bufferOffset += lineBytes
+          textRow += 1
+        }
+      }
+      source.write(offset, sourceBuffer.subarray(0, length))
+    }
+    source.flush()
+
+    const editOffset = editPosition === 'head' ? 0
+      : editPosition === 'tail' ? byteLength - editBytes
+        : Math.floor(byteLength / 2)
+    const targetBytes = byteLength + (editKind === 'insert' ? editBytes : editKind === 'delete' ? -editBytes : 0)
+    target.truncate(targetBytes)
+    if (editKind === 'replace') {
+      for (let offset = 0; offset < byteLength; offset += ioBytes) {
+        const length = Math.min(ioBytes, byteLength - offset)
+        target.write(offset, source.read(offset, length))
+      }
+      const replacement = new Uint8Array(editBytes)
+      replacement.fill(contentKind === 'text' ? 0x58 : 0xd3)
+      target.write(editOffset, replacement)
+    } else if (editKind === 'insert') {
+      for (let offset = 0; offset < editOffset; offset += ioBytes) {
+        const length = Math.min(ioBytes, editOffset - offset)
+        target.write(offset, source.read(offset, length))
+      }
+      const insertion = new Uint8Array(editBytes)
+      if (contentKind === 'repetitive') {
+        for (let index = 0; index < insertion.byteLength; index += 1) insertion[index] = repeated[index % repeated.byteLength]!
+      } else insertion.fill(contentKind === 'text' ? 0x59 : 0xb7)
+      target.write(editOffset, insertion)
+      for (let sourceOffset = editOffset, targetOffset = editOffset + editBytes;
+        sourceOffset < byteLength; sourceOffset += ioBytes, targetOffset += ioBytes) {
+        const length = Math.min(ioBytes, byteLength - sourceOffset)
+        target.write(targetOffset, source.read(sourceOffset, length))
+      }
+    } else {
+      for (let offset = 0; offset < editOffset; offset += ioBytes) {
+        const length = Math.min(ioBytes, editOffset - offset)
+        target.write(offset, source.read(offset, length))
+      }
+      for (let sourceOffset = editOffset + editBytes, targetOffset = editOffset;
+        sourceOffset < byteLength; sourceOffset += ioBytes, targetOffset += ioBytes) {
+        const length = Math.min(ioBytes, byteLength - sourceOffset)
+        target.write(targetOffset, source.read(sourceOffset, length))
+      }
+    }
+    target.flush()
+
+    const buildSourceIndex = async (cdc: boolean, cdcAverage = averageBytes): Promise<ContentSourceIndex> => {
+      const sourceChunkingStartedAt = performance.now()
+      const sourceRanges = cdc
+        ? await findContentChunks(byteLength, (offset, length) => source.read(offset, length), {
+          minimumBytes, averageBytes: cdcAverage, maximumBytes, readBytes: ioBytes,
+        })
+        : { chunks: fixedFileChunks(byteLength, 1024 * 1024), bytesRead: 0, readCalls: 0, maxReadBytes: 0 }
+      const sourceChunkingMs = performance.now() - sourceChunkingStartedAt
+      const sourceHashes = await hashFileChunks(source, sourceRanges.chunks)
+      if (cdc && !contentChunkRangesAreValid(byteLength, sourceRanges.chunks, minimumBytes, maximumBytes)) {
+        throw new Error('browser-native content chunking probe: source chunks violate range limits')
+      }
+      return {
+        cdc,
+        averageBytes: cdcAverage,
+        chunks: sourceHashes.chunks,
+        sourceChunkSizes: chunkSizeStats(sourceRanges.chunks),
+        sourceRangeReadBytes: cdc ? sourceRanges.bytesRead + sourceHashes.bytesRead : sourceHashes.bytesRead,
+        sourceRangeReadCalls: cdc ? sourceRanges.readCalls + sourceHashes.readCalls : sourceHashes.readCalls,
+        sourceChunkingMs,
+        sourceReadAndHashMs: sourceHashes.elapsedMs,
+      }
+    }
+
+    const measureTarget = async (sourceIndex: ContentSourceIndex) => {
+      const targetChunkingStartedAt = performance.now()
+      const targetRanges = sourceIndex.cdc
+        ? await findContentChunks(targetBytes, (offset, length) => target.read(offset, length), {
+          minimumBytes, averageBytes: sourceIndex.averageBytes, maximumBytes, readBytes: ioBytes,
+        })
+        : { chunks: fixedFileChunks(targetBytes, 1024 * 1024), bytesRead: 0, readCalls: 0, maxReadBytes: 0 }
+      const targetChunkingMs = performance.now() - targetChunkingStartedAt
+      const targetHashes = await hashFileChunks(target, targetRanges.chunks)
+      if (sourceIndex.cdc && !contentChunkRangesAreValid(targetBytes, targetRanges.chunks, minimumBytes, maximumBytes)) {
+        throw new Error('browser-native content chunking probe: target chunks violate range limits')
+      }
+      const sourceByPosition = new Set(sourceIndex.chunks.map(chunk => `${chunk.offset}:${chunk.length}:${chunk.hash}`))
+      const sourceByContent = new Set(sourceIndex.chunks.map(chunk => `${chunk.length}:${chunk.hash}`))
+      let reusableBytes = 0
+      let uploadedBytes = 0
+      let uploadedChunks = 0
+      for (const chunk of targetHashes.chunks) {
+        const reusable = sourceIndex.cdc
+          ? sourceByContent.has(`${chunk.length}:${chunk.hash}`)
+          : sourceByPosition.has(`${chunk.offset}:${chunk.length}:${chunk.hash}`)
+        if (reusable) reusableBytes += chunk.length
+        else {
+          uploadedBytes += chunk.length
+          uploadedChunks += 1
+        }
+      }
+      const descriptors = targetHashes.chunks.map(({ offset, length, hash }) => ({ offset, length, hash }))
+      return {
+        chunkCount: targetHashes.chunks.length,
+        reusableBytes,
+        uploadedBytes,
+        uploadedChunks,
+        descriptorBytes: new TextEncoder().encode(JSON.stringify(descriptors)).byteLength,
+        sourceChunkSizes: sourceIndex.sourceChunkSizes,
+        targetChunkSizes: chunkSizeStats(targetRanges.chunks),
+        sourceChunkingMs: sourceIndex.sourceChunkingMs,
+        sourceReadAndHashMs: sourceIndex.sourceReadAndHashMs,
+        targetChunkingMs,
+        targetReadAndHashMs: targetHashes.elapsedMs,
+        sourceIndexBuildMs: sourceIndex.sourceChunkingMs + sourceIndex.sourceReadAndHashMs,
+        targetPreparationMs: targetChunkingMs + targetHashes.elapsedMs,
+        sourceBytesRead: sourceIndex.sourceRangeReadBytes,
+        sourceReadCalls: sourceIndex.sourceRangeReadCalls,
+        targetBytesRead: sourceIndex.cdc ? targetRanges.bytesRead + targetHashes.bytesRead : targetHashes.bytesRead,
+        targetReadCalls: sourceIndex.cdc ? targetRanges.readCalls + targetHashes.readCalls : targetHashes.readCalls,
+        maximumChunkBytes: targetHashes.chunks.reduce((maximum, chunk) => Math.max(maximum, chunk.length), 0),
+      }
+    }
+
+    const fixedSourceIndex = await buildSourceIndex(false)
+    const cdcSourceIndex = await buildSourceIndex(true, averageBytes)
+    const alternateCdcSourceIndex = await buildSourceIndex(true, alternateAverageBytes)
+    const results = []
+    for (let repeat = 0; repeat < 3; repeat += 1) {
+      results.push({
+        fixed: await measureTarget(fixedSourceIndex),
+        cdc: await measureTarget(cdcSourceIndex),
+        alternateCdc: await measureTarget(alternateCdcSourceIndex),
+      })
+    }
+    const sourceHash = hashChunkBackedFile(source, ioBytes)
+    const targetHash = hashChunkBackedFile(target, ioBytes)
+    return {
+      ok: targetBytes === target.size && sourceHash !== targetHash
+        && results.every(result => result.fixed.reusableBytes + result.fixed.uploadedBytes === targetBytes
+          && result.cdc.reusableBytes + result.cdc.uploadedBytes === targetBytes
+          && result.cdc.maximumChunkBytes <= maximumBytes
+          && result.alternateCdc.reusableBytes + result.alternateCdc.uploadedBytes === targetBytes
+          && result.alternateCdc.maximumChunkBytes <= maximumBytes),
+      storage: 'DSH Worker OPFS sync access handles',
+      sourceBytes: byteLength,
+      targetBytes,
+      contentKind,
+      editKind,
+      editPosition,
+      sourceHash,
+      targetHash,
+      integrityReadBytes: byteLength + targetBytes,
+      config: { minimumBytes, averageBytes, alternateAverageBytes, maximumBytes, readBytes: ioBytes },
+      results,
+    }
+  } finally {
+    try {
+      sourceSync?.close()
+    } finally {
+      try {
+        targetSync?.close()
+      } finally {
+        if (directoryCreated) await root.removeEntry(directoryName, { recursive: true })
+      }
+    }
+  }
 }
 
 async function runChunkEditProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
@@ -748,6 +1071,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')
     if (request.action === 'chunk-edit-probe') {
       workspaceTestResponse(request.requestId, await runChunkEditProbe(request))
+      return
+    }
+    if (request.action === 'content-chunking-probe') {
+      workspaceTestResponse(request.requestId, await runContentChunkingProbe(request))
       return
     }
     if (request.action === 'reference-edit-probe') {

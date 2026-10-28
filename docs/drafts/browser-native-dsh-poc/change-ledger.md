@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-045：内容定义分块的 Worker 成本与协议准入测量
+
+```text
+changeId: BN-P2-045
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 起始时 `research` 与 `origin/research` 同步且工作区干净；仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-content-chunker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-content-chunker.spec.ts; docs/drafts/browser-native-dsh-poc/tests/content-defined-chunking.e2e.mjs; docs/drafts/browser-native-dsh-poc/content-defined-chunking-validation-plan.md; docs/drafts/browser-native-dsh-poc/content-defined-chunking-validation-progress.md; docs/drafts/browser-native-dsh-poc/content-defined-chunking-chrome-results.json; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: 固定偏移复用能降低等长局部编辑上行，但不能保证插入和删除后的边界复用。进入正式产品前需要在真实 Chrome Worker/OPFS 上比较多种内容和编辑，记录块分布、客户端读取/hash 工作量，并据此决定是否值得投入独立上传协议原型。
+existingExtensionPointsChecked: 复用 PoC Worker 的受限 workspace test request、OPFS sync access handles、`ChunkBackedFile` range reader、SHA-256 chunk hashing、现有 1 MiB 固定偏移结果作为对照。未修改标准 Workspace uploader、backend route、manifest、Session、Agent Loop、正式 packages/apps 或根依赖。
+behaviorChange: 新增仅供 probe 使用的 `content-chunking-probe` Worker action，在临时 OPFS 文件中生成固定种子的文本、伪随机二进制和重复模板数据，比较固定偏移与两档 gear-based chunking 的边界、hash、块重用估算、descriptor、range read 与 elapsed time；关闭句柄后删除实验目录。Worker test port 验证 chunk-length 参数。生产 DSH 工具和上传协议不使用该 chunker。
+directoryOutChangeReason: 唯一 PoC 子目录外改动是 `docs/drafts/README.md` 的专题目录登记；它仅连接计划、进度、脚本和合成原始 JSON。Browser-Native 产品运行代码与 profile 均未改。
+consumersUpdated: 同目录计划和进度、PoC README、中文 drafts 索引、测试脚本和原始证据。未新增翻译配对；Browser-Native PoC 目录已有中文 scratch 翻译豁免。
+tests: chunker Vitest 6/6、Workspace/durable-store/chunker Vitest 40/40、backend Node tests 56/56、Web TypeScript check、preview build 均通过。最新 Chrome 156 Worker/OPFS E2E 的 18 个合成 workload 均通过且无页面错误；8/8 头部/中部插入删除场景的 128 KiB 设置上行估算较固定偏移降低 86.3%–98.9%。保存的 JSON 不含用户文件、Session、模型请求或凭据。64 MiB 固定偏移 reuse-response-loss 恢复与 original roster 真实 LLM 普通文件 smoke 也在最终 preview 通过；CDC 本身没有上传或调用 LLM。
+syncReplaySteps: 上游同步后检查 Worker probe action 仍由 test request validator 限制，所有 OPFS 临时目录都在关闭句柄后清理，chunker 无缺口/重叠并遵守 max chunk，默认 uploader 不导入 probe。运行 chunker/Workspace/durable-store/backend tests、Web typecheck、preview build、Chrome CDC E2E、64 MiB 固定偏移恢复和真实 LLM smoke。不要把估算上传量写成真实网络流量，不把单机 Chrome 读/hash 成本写成 SLA，也不要将当前 PoC uploader 描述成 CDC 协议。
+deleteCondition: 下一阶段协议原型形成正式的 versioned chunk manifest、上传/授权/CAS/恢复与 backend 成本验收后，迁移必要测试并删除临时 probe；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-044：固定偏移分块复用与非顺序上传恢复
 
 ```text

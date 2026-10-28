@@ -207,6 +207,22 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DS
   node docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs
 ```
 
+## 内容定义分块成本对照
+
+[验证计划](content-defined-chunking-validation-plan.md)与[实施进度](content-defined-chunking-validation-progress.md)比较实验性 gear-based CDC 和现有 1 MiB 固定偏移复用。最终 Chrome Dedicated Worker/OPFS 对照覆盖 18 个合成 workload，每个策略重复 3 次；[原始结果](content-defined-chunking-chrome-results.json)包含块长分布、估算上行、descriptor、range read、hash 和 Worker 耗时。
+
+在头部/中部插入和删除的 8 个文本/二进制核心场景中，128 KiB 目标平均值配置估算上行比固定偏移少 86.3%–98.9%；但 16 MiB 文本的实际块长 mean 为 763 KiB，64 MiB 文本中 512 KiB 平均值配置约半数 chunk 达到 1 MiB 上限。16 MiB CDC target 准备约需 0.137–0.200 秒、来源索引约需 0.136–0.226 秒；64 MiB 文本分别约需 0.643–0.684 秒和 0.661–0.668 秒，来源与目标各读取约 128 MiB，页面帧探针最大间隔为 16.8 ms。结果只允许进入独立协议原型，不证明真实上传收益、backend 写放大或生产对象存储成本；当前 uploader 仍使用固定偏移协议。
+
+在 preview 构建后复跑算法和 Chrome 成本对照：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-content-chunker.spec.ts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_RESULT_FILE=docs/drafts/browser-native-dsh-poc/content-defined-chunking-chrome-results.json node docs/drafts/browser-native-dsh-poc/tests/content-defined-chunking.e2e.mjs
+```
+
+该 probe 不调用 LLM，也不经过 Workspace upload/backend blob protocol；真实 LLM smoke 独立验证原生 DSH `read → write → read` 和刷新恢复，命令见[实施进度](content-defined-chunking-validation-progress.md)。
+
 ## Browser-native 文件搜索与载荷安全
 
 [本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、扫描行数、匹配数、结果行长、pattern 和 edit 载荷上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。内容、include 和 glob 的正则语法编译及匹配在可终止的嵌套 Worker 中执行；这限制了单次阻塞，但不是完整 ReDoS 保证。
