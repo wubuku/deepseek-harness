@@ -734,6 +734,14 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     }
   }
 
+  /**
+   * Verify the complete download before publishing OPFS bytes; failures abort the writable.
+   * @param workspaceId - Workspace owning the local cache.
+   * @param hash - Expected full SHA-256; existing damaged entries remain fail-closed.
+   * @param bytes - Expected byte length.
+   * @param readChunk - Sequential range source, responsible for checking EOF before its final return.
+   * @returns True after verification and publication, or when a verified cache entry already exists.
+   */
   async cacheBlobFromChunks(
     workspaceId: string,
     hash: string,
@@ -742,20 +750,33 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   ): Promise<boolean> {
     if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('browser-native workspace: invalid blob byte length')
     const { blobDirectory } = await this.resources(workspaceId)
-    const handle = await blobDirectory.getFileHandle(hash, { create: true })
+    let handle: FileSystemFileHandle
+    let created = false
     try {
-      const existing = await handle.getFile()
-      if (existing.size === bytes && await sha256File(existing) === hash) return true
+      handle = await blobDirectory.getFileHandle(hash)
     } catch (error) {
-      void error
+      if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error
+      handle = await blobDirectory.getFileHandle(hash, { create: true })
+      created = true
     }
-    if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
-      throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
-    }
-    const writable = await handle.createWritable()
-    const digest = new Sha256()
-    let offset = 0
+    let writable: FileSystemWritableFileStream | undefined
     try {
+      if (!created) {
+        const existing = await handle.getFile()
+        if (existing.size !== bytes) {
+          throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: local blob size mismatch (${hash})`)
+        }
+        if (await sha256File(existing) !== hash) {
+          throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local blob hash mismatch (${hash})`)
+        }
+        return true
+      }
+      if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
+        throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
+      }
+      writable = await handle.createWritable()
+      const digest = new Sha256()
+      let offset = 0
       while (offset < bytes) {
         const length = Math.min(BLOB_IO_CHUNK_BYTES, bytes - offset)
         const chunk = await readChunk(offset, length)
@@ -769,9 +790,16 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       return true
     } catch (error) {
       try {
-        await writable.abort()
+        await writable?.abort()
       } catch (abortError) {
         void abortError
+      }
+      if (created) {
+        try {
+          if ((await handle.getFile()).size === 0) await blobDirectory.removeEntry(hash)
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'browser-native workspace: failed download left an unverified local cache entry')
+        }
       }
       throw error
     }

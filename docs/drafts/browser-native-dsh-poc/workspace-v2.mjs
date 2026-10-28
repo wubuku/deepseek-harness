@@ -1353,6 +1353,35 @@ export class WorkspaceStore {
       : { workspaceId, operationId, found: true, receipt: structuredClone(operation.receipt) }
   }
 
+  /**
+   * Authorize a current manifest file and verify its descriptor/chunks while locked.
+   * The caller owns closing the returned reader; iteration runs without Workspace locks.
+   * @param {object} request - Request carrying the browser principal cookie.
+   * @param {string} workspaceId - Workspace owned by that principal.
+   * @param {string} hash - Full-file SHA-256 referenced by the current manifest.
+   * @returns {Promise<object>} Verified reader; never buffers fallback blobs.
+   * @throws {WorkspaceError} FILE_DOWNLOAD_UNSUPPORTED (409) when chunk mode is
+   * disabled or this file has no descriptor; authorization and corruption errors propagate.
+   */
+  async openBlobRead(request, workspaceId, hash) {
+    const principalId = this.principalFromRequest(request)
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const entry = [...workspace.entries.values()].find(entry => entry.kind === 'file' && entry.hash === hash)
+      if (entry === undefined) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new WorkspaceError('INVALID_REQUEST', 'blob hash is invalid')
+      const reader = this.chunkObjects === undefined ? undefined : await this.chunkObjects.openVerifiedRead(hash)
+      if (reader === undefined) {
+        throw new WorkspaceError('FILE_DOWNLOAD_UNSUPPORTED', 'this file requires the legacy blob download endpoint', 409)
+      }
+      if (reader.totalBytes !== entry.bytes) {
+        await reader.close()
+        throw new WorkspaceError('BLOB_CORRUPT', 'stored file size differs from its manifest entry', 500)
+      }
+      return reader
+    })
+  }
+
   async getBlob(request, workspaceId, hash) {
     const principalId = this.principalFromRequest(request)
     return await this.exclusive(workspaceId, async () => {

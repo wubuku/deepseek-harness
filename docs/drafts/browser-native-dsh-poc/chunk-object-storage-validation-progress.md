@@ -95,6 +95,8 @@ node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 
 ## 验收服务与交付限制
 
+本节服务是该批次的历史记录，已被后续下载流批次替换并停止；当前可访问地址见[下载流进度](verified-stream-download-validation-progress.md#验收服务)。
+
 新服务使用真实 backend 模型、CDC 与块对象；已分配未占用端口，不使用主机 Agent 执行进程。
 
 Chrome 已打开实际地址并保存截图，无 pageerror。preview 初次默认 Workspace 创建仍会出现提示，由既有 in-page picker 选择 Worker 的 `/dsh/home/` 后可用；这是已有 preview 限制，本批未修改该 UI。

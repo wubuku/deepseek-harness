@@ -11,6 +11,8 @@ import { createServer } from 'node:http'
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_CONTENT_LAYOUT, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
 
@@ -413,6 +415,57 @@ function sendBytes(response, bytes, headers = {}) {
     ...headers,
   })
   response.end(bytes)
+}
+
+async function streamWorkspaceBlob(request, response, workspaces, workspaceId, hash, downloadTimeoutMs, controller) {
+  let reader
+  let closeResult
+  const closeReader = () => {
+    closeResult ??= Promise.resolve().then(() => reader.close()).then(
+      () => ({ ok: true }),
+      error => ({ ok: false, error }),
+    )
+    return closeResult
+  }
+  const onAbort = () => {
+    response.destroy()
+    if (reader !== undefined) void closeReader()
+  }
+  const abort = () => controller.abort()
+  const onClose = () => {
+    if (!response.writableFinished) abort()
+  }
+  request.once('aborted', abort)
+  response.once('close', onClose)
+  response.once('error', abort)
+  controller.signal.addEventListener('abort', onAbort, { once: true })
+  const timeout = setTimeout(abort, downloadTimeoutMs)
+  try {
+    if (request.aborted || response.destroyed) abort()
+    if (controller.signal.aborted) return
+    reader = await workspaces.openBlobRead(request, workspaceId, hash)
+    if (controller.signal.aborted || request.aborted || response.destroyed) return
+    response.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': String(reader.totalBytes),
+      'x-content-sha256': reader.hash,
+      'x-total-bytes': String(reader.totalBytes),
+      'cache-control': 'no-store',
+      'x-browser-native-protocol': String(PROTOCOL_VERSION),
+    })
+    await pipeline(Readable.from(reader.chunks(), { objectMode: false, highWaterMark: 1 }), response,
+      { signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+    request.off('aborted', abort)
+    response.off('close', onClose)
+    response.off('error', abort)
+    controller.signal.removeEventListener('abort', onAbort)
+    if (reader !== undefined) {
+      const result = await closeReader()
+      if (!result.ok) throw result.error
+    }
+  }
 }
 
 async function readRawBody(request, maximumBytes) {
@@ -2627,9 +2680,31 @@ async function serveStatic(response, root, pathname) {
   response.end(body)
 }
 
+/**
+ * Create the PoC server. Verified downloads require explicit chunk-object mode.
+ * @param {object} options - Server configuration; workspaceVerifiedDownloads defaults
+ * to false, workspaceDownloadMaxReaders to 4, and workspaceDownloadTimeoutMs to 30000.
+ * Reader limits include verification; deadlines include verification and transmission.
+ * Cancellation destroys the connection immediately; in-progress descriptor/chunk
+ * verification finishes before its returned reader can be closed and its slot released.
+ * @returns {Promise<object>} Server and stores; close waits for download cleanup.
+ */
 export async function createBrowserNativeV2Server(options) {
   if (options.workspaceChunkObjects !== undefined && typeof options.workspaceChunkObjects !== 'boolean') {
     throw new TypeError('workspaceChunkObjects must be a boolean')
+  }
+  if (options.workspaceVerifiedDownloads !== undefined && typeof options.workspaceVerifiedDownloads !== 'boolean') {
+    throw new TypeError('workspaceVerifiedDownloads must be a boolean')
+  }
+  if (options.workspaceVerifiedDownloads === true && options.workspaceChunkObjects !== true) {
+    throw new TypeError('workspaceVerifiedDownloads requires workspaceChunkObjects: true')
+  }
+  const workspaceDownloadMaxReaders = timeoutMs(options.workspaceDownloadMaxReaders === undefined ? 4
+    : options.workspaceDownloadMaxReaders, 'workspaceDownloadMaxReaders')
+  const workspaceDownloadTimeoutMs = timeoutMs(options.workspaceDownloadTimeoutMs === undefined ? 30_000
+    : options.workspaceDownloadTimeoutMs, 'workspaceDownloadTimeoutMs')
+  if (workspaceDownloadTimeoutMs > 2_147_483_647) {
+    throw new TypeError('workspaceDownloadTimeoutMs exceeds the Node timer limit')
   }
   const dataDirLock = await acquireDataDirLock(options.dataDir)
   let released = false
@@ -2656,6 +2731,7 @@ export async function createBrowserNativeV2Server(options) {
   await workspaces.load()
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
+  const workspaceDownloads = new Map()
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
@@ -2688,7 +2764,8 @@ export async function createBrowserNativeV2Server(options) {
           }
         }
         sendJson(response, 200, { contentLayout: WORKSPACE_CONTENT_LAYOUT,
-          ...(options.workspaceChunkObjects === true ? { fileStorage: { version: 1, kind: 'chunk-objects' } } : {}) })
+          ...(options.workspaceChunkObjects === true ? { fileStorage: { version: 1, kind: 'chunk-objects' } } : {}),
+          ...(options.workspaceVerifiedDownloads === true ? { fileDownload: { version: 1, kind: 'verified-stream' } } : {}) })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/manifest') {
@@ -2765,6 +2842,24 @@ export async function createBrowserNativeV2Server(options) {
           uploadComplete[1],
           uploadComplete[2],
         ))
+        return
+      }
+      const blobStream = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})\/stream$/)
+      if (request.method === 'GET' && blobStream !== null) {
+        if (options.workspaceVerifiedDownloads !== true) throw new BackendError('NOT_FOUND', 'route not found', 404)
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)
+          || [...url.searchParams.keys()].some(key => key !== 'protocolVersion' && key !== 'workspaceId')
+          || url.searchParams.getAll('protocolVersion').length !== 1 || url.searchParams.getAll('workspaceId').length !== 1) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported file download query')
+        }
+        if (workspaceDownloads.size >= workspaceDownloadMaxReaders) {
+          throw new WorkspaceError('FILE_DOWNLOAD_BUSY', 'too many active file downloads; retry after a download finishes', 429)
+        }
+        const controller = new AbortController()
+        const download = streamWorkspaceBlob(request, response, workspaces, url.searchParams.get('workspaceId'),
+          blobStream[1], workspaceDownloadTimeoutMs, controller)
+        workspaceDownloads.set(download, controller)
+        try { await download } finally { workspaceDownloads.delete(download) }
         return
       }
       const blobLayout = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})\/layout$/i)
@@ -2918,7 +3013,7 @@ export async function createBrowserNativeV2Server(options) {
       }
       throw new BackendError('NOT_FOUND', 'route not found', 404)
     } catch (error) {
-      if (!response.headersSent) sendError(response, error)
+      if (!response.headersSent && !response.destroyed) sendError(response, error)
       else response.destroy()
     }
   })
@@ -2941,12 +3036,13 @@ export async function createBrowserNativeV2Server(options) {
     }),
     close: async () => {
       try {
+        for (const controller of workspaceDownloads.values()) controller.abort()
         await new Promise((resolveClose, reject) => {
           server.closeAllConnections()
           server.close(error => error ? reject(error) : resolveClose())
         })
       } finally {
-        await releaseDataDirLock()
+        try { await Promise.allSettled([...workspaceDownloads.keys()]) } finally { await releaseDataDirLock() }
       }
     },
   }

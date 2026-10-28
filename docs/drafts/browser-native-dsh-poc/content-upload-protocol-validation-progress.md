@@ -67,6 +67,8 @@ preview、Web tsc、build:check、43 项 Vitest、文档检查与 diff 空白检
 
 ## 用户验收服务
 
+本节是该批次历史记录；服务已停止，当前验收地址见[验证下载流进度](verified-stream-download-validation-progress.md#验收服务)。
+
 | 项目 | 实际值 |
 |---|---|
 | URL | `http://127.0.0.1:49217/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none` |

@@ -23,6 +23,11 @@ import type {
   DurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
 import { DurableWorkspaceStoreError } from './browser-native-workspace-store.ts'
+import {
+  createVerifiedDownload,
+  hasVerifiedDownloadCapability,
+  VerifiedDownloadUnsupportedError,
+} from './browser-native-verified-download.ts'
 
 const PROTOCOL_VERSION = 1
 const WORKSPACE_ROOT = '/dsh/home/workspace'
@@ -225,6 +230,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private writerClaim: Promise<void> | undefined
   private activeOperation: WorkspaceToolOperation | undefined
   private accessMode: WorkspaceAccessMode = 'writer'
+  private verifiedDownloads = false
 
   constructor(
     private readonly onStatus = statusMessage,
@@ -240,9 +246,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.onStatus('loading', undefined, undefined, 0)
     try {
       if (this.contentDefinedUpload) {
-        requireContentUploadCapability(await readJson(await fetch(`${WORKSPACE_API}/upload-capabilities`, {
+        const capabilities = await readJson(await fetch(`${WORKSPACE_API}/upload-capabilities`, {
           credentials: 'same-origin',
-        })))
+        }))
+        requireContentUploadCapability(capabilities)
+        this.verifiedDownloads = hasVerifiedDownloadCapability(capabilities)
       }
       const localWorkspaceIds = await this.store?.listWorkspaceIds() ?? []
       const hasLocalWorkspaceData = localWorkspaceIds.length > 0
@@ -305,14 +313,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         if (backing !== undefined) {
           vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
         } else {
-          const streamed = this.store !== undefined && typeof this.store.cacheBlobFromChunks === 'function'
-            ? await this.store.cacheBlobFromChunks(
-              this.workspaceId,
-              entry.hash,
-              entry.bytes,
-              async (offset, length) => await this.downloadBlobChunk(entry.hash!, entry.bytes!, offset, length),
-            )
-            : false
+          const streamed = await this.cacheDownloadedBlob(entry.hash, entry.bytes)
           if (streamed === true) {
             const cached = await this.store?.openBlob(this.workspaceId, entry.hash, entry.bytes)
             if (cached === undefined) throw new Error(`browser-native workspace: streamed blob was not available for ${path}`)
@@ -1321,7 +1322,41 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     return bytes.subarray(chunkOffset, chunkOffset + length)
   }
 
+  private async cacheDownloadedBlob(hash: string, totalBytes: number): Promise<boolean> {
+    if (this.store === undefined || typeof this.store.cacheBlobFromChunks !== 'function') return false
+    if (this.verifiedDownloads) {
+      if (totalBytes === 0) return false
+      const download = createVerifiedDownload(this.workspaceId!, hash, totalBytes)
+      try {
+        return await this.store.cacheBlobFromChunks(this.workspaceId!, hash, totalBytes, download.read)
+      } catch (error) {
+        if (!(error instanceof VerifiedDownloadUnsupportedError)) throw error
+      } finally {
+        await download.close()
+      }
+    }
+    return await this.store.cacheBlobFromChunks(
+      this.workspaceId!, hash, totalBytes,
+      async (offset, length) => await this.downloadBlobChunk(hash, totalBytes, offset, length),
+    )
+  }
+
   private async downloadBlob(hash: string, totalBytes: number): Promise<Uint8Array> {
+    if (this.verifiedDownloads) {
+      const download = createVerifiedDownload(this.workspaceId!, hash, totalBytes)
+      try {
+        const output = new Uint8Array(totalBytes)
+        if (totalBytes === 0) await download.read(0, 0)
+        for (let offset = 0; offset < totalBytes; offset += WORKSPACE_BLOB_CHUNK_BYTES) {
+          output.set(await download.read(offset, Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)), offset)
+        }
+        return output
+      } catch (error) {
+        if (!(error instanceof VerifiedDownloadUnsupportedError)) throw error
+      } finally {
+        await download.close()
+      }
+    }
     const output = new Uint8Array(totalBytes)
     const chunkCount = Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
     for (let index = 0; index < chunkCount; index += 1) {

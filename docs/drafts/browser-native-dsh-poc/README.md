@@ -252,6 +252,12 @@ backend 的 `createBrowserNativeV2Server({ workspaceChunkObjects: true })` 显�
 
 首次从远端恢复文件时，mirror 先验证原本地 snapshot，并在无本地状态时登记干净 metadata，再下载到 OPFS。已有 OPFS bytes 却丢失 metadata 仍拒绝自动覆盖；不能把缓存清除、可重新下载与本地未同步状态损坏混为一类。
 
+### 块对象验证下载流
+
+`createBrowserNativeV2Server({ workspaceChunkObjects: true, workspaceVerifiedDownloads: true })` 显式协商 `fileDownload: { version: 1, kind: 'verified-stream' }`；Worker 的 CDC 模式使用一条 HTTP 流顺序写入 OPFS，完整长度、EOF 和 SHA-256 验证后才发布文件。旧完整 blob 只在精确 `409 FILE_DOWNLOAD_UNSUPPORTED` 时使用原下载路径；其他错误不降级。默认下载上限 4 条、deadline 30 秒，分别通过 `workspaceDownloadMaxReaders` 和 `workspaceDownloadTimeoutMs` 配置。
+
+store 先完整验证一次，返回时再次验证每个 chunk，以活动引用保护下载中的块不被 GC；旧 range 语义不变。[规划](verified-stream-download-validation-plan.md)、[进度和可执行命令](verified-stream-download-validation-progress.md)及[Chrome 工件](verified-stream-download-chrome-results.json)记录 64 MiB 冷恢复从读取 4 GiB 降为 128 MiB、取消/损坏/截断恢复与真实模型 smoke。该模式仍默认关闭，不代表多实例或 OS crash 已验证。
+
 ## Browser-native 文件搜索与载荷安全
 
 [本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、扫描行数、匹配数、结果行长、pattern 和 edit 载荷上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。内容、include 和 glob 的正则语法编译及匹配在可终止的嵌套 Worker 中执行；这限制了单次阻塞，但不是完整 ReDoS 保证。

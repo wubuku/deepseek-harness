@@ -69,11 +69,16 @@ function normalizeLayout(layout, totalBytes) {
  * Single-process storage for immutable chunks and version-1 file descriptors.
  * One instance owns a root. Mutations are queued within that instance; the caller
  * holds its global lifecycle lock across uploads, durable pending roots, reads,
- * deletion and GC. The queue does not coordinate other instances or processes.
+ * deletion and GC. Verified readers require that lock only until open resolves;
+ * their captured chunk roots protect subsequent iteration without holding it.
+ * The queue does not coordinate other instances or processes.
  * Published descriptors take precedence over fallback blobs; invalid descriptors
  * never fall back silently. Chunk collection never removes file descriptors.
  */
 export class ChunkObjectWorkspaceBlobStore {
+  #activeReaders = new Set()
+  #readBufferBytes = 0
+
   /**
    * @param {string} root - Private directory containing chunks/ and files/.
    * @param {object} fallback - Existing FileWorkspaceBlobStore-compatible store.
@@ -87,7 +92,7 @@ export class ChunkObjectWorkspaceBlobStore {
     this.metrics = { chunkWriteBytes: 0, chunkReadBytes: 0, chunkVerificationBytes: 0,
       chunkInputVerificationBytes: 0, fileVerificationBytes: 0, descriptorWriteBytes: 0,
       descriptorReadBytes: 0, chunkWrites: 0, descriptorWrites: 0, removedChunkBytes: 0,
-      removedChunks: 0, assembledWriteBytes: 0 }
+      removedChunks: 0, assembledWriteBytes: 0, peakReadBufferBytes: 0 }
   }
 
   /** Create directories and initialize the fallback before accepting operations. */
@@ -171,6 +176,100 @@ export class ChunkObjectWorkspaceBlobStore {
       bytes.copy(output, Math.max(chunkOffset - offset, 0), startInChunk, endInChunk)
     })
     return output
+  }
+
+  /**
+   * Capture and fully verify a descriptor under the caller's Workspace lifecycle
+   * lock before returning a single-use reader. Missing descriptors return undefined
+   * without reading fallback blobs; invalid descriptors/chunks throw BLOB_CORRUPT.
+   * Open joins the mutation queue once; verification does not reenter that queue.
+   * Iteration needs no lifecycle lock and ignores later descriptor changes. Each
+   * yielded chunk is freshly SHA-256 verified; normal EOF checks the incremental
+   * full-file digest without another disk scan. Bytes transfer to the consumer.
+   * Reader roots survive descriptor deletion until EOF, failure, iterator return/
+   * throw, or explicit close. Call close when abandoning an unconsumed reader.
+   * Close is idempotent, stops further yields, and awaits any in-flight chunk read
+   * before releasing roots. Cancellation does not establish a verified full stream.
+   * Calling chunks again or after close raises BLOB_READER_CLOSED.
+   * @param {string} hash - Full-file SHA-256.
+   * @returns {Promise<{totalBytes: number, hash: string, chunks(): AsyncGenerator<Buffer>, close(): Promise<void>}|undefined>}
+   * Captured metadata, bounded sequential chunks, and explicit reference release.
+   */
+  async openVerifiedRead(hash) {
+    assertHash(hash)
+    return await this.#exclusive(async () => {
+      const descriptor = await this.#readDescriptor(hash)
+      if (descriptor === undefined) return undefined
+      await this.#verifyDescriptor(descriptor)
+      const roots = descriptor.layout.chunks
+      this.#activeReaders.add(roots)
+      let closed = false
+      let started = false
+      let pendingRead
+      let closing
+      const release = () => { this.#activeReaders.delete(roots) }
+      const close = () => {
+        closed = true
+        if (closing === undefined) {
+          if (pendingRead === undefined) {
+            release()
+            closing = Promise.resolve()
+          } else {
+            closing = pendingRead.then(release, release)
+          }
+        }
+        return closing
+      }
+      const store = this
+      async function* readChunks() {
+        try {
+          const digest = createHash('sha256')
+          for (const chunk of roots) {
+            if (closed) return
+            let bytes
+            try {
+              pendingRead = store.#requireChunk(chunk, value => {
+                digest.update(value)
+                store.metrics.fileVerificationBytes += value.byteLength
+              })
+              bytes = await pendingRead
+            } finally {
+              pendingRead = undefined
+            }
+            if (closed) return
+            yield bytes
+            bytes = undefined
+          }
+          if (closed) return
+          if (digest.digest('hex') !== descriptor.hash) throw corrupt('chunk sequence does not match full-file SHA-256')
+        } finally {
+          await close()
+        }
+      }
+      return {
+        totalBytes: descriptor.totalBytes,
+        hash: descriptor.hash,
+        chunks() {
+          if (started || closed) {
+            throw new WorkspaceError('BLOB_READER_CLOSED', 'verified reader is closed or already consumed', 409)
+          }
+          started = true
+          const iterator = readChunks()
+          const finish = iterator.return.bind(iterator)
+          const fail = iterator.throw.bind(iterator)
+          iterator.return = async value => {
+            await close()
+            return await finish(value)
+          }
+          iterator.throw = async error => {
+            await close()
+            return await fail(error)
+          }
+          return iterator
+        },
+        close,
+      }
+    })
   }
 
   /**
@@ -313,7 +412,7 @@ export class ChunkObjectWorkspaceBlobStore {
   }
 
   /**
-   * Mark all published file descriptors and caller-supplied durable pending roots,
+   * Mark all published descriptors, active readers and caller-supplied pending roots,
    * then remove only unreferenced canonical chunks. Caller holds its global lifecycle
    * lock throughout. Unknown/invalid descriptors, conflicting root lengths, or missing
    * and corrupt root chunks skip the entire sweep. Unknown objects are never deleted.
@@ -335,6 +434,9 @@ export class ChunkObjectWorkspaceBlobStore {
       try {
         if (!Array.isArray(extraRoots)) throw corrupt('chunk GC roots must be an array')
         for (const root of extraRoots) addRoot(root)
+        for (const chunks of this.#activeReaders) {
+          for (const chunk of chunks) addRoot({ hash: chunk.hash, length: chunk.length })
+        }
         for (const entry of await readdir(this.filesDir, { withFileTypes: true })) {
           if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) {
             result.preservedUnknownObjects += 1
@@ -397,13 +499,17 @@ export class ChunkObjectWorkspaceBlobStore {
   }
 
   /**
-   * Return a detached cumulative counter snapshot; fallback I/O and filesystem metadata
+   * Return detached counters plus the current activeReaders count; fallback and metadata
    * I/O are excluded. chunkReadBytes includes chunkVerificationBytes; input verification
    * and full-file hash work are separate, nonadditive counters, not extra disk reads.
+   * peakReadBufferBytes counts concurrent store-owned chunk read buffers only, through
+   * verification and before transfer to consumers. It excludes descriptor/layout data,
+   * upload snapshots, assembled/range outputs, consumer-retained bytes and runtime/OS
+   * allocations; it does not measure RSS. One sequential reader uses at most 1 MiB.
    * @returns {object} Numeric byte/object counters since construction, including failed calls.
    */
   getMetrics() {
-    return { ...this.metrics }
+    return { ...this.metrics, activeReaders: this.#activeReaders.size }
   }
 
   #chunkPath(hash) {
@@ -453,7 +559,7 @@ export class ChunkObjectWorkspaceBlobStore {
     }
   }
 
-  async #readBounded(path, maximum, metric) {
+  async #readBounded(path, maximum, metric, consume = bytes => bytes) {
     let info
     try { info = await lstat(path) } catch (error) {
       if (error?.code === 'ENOENT') return undefined
@@ -461,8 +567,14 @@ export class ChunkObjectWorkspaceBlobStore {
     }
     if (!info.isFile() || info.size > maximum) throw corrupt('stored object is not a bounded regular file')
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    let ownedBytes = 0
     try {
-      const bytes = Buffer.alloc(Math.min(info.size + 1, maximum + 1))
+      const bytes = Buffer.alloc(info.size)
+      if (metric === 'chunkReadBytes') {
+        ownedBytes = bytes.byteLength
+        this.#readBufferBytes += ownedBytes
+        this.metrics.peakReadBufferBytes = Math.max(this.metrics.peakReadBufferBytes, this.#readBufferBytes)
+      }
       let offset = 0
       while (offset < bytes.byteLength) {
         const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset)
@@ -470,10 +582,12 @@ export class ChunkObjectWorkspaceBlobStore {
         if (bytesRead === 0) break
         offset += bytesRead
       }
-      if (offset !== info.size) throw corrupt('stored object size changed while reading')
-      return bytes.subarray(0, offset)
+      if (offset !== info.size || (await handle.stat()).size !== info.size) {
+        throw corrupt('stored object size changed while reading')
+      }
+      return consume(bytes)
     } finally {
-      await handle.close()
+      try { await handle.close() } finally { this.#readBufferBytes -= ownedBytes }
     }
   }
 
@@ -493,17 +607,18 @@ export class ChunkObjectWorkspaceBlobStore {
     }
   }
 
-  async #readChunk(hash, length) {
-    const bytes = await this.#readBounded(this.#chunkPath(hash), MAX_CHUNK_BYTES, 'chunkReadBytes')
-    if (bytes === undefined) return undefined
-    if (bytes.byteLength !== length) throw corrupt('stored chunk length does not match its reference')
-    this.metrics.chunkVerificationBytes += bytes.byteLength
-    if (hashBytes(bytes) !== hash) throw corrupt('stored chunk SHA-256 does not match its key')
-    return bytes
+  async #readChunk(hash, length, consume) {
+    return await this.#readBounded(this.#chunkPath(hash), MAX_CHUNK_BYTES, 'chunkReadBytes', bytes => {
+      if (bytes.byteLength !== length) throw corrupt('stored chunk length does not match its reference')
+      this.metrics.chunkVerificationBytes += bytes.byteLength
+      if (hashBytes(bytes) !== hash) throw corrupt('stored chunk SHA-256 does not match its key')
+      if (consume !== undefined) consume(bytes)
+      return bytes
+    })
   }
 
-  async #requireChunk(chunk) {
-    const bytes = await this.#readChunk(chunk.hash, chunk.length)
+  async #requireChunk(chunk, consume) {
+    const bytes = await this.#readChunk(chunk.hash, chunk.length, consume)
     if (bytes === undefined) throw corrupt('file descriptor references a missing chunk')
     return bytes
   }
@@ -511,10 +626,11 @@ export class ChunkObjectWorkspaceBlobStore {
   async #verifyDescriptor(descriptor, consume, code = 'BLOB_CORRUPT') {
     const digest = createHash('sha256')
     for (const chunk of descriptor.layout.chunks) {
-      const bytes = await this.#requireChunk(chunk)
-      digest.update(bytes)
-      this.metrics.fileVerificationBytes += bytes.byteLength
-      if (consume !== undefined) consume(bytes, chunk.offset)
+      await this.#requireChunk(chunk, bytes => {
+        digest.update(bytes)
+        this.metrics.fileVerificationBytes += bytes.byteLength
+        if (consume !== undefined) consume(bytes, chunk.offset)
+      })
     }
     if (digest.digest('hex') !== descriptor.hash) {
       throw new WorkspaceError(code, 'chunk sequence does not match full-file SHA-256', code === 'BLOB_CORRUPT' ? 500 : 409)

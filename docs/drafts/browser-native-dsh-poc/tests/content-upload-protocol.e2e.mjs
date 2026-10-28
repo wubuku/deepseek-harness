@@ -19,8 +19,13 @@ const api = '/api/browser-native/workspace'
 const previewQuery = 'browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none'
 const forceFixed = process.env.DSH_POC_CONTENT_UPLOAD_FORCE_FIXED === '1'
 const chunkObjectComparison = process.env.DSH_POC_CHUNK_OBJECTS === '1'
+const verifiedDownloadComparison = process.env.DSH_POC_VERIFIED_DOWNLOADS === '1'
+const forceRangeDownload = process.env.DSH_POC_DOWNLOAD_FORCE_RANGE === '1'
+const downloadFault = process.env.DSH_POC_DOWNLOAD_FAULT
+assert.ok(downloadFault === undefined || ['corrupt', 'truncate', 'abort'].includes(downloadFault), 'unknown verified download fault')
+assert.ok(downloadFault === undefined || verifiedDownloadComparison, 'download fault requires the verified stream comparison')
 const forceStaging = process.env.DSH_POC_CHUNK_OBJECTS_FORCE_STAGING === '1'
-const coldRead = process.env.DSH_POC_CHUNK_OBJECTS_COLD_READ === '1'
+const coldRead = process.env.DSH_POC_CHUNK_OBJECTS_COLD_READ === '1' || verifiedDownloadComparison
 const timeout = Number(process.env.DSH_POC_CONTENT_UPLOAD_TIMEOUT_MS ?? 240_000)
 assert.ok(Number.isSafeInteger(timeout) && timeout > 0, 'DSH_POC_CONTENT_UPLOAD_TIMEOUT_MS must be a positive integer')
 const scenarios = [
@@ -44,7 +49,7 @@ const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdi
 const startedAt = performance.now()
 const evidence = {
   result: 'running', selection, forceFixedNegativeControl: forceFixed, chunkObjectComparison, forceStagingNegativeControl: forceStaging,
-  coldRead,
+  coldRead, verifiedDownloadComparison, forceRangeDownload, downloadFault,
   browser: process.env.DSH_POC_BROWSER ?? 'chrome',
   model: 'not used; no composer submission or ctx.agentLoop execution',
   measurements: 'Actual HTTP request bodies; backend response I/O counters exclude audit downloads and metadata filesystem I/O',
@@ -115,6 +120,7 @@ function uploadIdentity(path) {
 }
 
 function requestStage(path, method) {
+  if (path.endsWith('/stream')) return 'download-stream'
   if (path === `${api}/blob-upload/start`) return 'start'
   if (path === `${api}/commit`) return 'commit'
   if (path.includes('/blob-upload/')) {
@@ -210,6 +216,28 @@ async function captureRoute(run, route) {
     ...(stage !== 'start' ? {} : { layoutBytes: payload.layout === undefined ? 0 : Buffer.byteLength(JSON.stringify(payload.layout)) }),
   }
   run.requests.push(record)
+  if (stage === 'download-stream') {
+    if (run.phase === 'cold-hydrate' && downloadFault !== undefined && run.downloadFault === undefined) {
+      run.downloadFault = { kind: downloadFault, applied: false }
+      if (downloadFault === 'abort') await route.abort('failed')
+      else {
+        const response = await route.fetch({ timeout, maxRetries: 0, maxRedirects: 0 })
+        const bytes = Buffer.from(await response.body())
+        assert.equal(response.status(), 200)
+        const body = downloadFault === 'truncate' ? bytes.subarray(0, bytes.byteLength - 1) : bytes
+        if (downloadFault === 'corrupt') body[Math.floor(body.byteLength / 2)] ^= 1
+        await route.fulfill({ response, body })
+      }
+      record.status = 0
+      record.injectedFault = downloadFault
+      run.downloadFault.applied = true
+      return
+    }
+    run.streamRecords.set(request, record)
+    record.startedAt = performance.now()
+    await route.continue()
+    return
+  }
   if (stage === 'start' && run.uploadGate !== undefined) await run.uploadGate.promise
   const before = performance.now()
   const response = await route.fetch({ timeout, maxRetries: 0, maxRedirects: 0 })
@@ -239,14 +267,18 @@ async function createRun(scenario, strategy) {
   app = undefined
   await mkdir(dataDir, { recursive: true })
   currentDataDir = await mkdtemp(join(dataDir, 'run-'))
-  const chunkObjects = strategy === 'cdc-objects'
-  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted', workspaceChunkObjects: chunkObjects && !forceStaging })
+  const chunkObjects = strategy.startsWith('cdc-objects')
+  const verifiedDownloads = strategy === 'cdc-objects-stream'
+  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted',
+    workspaceChunkObjects: chunkObjects && !forceStaging,
+    workspaceVerifiedDownloads: verifiedDownloads && !forceRangeDownload })
   origin = await app.listen(0)
   const context = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' })
   const run = {
-    strategy, chunkObjects, lossStage: scenario.lossStage, context, phase: 'boot', epoch: 0,
+    strategy, chunkObjects, verifiedDownloads, lossStage: scenario.lossStage, context, phase: 'boot', epoch: 0,
     contentDefinedUpload: strategy !== 'fixed' && !forceFixed, sessionIds: new Set(), sessionTraffic: [], llmRequests: [],
-    requests: [], externalRequests: [], pageErrors: [], workerErrors: [], consoleWarnings: [], routeErrors: [], routes: new Set(), closing: false,
+    requests: [], externalRequests: [], pageErrors: [], workerErrors: [], consoleWarnings: [], routeErrors: [], routes: new Set(),
+    streamRecords: new Map(), closing: false,
   }
   active = run
   await context.addInitScript(({ enabled }) => {
@@ -286,6 +318,26 @@ async function createRun(scenario, strategy) {
       if (body?.sessionId !== undefined) run.sessionIds.add(body.sessionId)
       run.sessionTraffic.push({ path: url.pathname, sessionId: body?.sessionId, eventTypes: body?.events?.map(event => event.type) })
     }
+  })
+  context.on('response', response => {
+    const record = run.streamRecords.get(response.request())
+    if (record !== undefined) {
+      record.status = response.status()
+      record.contentBytes = Number(response.headers()['content-length'])
+    }
+  })
+  context.on('requestfinished', request => {
+    const record = run.streamRecords.get(request)
+    if (record === undefined) return
+    const pending = request.sizes().then(sizes => {
+      record.responseBytes = sizes.responseBodySize
+      record.elapsedMs = performance.now() - record.startedAt
+      record.completed = true
+    }).catch(error => {
+      if (!run.closing) run.routeErrors.push(error.message)
+    })
+    run.routes.add(pending)
+    void pending.finally(() => run.routes.delete(pending))
   })
   await context.route('**/*', route => {
     const pending = captureRoute(run, route).catch(async error => {
@@ -351,7 +403,7 @@ function assertHealthy(run) {
   const submittedInputs = run.sessionTraffic.flatMap(request => request.eventTypes ?? [])
     .filter(type => /^(turn|user|assistant|tool|input)(?:\/|[.-])/.test(type))
   assert.deepEqual(submittedInputs, [], 'captured Session appends must contain no submitted prompt or loop event')
-  const failures = run.requests.filter(request => request.status !== 200)
+  const failures = run.requests.filter(request => request.status !== 200 && request.injectedFault === undefined)
   assert.deepEqual(failures, [], 'Workspace protocol requests must succeed')
 }
 
@@ -359,8 +411,8 @@ async function reloadWorkspace(run, expected) {
   run.phase = coldRead ? 'cold-hydrate' : 'refresh'
   await action(run, { action: 'close-vfs' })
   let cleared
-  const before = performance.now()
-  const ioBefore = app.workspaces.chunkObjects?.getMetrics()
+  let before = performance.now()
+  let ioBefore = app.workspaces.chunkObjects?.getMetrics()
   if (coldRead) {
     await run.page.goto(`${origin}/api/browser-native/health`, { waitUntil: 'domcontentloaded' })
     cleared = await bounded(run.page.evaluate(async () => {
@@ -387,6 +439,37 @@ async function reloadWorkspace(run, expected) {
     assert.ok(cleared.databases.includes('dsh-browser-native-workspace-v1'))
     await run.page.goto(`${origin}/preview.html?${previewQuery}`, { waitUntil: 'domcontentloaded' })
   } else await run.page.reload({ waitUntil: 'domcontentloaded' })
+  if (run.verifiedDownloads && downloadFault !== undefined) {
+    await waitFor(() => run.downloadFault?.applied, 'one verified download fault to be applied', timeout)
+    await run.page.waitForFunction(() => ['error', 'local-corrupt'].includes(window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state),
+      undefined, { timeout })
+    run.downloadFault.status = await run.page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__)
+    assert.notEqual(run.downloadFault.status.state, 'synced', 'failed stream must not publish a ready Workspace')
+    await run.page.goto(`${origin}/api/browser-native/health`, { waitUntil: 'domcontentloaded' })
+    run.downloadFault.local = await run.page.evaluate(async ({ workspaceId, hash }) => {
+      const root = await navigator.storage.getDirectory()
+      const directory = await root.getDirectoryHandle(`dsh-workspace-blobs-${workspaceId}`)
+      try {
+        const file = await (await directory.getFileHandle(hash)).getFile()
+        return { present: true, bytes: file.size }
+      } catch (error) {
+        if (error.name !== 'NotFoundError') throw error
+        return { present: false }
+      }
+    }, { workspaceId: run.workspaceId, hash: expected.digest })
+    assert.equal(run.downloadFault.local.present, false, 'unverified remote bytes must not remain at a canonical OPFS hash')
+    run.downloadFault.expectedPageErrors = run.pageErrors.splice(0)
+    assert.ok(run.downloadFault.expectedPageErrors.every(message => /download|fetch|network|blob|stream|terminated/i.test(message)))
+    const port = Number(new URL(origin).port)
+    await app.close()
+    app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted',
+      workspaceChunkObjects: true, workspaceVerifiedDownloads: !forceRangeDownload })
+    assert.equal(await app.listen(port), origin)
+    before = performance.now()
+    ioBefore = app.workspaces.chunkObjects.getMetrics()
+    run.phase = 'cold-hydrate-retry'
+    await run.page.goto(`${origin}/preview.html?${previewQuery}`, { waitUntil: 'domcontentloaded' })
+  }
   try { await waitForPreview(run.page) } catch (error) {
     run.readinessFailure = await run.page.evaluate(() => ({
       body: document.body.innerText.slice(0, 4000), status: window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__,
@@ -399,7 +482,19 @@ async function reloadWorkspace(run, expected) {
   assert.equal(read.bytes, expected.bytes)
   const manifest = await verifyManifest(run, expected, 2)
   const ioAfter = app.workspaces.chunkObjects?.getMetrics()
-  return { status, read, manifest, usage: await action(run, { action: 'usage' }), cleared,
+  if (run.verifiedDownloads) {
+    const phase = run.downloadFault === undefined ? 'cold-hydrate' : 'cold-hydrate-retry'
+    const downloads = run.requests.filter(request => request.phase === phase && request.stage === 'download-stream')
+    assert.equal(downloads.length, 1, 'cold hydrate must use one verified HTTP stream')
+    assert.equal(downloads[0].status, 200, 'verified stream must return successful headers')
+    assert.equal(downloads[0].contentBytes, expected.bytes)
+    downloads[0].verifiedThroughOpfsAndVfs = true
+    assert.equal(ioAfter.activeReaders, 0, 'completed cold hydrate must release the storage reader')
+    assert.ok(ioAfter.chunkReadBytes - ioBefore.chunkReadBytes <= expected.bytes * 2,
+      'verified cold hydrate must read no more than two complete copies of chunk bytes')
+    assert.ok(ioAfter.peakReadBufferBytes <= 1024 * 1024, 'storage reader must retain at most one 1 MiB chunk')
+  }
+  return { status, read, manifest, usage: await action(run, { action: 'usage' }), cleared, downloadFault: run.downloadFault,
     elapsedMs: performance.now() - before,
     ...(ioBefore === undefined ? {} : { chunkIoDelta: Object.fromEntries(Object.keys(ioBefore).map(key => [key, ioAfter[key] - ioBefore[key]])) }) }
 }
@@ -433,7 +528,9 @@ async function recoverWorkload(run, expected) {
   const port = Number(new URL(origin).port)
   await app.close()
   app = undefined
-  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted', workspaceChunkObjects: run.chunkObjects && !forceStaging })
+  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted',
+    workspaceChunkObjects: run.chunkObjects && !forceStaging,
+    workspaceVerifiedDownloads: run.verifiedDownloads && !forceRangeDownload })
   assert.equal(await app.listen(port), origin, 'restart must preserve origin and browser storage')
   const afterRestart = await auditJson(run, uploadPath)
   assert.equal(afterRestart.complete, beforeRestart.complete)
@@ -583,7 +680,7 @@ async function runScenario(scenario, strategy, result) {
     result.source.cost = assertUpload(run, 'source', source)
     result.target.cost = assertUpload(run, 'target', target)
     assertHealthy(run)
-    if (chunkObjectComparison) {
+    if (chunkObjectComparison || verifiedDownloadComparison) {
       result.garbageCollection = await app.workspaces.collectGarbage(run.workspaceId)
       result.afterGarbageCollection = await storageSnapshot()
       await verifyManifest(run, target, 2)
@@ -629,7 +726,9 @@ try {
   for (const scenario of selected) {
     const result = { ...scenario, runs: [] }
     evidence.scenarios.push(result)
-    const strategies = chunkObjectComparison
+    const strategies = verifiedDownloadComparison
+      ? scenario.lossStage === undefined ? ['cdc-objects-range', 'cdc-objects-stream'] : ['cdc-objects-stream']
+      : chunkObjectComparison
       ? scenario.lossStage === undefined ? ['cdc-staging', 'cdc-objects'] : ['cdc-objects']
       : scenario.lossStage === undefined ? ['fixed', 'cdc'] : ['cdc']
     for (const strategy of strategies) {
@@ -644,7 +743,11 @@ try {
       assert.equal(fixed.target.remote.digest, cdc.target.remote.digest)
       assert.equal(fixed.target.manifest.revision, cdc.target.manifest.revision)
       assert.deepEqual(fixed.target.manifest.entries, cdc.target.manifest.entries)
-      result.comparison = chunkObjectComparison ? {
+      result.comparison = verifiedDownloadComparison ? {
+        range: fixed.refresh, stream: cdc.refresh,
+        rangeReadBytes: fixed.refresh.chunkIoDelta.chunkReadBytes,
+        streamReadBytes: cdc.refresh.chunkIoDelta.chunkReadBytes,
+      } : chunkObjectComparison ? {
         staging: fixed.target.cost, objects: cdc.target.cost,
         stagingDisk: fixed.target.storage.disk, objectsDisk: cdc.target.storage.disk,
       } : {
@@ -653,7 +756,11 @@ try {
         savedPutFraction: 1 - cdc.target.cost.uploadPutBytes / fixed.target.cost.uploadPutBytes,
         fixed: fixed.target.cost, cdc: cdc.target.cost,
       }
-      if (chunkObjectComparison) {
+      if (verifiedDownloadComparison) {
+        assert.equal(fixed.target.cost.uploadPutBytes, cdc.target.cost.uploadPutBytes)
+        assert.ok(result.comparison.streamReadBytes < result.comparison.rangeReadBytes,
+          'verified download must reduce actual chunk disk reads during cold hydrate')
+      } else if (chunkObjectComparison) {
         assert.equal(fixed.target.cost.uploadPutBytes, cdc.target.cost.uploadPutBytes, 'storage choice must not change chunker or HTTP bytes')
         assert.equal(cdc.target.cost.backendIo.assembledWriteBytes, 0)
         assert.equal(cdc.target.cost.backendIo.stagedReuseBytes, 0)
@@ -666,7 +773,7 @@ try {
     result.result = 'passed'
     process.stderr.write(`${JSON.stringify({ scenario: scenario.name, state: 'passed', comparison: result.comparison })}\n`)
   }
-  if (!chunkObjectComparison && (selection === 'normal' || selection === 'all')) {
+  if (!chunkObjectComparison && !verifiedDownloadComparison && (selection === 'normal' || selection === 'all')) {
     const shiftSavings = evidence.scenarios.filter(scenario => scenario.lossStage === undefined && scenario.editKind !== 'replace')
     assert.ok(shiftSavings.filter(scenario => scenario.comparison.savedPutFraction > 0.5).length >= 2,
       'at least two shift edits must reduce actual HTTP PUT bytes by more than 50%')

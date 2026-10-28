@@ -129,6 +129,404 @@ test('a 64 MiB logical file reuses one immutable chunk without assembling whole-
   assert.equal(store.getMetrics().chunkReadBytes, totalBytes * 2)
 })
 
+test('verified reads preverify once and stream repeated chunks and a short tail with exactly two disk passes', async context => {
+  const { store, descriptorPath } = await fixture(context)
+  const repeated = Buffer.alloc(MAX_CHUNK_BYTES, 0x61)
+  const parts = [repeated, Buffer.alloc(MIN_CHUNK_BYTES, 0x62), repeated, Buffer.from('tail')]
+  const value = await upload(store, parts)
+  const descriptorBytes = (await readFile(descriptorPath(value.hash))).byteLength
+  const before = store.getMetrics()
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  assert.equal(reader.hash, value.hash)
+  assert.equal(reader.totalBytes, value.bytes.byteLength)
+  const opened = store.getMetrics()
+  assert.equal(opened.chunkReadBytes - before.chunkReadBytes, value.bytes.byteLength)
+  assert.equal(opened.fileVerificationBytes - before.fileVerificationBytes, value.bytes.byteLength)
+  assert.equal(opened.descriptorReadBytes - before.descriptorReadBytes, descriptorBytes)
+  assert.equal(opened.activeReaders, 1)
+  const digest = createHash('sha256')
+  let index = 0
+  for await (const bytes of reader.chunks()) {
+    assert.deepEqual(bytes, parts[index])
+    digest.update(bytes)
+    assert.equal(store.getMetrics().chunkReadBytes - opened.chunkReadBytes,
+      value.layout.chunks[index].offset + bytes.byteLength)
+    index += 1
+  }
+  assert.equal(index, parts.length)
+  assert.equal(digest.digest('hex'), value.hash)
+  const after = store.getMetrics()
+  assert.equal(after.chunkReadBytes - before.chunkReadBytes, value.bytes.byteLength * 2)
+  assert.equal(after.chunkVerificationBytes - before.chunkVerificationBytes, value.bytes.byteLength * 2)
+  assert.equal(after.fileVerificationBytes - before.fileVerificationBytes, value.bytes.byteLength * 2)
+  assert.equal(after.descriptorReadBytes, opened.descriptorReadBytes)
+  assert.equal(after.activeReaders, 0)
+  assert.equal(after.peakReadBufferBytes, MAX_CHUNK_BYTES)
+  await reader.close()
+  assert.deepEqual(store.getMetrics(), after)
+  assert.throws(() => reader.chunks(), error => error.code === 'BLOB_READER_CLOSED')
+})
+
+test('a 64 MiB verified stream retains only a chunk buffer and performs no third verification scan', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MAX_CHUNK_BYTES, 0x71)
+  const chunkHash = sha256(part)
+  const digest = createHash('sha256')
+  const chunks = Array.from({ length: 64 }, (_, index) => {
+    digest.update(part)
+    return { hash: chunkHash, offset: index * part.byteLength, length: part.byteLength }
+  })
+  const hash = digest.digest('hex')
+  const totalBytes = part.byteLength * chunks.length
+  await store.putChunk(chunkHash, part)
+  await store.compose(hash, totalBytes, { ...PARAMETERS, chunks })
+  const before = store.getMetrics()
+  const reader = await store.openVerifiedRead(hash)
+  context.after(async () => await reader.close())
+  const outputDigest = createHash('sha256')
+  let outputBytes = 0
+  for await (const bytes of reader.chunks()) {
+    assert.equal(bytes.byteLength, MAX_CHUNK_BYTES)
+    outputDigest.update(bytes)
+    outputBytes += bytes.byteLength
+  }
+  assert.equal(outputBytes, totalBytes)
+  assert.equal(outputDigest.digest('hex'), hash)
+  const after = store.getMetrics()
+  assert.equal(after.chunkReadBytes - before.chunkReadBytes, totalBytes * 2)
+  assert.equal(after.fileVerificationBytes - before.fileVerificationBytes, totalBytes * 2)
+  assert.equal(after.peakReadBufferBytes, MAX_CHUNK_BYTES)
+  assert.equal(after.activeReaders, 0)
+})
+
+test('empty verified readers validate the empty digest and release without chunk reads', async context => {
+  const { store } = await fixture(context)
+  const value = await upload(store, [])
+  const before = store.getMetrics()
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  assert.equal(reader.totalBytes, 0)
+  assert.equal(store.getMetrics().activeReaders, 1)
+  const iterator = reader.chunks()
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.equal(store.getMetrics().chunkReadBytes, before.chunkReadBytes)
+  assert.equal(store.getMetrics().peakReadBufferBytes, 0)
+})
+
+test('verified reads return undefined for absent descriptors without reading or verifying fallback blobs', async context => {
+  const { store, fallback } = await fixture(context)
+  const bytes = Buffer.from('legacy-only bytes')
+  const hash = sha256(bytes)
+  await fallback.put(hash, bytes)
+  const before = store.getMetrics()
+  assert.equal(await store.openVerifiedRead(hash), undefined)
+  assert.equal(await store.openVerifiedRead(sha256('absent')), undefined)
+  await writeFile(fallback.path(hash), 'corrupt fallback')
+  assert.equal(await fallback.verify(hash, bytes.byteLength), false)
+  assert.equal(await store.openVerifiedRead(hash), undefined)
+  assert.deepEqual(store.getMetrics(), before)
+  await rejectsCode(store.openVerifiedRead('../escape'), 'INVALID_REQUEST')
+})
+
+test('verified reads reject corrupt descriptors, missing or damaged chunks and validly reordered layouts before opening', async context => {
+  for (const damage of ['descriptor', 'missing', 'truncated', 'same-size', 'reordered']) {
+    await context.test(damage, async child => {
+      const { store, fallback, descriptorPath, chunkPath } = await fixture(child)
+      const first = Buffer.alloc(MIN_CHUNK_BYTES, 0x41)
+      const second = Buffer.alloc(MIN_CHUNK_BYTES, 0x42)
+      const value = await upload(store, [first, second])
+      await fallback.put(value.hash, value.bytes)
+      switch (damage) {
+        case 'descriptor':
+          await writeFile(descriptorPath(value.hash), '{')
+          break
+        case 'missing':
+          await rm(chunkPath(sha256(second)))
+          break
+        case 'truncated':
+          await writeFile(chunkPath(sha256(second)), second.subarray(1))
+          break
+        case 'same-size':
+          await writeFile(chunkPath(sha256(second)), Buffer.alloc(second.byteLength, 0x43))
+          break
+        case 'reordered':
+          await writeFile(descriptorPath(value.hash), JSON.stringify({ ...descriptor(value),
+            layout: fileVersion([second, first]).layout }))
+          break
+      }
+      await rejectsCode(store.openVerifiedRead(value.hash), 'BLOB_CORRUPT')
+      assert.equal(store.getMetrics().activeReaders, 0)
+    })
+  }
+})
+
+test('verified readers use their captured layout after a descriptor is replaced or removed', async context => {
+  const { store, descriptorPath } = await fixture(context)
+  const first = Buffer.alloc(MIN_CHUNK_BYTES, 0x41)
+  const second = Buffer.alloc(MIN_CHUNK_BYTES, 0x42)
+  const value = await upload(store, [first, second])
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  const iterator = reader.chunks()
+  await writeFile(descriptorPath(value.hash), JSON.stringify({ ...descriptor(value),
+    layout: fileVersion([second, first]).layout }))
+  assert.deepEqual(await iterator.next(), { value: first, done: false })
+  await rm(descriptorPath(value.hash))
+  assert.deepEqual(await iterator.next(), { value: second, done: false })
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+  assert.equal(store.getMetrics().activeReaders, 0)
+})
+
+test('consumer-owned chunk mutations do not affect repeated reads or the incremental full digest', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const value = await upload(store, [part, part])
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  let count = 0
+  for await (const bytes of reader.chunks()) {
+    assert.deepEqual(bytes, part)
+    bytes.fill(0xff)
+    count += 1
+  }
+  assert.equal(count, 2)
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.equal(await store.verifyChunk(sha256(part), part.byteLength), true)
+})
+
+test('streaming rejects chunk damage introduced after open and releases roots before reporting failure', async context => {
+  for (const damage of ['missing', 'truncated', 'same-size']) {
+    await context.test(damage, async child => {
+      const { store, chunkPath } = await fixture(child)
+      const first = Buffer.alloc(MIN_CHUNK_BYTES, 0x41)
+      const second = Buffer.alloc(MIN_CHUNK_BYTES, 0x42)
+      const value = await upload(store, [first, second])
+      const reader = await store.openVerifiedRead(value.hash)
+      child.after(async () => await reader.close())
+      const iterator = reader.chunks()
+      assert.deepEqual(await iterator.next(), { value: first, done: false })
+      await store.delete(value.hash)
+      if (damage === 'missing') await rm(chunkPath(sha256(second)))
+      else await writeFile(chunkPath(sha256(second)), damage === 'truncated'
+        ? second.subarray(1) : Buffer.alloc(second.byteLength, 0x43))
+      await rejectsCode(iterator.next(), 'BLOB_CORRUPT')
+      assert.equal(store.getMetrics().activeReaders, 0)
+      const collected = await store.collectChunks([])
+      assert.equal(collected.skipped, undefined)
+      assert.equal(await store.verifyChunk(sha256(first), first.byteLength), false)
+      await reader.close()
+    })
+  }
+})
+
+test('deleting a descriptor cannot collect active reader chunks, and close permits their collection', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const tail = Buffer.from('tail')
+  const value = await upload(store, [part, part, tail])
+  const orphan = Buffer.from('orphan')
+  await store.putChunk(sha256(orphan), orphan)
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  const iterator = reader.chunks()
+  assert.deepEqual(await iterator.next(), { value: part, done: false })
+  assert.throws(() => reader.chunks(), error => error.code === 'BLOB_READER_CLOSED')
+  await store.delete(value.hash)
+  assert.equal(await store.stat(value.hash), undefined)
+  const retained = await store.collectChunks([])
+  assert.equal(retained.skipped, undefined)
+  assert.equal(retained.descriptorRoots, 0)
+  assert.equal(retained.retainedChunks, 2)
+  assert.equal(retained.removedBytes, orphan.byteLength)
+  assert.deepEqual(await iterator.next(), { value: part, done: false })
+  await Promise.all([reader.close(), reader.close()])
+  assert.equal(store.getMetrics().activeReaders, 0)
+  const collected = await store.collectChunks([])
+  assert.equal(collected.removedChunks, 2)
+  assert.equal(collected.removedBytes, part.byteLength + tail.byteLength)
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+})
+
+test('normal verified EOF releases roots so GC can reclaim deleted logical files', async context => {
+  const { store } = await fixture(context)
+  const parts = [Buffer.alloc(MIN_CHUNK_BYTES, 0x61), Buffer.from('tail')]
+  const value = await upload(store, parts)
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  await store.delete(value.hash)
+  let index = 0
+  for await (const bytes of reader.chunks()) {
+    assert.deepEqual(bytes, parts[index])
+    index += 1
+  }
+  assert.equal(index, parts.length)
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.equal((await store.collectChunks([])).removedChunks, parts.length)
+})
+
+test('close waits for an in-flight read, prevents its yield and permits concurrent GC to finish', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const value = await upload(store, [part, part])
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  await store.delete(value.hash)
+  const iterator = reader.chunks()
+  const pending = iterator.next()
+  const closing = reader.close()
+  assert.equal(store.getMetrics().activeReaders, 1)
+  assert.equal(reader.close(), closing)
+  const collecting = store.collectChunks([])
+  await closing
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.deepEqual(await pending, { value: undefined, done: true })
+  const concurrent = await collecting
+  assert.equal(concurrent.skipped, undefined)
+  const final = await store.collectChunks([])
+  assert.equal(final.skipped, undefined)
+  assert.equal(concurrent.removedChunks + final.removedChunks, 1)
+  assert.equal(await store.verifyChunk(sha256(part), part.byteLength), false)
+})
+
+test('corrupt active reader roots stop GC until the reader closes, even after descriptor deletion', async context => {
+  const { store, chunkPath } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const value = await upload(store, [part])
+  const orphan = Buffer.from('orphan')
+  await store.putChunk(sha256(orphan), orphan)
+  const reader = await store.openVerifiedRead(value.hash)
+  context.after(async () => await reader.close())
+  await store.delete(value.hash)
+  await writeFile(chunkPath(sha256(part)), Buffer.alloc(part.byteLength, 0x62))
+  const blocked = await store.collectChunks([])
+  assert.equal(typeof blocked.skipped, 'string')
+  assert.equal(blocked.removedChunks, 0)
+  assert.equal(store.getMetrics().activeReaders, 1)
+  assert.equal(await store.verifyChunk(sha256(orphan), orphan.byteLength), true)
+  await reader.close()
+  const collected = await store.collectChunks([])
+  assert.equal(collected.skipped, undefined)
+  assert.equal(collected.removedChunks, 1)
+  assert.equal(collected.removedBytes, orphan.byteLength)
+  assert.equal(collected.preservedUnknownObjects, 1)
+})
+
+test('iterator return releases roots both before first next and midway through a stream', async context => {
+  for (const start of [false, true]) {
+    await context.test(start ? 'midstream' : 'before first next', async child => {
+      const { store } = await fixture(child)
+      const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+      const value = await upload(store, [part, part])
+      const reader = await store.openVerifiedRead(value.hash)
+      child.after(async () => await reader.close())
+      const iterator = reader.chunks()
+      await store.delete(value.hash)
+      if (start) assert.deepEqual(await iterator.next(), { value: part, done: false })
+      assert.deepEqual(await iterator.return(), { value: undefined, done: true })
+      assert.equal(store.getMetrics().activeReaders, 0)
+      assert.equal((await store.collectChunks([])).removedChunks, 1)
+      assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+    })
+  }
+})
+
+test('breaking or throwing in a consumer releases verified reader roots', async context => {
+  for (const fail of [false, true]) {
+    await context.test(fail ? 'consumer throws' : 'consumer breaks', async child => {
+      const { store } = await fixture(child)
+      const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+      const value = await upload(store, [part, part])
+      const reader = await store.openVerifiedRead(value.hash)
+      child.after(async () => await reader.close())
+      await store.delete(value.hash)
+      const failure = new Error('consumer stopped')
+      const consume = async () => {
+        for await (const bytes of reader.chunks()) {
+          assert.deepEqual(bytes, part)
+          if (fail) throw failure
+          break
+        }
+      }
+      if (fail) await assert.rejects(consume(), error => error === failure)
+      else await consume()
+      assert.equal(store.getMetrics().activeReaders, 0)
+      assert.equal((await store.collectChunks([])).removedChunks, 1)
+    })
+  }
+})
+
+test('closing an unconsumed reader and throwing into an unstarted iterator release their roots', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const value = await upload(store, [part])
+  const first = await store.openVerifiedRead(value.hash)
+  const second = await store.openVerifiedRead(value.hash)
+  context.after(async () => { await first.close(); await second.close() })
+  const iterator = second.chunks()
+  await store.delete(value.hash)
+  await first.close()
+  await first.close()
+  assert.equal(store.getMetrics().activeReaders, 1)
+  assert.equal((await store.collectChunks([])).retainedChunks, 1)
+  assert.throws(() => first.chunks(), error => error.code === 'BLOB_READER_CLOSED')
+  const failure = new Error('cancelled before next')
+  await assert.rejects(iterator.throw(failure), error => error === failure)
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.equal((await store.collectChunks([])).removedChunks, 1)
+})
+
+test('two readers retain independent references to duplicate and shared chunk roots', async context => {
+  const { store } = await fixture(context)
+  const shared = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const one = await upload(store, [shared, shared, Buffer.from('one')])
+  const two = await upload(store, [shared, Buffer.from('two')])
+  const first = await store.openVerifiedRead(one.hash)
+  const second = await store.openVerifiedRead(two.hash)
+  context.after(async () => { await first.close(); await second.close() })
+  assert.equal(store.getMetrics().activeReaders, 2)
+  await store.delete(one.hash)
+  await store.delete(two.hash)
+  const retained = await store.collectChunks([])
+  assert.equal(retained.retainedChunks, 3)
+  assert.equal(retained.removedChunks, 0)
+  await first.close()
+  assert.equal(store.getMetrics().activeReaders, 1)
+  const releasedFirst = await store.collectChunks([])
+  assert.equal(releasedFirst.removedChunks, 1)
+  assert.equal(releasedFirst.removedBytes, Buffer.byteLength('one'))
+  assert.equal(releasedFirst.retainedChunks, 2)
+  const output = []
+  for await (const bytes of second.chunks()) output.push(bytes)
+  assert.deepEqual(Buffer.concat(output), two.bytes)
+  assert.equal(store.getMetrics().activeReaders, 0)
+  assert.equal((await store.collectChunks([])).removedChunks, 2)
+})
+
+test('open, deletion and GC join the mutation queue without nested acquisition or holding it across yields', async context => {
+  const { store } = await fixture(context)
+  const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x61)
+  const value = await upload(store, [part, part])
+  const barrier = Promise.withResolvers()
+  store.mutationQueue = barrier.promise
+  const opening = store.openVerifiedRead(value.hash)
+  const deleting = store.delete(value.hash)
+  const collecting = store.collectChunks([])
+  barrier.resolve()
+  const [reader, , retained] = await Promise.all([opening, deleting, collecting])
+  context.after(async () => await reader.close())
+  assert.equal(retained.skipped, undefined)
+  assert.equal(retained.retainedChunks, 1)
+  assert.equal(retained.removedChunks, 0)
+  const iterator = reader.chunks()
+  assert.deepEqual(await iterator.next(), { value: part, done: false })
+  assert.equal((await store.collectChunks([])).removedChunks, 0)
+  await reader.close()
+  assert.equal((await store.collectChunks([])).removedChunks, 1)
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true })
+})
+
 test('chunk verification distinguishes missing, wrong length and same-size corrupt bytes', async context => {
   const { store, chunkPath } = await fixture(context)
   const part = Buffer.alloc(MIN_CHUNK_BYTES, 0x31)

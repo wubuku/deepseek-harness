@@ -12,6 +12,20 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-048：块对象完整性下载流验证
+
+```text
+changeId: BN-P2-048
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 起始research与origin/research同步、工作区干净、仅主worktree
+file: 本目录chunk-object-store.mjs、workspace-v2.mjs、backend-v2.mjs、browser-native-workspace.ts、browser-native-verified-download.ts及相关测试、计划、进度、README；docs/drafts/README.md登记
+reason: 上批64MiB冷恢复每个range重复全文件验证，实际读取4GiB；需在保留完整性与有界内存的前提下降低服务器负担，同时避免下载期间GC和连接取消泄漏引用。
+existingExtensionPointsChecked: blobStore可选reader、既有lifecycle锁、upload-capabilities、OPFS cacheBlobFromChunks与incremental SHA；不改Agent Loop、Session格式、默认fixed或旧range语义。
+coupling: 仅docs-owned原型；下载能力显式backend opt-in，旧完整blob只允许明确unsupported回退。唯一目录外修改为drafts索引。
+tests: 实际命令、成本、故障、负对照和真实LLM结果由verified-stream-download-validation-progress.md维护；未运行不写PASS。
+upstreamReplay: 先加入有界reader与active roots，再HTTP背压与取消，最后浏览器协商、OPFS发布和真实Chrome冷恢复；保留旧range负对照与默认模式回归。
+deleteWhen: 正式Workspace provider提供同等下载完整性、背压、资源释放与真实冷恢复成本证据。
+```
+
 ### BN-P2-047：不可变块对象与文件版本存储验证
 
 ```text

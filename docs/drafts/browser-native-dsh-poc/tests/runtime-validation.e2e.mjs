@@ -24,6 +24,7 @@ const roster = process.env.DSH_POC_ROSTER ?? 'browser'
 const durableWorkspace = process.env.DSH_POC_DURABLE_WORKSPACE === '1'
 const contentDefinedUpload = process.env.DSH_POC_CONTENT_UPLOAD === '1'
 const chunkObjects = process.env.DSH_POC_CHUNK_OBJECTS === '1'
+const verifiedDownloads = process.env.DSH_POC_VERIFIED_DOWNLOADS === '1'
 const blockWorkspaceCommitOnce = process.env.DSH_POC_BLOCK_WORKSPACE_COMMIT_ONCE === '1'
 const skipPostRefreshTurns = process.env.DSH_POC_SKIP_POST_REFRESH_TURNS === '1'
 const port = Number(process.env.DSH_POC_PORT ?? '0')
@@ -49,6 +50,7 @@ if (!['browser', 'original'].includes(roster)) throw new Error('DSH_POC_ROSTER m
 if (mode === 'real' && envFile === undefined) throw new Error('DSH_POC_ENV_FILE is required for real mode')
 if (contentDefinedUpload && !durableWorkspace) throw new Error('content upload smoke requires a durable Workspace')
 if (chunkObjects && !contentDefinedUpload) throw new Error('chunk object smoke requires content-defined uploads')
+if (verifiedDownloads && !chunkObjects) throw new Error('verified download smoke requires chunk objects')
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('DSH_POC_PORT must be a TCP port')
 if (!Number.isInteger(turnTimeout) || turnTimeout < 1_000) throw new Error('DSH_POC_TURN_TIMEOUT_MS must be at least 1000')
 if (!Number.isInteger(refreshCycles) || refreshCycles < 1 || refreshCycles > 5) {
@@ -91,10 +93,11 @@ const httpErrors = []
 const consoleErrors = []
 const llmStatuses = []
 let blockedWorkspaceCommit = false
+let coldWorkspaceReset
 try {
   image = await createRuntimeValidationDist({ roster })
   app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: mode, envFile,
-    workspaceChunkObjects: chunkObjects })
+    workspaceChunkObjects: chunkObjects, workspaceVerifiedDownloads: verifiedDownloads })
   origin = await app.listen(port)
   const launcher = browserName === 'webkit' ? webkit : chromium
   browser = await launcher.launch({ headless: true, ...(browserName === 'chrome' ? { channel: 'chrome' } : {}) })
@@ -232,7 +235,30 @@ try {
   if (mode === 'real' || refreshCycles > 1) {
     for (let cycle = 1; cycle <= refreshCycles; cycle += 1) {
       phase = `page refresh ${cycle} and Session reconnect`
-      await page.reload({ waitUntil: 'domcontentloaded' })
+      if (verifiedDownloads && cycle === 1) {
+        const previewUrl = page.url()
+        await page.goto(`${origin}/api/browser-native/health`, { waitUntil: 'domcontentloaded' })
+        coldWorkspaceReset = await page.evaluate(async () => {
+          const root = await navigator.storage.getDirectory()
+          const entries = []
+          for await (const [name] of root.entries()) {
+            if (!name.startsWith('dsh-workspace-blobs-')) continue
+            await root.removeEntry(name, { recursive: true })
+            entries.push(name)
+          }
+          await new Promise((resolveDeleted, rejectDeleted) => {
+            const request = indexedDB.deleteDatabase('dsh-browser-native-workspace-v1')
+            request.onsuccess = () => resolveDeleted()
+            request.onerror = () => rejectDeleted(request.error)
+            request.onblocked = () => rejectDeleted(new Error('Workspace database deletion blocked'))
+          })
+          return { entries, retainedSessionOutbox: (await indexedDB.databases())
+            .some(database => database.name === 'dsh-browser-native-session-outbox-v1') }
+        })
+        assert.ok(coldWorkspaceReset.entries.length > 0, 'real smoke must clear existing Workspace bytes')
+        assert.equal(coldWorkspaceReset.retainedSessionOutbox, true, 'Workspace reset must preserve Session persistence')
+        await page.goto(previewUrl, { waitUntil: 'domcontentloaded' })
+      } else await page.reload({ waitUntil: 'domcontentloaded' })
       await waitForPreview(page)
       await page.getByText(mode === 'real' ? token : 'BROWSER_NATIVE_RUNTIME_VALIDATION_OK', { exact: false }).last().waitFor({ timeout: 20_000 })
     }
@@ -359,6 +385,11 @@ try {
     assert.ok(chunkObjectIo.descriptorWrites > 0, 'real file tools must publish a file descriptor')
     assert.equal(chunkObjectIo.assembledWriteBytes, 0, 'chunk object smoke must not assemble a complete blob')
   }
+  if (verifiedDownloads) {
+    assert.equal(requests.filter(request => /\/workspace\/blob\/[a-f0-9]{64}\/stream$/.test(request.path)
+      && request.status === 200).length, 1, 'real model refresh must restore through one verified download stream')
+    assert.equal(chunkObjectIo.activeReaders, 0, 'real model smoke must release its download reader')
+  }
   const firstTurnFlushes = requests.filter(request => request.path.endsWith('/session/flush')
     && request.startedAt >= first.submittedAt && request.startedAt <= first.settledAt && request.settledAt !== undefined)
   const firstTextChunkAt = session.events
@@ -372,6 +403,8 @@ try {
     durableWorkspace,
     contentDefinedUpload,
     chunkObjects,
+    verifiedDownloads,
+    coldWorkspaceReset,
     chunkObjectIo,
     blockedWorkspaceCommit,
     workspaceCommitStatuses: requests.filter(request => request.path.endsWith('/workspace/commit')).map(request => request.status),
