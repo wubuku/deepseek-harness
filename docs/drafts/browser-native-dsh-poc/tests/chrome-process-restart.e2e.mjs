@@ -58,7 +58,7 @@ try {
   const before = await page.evaluate(async id => {
     const manifestResponse = await fetch(`/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`)
     const manifest = await manifestResponse.json()
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     const record = await new Promise((resolveRecord, reject) => {
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
       request.onsuccess = () => {

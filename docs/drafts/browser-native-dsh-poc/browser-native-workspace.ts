@@ -220,6 +220,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private localPersistVersion = 0
   private localPersistedVersion = 0
   private localPersistFailure: Error | undefined
+  private localWriterInvalidated = false
   private writerToken: string | undefined
   private fencingToken: number | undefined
   private writerLeaseState: 'unclaimed' | 'active' | 'lost' | 'released' = 'unclaimed'
@@ -285,6 +286,14 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
           this.onAccessMode?.(this.accessMode)
         }
       }
+      if (this.accessMode === 'writer') {
+        await this.store?.acquireWriter(this.workspaceId, this.useWriterLease ? async () => {
+          await this.writerRenewal?.catch(() => {})
+          await this.renewWriter()
+          this.assertWriterLeaseUsable()
+          return () => this.assertWriterLeaseUsable()
+        } : undefined)
+      }
       if (this.useWriterLease && this.accessMode === 'writer') await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
       const localSnapshot = this.accessMode === 'writer' ? await this.store?.load(this.workspaceId) : undefined
       const manifest = await this.loadManifest()
@@ -349,7 +358,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         : error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
           ? 'local-newer-version'
           : error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
-            && error.code !== 'LOCAL_SNAPSHOT_CONFLICT'
+            && error.code !== 'LOCAL_SNAPSHOT_CONFLICT' && error.code !== 'LOCAL_WRITER_LOST'
             ? 'local-corrupt'
             : error instanceof DownloadJournalError && error.code === 'LOCAL_DOWNLOAD_JOURNAL_INVALID'
               ? 'local-corrupt'
@@ -421,6 +430,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
     if (this.failure !== undefined) this.failure = undefined
     try {
+      await this.assertLocalWriter()
       await this.awaitLocalPersist()
     } catch (error) {
       this.setLocalPersistFailure(error)
@@ -447,10 +457,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   async flushLocalWorkspace(): Promise<void> {
+    if (this.accessMode === 'writer') await this.assertLocalWriter()
     await this.awaitLocalPersist()
+    if (this.accessMode === 'writer') await this.assertLocalWriter()
   }
 
   assertLocalWorkspaceUsable(): void {
+    if (this.localWriterInvalidated) throw new Error('browser-native workspace: local writer was invalidated; reload before using Workspace files')
     if (this.localPersistFailure !== undefined || this.localPersistedVersion < this.localPersistVersion) {
       throw new Error(
         `browser-native local Workspace persistence is unresolved; reload before using Workspace files (${this.localPersistFailure?.message ?? 'save is pending'})`,
@@ -481,7 +494,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   async verifyFileToolRevision(authorizedRevision: number | undefined): Promise<void> {
-    if (this.accessMode === 'writer') return
+    if (this.accessMode === 'writer') {
+      await this.ensureWriterLease()
+      return
+    }
     if (this.accessMode === 'stale') {
       throw new Error('browser-native workspace: observer snapshot is stale; refresh before reading Workspace files')
     }
@@ -497,6 +513,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   async ensureWriterLease(): Promise<void> {
     if (this.accessMode !== 'writer') throw new Error('browser-native workspace: read-only observer cannot acquire writer access without a page reload')
+    await this.assertLocalWriter()
     if (!this.useWriterLease) return
     if (this.writerLeaseState === 'unclaimed') await this.claimWriter()
     this.assertWriterLeaseUsable()
@@ -504,6 +521,24 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       await this.renewWriter()
     }
     this.assertWriterLeaseUsable()
+  }
+
+  private async assertLocalWriter(): Promise<void> {
+    if (this.localWriterInvalidated) throw new Error('browser-native workspace: local writer was invalidated; reload before using Workspace files')
+    if (this.workspaceId === undefined) throw new Error('browser-native workspace: local writer has no Workspace identity')
+    try {
+      await this.store?.assertWriter(this.workspaceId)
+      if (this.localWriterInvalidated) throw new Error('browser-native workspace: local writer was invalidated; reload before using Workspace files')
+    } catch (error) {
+      this.invalidateLocalWriter()
+      this.setLocalPersistFailure(error)
+      throw error
+    }
+  }
+
+  private invalidateLocalWriter(): void {
+    this.localWriterInvalidated = true
+    if (this.workspaceId !== undefined) this.store?.invalidateWriter(this.workspaceId)
   }
 
   async runToolOperation<T>(operation: WorkspaceToolOperation, run: () => Promise<T>): Promise<T> {
@@ -571,6 +606,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   async releaseWriter(): Promise<void> {
+    if (this.accessMode === 'writer') this.invalidateLocalWriter()
     if (!this.useWriterLease || this.workspaceId === undefined || this.writerToken === undefined || this.fencingToken === undefined) return
     this.clearWriterHeartbeat()
     await this.writerRenewal?.catch(() => {})
@@ -630,6 +666,9 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         this.latestLocalSnapshot = undefined
         try {
           await this.testHooks?.beforeLocalPersist?.()
+          this.assertWriterLeaseUsable()
+          await this.assertLocalWriter()
+          this.assertWriterLeaseUsable()
           await this.persistReferencedBlobs(snapshot)
           await this.store?.save(snapshot)
           await this.testHooks?.afterLocalPersist?.()
@@ -818,6 +857,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       this.onStatus('syncing', this.workspaceId, this.revision, this.pending.size + batch.changes.length)
       try {
         const changes = await this.uploadChanges(batch.operationId, batch.changes)
+        await this.ensureWriterLease()
         if (this.useWriterLease) await this.renewWriter()
         const response = await fetch(`${WORKSPACE_API}/commit`, {
           method: 'POST',
@@ -1049,6 +1089,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   private markWriterLeaseLost(cause: unknown): void {
     if (this.writerLeaseState !== 'active') return
+    this.invalidateLocalWriter()
     this.clearWriterHeartbeat()
     this.writerLeaseState = 'lost'
     const detail = cause instanceof Error ? cause.message : String(cause)
@@ -1067,6 +1108,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   private abandonWriterLease(): void {
+    if (this.accessMode === 'writer') this.invalidateLocalWriter()
     if (this.writerLeaseState !== 'active') return
     this.clearWriterHeartbeat()
     this.writerLeaseState = 'lost'

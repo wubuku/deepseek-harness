@@ -52,6 +52,10 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 ## 完整性与生命周期验证
 
+[本地写权与代际计划](local-writer-fencing-validation-plan.md)及[实际进度](local-writer-fencing-validation-progress.md)验证多 Worker 的共享 OPFS/IndexedDB 安全：snapshot 具有独立本地 generation，writer 具有一次性实例身份和 epoch，接管后旧实例不能通过 load 恢复权限。远端 lease 模式在取得本地操作锁后重新核对服务端写权；observer 不接管本地 metadata。本地写权不替代 backend lease 或身份授权。
+
+该研究原型将名为 `dsh-browser-native-workspace-v1` 的 IndexedDB 数据库升级到 schema 2，保留 version 1 的 Workspace snapshot、pending/retry/receipt 和 OPFS 文件，新增 control store；数据库名称不代表当前 schema 版本。首次升级前关闭旧版 PoC 标签页，再用本版刷新；被旧连接阻挡时明确拒绝，不清缓存。升级后旧版页面不得继续写入，也不支持降级写回；请保留数据并使用本版恢复。未知版本或损坏 control 均拒绝自动修复。这是 docs-owned 研究原型的数据变更，不是已发布 DSH Session 格式变更。
+
 [下一批完整性与生命周期计划](next-integrity-and-lifecycle-plan.md)选择四个正式产品前仍有直接风险的验证面：冷 hydrate 分块写入和增量 SHA-256、OPFS orphan blob 的保守回收、页面离开前的本地 durable barrier，以及 Session receipt、Workspace outbox、云端 commit unknown 和 writer fencing 的组合恢复。实际证据和限制见[进度记录](next-integrity-and-lifecycle-progress.md)。
 
 当前实现新增 `DurableWorkspaceStore.cacheBlobFromChunks()` 和 `reconcileBlobs()`；Browser Durable Store 的冷 hydrate 逐块下载并写入 OPFS，已提交文件通过外部 range backing 注入 VFS。回收只在 IndexedDB metadata 可验证时执行，metadata 缺失或版本不可信时保持 `local-corrupt`。durable `pagehide` 由页面向 Worker 请求本地 flush，收到 ack 或 1.5 秒超时后终止 Worker；它不等待云端 commit、Session flush 或模型，也不提供后台 Agent。

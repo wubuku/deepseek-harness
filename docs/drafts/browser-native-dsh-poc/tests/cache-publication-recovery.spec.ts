@@ -7,6 +7,7 @@ import {
   BrowserDurableWorkspaceStore,
   type DownloadPublicationStage,
   type DurableWorkspaceSnapshot,
+  type DurableWorkspaceStore,
 } from '../browser-native-workspace-store.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
@@ -106,7 +107,11 @@ class MetadataTransaction {
   private settled = false
   private readonly writes: Array<() => void> = []
 
-  constructor(private readonly records: Map<string, unknown>, private readonly trace: string[]) {}
+  constructor(
+    private readonly stores: ReadonlyMap<string, Map<string, unknown>>,
+    private readonly names: readonly string[],
+    private readonly trace: string[],
+  ) {}
 
   private request<T>(operation: () => T) {
     const request: { result: T | undefined; onsuccess: (() => void) | null } = { result: undefined, onsuccess: null }
@@ -116,7 +121,7 @@ class MetadataTransaction {
       request.result = structuredClone(operation())
       request.onsuccess?.()
       this.pending -= 1
-      queueMicrotask(() => {
+      setImmediate(() => {
         if (this.pending !== 0 || this.settled) return
         this.settled = true
         for (const write of this.writes) write()
@@ -127,20 +132,25 @@ class MetadataTransaction {
   }
 
   objectStore(name: string) {
-    expect(name).toBe('workspace')
+    expect(this.names).toContain(name)
+    const records = this.stores.get(name)
+    if (records === undefined) throw new Error(`Missing object store ${name}`)
     return {
+      keyPath: 'workspaceId',
+      autoIncrement: false,
+      indexNames: [],
       get: (workspace: string) => this.request(() => {
-        this.trace.push('metadata:get')
-        return this.records.get(workspace)
+        this.trace.push(name === 'workspace' ? 'metadata:get' : 'control:get')
+        return records.get(workspace)
       }),
-      getAllKeys: () => this.request(() => [...this.records.keys()]),
+      getAllKeys: () => this.request(() => [...records.keys()]),
       put: (record: { workspaceId: string }) => this.request(() => {
         const stored = structuredClone(record)
-        this.writes.push(() => { this.records.set(record.workspaceId, stored) })
+        this.writes.push(() => { records.set(record.workspaceId, stored) })
         return record.workspaceId
       }),
       delete: (workspace: string) => this.request(() => {
-        this.writes.push(() => { this.records.delete(workspace) })
+        this.writes.push(() => { records.delete(workspace) })
       }),
     }
   }
@@ -156,6 +166,8 @@ function storageFixture(options: { readonly metadata?: unknown; readonly missing
   const trace: string[] = []
   const records = new Map<string, unknown>()
   if (options.missingMetadata !== true) records.set(workspaceId, structuredClone('metadata' in options ? options.metadata : cleanSnapshot))
+  const controls = new Map<string, unknown>([[workspaceId, { version: 1, workspaceId, generation: 0, writerEpoch: 0 }]])
+  const stores = new Map([['workspace', records], ['control', controls]])
   const locks = new SerialLocks()
   const journal = new MemoryJournal(trace)
   const directories = new Map<string, Map<string, Uint8Array>>()
@@ -232,11 +244,11 @@ function storageFixture(options: { readonly metadata?: unknown; readonly missing
     }
   }
   const database = {
-    version: 1,
+    version: 2,
+    objectStoreNames: { length: stores.size, contains: (name: string) => stores.has(name) },
     close: vi.fn(),
-    transaction: (name: string) => {
-      expect(name).toBe('workspace')
-      return new MetadataTransaction(records, trace)
+    transaction: (names: string | readonly string[]) => {
+      return new MetadataTransaction(stores, typeof names === 'string' ? [names] : names, trace)
     },
   }
   vi.stubGlobal('indexedDB', { open: () => {
@@ -257,7 +269,40 @@ function storageFixture(options: { readonly metadata?: unknown; readonly missing
   })
   const store = (hooks?: ConstructorParameters<typeof BrowserDurableWorkspaceStore>[0]) => new BrowserDurableWorkspaceStore(hooks, journal)
   const read = vi.fn(async (offset: number, length: number) => content.slice(offset, offset + length))
-  return { store, files, directories, records, journal, locks, create, remove, write, close, abort, trace, read }
+  return { store, files, directories, records, controls, journal, locks, create, remove, write, close, abort, trace, read }
+}
+
+function durableState(local: ReturnType<typeof storageFixture>) {
+  return structuredClone({ records: local.records, controls: local.controls,
+    directories: local.directories, intents: local.journal.intents })
+}
+
+const fencedBytes = new Uint8Array([4, 5, 6])
+const fencedHash = hash(fencedBytes)
+const fencedSnapshot: DurableWorkspaceSnapshot = {
+  ...cleanSnapshot,
+  pending: [{ path: 'pending.bin', kind: 'file', mode: 0o600, bytes: fencedBytes.byteLength, content: fencedBytes }],
+  retryBatch: { operationId: 'original-operation', baseRevision: cleanSnapshot.revision,
+    changes: [{ path: 'retry.bin', kind: 'file', mode: 0o600, bytes: fencedBytes.byteLength, content: fencedBytes }] },
+  receipts: [{ operationId: 'original-receipt', workspaceId, baseRevision: 3, revision: 4,
+    manifestDigest: fencedHash, paths: ['committed.bin'], replayed: false }],
+}
+
+function writerOperations(store: DurableWorkspaceStore, read: (offset: number, length: number) => Promise<Uint8Array>) {
+  return {
+    acquireWriter: () => store.acquireWriter(workspaceId),
+    assertWriter: () => store.assertWriter(workspaceId),
+    load: () => store.load(workspaceId),
+    save: () => store.save({ ...cleanSnapshot, revision: 99 }),
+    clear: () => store.clear(workspaceId),
+    cacheBlob: () => store.cacheBlob(workspaceId, fencedHash, fencedBytes),
+    cacheBlobFromRanges: () => store.cacheBlobFromRanges(workspaceId, fencedHash, fencedBytes.byteLength, () => {
+      throw new Error('Fenced range source was read')
+    }),
+    cacheBlobFromChunks: () => store.cacheBlobFromChunks(workspaceId, fencedHash, fencedBytes.byteLength, read),
+    openBlob: () => store.openBlob(workspaceId, fencedHash, fencedBytes.byteLength),
+    reconcileBlobs: () => store.reconcileBlobs(workspaceId, []),
+  }
 }
 
 afterEach(() => {
@@ -286,7 +331,7 @@ describe('download publication recovery', () => {
     expect(local.journal.remove).toHaveBeenCalledWith(workspaceId, contentHash)
     expect(local.records.get(workspaceId)).toEqual(originalMetadata)
     expect(local.files.get(unrelatedHash)).toEqual(unrelated)
-    expect(local.trace.indexOf('journal:list')).toBeLessThan(local.trace.indexOf('metadata:get'))
+    expect(local.trace.indexOf('journal:list')).toBeLessThan(local.trace.lastIndexOf('metadata:get'))
     expect(local.remove).toHaveBeenCalledTimes(stage === 'entry-created' || stage === 'first-chunk-written' ? 1 : 0)
     expect(local.files.get(contentHash)).toEqual(stage === 'published' ? content : undefined)
 
@@ -352,7 +397,8 @@ describe('download publication recovery', () => {
     local.journal.list.mockRejectedValue(failure)
     await expect(local.store().load(workspaceId)).rejects.toBe(failure)
     expect(local.files.get(contentHash)).toEqual(new Uint8Array([1]))
-    expect(local.trace).not.toContain('metadata:get')
+    expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+    expect(local.trace.some(event => event.startsWith('opfs:'))).toBe(false)
     expect(local.remove).not.toHaveBeenCalled()
     expect(local.journal.remove).not.toHaveBeenCalled()
     expect(local.journal.intents.size).toBe(1)
@@ -427,7 +473,7 @@ describe('journaled download publication', () => {
     } })
     await expect(store.cacheBlobFromChunks(workspaceId, contentHash, content.byteLength, local.read)).resolves.toBe(true)
     expect(stages).toEqual(['intent-durable', 'entry-created', 'first-chunk-written', 'published'])
-    expect(local.trace.filter(event => event !== 'journal:list' && event !== 'metadata:get')).toEqual([
+    expect(local.trace.filter(event => event !== 'journal:list' && event !== 'metadata:get' && event !== 'control:get')).toEqual([
       'journal:put', 'intent-durable', 'opfs:create', 'entry-created', 'opfs:write',
       'first-chunk-written', 'opfs:write', 'opfs:close', 'published', 'journal:remove',
     ])
@@ -702,6 +748,36 @@ describe('Workspace local Web Locks', () => {
 })
 
 describe('Workspace snapshot compare-and-swap', () => {
+  it('rejects a stale save after an identical JSON snapshot is saved twice', async () => {
+    const local = storageFixture()
+    const stale = local.store()
+    const writer = local.store()
+    await stale.load(workspaceId)
+    await writer.load(workspaceId)
+    await writer.save(cleanSnapshot)
+    await writer.save(cleanSnapshot)
+    expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+    expect(local.controls.get(workspaceId)).toMatchObject({ generation: 2 })
+
+    await expect(stale.save({ ...cleanSnapshot, revision: 99 })).rejects.toMatchObject({ code: 'LOCAL_SNAPSHOT_CONFLICT' })
+    expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+  })
+
+  it('rejects a stale save after clear and recreation with identical JSON', async () => {
+    const local = storageFixture()
+    const stale = local.store()
+    const writer = local.store()
+    await stale.load(workspaceId)
+    await writer.load(workspaceId)
+    await writer.clear(workspaceId)
+    await writer.save(cleanSnapshot)
+    expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+    expect(local.controls.get(workspaceId)).toMatchObject({ generation: 2 })
+
+    await expect(stale.save({ ...cleanSnapshot, revision: 99 })).rejects.toMatchObject({ code: 'LOCAL_SNAPSHOT_CONFLICT' })
+    expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+  })
+
   it.each(['pending', 'retryBatch'] as const)('rejects stale saves after another store persists %s at the same revision', async owner => {
     const local = storageFixture()
     const first = local.store()
@@ -761,10 +837,13 @@ describe('Workspace snapshot compare-and-swap', () => {
       return abort
     } })
     await store.load(workspaceId)
+    const originalControl = structuredClone(local.controls.get(workspaceId))
     await expect(store.save({ ...cleanSnapshot, revision: 5 })).rejects.toMatchObject({ name: 'AbortError' })
     expect(local.records.get(workspaceId)).toEqual(cleanSnapshot)
+    expect(local.controls.get(workspaceId)).toEqual(originalControl)
     await expect(store.save({ ...cleanSnapshot, revision: 6 })).resolves.toBeUndefined()
     expect(local.records.get(workspaceId)).toEqual({ ...cleanSnapshot, revision: 6 })
+    expect(local.controls.get(workspaceId)).toMatchObject({ generation: 1 })
   })
 
   it('does not authorize a save when loading pending bytes failed verification', async () => {
@@ -784,6 +863,178 @@ describe('Workspace snapshot compare-and-swap', () => {
     await store.clear(workspaceId)
     await expect(store.save({ ...cleanSnapshot, revision: 0 })).resolves.toBeUndefined()
     expect(local.records.get(workspaceId)).toEqual({ ...cleanSnapshot, revision: 0 })
+  })
+
+  it('rolls back snapshot deletion and generation together when clear aborts', async () => {
+    const local = storageFixture()
+    let abortNext = true
+    const store = local.store({ abortNextMetadataTransaction: () => {
+      const abort = abortNext
+      abortNext = false
+      return abort
+    } })
+    await store.acquireWriter(workspaceId)
+    await store.load(workspaceId)
+    local.files.set(fencedHash, fencedBytes)
+    local.journal.seed(fencedBytes)
+    const before = durableState(local)
+
+    await expect(store.clear(workspaceId)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(durableState(local)).toEqual(before)
+    expect(local.remove).not.toHaveBeenCalled()
+    expect(local.journal.remove).not.toHaveBeenCalled()
+    await expect(store.assertWriter(workspaceId)).resolves.toBeUndefined()
+    await expect(store.save(cleanSnapshot)).resolves.toBeUndefined()
+    expect(local.controls.get(workspaceId)).toMatchObject({ generation: 1 })
+  })
+})
+
+describe('Workspace local writer fencing', () => {
+  const operations = ['acquireWriter', 'assertWriter', 'load', 'save', 'clear', 'cacheBlob',
+    'cacheBlobFromRanges', 'cacheBlobFromChunks', 'openBlob', 'reconcileBlobs'] as const
+
+  it.each((['takeover', 'invalidation', 'unbound'] as const).flatMap(cause => operations
+    .filter(operation => cause !== 'unbound' || operation !== 'acquireWriter')
+    .map(operation => [operation, cause] as const)))(
+    'rejects %s after %s without changing pending, retry, receipts, blobs or intents', async (operation, cause) => {
+      const local = storageFixture()
+      const owner = local.store()
+      await owner.acquireWriter(workspaceId)
+      await owner.load(workspaceId)
+      await owner.save(fencedSnapshot)
+      let stale = owner
+      if (cause === 'takeover') await local.store().acquireWriter(workspaceId)
+      if (cause === 'invalidation') owner.invalidateWriter(workspaceId)
+      if (cause === 'unbound') stale = local.store()
+      const interruptedBytes = new Uint8Array([8, 9])
+      local.journal.seed(interruptedBytes)
+      local.files.set(hash(interruptedBytes), new Uint8Array(0))
+      const before = durableState(local)
+      const read = vi.fn(async () => fencedBytes)
+
+      await expect(writerOperations(stale, read)[operation]()).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+      expect(durableState(local)).toEqual(before)
+      expect(read).not.toHaveBeenCalled()
+      expect(local.remove).not.toHaveBeenCalled()
+      expect(local.journal.remove).not.toHaveBeenCalled()
+      expect(local.locks.held.size).toBe(0)
+    },
+  )
+
+  it('does not regain write access by loading after takeover', async () => {
+    const local = storageFixture()
+    const stale = local.store()
+    await stale.acquireWriter(workspaceId)
+    await stale.load(workspaceId)
+    const successor = local.store()
+    await successor.acquireWriter(workspaceId)
+    await successor.load(workspaceId)
+    await successor.save(fencedSnapshot)
+    const before = durableState(local)
+
+    await expect(stale.load(workspaceId)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+    await expect(stale.save(cleanSnapshot)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+    await expect(stale.acquireWriter(workspaceId)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+    expect(durableState(local)).toEqual(before)
+    await expect(successor.assertWriter(workspaceId)).resolves.toBeUndefined()
+    await expect(successor.load(workspaceId)).resolves.toEqual(fencedSnapshot)
+  })
+
+  it('keeps the new owner usable after late repeated invalidation of the old owner', async () => {
+    const local = storageFixture()
+    const previous = local.store()
+    await previous.acquireWriter(workspaceId)
+    const originalControl = structuredClone(local.controls.get(workspaceId))
+    const successor = local.store()
+    await successor.acquireWriter(workspaceId)
+    await successor.load(workspaceId)
+    await successor.save(fencedSnapshot)
+    const before = durableState(local)
+    expect(local.controls.get(workspaceId)).toMatchObject({ writerEpoch: 2, generation: 1,
+      writerId: expect.stringMatching(/^[0-9a-f-]{36}$/) })
+    expect(local.controls.get(workspaceId)).not.toMatchObject(originalControl!)
+
+    previous.invalidateWriter(workspaceId)
+    previous.invalidateWriter(workspaceId)
+    expect(durableState(local)).toEqual(before)
+    await expect(successor.assertWriter(workspaceId)).resolves.toBeUndefined()
+    await expect(successor.save({ ...fencedSnapshot, revision: 5 })).resolves.toBeUndefined()
+    await expect(successor.load(workspaceId)).resolves.toEqual({ ...fencedSnapshot, revision: 5 })
+    expect(local.files.get(fencedHash)).toEqual(fencedBytes)
+  })
+
+  it('cannot acquire a writer after invalidation before the first acquisition', async () => {
+    const local = storageFixture()
+    const store = local.store()
+    const before = durableState(local)
+    store.invalidateWriter(workspaceId)
+    await expect(store.acquireWriter(workspaceId)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+    expect(durableState(local)).toEqual(before)
+    const successor = local.store()
+    await successor.acquireWriter(workspaceId)
+    await expect(successor.assertWriter(workspaceId)).resolves.toBeUndefined()
+  })
+
+  it('rejects an already queued save when its owner is invalidated before the lock is granted', async () => {
+    const local = storageFixture()
+    const store = local.store()
+    await store.acquireWriter(workspaceId)
+    await store.load(workspaceId)
+    const before = durableState(local)
+    const entered = deferred()
+    const proceed = deferred()
+    const requestCount = local.locks.requests.length
+    const held = local.locks.request(`dsh-workspace-local-${workspaceId}`, { mode: 'exclusive' }, async () => {
+      entered.resolve()
+      await proceed.promise
+    })
+    let pending: Promise<void> | undefined
+    try {
+      await entered.promise
+      pending = expect(store.save(fencedSnapshot)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
+      await local.locks.waitForRequests(requestCount + 2)
+      expect(durableState(local)).toEqual(before)
+      store.invalidateWriter(workspaceId)
+    } finally {
+      proceed.resolve()
+      await Promise.all([held, pending])
+    }
+    expect(durableState(local)).toEqual(before)
+    expect(local.create).not.toHaveBeenCalled()
+    expect(local.locks.held.size).toBe(0)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['unknown version', { version: 2, workspaceId, writerEpoch: 0, generation: 0 }],
+    ['different Workspace', { version: 1, workspaceId: otherWorkspaceId, writerEpoch: 0, generation: 0 }],
+    ['missing generation', { version: 1, workspaceId, writerEpoch: 0 }],
+    ['negative generation', { version: 1, workspaceId, writerEpoch: 0, generation: -1 }],
+    ['fractional generation', { version: 1, workspaceId, writerEpoch: 0, generation: 0.5 }],
+    ['unsafe generation', { version: 1, workspaceId, writerEpoch: 0, generation: Number.MAX_SAFE_INTEGER + 1 }],
+    ['negative epoch', { version: 1, workspaceId, writerEpoch: -1, generation: 0 }],
+    ['missing owner', { version: 1, workspaceId, writerEpoch: 1, generation: 0 }],
+    ['invalid owner', { version: 1, workspaceId, writerEpoch: 1, generation: 0, writerId: 'invalid' }],
+    ['owner without epoch', { version: 1, workspaceId, writerEpoch: 0, generation: 0,
+      writerId: '1ee1f36c-a560-4b05-8e5d-9a930d93e42b' }],
+  ] as const)('fails closed for %s control without repairing or deleting retained data', async (_name, control) => {
+    const local = storageFixture()
+    if (control === undefined) local.controls.delete(workspaceId)
+    else local.controls.set(workspaceId, control)
+    local.files.set(fencedHash, fencedBytes)
+    local.journal.seed(fencedBytes)
+    const before = durableState(local)
+    const read = vi.fn(async () => fencedBytes)
+
+    for (const operation of operations) {
+      await expect(writerOperations(local.store(), read)[operation]()).rejects.toMatchObject({ code: 'LOCAL_CONTROL_INVALID' })
+      expect(durableState(local)).toEqual(before)
+    }
+    expect(read).not.toHaveBeenCalled()
+    expect(local.remove).not.toHaveBeenCalled()
+    expect(local.journal.remove).not.toHaveBeenCalled()
+    expect(local.locks.held.size).toBe(0)
   })
 })
 

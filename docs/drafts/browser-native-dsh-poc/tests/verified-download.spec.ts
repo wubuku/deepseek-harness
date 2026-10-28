@@ -151,18 +151,51 @@ function opfsCache(existing?: Uint8Array, options: {
     removeEntry: vi.fn(async () => { canonical = undefined }),
   }
   const records = new Map<string, unknown>([[workspaceId, { version: 1, workspaceId, revision: 0, pending: [] }]])
+  const controls = new Map<string, unknown>([[workspaceId, { version: 1, workspaceId, generation: 0, writerEpoch: 0 }]])
+  const stores = new Map([['workspace', records], ['control', controls]])
   const database = {
-    version: 1,
-    transaction: () => {
-      const transaction = { oncomplete: () => {}, onerror: () => {}, onabort: () => {}, error: null,
-        objectStore: () => ({ get: (workspace: string) => {
-          const request = { result: records.get(workspace), onsuccess: () => {}, onerror: () => {} }
-          queueMicrotask(() => {
-            request.onsuccess()
-            queueMicrotask(() => { transaction.oncomplete() })
+    version: 2,
+    objectStoreNames: { length: stores.size, contains: (name: string) => stores.has(name) },
+    close: vi.fn(),
+    transaction: (names: string | readonly string[]) => {
+      let pending = 0
+      let settled = false
+      const writes: Array<() => void> = []
+      const request = (operation: () => unknown) => {
+        const result: { result: unknown; onsuccess: () => void; onerror: () => void } = {
+          result: undefined, onsuccess: () => {}, onerror: () => {},
+        }
+        pending += 1
+        queueMicrotask(() => {
+          if (settled) return
+          result.result = structuredClone(operation())
+          result.onsuccess()
+          pending -= 1
+          setImmediate(() => {
+            if (pending !== 0 || settled) return
+            settled = true
+            for (const write of writes) write()
+            transaction.oncomplete()
           })
-          return request
-        } }) }
+        })
+        return result
+      }
+      const transaction = { oncomplete: () => {}, onerror: () => {}, onabort: () => {}, error: null,
+        objectStore: (name: string) => {
+          expect(typeof names === 'string' ? [names] : names).toContain(name)
+          const values = stores.get(name)
+          if (values === undefined) throw new Error(`Missing object store ${name}`)
+          return {
+            keyPath: 'workspaceId',
+            autoIncrement: false,
+            indexNames: [],
+            get: (workspace: string) => request(() => values.get(workspace)),
+            put: (record: { workspaceId: string }) => {
+              const stored = structuredClone(record)
+              return request(() => { writes.push(() => { values.set(record.workspaceId, stored) }) })
+            },
+          }
+        } }
       return transaction
     },
   }
@@ -195,7 +228,8 @@ function opfsCache(existing?: Uint8Array, options: {
     remove: async (workspace: string, digest: string) => { intents.delete(`${workspace}:${digest}`) },
   }
   vi.stubGlobal('navigator', { locks, storage: { getDirectory: async () => ({ getDirectoryHandle: async () => directory }) } })
-  return { store: new BrowserDurableWorkspaceStore(undefined, journal), writable, directory, handle,
+  const createStore = () => new BrowserDurableWorkspaceStore(undefined, journal)
+  return { store: createStore(), createStore, writable, directory, handle,
     canonical: () => canonical }
 }
 
@@ -546,7 +580,7 @@ describe('failed OPFS download publication', () => {
       const runtime = createBrowserNativeWorkspaceRuntime({ contentDefinedUpload: true, store: cache.store, onStatus: () => {} })
       await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow()
       expect(cache.canonical()).toBeUndefined()
-      expect(await cache.store.openBlob(workspaceId, hash(source), source.byteLength)).toBeUndefined()
+      await expect(cache.store.openBlob(workspaceId, hash(source), source.byteLength)).rejects.toMatchObject({ code: 'LOCAL_WRITER_LOST' })
       expect(runtime.vfs.existsSync(`${root}/file.bin`)).toBe(false)
       expect(cache.writable.close).toHaveBeenCalledTimes(fault === 'close' ? 1 : 0)
       expect(network.calls.some(path => path.includes('/chunk/'))).toBe(false)
@@ -557,7 +591,12 @@ describe('failed OPFS download publication', () => {
       options.closeFailure = false
       const recoveredWire = wire(source, [chunkBytes])
       workspaceFetch(source, () => recoveredWire.response)
-      const recovered = createBrowserNativeWorkspaceRuntime({ contentDefinedUpload: true, store: cache.store, onStatus: () => {} })
+      const recoveredStore = cache.createStore()
+      vi.spyOn(recoveredStore, 'listWorkspaceIds').mockResolvedValue([])
+      vi.spyOn(recoveredStore, 'load').mockResolvedValue(undefined)
+      vi.spyOn(recoveredStore, 'save').mockResolvedValue()
+      vi.spyOn(recoveredStore, 'reconcileBlobs').mockResolvedValue({ removedFiles: 0, removedBytes: 0, retainedFiles: 1 })
+      const recovered = createBrowserNativeWorkspaceRuntime({ contentDefinedUpload: true, store: recoveredStore, onStatus: () => {} })
       await recovered.prepareVfs(recovered.vfs)
       expect(recovered.vfs.readFileSync(`${root}/file.bin`)).toEqual(source)
     },

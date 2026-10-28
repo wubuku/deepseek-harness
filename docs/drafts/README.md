@@ -95,6 +95,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 37. [Browser-Native 不可变块对象存储规划](browser-native-dsh-poc/chunk-object-storage-validation-plan.md)及[实施进度](browser-native-dsh-poc/chunk-object-storage-validation-progress.md)：验证复用块引用、文件版本、pending GC、重启恢复与实际磁盘成本；完整文件 hash 和 manifest CAS 仍独立于块上传。
 38. [Browser-Native 验证下载流规划](browser-native-dsh-poc/verified-stream-download-validation-plan.md)及[实施进度](browser-native-dsh-poc/verified-stream-download-validation-progress.md)：针对冷恢复读取放大验证有界读取、OPFS 完整性发布、取消和 GC 引用释放；成本与真实模型分别验收。
 39. [Browser-Native 缓存发布恢复规划](browser-native-dsh-poc/cache-publication-recovery-validation-plan.md)及[实施进度](browser-native-dsh-poc/cache-publication-recovery-validation-progress.md)：验证持久化下载意图、跨 Worker 本地互斥、pending/retry 保护和强制终止后的恢复；不将可重建 cache 与唯一的本地副本混同。
+40. [Browser-Native 本地写权与代际规划](browser-native-dsh-poc/local-writer-fencing-validation-plan.md)及[实施进度](browser-native-dsh-poc/local-writer-fencing-validation-progress.md)：验证 snapshot ABA、失效 Worker、保留式 IndexedDB 升级与完整 Host 接管，区分本地 epoch、Web Lock 和远端 lease。
 
 ### 需要实现或审查代码时
 

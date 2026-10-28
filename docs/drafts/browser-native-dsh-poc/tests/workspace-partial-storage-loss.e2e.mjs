@@ -22,7 +22,7 @@ const testContent = `partial-storage-loss-${crypto.randomUUID()}\n`
 
 async function readWorkspaceRecord(page, workspaceId) {
   return await page.evaluate(async id => await new Promise((resolveRecord, reject) => {
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
     request.onsuccess = () => {
       const database = request.result
@@ -123,7 +123,7 @@ try {
     const directory = await root.getDirectoryHandle(`dsh-workspace-blobs-${id}`)
     const file = await (await directory.getFileHandle(hash)).getFile()
     const database = await new Promise((resolveDatabase, reject) => {
-      const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+      const request = indexedDB.open('dsh-browser-native-workspace-v1')
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
       request.onsuccess = () => resolveDatabase(request.result)
     })
@@ -139,7 +139,7 @@ try {
 
     async function readRecordAfterDelete(workspaceId) {
       const reopened = await new Promise((resolveDatabase, reject) => {
-        const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+        const request = indexedDB.open('dsh-browser-native-workspace-v1')
         request.onerror = () => reject(request.error ?? new Error('IndexedDB reopen failed'))
         request.onsuccess = () => resolveDatabase(request.result)
       })
@@ -164,7 +164,7 @@ try {
     const orphan = await (await directory.getFileHandle(hash)).getFile()
     const manifest = await (await fetch(`/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`)).json()
     const record = await new Promise((resolveRecord, reject) => {
-      const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+      const request = indexedDB.open('dsh-browser-native-workspace-v1')
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
       request.onsuccess = () => {
         const database = request.result

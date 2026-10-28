@@ -15,6 +15,7 @@ const sourceDirectory = fileURLToPath(new URL('../', import.meta.url))
 const timeout = Number(process.env.DSH_POC_STORE_CONCURRENCY_TIMEOUT_MS ?? 30_000)
 assert.ok(Number.isSafeInteger(timeout) && timeout > 0, 'The concurrency timeout must be a positive integer')
 const label = process.env.DSH_POC_STORE_CONCURRENCY_LABEL ?? 'current'
+const selectedScenarios = process.env.DSH_POC_STORE_CONCURRENCY_SCENARIOS?.split(',')
 assert.match(label, /^[a-zA-Z0-9_-]+$/, 'The artifact label must be a filename component')
 const artifactDirectory = process.env.DSH_POC_STORE_CONCURRENCY_ARTIFACT_DIR === undefined
   ? await mkdtemp(join(tmpdir(), 'dsh-store-write-concurrency-'))
@@ -25,7 +26,7 @@ const sourceFiles = ['browser-native-workspace-store.ts', 'browser-native-downlo
 const evidence = {
   result: 'running', browser: 'chrome', label, artifactDirectory, scenarios: [], cleanupErrors: [],
   scope: 'Direct store operations in Dedicated Workers with real OPFS, IndexedDB, and Web Locks; no DSH Host or model',
-  limitation: 'Record comparison detects changed metadata; identical-record ABA and arbitrary owner fencing are outside this guarantee',
+  limitation: 'Same-origin browser fencing does not replace remote authorization, backend leases, or cross-device coordination',
 }
 
 async function workerMain(waitTimeout) {
@@ -37,6 +38,8 @@ async function workerMain(waitTimeout) {
   let pauseDownloadStage
   let sourceReadCount = 0
   let abortMetadata = false
+  let legacyConnection
+  let authorizationAllowed = true
   const emit = (type, details = {}) => {
     const event = { type, ...details }
     events.push(event)
@@ -112,6 +115,91 @@ async function workerMain(waitTimeout) {
     try {
       let value
       switch (action) {
+        case 'deny-authorization': authorizationAllowed = false; value = true; break
+        case 'acquire-authorized':
+          emit('acquire-requested')
+          await store.acquireWriter(workspaceId, async () => {
+            emit('authorization-started')
+            if (!authorizationAllowed) throw Object.assign(new Error('Remote writer was superseded'), { code: 'WORKSPACE_OWNERSHIP_LOST' })
+            return () => {
+              emit('authorization-rechecked')
+              if (data.expireBeforeCommit === true) throw Object.assign(new Error('Remote authorization expired before local commit'), { code: 'WORKSPACE_OWNERSHIP_LOST' })
+            }
+          })
+          value = true
+          break
+        case 'seed-legacy': {
+          const content = new TextEncoder().encode('legacy pending and retry bytes')
+          const hash = await digest(content)
+          const root = await navigator.storage.getDirectory()
+          const directory = await root.getDirectoryHandle(`dsh-workspace-blobs-${workspaceId}`, { create: true })
+          const handle = await directory.getFileHandle(hash, { create: true })
+          const writable = await handle.createWritable()
+          await writable.write(content)
+          await writable.close()
+          const pending = { path: 'legacy.txt', kind: 'file', mode: 0o600, bytes: content.length, contentHash: hash }
+          const snapshot = {
+            version: 1, workspaceId, revision: 7, pending: [pending],
+            retryBatch: { operationId: 'legacy-operation', baseRevision: 7, changes: [{ ...pending, path: 'retry.txt' }] },
+            receipts: [{ operationId: 'legacy-receipt', workspaceId, baseRevision: 6, revision: 7,
+              manifestDigest: 'legacy-manifest', paths: ['committed.txt'], replayed: false }],
+          }
+          await new Promise((resolveSeed, reject) => {
+            const opened = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+            opened.onupgradeneeded = () => opened.result.createObjectStore('workspace', { keyPath: 'workspaceId' })
+            opened.onerror = () => reject(opened.error)
+            opened.onsuccess = () => {
+              const database = opened.result
+              const transaction = database.transaction('workspace', 'readwrite')
+              transaction.objectStore('workspace').put(snapshot)
+              transaction.oncomplete = () => {
+                if (data.holdConnection === true) legacyConnection = database
+                else database.close()
+                resolveSeed()
+              }
+              transaction.onabort = () => { database.close(); reject(transaction.error) }
+            }
+          })
+          value = { snapshot, hash, bytes: content.length }
+          break
+        }
+        case 'close-legacy': legacyConnection?.close(); legacyConnection = undefined; value = true; break
+        case 'read-legacy': {
+          if (legacyConnection === undefined) throw new Error('No held legacy connection')
+          value = await new Promise((resolveLegacy, reject) => {
+            const transaction = legacyConnection.transaction('workspace', 'readonly')
+            const request = transaction.objectStore('workspace').get(workspaceId)
+            transaction.oncomplete = () => resolveLegacy(request.result)
+            transaction.onabort = () => reject(transaction.error)
+          })
+          break
+        }
+        case 'metadata-state':
+        case 'corrupt-control': {
+          value = await new Promise((resolveState, reject) => {
+            const opened = indexedDB.open('dsh-browser-native-workspace-v1')
+            opened.onerror = () => reject(opened.error)
+            opened.onsuccess = () => {
+              const database = opened.result
+              const stores = [...database.objectStoreNames]
+              const transaction = database.transaction(stores, action === 'corrupt-control' ? 'readwrite' : 'readonly')
+              const request = transaction.objectStore('control').get(workspaceId)
+              request.onsuccess = () => {
+                if (action === 'corrupt-control') transaction.objectStore('control').put({ ...request.result, generation: -1 })
+              }
+              transaction.oncomplete = () => {
+                database.close()
+                resolveState({ version: database.version, stores, control: request.result })
+              }
+              transaction.onabort = () => { database.close(); reject(transaction.error) }
+            }
+          })
+          break
+        }
+        case 'acquire': await store.acquireWriter(workspaceId); value = true; break
+        case 'assert-writer': await store.assertWriter(workspaceId); value = true; break
+        case 'invalidate': store.invalidateWriter(workspaceId); value = true; break
+        case 'clear': await store.clear(workspaceId); value = true; break
         case 'save':
           try {
             await store.save(materialize(data.snapshot))
@@ -315,6 +403,139 @@ async function event(page, name, type) {
 const clean = workspaceId => ({ version: 1, workspaceId, revision: 0, pending: [] })
 const change = (path, content) => ({ path, kind: 'file', mode: 0o600, bytes: Buffer.byteLength(content), content })
 const scenarios = {
+  'queued-acquire-reauthorizes': async (page, observation) => {
+    const workspaceId = randomUUID()
+    await success(page, 'first', 'acquire', { workspaceId })
+    await success(page, 'first', 'load', { workspaceId })
+    await success(page, 'first', 'save', { snapshot: { ...clean(workspaceId), pending: [change('successor.txt', 'legitimate new owner')] } })
+    observation.before = await success(page, 'first', 'inspect', { workspaceId })
+    observation.controlBefore = await success(page, 'first', 'metadata-state', { workspaceId })
+    const holding = await start(page, 'first', 'hold', { workspaceId })
+    await event(page, 'first', 'lock-held')
+    const acquiring = await start(page, 'second', 'acquire-authorized', { workspaceId })
+    await event(page, 'second', 'acquire-requested')
+    await page.waitForFunction(async id => (await navigator.locks.query()).pending.some(lock => lock.name === `dsh-workspace-local-${id}`), workspaceId, { timeout })
+    observation.overlap = await page.evaluate(async () => ({ locks: await navigator.locks.query(), events: window.storeConcurrency.clients.get('second').events.slice() }))
+    assert.equal(observation.overlap.events.some(item => item.type === 'authorization-started'), false, 'Authorization must run inside the acquired lock')
+    await success(page, 'second', 'deny-authorization')
+    await success(page, 'first', 'release-lock')
+    await result(page, 'first', holding)
+    observation.acquired = await result(page, 'second', acquiring)
+    assert.equal(observation.acquired.error?.code, 'WORKSPACE_OWNERSHIP_LOST')
+    observation.after = await success(page, 'first', 'inspect', { workspaceId })
+    observation.controlAfter = await success(page, 'first', 'metadata-state', { workspaceId })
+    assert.deepEqual(observation.after.record, observation.before.record)
+    assert.deepEqual(observation.after.files, observation.before.files)
+    assert.deepEqual(observation.controlAfter, observation.controlBefore)
+    await success(page, 'first', 'assert-writer', { workspaceId })
+  },
+  'authorization-recheck-before-commit': async (page, observation) => {
+    const workspaceId = randomUUID()
+    await success(page, 'first', 'acquire', { workspaceId })
+    await success(page, 'first', 'load', { workspaceId })
+    await success(page, 'first', 'save', { snapshot: clean(workspaceId) })
+    observation.before = await success(page, 'first', 'metadata-state', { workspaceId })
+    observation.acquired = await request(page, 'second', 'acquire-authorized', { workspaceId, expireBeforeCommit: true })
+    assert.equal(observation.acquired.error?.code, 'WORKSPACE_OWNERSHIP_LOST')
+    observation.after = await success(page, 'first', 'metadata-state', { workspaceId })
+    assert.deepEqual(observation.after, observation.before)
+    await success(page, 'first', 'assert-writer', { workspaceId })
+  },
+  'legacy-migration-preserves-outbox': async (page, observation) => {
+    const workspaceId = randomUUID()
+    observation.legacy = await success(page, 'first', 'seed-legacy', { workspaceId })
+    await success(page, 'second', 'acquire', { workspaceId })
+    observation.loaded = await success(page, 'second', 'load', { workspaceId })
+    assert.equal(observation.loaded.revision, 7)
+    assert.equal(observation.loaded.pending[0].path, 'legacy.txt')
+    assert.equal(observation.loaded.retryBatch.operationId, 'legacy-operation')
+    assert.deepEqual(observation.loaded.receipts, observation.legacy.snapshot.receipts)
+    observation.metadata = await success(page, 'second', 'metadata-state', { workspaceId })
+    assert.equal(observation.metadata.version, 2)
+    assert.equal(observation.metadata.control.writerEpoch, 1)
+    observation.after = await success(page, 'second', 'inspect', { workspaceId })
+    assert.deepEqual(observation.after.record, observation.legacy.snapshot, 'Migration must not rewrite the existing snapshot')
+    assert.deepEqual(observation.after.files, [{ name: observation.legacy.hash, hash: observation.legacy.hash, bytes: observation.legacy.bytes }])
+  },
+  'blocked-upgrade-retains-legacy': async (page, observation) => {
+    const workspaceId = randomUUID()
+    observation.legacy = await success(page, 'first', 'seed-legacy', { workspaceId, holdConnection: true })
+    observation.blocked = await request(page, 'second', 'acquire', { workspaceId })
+    assert.equal(observation.blocked.ok, false)
+    assert.match(observation.blocked.error?.message ?? '', /blocked/i)
+    observation.afterFailure = await success(page, 'first', 'read-legacy', { workspaceId })
+    assert.deepEqual(observation.afterFailure, observation.legacy.snapshot)
+    await success(page, 'first', 'close-legacy')
+    await success(page, 'first', 'acquire', { workspaceId })
+    observation.loaded = await success(page, 'first', 'load', { workspaceId })
+    assert.equal(observation.loaded.retryBatch.operationId, 'legacy-operation')
+  },
+  'corrupt-control-retains-bytes': async (page, observation) => {
+    const workspaceId = randomUUID()
+    await success(page, 'first', 'save', { snapshot: { ...clean(workspaceId), pending: [change('keep.txt', 'local only bytes')] } })
+    observation.before = await success(page, 'first', 'inspect', { workspaceId })
+    await success(page, 'first', 'corrupt-control', { workspaceId })
+    observation.load = await request(page, 'second', 'load', { workspaceId })
+    assert.equal(observation.load.error?.code, 'LOCAL_CONTROL_INVALID')
+    observation.after = await success(page, 'first', 'inspect', { workspaceId })
+    assert.deepEqual(observation.after.record, observation.before.record)
+    assert.deepEqual(observation.after.files, observation.before.files)
+  },
+  'identical-record-aba': async (page, observation) => {
+    const workspaceId = randomUUID()
+    const initial = clean(workspaceId)
+    await success(page, 'first', 'save', { snapshot: initial })
+    await success(page, 'second', 'load', { workspaceId })
+    await success(page, 'second', 'save', { snapshot: { ...initial, pending: [change('intermediate.txt', 'intervening edit')] } })
+    await success(page, 'second', 'save', { snapshot: initial })
+    observation.stale = await request(page, 'first', 'save', { snapshot: { ...initial, pending: [change('stale.txt', 'stale write')] } })
+    assert.equal(observation.stale.error?.code, 'LOCAL_SNAPSHOT_CONFLICT')
+    observation.after = await success(page, 'second', 'inspect', { workspaceId })
+    assert.deepEqual(observation.after.record, initial)
+  },
+  'clear-recreate-aba': async (page, observation) => {
+    const workspaceId = randomUUID()
+    const initial = clean(workspaceId)
+    await success(page, 'first', 'save', { snapshot: initial })
+    await success(page, 'second', 'load', { workspaceId })
+    await success(page, 'second', 'clear', { workspaceId })
+    await success(page, 'second', 'save', { snapshot: initial })
+    observation.stale = await request(page, 'first', 'save', { snapshot: { ...initial, pending: [change('stale.txt', 'stale after clear')] } })
+    assert.equal(observation.stale.error?.code, 'LOCAL_SNAPSHOT_CONFLICT')
+    observation.after = await success(page, 'second', 'inspect', { workspaceId })
+    assert.deepEqual(observation.after.record, initial)
+  },
+  'local-owner-fencing': async (page, observation) => {
+    const workspaceId = randomUUID()
+    const initial = clean(workspaceId)
+    await success(page, 'first', 'acquire', { workspaceId })
+    await success(page, 'first', 'load', { workspaceId })
+    await success(page, 'first', 'save', { snapshot: initial })
+    await success(page, 'second', 'acquire', { workspaceId })
+    await success(page, 'second', 'load', { workspaceId })
+    await success(page, 'second', 'save', { snapshot: {
+      ...initial, pending: [change('successor.txt', 'successor pending')],
+      retryBatch: { operationId: randomUUID(), baseRevision: 0, changes: [change('retry.txt', 'successor retry')] },
+    } })
+    observation.before = await success(page, 'second', 'inspect', { workspaceId })
+    observation.rejected = []
+    for (const [action, fields] of [
+      ['load', {}], ['save', { snapshot: initial }], ['cache-local', { content: 'late local bytes' }],
+      ['reconcile', {}], ['clear', {}], ['assert-writer', {}],
+    ]) {
+      const response = await request(page, 'first', action, { workspaceId, ...fields })
+      observation.rejected.push({ action, response })
+      assert.equal(response.ok, false, `Old writer must reject ${action}`)
+      assert.match(response.error?.code ?? '', /LOCAL_.*(WRITER|OWNERSHIP)/)
+    }
+    await success(page, 'first', 'invalidate', { workspaceId })
+    await success(page, 'second', 'assert-writer', { workspaceId })
+    observation.reacquire = await request(page, 'first', 'acquire', { workspaceId })
+    assert.equal(observation.reacquire.ok, false, 'An invalidated store must not silently acquire a new identity')
+    observation.after = await success(page, 'second', 'inspect', { workspaceId })
+    assert.deepEqual(observation.after.record, observation.before.record)
+    assert.deepEqual(observation.after.files, observation.before.files)
+  },
   'stale-snapshot': async (page, observation) => {
     const workspaceId = randomUUID()
     const initial = clean(workspaceId)
@@ -365,16 +586,21 @@ const scenarios = {
     const workspaceId = randomUUID()
     const initial = clean(workspaceId)
     await success(page, 'first', 'save', { snapshot: initial })
+    observation.metadataBefore = await success(page, 'first', 'metadata-state', { workspaceId })
     await success(page, 'first', 'abort-metadata')
     observation.aborted = await request(page, 'first', 'save', { snapshot: { ...initial, pending: [change('abort.txt', 'aborted snapshot')] } })
     observation.afterAbort = await success(page, 'second', 'inspect', { workspaceId })
     assert.equal(observation.aborted.ok, false)
     assert.deepEqual(observation.afterAbort.record, initial)
+    observation.metadataAfterAbort = await success(page, 'first', 'metadata-state', { workspaceId })
+    assert.deepEqual(observation.metadataAfterAbort, observation.metadataBefore, 'An aborted snapshot must not advance the committed generation')
     const next = { ...initial, pending: [change('next.txt', 'next snapshot')] }
     observation.next = await request(page, 'first', 'save', { snapshot: next })
     observation.afterNext = await success(page, 'second', 'inspect', { workspaceId })
     assert.equal(observation.next.ok, true)
     assert.equal(observation.afterNext.record.pending[0].path, 'next.txt')
+    observation.metadataAfterNext = await success(page, 'first', 'metadata-state', { workspaceId })
+    assert.equal(observation.metadataAfterNext.control.generation, observation.metadataBefore.control.generation + 1)
   },
   'journal-only-enumeration': async (page, observation) => {
     const workspaceId = randomUUID()
@@ -572,6 +798,7 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   evidence.browserVersion = browser.version()
   for (const [name, run] of Object.entries(scenarios)) {
+    if (selectedScenarios !== undefined && !selectedScenarios.includes(name)) continue
     const observation = { name, result: 'running' }
     evidence.scenarios.push(observation)
     const context = await browser.newContext()
@@ -594,6 +821,8 @@ try {
     }
     process.stdout.write(`${label}: ${name}: ${observation.result}\n`)
   }
+  assert.ok(evidence.scenarios.length > 0, 'At least one scenario must run')
+  if (selectedScenarios !== undefined) assert.deepEqual(evidence.scenarios.map(item => item.name).sort(), [...selectedScenarios].sort())
   evidence.result = evidence.scenarios.every(scenario => scenario.result === 'passed') ? 'passed' : 'failed'
 } catch (error) {
   evidence.result = 'failed'

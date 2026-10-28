@@ -32,7 +32,7 @@ async function listLocalBlobs(page, workspaceId) {
 
 async function readRecord(page, workspaceId) {
   return await page.evaluate(async id => await new Promise((resolveRecord, reject) => {
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
     request.onsuccess = () => {
       const database = request.result
@@ -95,7 +95,7 @@ try {
   assert.deepEqual(reconciled, [retained])
 
   await page.evaluate(async id => {
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     await new Promise((resolveRequest, rejectRequest) => {
       request.onerror = () => rejectRequest(request.error ?? new Error('IndexedDB open failed'))
       request.onsuccess = () => resolveRequest(request.result)

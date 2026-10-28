@@ -12,6 +12,21 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-050：本地写权与 snapshot 代际
+
+```text
+changeId: BN-P2-050
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 起始工作区干净、与origin/research同步、仅主worktree
+file: 本目录browser-native-workspace-store.ts、browser-native-workspace.ts、相关单测/E2E、规划/进度、README和兼容矩阵；docs/drafts/README.md登记
+reason: 完整record比较无法检测ABA；远端lease失效也不能自行阻止旧Worker的排队本地保存。旧启动过程还可能在等待本地锁期间失去远端写权。
+existingExtensionPointsChecked: DurableWorkspaceStore、prepareVfs、既有Writer lease、Web Locks、本地持久化队列与PoC test port；不改变正式Agent Loop或Session格式。
+behavior: 数据库schema2增加control store，generation与snapshot原子提交；显式本地writer身份与epoch使旧实例永久失效；锁内重新授权后才可接管。保留旧snapshot版本和OPFS内容，不支持旧代码降级写入。
+coupling: 仅docs-owned原型；既有E2E读取helper改为读取当前数据库版本，前向版本负例改为schema3。目录外只登记drafts索引。
+tests: 实际命令、反例、Chrome存储/完整Host和真实LLM结果由local-writer-fencing-validation-progress.md维护。
+upstreamReplay: 先保留式升级本地metadata并实现generation/owner检查，再接入mirror生命周期和锁内远端授权，最后重放存储、双Host、强杀、前向版本和真实LLM验收。
+deleteWhen: 正式Browser Workspace provider提供同等本地代际、写权和保留式升级，并有维护中的完整Host竞争/恢复证据。
+```
+
 ### BN-P2-049：下载缓存发布恢复
 
 ```text

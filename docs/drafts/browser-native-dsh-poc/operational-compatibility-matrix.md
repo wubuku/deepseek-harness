@@ -74,6 +74,8 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 ## 解释和复跑
 
+多 Worker 本地写权、snapshot ABA、IndexedDB 保留式升级和旧写者迟到保存的本批结果见[本地写权进度](local-writer-fencing-validation-progress.md)。本地 generation、writer epoch、远端 revision 和 backend fencing token 分别表达不同事实；任何一个都不能替代其余检查。当前 observer 仍将已提交文件下载到 resident VFS，未证明其大文件内存预算。
+
 测试使用真实 Chrome，但除明确标记真实模型的 Session/LLM 路径外，能力和故障验收使用 scripted LLM。`default-profile-capabilities.e2e.mjs` 验证 Browser profile 的实际 schema 与受限 Bash 调用；`default-interaction-tools.e2e.mjs` 验证问答与工作目录闭环；`runtime-validation.e2e.mjs` 的真实模型文件读写序列使用独立 Browser validation roster。因此，不要把这些测试合并表述成“真实模型已验证 Browser profile 中每个工具”。
 
 运行命令、Chrome 版本、测试结果和未验证范围见[运行范围验证进度](operational-envelope-validation-progress.md)。矩阵针对本 PoC 当前 checkout，不能替代 DSH package README、runtime API 文档或生产兼容性承诺。

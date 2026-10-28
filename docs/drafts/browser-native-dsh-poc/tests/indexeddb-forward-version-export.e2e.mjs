@@ -39,14 +39,14 @@ try {
   const workspaceId = await page.evaluate(async () => (await (await fetch('/api/browser-native/workspace/identity')).json()).workspaceId)
   const setup = await page.evaluate(async ({ id, value }) => {
     const database = await new Promise((resolveDatabase, reject) => {
-      const request = indexedDB.open('dsh-browser-native-workspace-v1', 2)
+      const request = indexedDB.open('dsh-browser-native-workspace-v1', 3)
       request.onupgradeneeded = () => {
         const db = request.result
         if (!db.objectStoreNames.contains('workspace')) db.createObjectStore('workspace', { keyPath: 'workspaceId' })
         if (!db.objectStoreNames.contains('future-data')) db.createObjectStore('future-data', { keyPath: 'key' })
       }
       request.onsuccess = () => resolveDatabase(request.result)
-      request.onerror = () => reject(request.error ?? new Error('IndexedDB v2 setup failed'))
+      request.onerror = () => reject(request.error ?? new Error('IndexedDB v3 setup failed'))
     })
     const localBytes = new TextEncoder().encode('forward-version-local-recovery-payload\n')
     const digest = await crypto.subtle.digest('SHA-256', localBytes)
@@ -62,8 +62,8 @@ try {
     transaction.objectStore('future-data').put(value)
     await new Promise((resolveTransaction, reject) => {
       transaction.oncomplete = () => resolveTransaction()
-      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB v2 seed failed'))
-      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB v2 seed aborted'))
+      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB v3 seed failed'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB v3 seed aborted'))
     })
     const root = await navigator.storage.getDirectory()
     const directory = await root.getDirectoryHandle(`dsh-workspace-blobs-${id}`, { create: true })
@@ -76,7 +76,7 @@ try {
     database.close()
     return { version, stores, hash, bytes: localBytes.length }
   }, { id: workspaceId, value: sentinel })
-  assert.equal(setup.version, 2)
+  assert.equal(setup.version, 3)
   assert.deepEqual(setup.stores, ['future-data', 'workspace'])
 
   await page.goto(`${origin}/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none`, {
@@ -91,9 +91,13 @@ try {
   ])
   const downloadPath = await download.path()
   assert.ok(downloadPath)
-  const bundle = JSON.parse(await readFile(downloadPath, 'utf8'))
+  const recoverySet = JSON.parse(await readFile(downloadPath, 'utf8'))
+  assert.equal(recoverySet.format, 'dsh-browser-native-workspace-recovery-set-v1')
+  assert.equal(recoverySet.workspaces.length, 1)
+  const bundle = recoverySet.workspaces[0]
+  assert.equal(bundle.format, 'dsh-browser-native-workspace-recovery-v1')
   assert.equal(bundle.workspaceId, workspaceId)
-  assert.equal(bundle.indexedDbVersion, 2)
+  assert.equal(bundle.indexedDbVersion, 3)
   assert.deepEqual(bundle.objectStoreNames, ['future-data', 'workspace'])
   assert.deepEqual(bundle.metadata, {
     version: 1,
@@ -124,7 +128,7 @@ try {
       transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB verification failed'))
     }
   }), workspaceId)
-  assert.equal(afterExport.version, 2)
+  assert.equal(afterExport.version, 3)
   assert.deepEqual(afterExport.metadata, bundle.metadata)
   assert.deepEqual(afterExport.future, sentinel)
   assert.deepEqual(pageErrors, [])

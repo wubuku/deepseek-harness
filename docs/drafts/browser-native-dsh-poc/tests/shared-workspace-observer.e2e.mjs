@@ -75,7 +75,7 @@ async function workspaceManifest(page, workspaceId) {
 
 async function localSnapshot(page, workspaceId) {
   return await page.evaluate(async id => await new Promise((resolveRecord, reject) => {
-    const opening = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const opening = indexedDB.open('dsh-browser-native-workspace-v1')
     opening.onerror = () => reject(opening.error ?? new Error('Workspace IndexedDB open failed'))
     opening.onsuccess = () => {
       const database = opening.result

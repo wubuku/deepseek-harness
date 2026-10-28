@@ -26,7 +26,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('DSH_P
 async function browserStorageSnapshot(page, workspaceId) {
   return await page.evaluate(async id => {
     const record = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+      const request = indexedDB.open('dsh-browser-native-workspace-v1')
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
       request.onsuccess = () => {
         const database = request.result

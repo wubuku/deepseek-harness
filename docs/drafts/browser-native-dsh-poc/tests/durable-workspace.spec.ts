@@ -36,12 +36,198 @@ function stubRemoteManifest(revision: number, entries: readonly Record<string, u
   })
 }
 
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 describe('durable Browser-Native Workspace state', () => {
+  it('acquires local write access before recovering the snapshot', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    const acquired = deferred()
+    const proceed = deferred()
+    const acquire = vi.spyOn(store, 'acquireWriter').mockImplementation(async () => {
+      acquired.resolve()
+      await proceed.promise
+    })
+    const load = vi.spyOn(store, 'load')
+    const invalidated = vi.spyOn(store, 'invalidateWriter')
+    stubRemoteManifest(0)
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: () => {} })
+    const preparing = runtime.prepareVfs(runtime.vfs)
+    const prepared = expect(preparing).resolves.toBeUndefined()
+    try {
+      await acquired.promise
+      expect(acquire).toHaveBeenCalledExactlyOnceWith(workspaceId, undefined)
+      expect(load).not.toHaveBeenCalled()
+    } finally {
+      proceed.resolve()
+      await prepared
+    }
+    expect(load).toHaveBeenCalledExactlyOnceWith(workspaceId)
+    expect(invalidated).not.toHaveBeenCalled()
+  })
+
+  it.each(['ensureWriterLease', 'authorizeFileTool', 'verifyFileToolRevision', 'flushLocalWorkspace', 'runToolOperation'] as const)(
+    'invalidates a stale mirror when %s loses local write access', async entry => {
+      const store = new MemoryDurableWorkspaceStore()
+      const snapshot = { version: 1 as const, workspaceId, revision: 4, pending: [] }
+      await store.save(snapshot)
+      stubRemoteManifest(4)
+      const statuses: string[] = []
+      const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: status => { statuses.push(status) } })
+      await runtime.prepareVfs(runtime.vfs)
+      const failure = new DurableWorkspaceStoreError('LOCAL_WRITER_LOST', 'local writer was superseded')
+      const assert = vi.spyOn(store, 'assertWriter').mockRejectedValue(failure)
+      const invalidate = vi.spyOn(store, 'invalidateWriter')
+      const save = vi.spyOn(store, 'save')
+      const run = vi.fn(async () => {})
+      const entries = {
+        ensureWriterLease: () => runtime.ensureWriterLease(),
+        authorizeFileTool: () => runtime.authorizeFileTool('read'),
+        verifyFileToolRevision: () => runtime.verifyFileToolRevision(undefined),
+        flushLocalWorkspace: () => runtime.flushLocalWorkspace(),
+        runToolOperation: () => runtime.runToolOperation({ sessionId: 'stale-session', turn: 1, step: 1,
+          callId: 'stale-call', toolName: 'write', toolCallSeq: 1 }, run),
+      }
+
+      await expect(entries[entry]()).rejects.toBe(failure)
+      expect(assert).toHaveBeenCalledExactlyOnceWith(workspaceId)
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith(workspaceId)
+      expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local writer was invalidated/)
+      await expect(runtime.ensureWriterLease()).rejects.toThrow(/local writer was invalidated/)
+      expect(assert).toHaveBeenCalledTimes(1)
+      expect(run).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+      expect(statuses.at(-1)).toBe('error')
+      expect(statuses).not.toContain('local-corrupt')
+      await expect(store.load(workspaceId)).resolves.toEqual(snapshot)
+      expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith('/commit'))).toBe(false)
+    },
+  )
+
+  it('invalidates before a queued local save resumes after release', async () => {
+    vi.useFakeTimers()
+    const store = new MemoryDurableWorkspaceStore()
+    const snapshot = { version: 1 as const, workspaceId, revision: 4, pending: [] }
+    await store.save(snapshot)
+    stubRemoteManifest(4)
+    const entered = deferred()
+    const proceed = deferred()
+    const statuses: string[] = []
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: status => { statuses.push(status) },
+      testHooks: { beforeLocalPersist: async () => {
+        entered.resolve()
+        await proceed.promise
+      } } })
+    await runtime.prepareVfs(runtime.vfs)
+    const save = vi.spyOn(store, 'save')
+    const invalidate = vi.spyOn(store, 'invalidateWriter')
+    runtime.vfs.writeFileSync('/dsh/home/workspace/queued.txt', 'queued local change')
+    try {
+      await entered.promise
+      expect(save).not.toHaveBeenCalled()
+      await runtime.releaseWriter()
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith(workspaceId)
+      expect(save).not.toHaveBeenCalled()
+    } finally {
+      proceed.resolve()
+      await expect(runtime.flushWorkspace()).rejects.toThrow(/local writer was invalidated/)
+    }
+    expect(save).not.toHaveBeenCalled()
+    await expect(store.load(workspaceId)).resolves.toEqual(snapshot)
+    expect(runtime.vfs.readFileSync('/dsh/home/workspace/queued.txt', 'utf8')).toBe('queued local change')
+    expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local writer was invalidated/)
+    expect(statuses.at(-1)).toBe('error')
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith('/commit'))).toBe(false)
+  })
+
+  it('rejects a tool operation when its in-flight local writer check completes after release', async () => {
+    vi.useFakeTimers()
+    const store = new MemoryDurableWorkspaceStore()
+    const snapshot = { version: 1 as const, workspaceId, revision: 4, pending: [] }
+    await store.save(snapshot)
+    stubRemoteManifest(4)
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: () => {} })
+    await runtime.prepareVfs(runtime.vfs)
+    const entered = deferred()
+    const proceed = deferred()
+    const assert = vi.spyOn(store, 'assertWriter').mockImplementationOnce(async () => {
+      entered.resolve()
+      await proceed.promise
+    })
+    const invalidate = vi.spyOn(store, 'invalidateWriter')
+    const save = vi.spyOn(store, 'save')
+    const run = vi.fn(async () => {})
+    const operation = runtime.runToolOperation({ sessionId: 'released-session', turn: 1, step: 1,
+      callId: 'released-call', toolName: 'write', toolCallSeq: 1 }, run)
+    const rejected = expect(operation).rejects.toThrow(/local writer was invalidated/)
+
+    try {
+      await entered.promise
+      expect(assert).toHaveBeenCalledExactlyOnceWith(workspaceId)
+      expect(run).not.toHaveBeenCalled()
+      await runtime.releaseWriter()
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith(workspaceId)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      proceed.resolve()
+      await rejected
+    }
+    expect(run).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    await expect(store.load(workspaceId)).resolves.toEqual(snapshot)
+    expect(() => runtime.assertLocalWorkspaceUsable()).toThrow(/local writer was invalidated/)
+  })
+
+  it('persists local changes after a failed renewal while the writer lease remains valid', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const store = new MemoryDurableWorkspaceStore()
+    let offline = false
+    stubWorkspaceFetch(async input => {
+      if (offline) throw new TypeError('Failed to fetch: offline')
+      const url = String(input)
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 0, entries: [] })
+      if (url.endsWith('/lease')) return jsonResponse({
+        writerToken: 'writer', fencingToken: 1, leaseDurationMs: 60_000, renewAfterMs: 1_000,
+      })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, writerLease: true, onStatus: () => {} })
+
+    try {
+      await runtime.prepareVfs(runtime.vfs)
+      await runtime.authorizeFileTool('write')
+      const requestsBeforeRenewal = vi.mocked(fetch).mock.calls.length
+      offline = true
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(requestsBeforeRenewal + 1)
+      expect(runtime.getWriterLeaseTestState()).toMatchObject({ state: 'active', deadlineRemainingMs: 58_500 })
+      const requestsBeforePersist = vi.mocked(fetch).mock.calls.length
+      const content = new TextEncoder().encode('offline local change')
+      runtime.vfs.writeFileSync('/dsh/home/workspace/offline.txt', content)
+
+      await expect(runtime.flushLocalWorkspace()).resolves.toBeUndefined()
+
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(requestsBeforePersist)
+      await expect(store.load(workspaceId)).resolves.toMatchObject({
+        workspaceId, revision: 0, pending: [{ path: 'offline.txt', bytes: content.byteLength, content }],
+      })
+      expect(() => runtime.assertLocalWorkspaceUsable()).not.toThrow()
+    } finally {
+      offline = false
+      await runtime.releaseWriter()
+      vi.clearAllTimers()
+    }
+  })
+
   it('registers clean remote metadata before caching the first downloaded blob', async () => {
     const store = new MemoryDurableWorkspaceStore()
     const load = store.load.bind(store)
@@ -335,6 +521,9 @@ describe('durable Browser-Native Workspace state', () => {
     const statuses: string[] = []
     stubRemoteManifest(0)
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => {
         throw new DurableWorkspaceStoreError('LOCAL_BLOB_MISSING', 'browser-native workspace: local blob is missing (test)')
@@ -356,6 +545,9 @@ describe('durable Browser-Native Workspace state', () => {
     const statuses: string[] = []
     stubRemoteManifest(0)
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => {
@@ -381,6 +573,9 @@ describe('durable Browser-Native Workspace state', () => {
     let completeSave: () => void = () => { throw new Error('save was not started') }
     const pendingSave = new Promise<void>(resolve => { completeSave = resolve })
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => await pendingSave,
@@ -405,6 +600,9 @@ describe('durable Browser-Native Workspace state', () => {
     const firstSaveStarted = new Promise<void>(resolve => { notifyFirstSaveStarted = resolve })
     const snapshots: Array<{ pending: readonly { path: string }[] }> = []
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async (snapshot: { pending: readonly { path: string }[] }) => {
@@ -433,6 +631,9 @@ describe('durable Browser-Native Workspace state', () => {
     stubRemoteManifest(0)
     const snapshots: Array<{ pending: readonly { path: string }[] }> = []
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async (snapshot: { pending: readonly { path: string }[] }) => { snapshots.push(snapshot) },
@@ -455,6 +656,9 @@ describe('durable Browser-Native Workspace state', () => {
   it('rejects Agent Workspace access after local persistence fails', async () => {
     stubRemoteManifest(0)
     const store = {
+      acquireWriter: async () => {},
+      assertWriter: async () => {},
+      invalidateWriter: () => {},
       listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => {

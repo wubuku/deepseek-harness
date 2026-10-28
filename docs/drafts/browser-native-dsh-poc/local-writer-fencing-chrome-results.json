@@ -1,0 +1,78 @@
+{
+  "scope": "Browser-Native DSH Workspace local writer fencing and snapshot generation",
+  "browser": "Chrome",
+  "workspaceDatabaseSchema": 2,
+  "workspaceSnapshotVersion": 1,
+  "unitTests": {
+    "cachePublicationRecovery": 122,
+    "verifiedDownload": 54,
+    "durableWorkspace": 26,
+    "adjacentMirrorAndContentClient": 22
+  },
+  "directWorkerStorage": {
+    "initialScenariosPassed": 15,
+    "additionalAuthorizationScenariosPassed": 2,
+    "transactionAbortGenerationVerified": true,
+    "oldBehaviorNegativeControls": {
+      "identicalRecordAba": "expected assertion failure observed",
+      "clearRecreateAba": "expected assertion failure observed",
+      "queuedAcquireAuthorization": "expected assertion failure observed",
+      "preCommitAuthorization": "expected assertion failure observed"
+    }
+  },
+  "completeHost": {
+    "result": "passed",
+    "elapsedMs": 58181,
+    "localWriterEpochs": [1, 2],
+    "observedGenerations": [6, 14],
+    "successfulCommits": 4,
+    "distinctSuccessfulOperationIds": 4,
+    "transferredRetrySuccessfulCommits": 1,
+    "sessionReceiptCounts": [1, 1],
+    "oldQueuedSaveRejected": true,
+    "successorPendingAndBytesPreserved": true,
+    "oldLateCommits": 0,
+    "pageErrors": [],
+    "externalRequests": [],
+    "cleanupErrors": []
+  },
+  "adjacentChrome": {
+    "sharedWorkspaceObserver": "passed",
+    "downloadTerminationScenariosPassed": 5,
+    "forwardSchema3RecoveryExport": "passed"
+  },
+  "realLlm": {
+    "result": "passed",
+    "model": "gpt-5.6-sol",
+    "roster": "original",
+    "turns": 3,
+    "requests": 8,
+    "http200": 8,
+    "eventCount": 60,
+    "durableThroughSeq": 59,
+    "workspaceCommitStatuses": [200, 200],
+    "firstTurnTools": ["read", "write", "read"],
+    "memoryAndRefresh": "passed",
+    "coldWorkspaceRecoveryWithSessionRetained": "passed",
+    "pageErrors": [],
+    "sameOriginModelRequestsOnly": true,
+    "existingPreview404AndAbortDiagnosticsRetained": true
+  },
+  "checks": {
+    "webTypeScript": "passed",
+    "previewBuild": "passed",
+    "buildCheck": "2 passed",
+    "docSync": "43 passed",
+    "focusedOxlint": "passed",
+    "repositoryLint": "three existing errors in unchanged files"
+  },
+  "notVerified": [
+    "Complete Host lease expiry while waiting to acquire the local storage lock",
+    "Large-file observer resident memory budget",
+    "Natural storage eviction, OS crash, or power loss",
+    "Cross-device coordination or multi-backend production durability"
+  ],
+  "artifactDirectory": "/tmp/dsh-local-writer-final.lhRi53",
+  "completeHostArtifact": "dsh-local-writer-fencing-wK1jGs/results.json",
+  "realLlmArtifact": "real-final.json"
+}

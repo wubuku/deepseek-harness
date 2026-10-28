@@ -22,7 +22,7 @@ const prompt = 'BROWSER_NATIVE_WORKSPACE_CRASH_E2E：请使用 write 工具写�
 
 async function readWorkspaceRecord(page, workspaceId) {
   return await page.evaluate(async id => await new Promise((resolveRecord, reject) => {
-    const request = indexedDB.open('dsh-browser-native-workspace-v1', 1)
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
     request.onsuccess = () => {
       const database = request.result
