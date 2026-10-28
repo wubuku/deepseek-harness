@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { openPreview, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
+import { openPreview, waitFor, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -32,6 +32,20 @@ const requests = []
 const commits = []
 const pageErrors = []
 const externalRequests = []
+
+async function readSession(id) {
+  const cookie = (await page.context().cookies(`${origin}/api/browser-native/session/read`))
+    .find(item => item.name === 'dsh-browser-native-session-principal')
+  if (cookie === undefined) throw new Error('Browser Session principal cookie is missing')
+  const response = await fetch(`${origin}/api/browser-native/session/read`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: `${cookie.name}=${cookie.value}` },
+    body: JSON.stringify({ protocolVersion: 1, requestId: crypto.randomUUID(), sessionId: id, offset: 0 }),
+  })
+  const value = await response.json()
+  if (!response.ok) throw new Error(JSON.stringify(value))
+  return value
+}
 
 async function restartBackend() {
   await app.close()
@@ -90,6 +104,7 @@ try {
       worker.terminate()
     })
     await restartBackend()
+    restarted = true
     await route.abort()
   })
 
@@ -101,19 +116,19 @@ try {
     'Session creation for unknown commit recovery',
   )
   sessionId = createRequest.body.sessionId
-  await waitFor(() => interrupted, 'backend commit before response loss', 45_000)
+  await waitFor(() => restarted, 'backend commit, restart, and response loss', 45_000)
   assert.equal(commits.length, 1)
   const operationId = commits[0].operationId
   workspaceId = commits[0].workspaceId
   assert.equal(typeof workspaceId, 'string')
-  const beforeReload = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+  const beforeReload = await readSession(sessionId)
   assert.equal(beforeReload.events.some(event => event.type === 'browser-native/workspace-receipt'), false)
   assert.equal(beforeReload.events.filter(event => event.type === 'tool/call' && event.data.name === 'write').length, 1)
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForPreview(page)
   const recovered = await waitFor(async () => {
-    const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+    const current = await readSession(sessionId)
     const receipt = current.events.find(event => event.type === 'browser-native/workspace-receipt')
     return receipt === undefined ? undefined : { current, receipt }
   }, 'Workspace operation receipt after backend restart', 45_000)

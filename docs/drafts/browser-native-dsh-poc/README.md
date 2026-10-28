@@ -783,6 +783,22 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-obs
 
 真实 Chrome 双标签 E2E 使用 scripted DSH 响应控制 503 retry、schema 外伪造 write、工具执行期间的 owner commit、stale read 和 lease 接管，核对 prompt 去重、唯一 operation、Session receipt 归属和同源网络；另跑真实 LLM 普通 `read → write → read` 与 durable 刷新恢复 smoke。两种证据范围不同，真实模型 smoke 不证明模型自主选择 observer/owner 时序。每个 observer 文件工具增加两次小型 revision 请求，不再下载完整 manifest；跨设备授权、多实例 backend、并发写合并、自然 eviction、OS crash 和 Safari/WebKit 未验证。
 
+## Session 与 Workspace receipt 确认丢失恢复
+
+[跨存储恢复计划](cross-store-tool-recovery-validation-plan.md)与[实施进度](cross-store-tool-recovery-validation-progress.md)覆盖真实 DSH `write` 产生的 Workspace operation receipt：backend 已将包含 `tool/result` 和 receipt 的 Session 前缀 flush durable，但响应在到达 Worker 前丢失；随后旧 Worker 被终止、同 dataDir backend 重启，再刷新同一 Session。Chrome scripted E2E 检查 durable watermark、连续 Session seq、单一 tool call/result/receipt、Workspace revision、operationId 和 IndexedDB outbox，并确认刷新不重复 commit、receipt append 或原模型请求。
+
+Provider 仅在 Session receipt 的 DSH call 元组及 Workspace commit 全字段均与本地 outbox receipt 一致时才确认 outbox；缺少对应 `tool/call` 或字段错配会 fail closed。Session 与 Workspace 仍是独立事实源，顺序协调不构成原子事务；本批的 scripted fault 不是真实模型、自然 eviction、OS crash 或生产多实例存储证据。真实 LLM 普通文件 smoke 与文档门禁状态见进度记录。
+
+本批真实 Chrome/LLM smoke 另完成 3 轮、一次刷新、普通文件 `read → write → read`、跨轮记忆和刷新后文件读取；Session 含 59 个事件、durable watermark 为 58，8/8 LLM 请求返回 HTTP 200，且页面无异常。该运行只证明正常模型闭环可用，不证明真实模型能触发注入故障；首个 Session 文本 chunk 约 6.6 秒出现，但首个可见 assistant 更新约 103 秒，另有 compaction capacity warning 和三个 preview API 404，故不构成流式 UX 或 preview API 无告警验收。完整命令、请求取消和已知噪声见[本批进度](cross-store-tool-recovery-validation-progress.md)。
+
+复跑本批验证：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/agent-workspace-receipt-recovery.e2e.mjs
+```
+
 ## Workspace 并发 revision 与长编辑 fencing 验证
 
 [本批计划](workspace-concurrent-revision-validation-plan.md)与[进度记录](workspace-concurrent-revision-validation-progress.md)验证 observer 异步读取与远端 commit 的竞态、revision 查询响应成本，以及 writer lease 在长 OPFS edit 中转移时的旧写者 fencing。真实 Chrome 双页面测试确认 stale read 以错误结算，旧 Workspace 内容不进入 tool result 或后续 LLM 请求；长 edit 在 lease token 从 1 提升至 2 后不能发布到旧 Worker VFS 或生成 receipt，新 owner 可提交 revision 2。

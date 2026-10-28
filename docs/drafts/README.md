@@ -88,6 +88,8 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 31. [Browser-Native 复制标签页恢复隔离验证](browser-native-dsh-poc/next-tab-recovery-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/next-tab-recovery-isolation-validation-progress.md)：Chrome 复现并阻断 opener 复制 Workspace-only、Session-only 和完整恢复凭据；验证无 Web Locks fail-closed、刷新接管、旧 fencing 拒绝及同 Session 单次续聊。BFCache 只测合成 `pagehide.persisted`，不替代真实往返；真实 LLM smoke 单独验证普通文件恢复。
 32. [Browser-Native Workspace 并发 revision 与长编辑 fencing](browser-native-dsh-poc/workspace-concurrent-revision-validation-plan.md)及[进度](browser-native-dsh-poc/workspace-concurrent-revision-validation-progress.md)：验证 observer read 与 owner commit 竞态、1,000-entry manifest 下轻量 revision API 的响应规模，以及 32 MiB OPFS edit 期间 writer lease 转移；Chrome scripted 竞态与真实 LLM 普通文件 smoke 分开记录，不外推为跨存储事务、多 backend HA 或生产对象存储。
 
+33. [Browser-Native DSH 跨存储工具恢复验证](browser-native-dsh-poc/cross-store-tool-recovery-validation-plan.md)及[实施进度](browser-native-dsh-poc/cross-store-tool-recovery-validation-progress.md)：Chrome scripted DSH `write` 验证 receipt Session flush 已 durable、响应丢失后终止 Worker 并重启同 dataDir backend；刷新后不重放 prompt、工具或 commit，receipt outbox 对账完成。真实 LLM 普通文件闭环已单独完成；OS/自然存储故障、跨存储事务和流式 UI 响应性仍未验证。
+
 ### 需要实现或审查代码时
 
 优先阅读[实施方案](dsh-browser-native-agent-implementation-plan.md)，再读 [PoC 当前实现与限制](browser-native-dsh-poc/README.md)、[PoC v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和对应的实现、测试文件。研究报告解释为什么这样设计；v2 规划定义目标，代码和测试确定实际字段、行为和验证范围。[旧版实验协议](browser-native-dsh-poc/protocol.md)只用于追溯独立实验，不能作为 v2 的当前协议说明。

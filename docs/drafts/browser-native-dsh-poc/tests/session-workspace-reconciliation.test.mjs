@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
-import { classifyWorkspaceSession, createWorkspaceReceipt } from '../workspace-session-reconciliation.mjs'
+import { classifyWorkspaceSession, createWorkspaceReceipt, matchesWorkspaceReceipt } from '../workspace-session-reconciliation.mjs'
 
 const liveApps = new Set()
 const temporaryDirectories = new Set()
@@ -19,9 +19,11 @@ async function start() {
   return { app, origin }
 }
 
-async function post(origin, path, body) {
+async function post(origin, path, body, cookie) {
+  const headers = { 'content-type': 'application/json' }
+  if (cookie !== undefined) headers.cookie = cookie
   const response = await fetch(`${origin}${path}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 1, requestId: randomUUID(), ...body }),
+    method: 'POST', headers, body: JSON.stringify({ protocolVersion: 1, requestId: randomUUID(), ...body }),
   })
   const value = await response.json()
   return { response, value }
@@ -30,13 +32,18 @@ async function post(origin, path, body) {
 async function workspaceIdentity(origin) {
   const response = await fetch(`${origin}/api/browser-native/workspace/identity`)
   const value = await response.json()
-  return { workspaceId: value.workspaceId, cookie: response.headers.get('set-cookie').split(';', 1)[0] }
+  const cookies = response.headers.getSetCookie().map(cookie => cookie.split(';', 1)[0])
+  return {
+    workspaceId: value.workspaceId,
+    workspaceCookie: cookies.find(cookie => cookie.startsWith('dsh-browser-native-principal=')),
+    sessionCookie: cookies.find(cookie => cookie.startsWith('dsh-browser-native-session-principal=')),
+  }
 }
 
 async function workspacePost(origin, identity, operation, body) {
   const response = await fetch(`${origin}/api/browser-native/workspace/${operation}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: identity.cookie },
+    headers: { 'content-type': 'application/json', cookie: identity.workspaceCookie },
     body: JSON.stringify({ protocolVersion: 1, requestId: randomUUID(), workspaceId: identity.workspaceId, ...body }),
   })
   return { response, value: await response.json() }
@@ -62,12 +69,61 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
     assert.throws(() => createWorkspaceReceipt({ operationId: 'op', status: 'committed' }), /workspace receipt is invalid/)
   })
 
+  it('requires a Workspace receipt to match the complete DSH call and commit identity', () => {
+    const receipt = {
+      operationId: 'operation-1',
+      workspaceId: 'workspace-1',
+      baseRevision: 2,
+      revision: 3,
+      manifestDigest: 'digest-3',
+      paths: ['report.txt'],
+      replayed: false,
+      operation: {
+        sessionId: 'session-1',
+        turn: 4,
+        step: 2,
+        callId: 'call-1',
+        toolName: 'write',
+        toolCallSeq: 12,
+      },
+    }
+    const eventData = {
+      ...receipt.operation,
+      operationId: receipt.operationId,
+      workspaceId: receipt.workspaceId,
+      baseRevision: receipt.baseRevision,
+      revision: receipt.revision,
+      manifestDigest: receipt.manifestDigest,
+      paths: receipt.paths,
+      replayed: receipt.replayed,
+    }
+    delete eventData.sessionId
+    assert.equal(matchesWorkspaceReceipt(eventData, receipt, 'session-1'), true)
+    assert.equal(matchesWorkspaceReceipt(eventData, receipt, 'session-2'), false)
+    for (const [field, value] of [
+      ['turn', 5],
+      ['step', 3],
+      ['callId', 'call-2'],
+      ['toolName', 'edit'],
+      ['toolCallSeq', 13],
+      ['operationId', 'operation-2'],
+      ['workspaceId', 'workspace-2'],
+      ['baseRevision', 1],
+      ['revision', 4],
+      ['manifestDigest', 'digest-4'],
+      ['paths', ['other.txt']],
+      ['replayed', true],
+    ]) {
+      assert.equal(matchesWorkspaceReceipt({ ...eventData, [field]: value }, receipt, 'session-1'), false, field)
+    }
+  })
+
   it('associates one committed Workspace operation with a durable Session receipt', async () => {
     const { origin } = await start()
     const identity = await workspaceIdentity(origin)
     const sessionId = randomUUID()
     const header = { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
-    const created = await post(origin, '/api/browser-native/session/create', { sessionId, header, inheritedEventCount: 0 })
+    const created = await post(origin, '/api/browser-native/session/create', { sessionId, header, inheritedEventCount: 0 }, identity.sessionCookie)
     assert.equal(created.response.ok, true, JSON.stringify(created.value))
     const ownerToken = created.value.owner.ownerToken
 
@@ -75,7 +131,7 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
     const hash = createHash('sha256').update(bytes).digest('hex')
     const uploadResponse = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
       method: 'PUT',
-      headers: { cookie: identity.cookie, 'content-type': 'application/octet-stream', 'x-browser-native-protocol': '1', 'x-request-id': randomUUID(), 'x-workspace-id': identity.workspaceId },
+      headers: { cookie: identity.workspaceCookie, 'content-type': 'application/octet-stream', 'x-browser-native-protocol': '1', 'x-request-id': randomUUID(), 'x-workspace-id': identity.workspaceId },
       body: bytes,
     })
     assert.equal(uploadResponse.ok, true)
@@ -100,15 +156,15 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
       ownerToken,
       expectedNextSeq: 0,
       events: [{ seq: 0, type: 'browser-native/workspace-receipt', ignorable: true, data: receipt }],
-    })
+    }, identity.sessionCookie)
     assert.equal(appended.response.ok, true, JSON.stringify(appended.value))
-    const flushed = await post(origin, '/api/browser-native/session/flush', { sessionId, ownerToken })
+    const flushed = await post(origin, '/api/browser-native/session/flush', { sessionId, ownerToken }, identity.sessionCookie)
     assert.equal(flushed.response.ok, true, JSON.stringify(flushed.value))
 
-    const read = await post(origin, '/api/browser-native/session/read', { sessionId, offset: 0 })
+    const read = await post(origin, '/api/browser-native/session/read', { sessionId, offset: 0 }, identity.sessionCookie)
     assert.deepEqual(read.value.events[0].data, receipt)
     assert.equal(read.value.events[0].ignorable, true)
-    const operation = await fetch(`${origin}/api/browser-native/workspace/operation/${operationId}?protocolVersion=1&workspaceId=${identity.workspaceId}`, { headers: { cookie: identity.cookie } })
+    const operation = await fetch(`${origin}/api/browser-native/workspace/operation/${operationId}?protocolVersion=1&workspaceId=${identity.workspaceId}`, { headers: { cookie: identity.workspaceCookie } })
     const operationBody = await operation.json()
     assert.equal(operationBody.found, true)
     assert.equal(operationBody.receipt.operationId, operationId)
@@ -123,12 +179,12 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
       sessionId,
       header: { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' },
       inheritedEventCount: 0,
-    })
+    }, identity.sessionCookie)
     const bytes = Buffer.from('workspace first\n')
     const hash = createHash('sha256').update(bytes).digest('hex')
     await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
       method: 'PUT',
-      headers: { cookie: identity.cookie, 'content-type': 'application/octet-stream', 'x-browser-native-protocol': '1', 'x-request-id': randomUUID(), 'x-workspace-id': identity.workspaceId },
+      headers: { cookie: identity.workspaceCookie, 'content-type': 'application/octet-stream', 'x-browser-native-protocol': '1', 'x-request-id': randomUUID(), 'x-workspace-id': identity.workspaceId },
       body: bytes,
     })
     const committed = await workspacePost(origin, identity, 'commit', {
@@ -140,10 +196,10 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
       sessionId,
       ownerToken: 'stale-owner',
       expectedNextSeq: 0,
-      events: [{ seq: 0, type: 'workspace/receipt', data: { status: 'committed' } }],
-    })
+      events: [{ seq: 0, type: 'browser-native/test-receipt', ignorable: true, data: { status: 'committed' } }],
+    }, identity.sessionCookie)
     assert.equal(blocked.response.status, 409)
-    const read = await post(origin, '/api/browser-native/session/read', { sessionId, offset: 0 })
+    const read = await post(origin, '/api/browser-native/session/read', { sessionId, offset: 0 }, identity.sessionCookie)
     assert.deepEqual(read.value.events, [])
     assert.equal(classifyWorkspaceSession({ workspaceStatus: 'committed', sessionStatus: 'pending' }), 'workspace-committed-session-pending')
     assert.equal(typeof created.value.owner.ownerToken, 'string')

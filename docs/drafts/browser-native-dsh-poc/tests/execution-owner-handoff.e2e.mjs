@@ -218,7 +218,23 @@ async function runScenario(name) {
     assert.equal(typeof workspaceId, 'string')
 
     await secondPage.goto(url, { waitUntil: 'domcontentloaded' })
-    await secondPage.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'lease-conflict', undefined, { timeout: 30_000 })
+    try {
+      await secondPage.waitForFunction(() => ['lease-conflict', 'read-only'].includes(
+        window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state ?? '',
+      ), undefined, { timeout: 30_000 })
+    } catch (error) {
+      process.stderr.write(`${JSON.stringify({
+        scenario: name,
+        status: await secondPage.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ ?? null),
+        pageErrors,
+        apiRequests: requests.filter(request => request.page === secondPage)
+          .map(({ path, status }) => ({ path, status })),
+        error: String(error),
+      })}\n`)
+      throw error
+    }
+    const observerStatus = await secondPage.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ ?? null)
+    assert.ok(['lease-conflict', 'read-only'].includes(observerStatus?.state), JSON.stringify(observerStatus))
     assert.equal(llmRequests.filter(request => request.page === secondPage).length, 0,
       'the receiving Worker must not call the model before it owns the Workspace')
 

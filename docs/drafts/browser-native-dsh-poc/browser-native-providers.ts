@@ -60,6 +60,7 @@ import {
 import { readSessionPages } from './browser-native-session-read.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
+import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -782,12 +783,14 @@ function createRemoteSessionPersistenceClass(
           const call = events.find(event => event.type === 'tool/call' && event.seq === operation.toolCallSeq
             && String(event.data.callId) === operation.callId && event.data.name === operation.toolName
             && event.data.turn === operation.turn && event.data.step === operation.step)
-          if (call === undefined) continue
+          if (call === undefined) {
+            throw new Error(`Workspace receipt operation "${receipt.operationId}" does not match a persisted DSH tool call`)
+          }
           const existing = events.find(event => event.type === 'browser-native/workspace-receipt'
             && event.data.operationId === receipt.operationId)
           if (existing !== undefined) {
-            if (existing.type !== 'browser-native/workspace-receipt' || existing.data.callId !== operation.callId
-              || existing.data.toolCallSeq !== operation.toolCallSeq || existing.data.workspaceId !== receipt.workspaceId) {
+            if (existing.type !== 'browser-native/workspace-receipt'
+              || !matchesWorkspaceReceipt(existing.data, receipt, String(session.id))) {
               throw new Error(`receipt operation "${receipt.operationId}" is already linked to different Session data`)
             }
             appendedOperations.add(receipt.operationId)

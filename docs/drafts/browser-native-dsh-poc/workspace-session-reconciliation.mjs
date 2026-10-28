@@ -21,6 +21,33 @@ export function createWorkspaceReceipt(value) {
   return Object.freeze({ ...receipt, paths: Object.freeze([...receipt.paths]) })
 }
 
+/**
+ * Compare a persisted Session receipt with its local Workspace operation.
+ * @param {object} eventData - Persisted Browser-Native receipt event data.
+ * @param {object} receipt - Durable Workspace commit receipt and originating tool call.
+ * @param {string} sessionId - Session whose log contains the event.
+ * @returns {boolean} Whether every call and commit identity field matches.
+ */
+export function matchesWorkspaceReceipt(eventData, receipt, sessionId) {
+  const operation = receipt?.operation
+  return operation !== undefined
+    && operation.sessionId === sessionId
+    && eventData.turn === operation.turn
+    && eventData.step === operation.step
+    && eventData.callId === operation.callId
+    && eventData.toolName === operation.toolName
+    && eventData.toolCallSeq === operation.toolCallSeq
+    && eventData.operationId === receipt.operationId
+    && eventData.workspaceId === receipt.workspaceId
+    && eventData.baseRevision === receipt.baseRevision
+    && eventData.revision === receipt.revision
+    && eventData.manifestDigest === receipt.manifestDigest
+    && eventData.replayed === receipt.replayed
+    && Array.isArray(eventData.paths)
+    && eventData.paths.length === receipt.paths.length
+    && eventData.paths.every((path, index) => path === receipt.paths[index])
+}
+
 export function classifyWorkspaceSession({ workspaceStatus, sessionStatus }) {
   if (workspaceStatus === 'committed' && sessionStatus === 'committed') return 'reconciled'
   if (workspaceStatus === 'committed' && sessionStatus === 'pending') return 'workspace-committed-session-pending'
