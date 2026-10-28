@@ -58,6 +58,59 @@ describe('durable Browser-Native Workspace state', () => {
     expect(restored?.pending[0]?.content).toEqual(new Uint8Array([1, 2, 3]))
   })
 
+  it('enumerates Workspace IDs from metadata and content-only remnants', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    const orphanWorkspaceId = 'a91d2bd5-e225-4d04-9a29-b49fb324ff11'
+    await store.save({ version: 1, workspaceId, revision: 0, pending: [] })
+    await store.cacheBlob(orphanWorkspaceId, remoteHash, remoteBytes)
+
+    await expect(store.listWorkspaceIds()).resolves.toEqual([orphanWorkspaceId, workspaceId].sort())
+  })
+
+  it('does not create a new identity when local Workspace data remains but the identity cookie is unavailable', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    await store.save({
+      version: 1,
+      workspaceId,
+      revision: 2,
+      pending: [{ path: 'draft.txt', kind: 'file', mode: 0o600, bytes: 5, content: new TextEncoder().encode('draft') }],
+    })
+    const requests: Array<{ readonly url: string; readonly headers?: HeadersInit }> = []
+    const statuses: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      requests.push({ url, headers: init?.headers })
+      if (url.endsWith('/identity')) return jsonResponse({ error: { code: 'UNAUTHENTICATED', message: 'identity missing' } }, 401)
+      throw new Error(`unexpected request ${url}`)
+    }))
+
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: status => { statuses.push(status) } })
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow('cannot be matched')
+
+    expect(requests).toHaveLength(1)
+    expect(new Headers(requests[0]?.headers).get('x-browser-native-identity-mode')).toBe('existing')
+    expect(requests.some(request => request.url.includes('/manifest?'))).toBe(false)
+    expect(runtime.getWorkspaceId()).toBeUndefined()
+    expect(statuses).toContain('identity-missing')
+    await expect(store.load(workspaceId)).resolves.toMatchObject({ revision: 2, pending: [{ path: 'draft.txt' }] })
+  })
+
+  it('stops when the current browser identity does not match retained Workspace data', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    await store.save({ version: 1, workspaceId, revision: 0, pending: [] })
+    const statuses: string[] = []
+    stubWorkspaceFetch(async input => {
+      if (String(input).endsWith('/identity')) return jsonResponse({ workspaceId: 'a91d2bd5-e225-4d04-9a29-b49fb324ff11' })
+      throw new Error(`unexpected request ${String(input)}`)
+    })
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: status => { statuses.push(status) } })
+
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow('different browser identity')
+
+    expect(statuses).toContain('identity-mismatch')
+    expect(runtime.getWorkspaceId()).toBeUndefined()
+  })
+
   it('replays local pending content over the remote manifest after Worker reconstruction', async () => {
     vi.useFakeTimers()
     const store = new MemoryDurableWorkspaceStore()
@@ -242,6 +295,7 @@ describe('durable Browser-Native Workspace state', () => {
     const statuses: string[] = []
     stubRemoteManifest(0)
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => {
         throw new DurableWorkspaceStoreError('LOCAL_BLOB_MISSING', 'browser-native workspace: local blob is missing (test)')
       },
@@ -262,6 +316,7 @@ describe('durable Browser-Native Workspace state', () => {
     const statuses: string[] = []
     stubRemoteManifest(0)
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => {
         throw new DurableWorkspaceStoreError('LOCAL_STORE_UNAVAILABLE', 'browser-native workspace: IndexedDB transaction aborted')
@@ -286,6 +341,7 @@ describe('durable Browser-Native Workspace state', () => {
     let completeSave: () => void = () => { throw new Error('save was not started') }
     const pendingSave = new Promise<void>(resolve => { completeSave = resolve })
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => await pendingSave,
       clear: async () => {},
@@ -309,6 +365,7 @@ describe('durable Browser-Native Workspace state', () => {
     const firstSaveStarted = new Promise<void>(resolve => { notifyFirstSaveStarted = resolve })
     const snapshots: Array<{ pending: readonly { path: string }[] }> = []
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async (snapshot: { pending: readonly { path: string }[] }) => {
         snapshots.push(snapshot)
@@ -336,6 +393,7 @@ describe('durable Browser-Native Workspace state', () => {
     stubRemoteManifest(0)
     const snapshots: Array<{ pending: readonly { path: string }[] }> = []
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async (snapshot: { pending: readonly { path: string }[] }) => { snapshots.push(snapshot) },
       clear: async () => {},
@@ -357,6 +415,7 @@ describe('durable Browser-Native Workspace state', () => {
   it('rejects Agent Workspace access after local persistence fails', async () => {
     stubRemoteManifest(0)
     const store = {
+      listWorkspaceIds: async () => [],
       load: async () => undefined,
       save: async () => {
         throw new DurableWorkspaceStoreError('LOCAL_STORE_UNAVAILABLE', 'browser-native workspace: IndexedDB transaction aborted')

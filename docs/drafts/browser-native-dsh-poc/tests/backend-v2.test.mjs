@@ -1758,7 +1758,22 @@ describe('browser-native DSH v2 backend', () => {
   it('isolates workspace identity and restores it after backend restart', async () => {
     const dataDir = await temporaryDirectory()
     const first = await start({ dataDir, llmMode: 'scripted' })
+    const missingLookup = await fetch(`${first.origin}/api/browser-native/workspace/identity`, {
+      headers: { 'x-browser-native-identity-mode': 'existing' },
+    })
+    assert.equal(missingLookup.status, 401)
+    assert.equal((await missingLookup.json()).error.code, 'UNAUTHENTICATED')
+
     const owner = await openWorkspaceIdentity(first.origin)
+    const existingLookup = await fetch(`${first.origin}/api/browser-native/workspace/identity`, {
+      headers: {
+        cookie: owner.cookie,
+        'x-browser-native-identity-mode': 'existing',
+      },
+    })
+    assert.equal(existingLookup.status, 200)
+    assert.equal((await existingLookup.json()).workspaceId, owner.workspaceId)
+    assert.equal(existingLookup.headers.get('set-cookie'), null)
     const other = await openWorkspaceIdentity(first.origin)
     assert.notEqual(owner.workspaceId, other.workspaceId)
 

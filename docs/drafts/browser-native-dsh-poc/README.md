@@ -649,6 +649,35 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/tab-recover
 
 [browser-native-recovery.ts](../../../apps/web/src/browser-native-recovery.ts)实现恢复记录校验和 Web Locks 管理；对应页面接线在 [browser-native-page-control.ts](../../../apps/web/src/browser-native-page-control.ts)。
 
+## 生命周期、身份与浏览器计算位置验证
+
+[本批计划](browser-lifecycle-ownership-validation-plan.md)及[验证进度](browser-lifecycle-ownership-validation-progress.md)覆盖无恢复凭据时的 Session/Workspace 同时 claim、真实 Chrome BFCache 尝试、页面冻结、身份 cookie 丢失后的本地 Workspace 导出，以及 1/4/8 个隔离浏览器 context 中的真实 DSH Worker workload。
+
+首次 claim 竞争中，Session 和 Workspace 各只有一个页面取得 `200`，另一个收到 `409`；两边 seq/revision 不变，也没有模型请求或 Workspace commit。Chrome CDP 冻结页面时 Dedicated Worker 仍续租两类 lease，竞争 claim 被拒绝。清除 PoC 身份 cookie 后，本地 metadata 和 OPFS 文件保留，页面 fail closed 并可导出恢复包，不会创建新 principal 或把空 Workspace 标为恢复成功。恢复包最大为 64 MiB；超限时操作失败，不截断也不修改本地数据。
+
+1/4/8 个隔离 context 共完成 13 个 DSH turn、26 次工具调用、13 个唯一 Workspace commit；每 context 一个 Dedicated Worker，全部由同一个 in-process PoC backend 服务。容量数字只用于单机诊断，不是生产 SLA。真实 Chrome back/forward 没有命中 BFCache；Chrome 报告 PoC 的 `no-store` 响应和 JavaScript 网络请求是拒绝原因，因此 BFCache 连续性仍未验证。真实 LLM 普通文件 smoke 在重试后通过，不替代 scripted 并发测试；首次空流失败保留在进度记录中。
+
+复跑本批验证：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/durable-workspace.spec.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-control-channel.spec.ts
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/first-claim-race.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/real-bfcache-lifecycle.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/page-freeze-lease-fencing.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/identity-cookie-loss.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/browser-worker-placement-capacity.e2e.mjs
+DSH_POC_LLM=real DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_FILE=docs/drafts/.env \
+  DSH_POC_TURN_TIMEOUT_MS=600000 node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+身份 cookie 丢失时的 fail-closed 状态和有界本地恢复导出由 opt-in preview 页面接线，变更原因、验证及 upstream 重放方式见 [change-ledger.md](change-ledger.md) 的 BN-P2-038。
+
 [执行写权交接计划](execution-owner-handoff-validation-plan.md)和[进度记录](execution-owner-handoff-validation-progress.md)验证同一 DSH Session 在两个 Dedicated Worker 之间切换时的顺序与未知结果恢复。协调器先 flush Workspace 云端 revision 和本地 snapshot，再 flush Session outbox 并核对 `durableThroughSeq`，随后转移 Session owner，最后释放旧 Workspace lease；Session 与 Workspace 仍不是跨存储事务。
 
 Chrome scripted E2E 覆盖正常交接、Session handoff 已提交但响应丢失、Workspace release 响应丢失，以及旧 owner 的 Session append、LLM request 和 Workspace renew 被 fencing。真实 LLM E2E 在同一个 Session 完成 `write → read → handoff → read → write → read`，核对 5 个 DSH tool call、2 个 Workspace commit/receipt 和两个 owner epoch/fencing token 的递增。LLM 请求不携带 Workspace principal cookie；handoff checkpoint 在 Worker adapter 中将内部 `ownerEpoch` 映射为现有 API 字段 `epoch`。

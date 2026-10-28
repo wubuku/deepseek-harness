@@ -92,7 +92,13 @@ export interface BrowserNativeWorkspaceWriterLease {
 export type BrowserNativeFileToolStage = 'grep-match' | ChunkEditStage
 
 type WorkspaceStatus = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
-  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict'
+  | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'identity-missing' | 'identity-mismatch'
+
+class WorkspaceIdentityError extends Error {
+  constructor(readonly state: 'identity-missing' | 'identity-mismatch', message: string) {
+    super(message)
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -221,10 +227,26 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     this.vfs = vfs
     this.onStatus('loading', undefined, undefined, 0)
     try {
-      const identityResponse = await fetch(`${WORKSPACE_API}/identity`, { credentials: 'same-origin' })
-      const identity = await readJson(identityResponse)
+      const localWorkspaceIds = await this.store?.listWorkspaceIds() ?? []
+      const hasLocalWorkspaceData = localWorkspaceIds.length > 0
+      const identityResponse = await fetch(`${WORKSPACE_API}/identity`, {
+        credentials: 'same-origin',
+        ...(hasLocalWorkspaceData ? { headers: { 'x-browser-native-identity-mode': 'existing' } } : {}),
+      })
+      let identity: Record<string, unknown>
+      try {
+        identity = await readJson(identityResponse)
+      } catch (error) {
+        if (hasLocalWorkspaceData && isRecord(error) && error.code === 'UNAUTHENTICATED') {
+          throw new WorkspaceIdentityError('identity-missing', 'The local Workspace cache cannot be matched to a signed-in browser identity')
+        }
+        throw error
+      }
       if (typeof identity.workspaceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(identity.workspaceId)) {
         throw new Error('browser-native workspace: identity response omitted a workspace id')
+      }
+      if (hasLocalWorkspaceData && !localWorkspaceIds.includes(identity.workspaceId)) {
+        throw new WorkspaceIdentityError('identity-mismatch', 'The local Workspace cache belongs to a different browser identity')
       }
       this.workspaceId = identity.workspaceId
       if (this.useWriterLease) await this.claimWriter()
@@ -297,16 +319,18 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.abandonWriterLease()
-      const state = error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
-        ? 'local-newer-version'
-        : error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
-          ? 'local-corrupt'
-          : 'error'
+      const state = error instanceof WorkspaceIdentityError
+        ? error.state
+        : error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
+          ? 'local-newer-version'
+          : error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
+            ? 'local-corrupt'
+            : 'error'
       const retryAfterMs = isRecord(error) && error.code === 'WORKSPACE_ALREADY_OWNED'
         && Number.isSafeInteger(error.retryAfterMs)
         ? Number(error.retryAfterMs)
         : undefined
-      this.failure = { state: state === 'local-corrupt' || state === 'local-newer-version' ? 'error' : state, message }
+      this.failure = { state: 'error', message }
       this.onStatus(
         retryAfterMs === undefined ? state : 'lease-conflict',
         this.workspaceId,

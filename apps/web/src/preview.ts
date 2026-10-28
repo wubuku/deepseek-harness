@@ -116,9 +116,9 @@ async function probeBrowserNativeWorker(currentWorker: Worker): Promise<void> {
         : [])
       finish(new Error(`browser-native startup blocked: ${codes.length === 0 ? 'PROBE_PROTOCOL_INVALID' : codes.join(',')}`))
     }
-    const onMessageError = (): void => finish(new Error('browser-native startup blocked: PROBE_PROTOCOL_INVALID'))
-    const onWorkerError = (event: ErrorEvent): void => finish(new Error(`browser-native startup blocked: WORKER_ERROR (${event.message})`))
-    const timeout = window.setTimeout(() => finish(new Error('browser-native startup blocked: PROBE_TIMEOUT')), 10_000)
+    const onMessageError = (): void => { finish(new Error('browser-native startup blocked: PROBE_PROTOCOL_INVALID')) }
+    const onWorkerError = (event: ErrorEvent): void => { finish(new Error(`browser-native startup blocked: WORKER_ERROR (${event.message})`)) }
+    const timeout = window.setTimeout(() => { finish(new Error('browser-native startup blocked: PROBE_TIMEOUT')) }, 10_000)
     channel.port1.addEventListener('message', onMessage)
     channel.port1.addEventListener('messageerror', onMessageError)
     currentWorker.addEventListener('error', onWorkerError, { once: true })
@@ -190,6 +190,7 @@ try {
   const workspaceStatus = window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state
   const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
     || workspaceStatus === 'local-newer-version' || workspaceStatus === 'recovery-conflict'
-    || workspaceStatus === 'recovery-unavailable')
+    || workspaceStatus === 'recovery-unavailable' || workspaceStatus === 'identity-missing'
+    || workspaceStatus === 'identity-mismatch')
   if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
 }

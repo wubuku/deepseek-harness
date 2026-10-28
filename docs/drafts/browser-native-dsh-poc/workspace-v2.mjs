@@ -512,6 +512,15 @@ export class WorkspaceStore {
     }
   }
 
+  lookupIdentity(request) {
+    const principalId = parseCookies(request.headers.cookie).get(COOKIE_NAME)
+    const workspaceId = principalId === undefined ? undefined : this.identities.get(principalId)
+    if (workspaceId === undefined) {
+      throw new WorkspaceError('UNAUTHENTICATED', 'existing workspace identity is missing or expired', 401)
+    }
+    return { workspaceId }
+  }
+
   requireWorkspace(principalId, workspaceId) {
     assertId(workspaceId, 'workspaceId')
     if (this.identities.get(principalId) !== workspaceId) {

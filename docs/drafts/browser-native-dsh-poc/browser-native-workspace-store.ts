@@ -21,6 +21,8 @@ export interface DurableWorkspaceSnapshot {
 
 /** Local store used by the Workspace mirror to survive Worker reconstruction. */
 export interface DurableWorkspaceStore {
+  /** List Workspace IDs that still have IndexedDB metadata or OPFS bytes. */
+  listWorkspaceIds(): Promise<readonly string[]>
   /** Read and verify one workspace snapshot. */
   load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined>
   /** Persist one snapshot and all referenced content blobs. */
@@ -143,6 +145,15 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
   private readonly snapshots = new Map<string, DurableWorkspaceSnapshot>()
   private readonly blobs = new Map<string, Uint8Array>()
+
+  async listWorkspaceIds(): Promise<readonly string[]> {
+    const workspaceIds = new Set(this.snapshots.keys())
+    for (const key of this.blobs.keys()) {
+      const separator = key.indexOf(':')
+      if (separator > 0) workspaceIds.add(key.slice(0, separator))
+    }
+    return [...workspaceIds].sort()
+  }
 
   async load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
     const snapshot = this.snapshots.get(workspaceId)
@@ -377,6 +388,46 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     readonly abortNextMetadataTransaction?: () => boolean
     readonly quotaNextOpfsWrite?: () => boolean
   }) {}
+
+  async listWorkspaceIds(): Promise<readonly string[]> {
+    const database = await openDatabase()
+    const workspaceIds = new Set<string>()
+    try {
+      const transaction = database.transaction(METADATA_STORE, 'readonly')
+      const keys = await requestResult(transaction.objectStore(METADATA_STORE).getAllKeys())
+      await transactionDone(transaction)
+      for (const key of keys) {
+        if (typeof key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
+          throw new DurableWorkspaceStoreError('LOCAL_METADATA_INVALID', 'browser-native workspace: local Workspace metadata has an invalid id')
+        }
+        workspaceIds.add(key)
+      }
+    } finally {
+      database.close()
+    }
+
+    const storage = globalThis.navigator?.storage
+    if (storage === undefined || typeof storage.getDirectory !== 'function') {
+      throw new DurableWorkspaceStoreError('LOCAL_STORE_UNAVAILABLE', 'browser-native workspace: OPFS is unavailable')
+    }
+    const root = await storage.getDirectory()
+    for await (const [name, entry] of root.entries()) {
+      if (entry.kind !== 'directory' || !name.startsWith(BLOB_DIRECTORY_PREFIX)) continue
+      let containsBytes = false
+      for await (const child of (entry as FileSystemDirectoryHandle).values()) {
+        if (child.kind !== 'file' && child.kind !== 'directory') continue
+        containsBytes = true
+        break
+      }
+      if (!containsBytes) continue
+      const workspaceId = name.slice(BLOB_DIRECTORY_PREFIX.length)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(workspaceId)) {
+        throw new DurableWorkspaceStoreError('LOCAL_METADATA_INVALID', 'browser-native workspace: local OPFS data has an invalid Workspace id')
+      }
+      workspaceIds.add(workspaceId)
+    }
+    return [...workspaceIds].sort()
+  }
 
   private async resources(workspaceId: string): Promise<{ database: IDBDatabase; blobDirectory: FileSystemDirectoryHandle }> {
     this.database ??= await openDatabase()

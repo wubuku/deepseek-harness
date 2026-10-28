@@ -50,6 +50,7 @@ if (!Number.isInteger(turnTimeout) || turnTimeout < 1_000) throw new Error('DSH_
 if (!Number.isInteger(refreshCycles) || refreshCycles < 1 || refreshCycles > 5) {
   throw new Error('DSH_POC_REFRESH_CYCLES must be an integer from 1 through 5')
 }
+const secrets = await readSecrets(envFile)
 
 function requestBody(request) {
   const body = request.postData()
@@ -63,6 +64,12 @@ async function readSecrets(file) {
   return text.split(/\r?\n/)
     .map(line => line.match(/^(OPENAI_NEXT_(?:GPT|GROK)_API_KEY)=(.*)$/)?.[2])
     .filter(value => value !== undefined && value.length > 0)
+}
+
+function diagnosticJson(value, secrets) {
+  let output = JSON.stringify(value)
+  for (const secret of secrets) output = output.replaceAll(secret, '[redacted]')
+  return output.replace(/([?&](?:access_token|token|api_key|apikey|authorization)=)[^&#\s\"]+/gi, '$1[redacted]')
 }
 
 let image
@@ -299,7 +306,7 @@ try {
     `unexpected Worker tunnel boot errors: ${JSON.stringify(consoleErrors)}`)
   const wire = JSON.stringify(requests)
   const browserWire = JSON.stringify(networkRequests)
-  for (const secret of await readSecrets(envFile)) {
+  for (const secret of secrets) {
     assert.equal(wire.includes(secret), false)
     assert.equal(browserWire.includes(secret), false, 'provider secret appeared in browser network traffic')
   }
@@ -327,7 +334,7 @@ try {
     .filter(event => event.type === 'assistant/message' && event.data.turn === 1)
     .flatMap(event => event.data.stream.filter(record => record.type === 'text-chunks').map(record => record.time0))
     .sort((left, right) => left - right)[0]
-  process.stdout.write(`${JSON.stringify({
+  process.stdout.write(`${diagnosticJson({
     mode,
     browser: browserName,
     roster,
@@ -387,16 +394,16 @@ try {
     consoleErrors,
     httpErrors,
     llmStatuses,
-  })}\n`)
+  }, secrets)}\n`)
 } catch (error) {
   const sessionId = requests.find(request => request.path.endsWith('/session/create'))?.body.sessionId
   const latest = sessionId ? await sessionRequest(origin, 'read', { sessionId, offset: 0 }) : undefined
-  process.stderr.write(`${JSON.stringify({ failure: error.message, llmStatuses, pageErrors, workerErrors, consoleErrors, httpErrors,
+  process.stderr.write(`${diagnosticJson({ failure: error.message, llmStatuses, pageErrors, workerErrors, consoleErrors, httpErrors,
     events: latest?.events?.filter(event => ['tool/call', 'tool/result', 'assistant/attempt', 'step/end', 'turn/end'].includes(event.type)),
     assistantText: latest?.events ? assistantText(latest) : undefined,
     pageLifecycle: page ? await page.evaluate(() => JSON.parse(sessionStorage.getItem('dsh-browser-native-lifecycle-trace') ?? '[]')) : [],
     pageText: page ? (await page.locator('body').innerText()).slice(-3000) : undefined,
-  })}\n`)
+  }, secrets)}\n`)
   throw error
 } finally {
   await page?.close()

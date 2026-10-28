@@ -1123,6 +1123,37 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     && typeof message.content === 'string'
     && !message.content.startsWith('Current runtime context.')
     && !message.content.startsWith('Time sampled while preparing turn'))?.content ?? ''
+  const workerPlacementMarker = latestUserText.match(/BROWSER_NATIVE_WORKER_PLACEMENT_[A-Z0-9_]+/)?.[0]
+  if (workerPlacementMarker !== undefined && hasTool(tools, 'write') && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(workerPlacementMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const suffix = workerPlacementMarker.slice('BROWSER_NATIVE_WORKER_PLACEMENT_'.length).toLowerCase()
+    const path = `/dsh/home/workspace/worker-placement-${suffix}.txt`
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-worker-placement-${suffix}-write`,
+        name: 'write',
+        arguments: { file_path: path, content: `placement=${suffix}\n` },
+      })
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-worker-placement-${suffix}-read`,
+        name: 'read',
+        arguments: { file_path: path },
+      })
+      return
+    }
+    const text = `${workerPlacementMarker}_DONE`
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: 0, blockType: 'text' } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: 0, text } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
+    response.end()
+    return
+  }
   const timedQuestionCases = [
     { marker: 'BROWSER_NATIVE_TIMED_HITL_IN_TIME', callId: 'browser-native-timed-hitl-in-time' },
     { marker: 'BROWSER_NATIVE_TIMED_HITL_LATE_REPLY', callId: 'browser-native-timed-hitl-late-reply' },
@@ -2344,6 +2375,10 @@ export async function createBrowserNativeV2Server(options) {
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/identity') {
+        if (request.headers['x-browser-native-identity-mode'] === 'existing') {
+          sendJson(response, 200, workspaces.lookupIdentity(request))
+          return
+        }
         const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
         sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookies })
         return

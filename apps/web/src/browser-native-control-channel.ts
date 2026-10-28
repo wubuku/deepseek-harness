@@ -27,6 +27,7 @@ export interface BrowserNativeWorkspaceStatus {
   readonly type: 'workspace'
   readonly state: 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
     | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict' | 'recovery-unavailable'
+    | 'identity-missing' | 'identity-mismatch'
   readonly workspaceId?: string
   readonly revision?: number
   readonly dirtyCount: number
@@ -80,8 +81,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
+  return Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null
 }
 
 function hasExactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
@@ -129,7 +129,7 @@ function isNotice(value: unknown): value is BrowserNativeControlNotice {
   if (value.type === 'workspace') {
     return hasExactKeys(value, ['type', 'state', 'dirtyCount'], ['workspaceId', 'revision', 'message', 'retryAfterMs'])
       && typeof value.state === 'string'
-      && ['loading', 'synced', 'dirty', 'syncing', 'error', 'conflict', 'local-corrupt', 'local-newer-version', 'lease-conflict', 'recovery-conflict', 'recovery-unavailable'].includes(value.state)
+      && ['loading', 'synced', 'dirty', 'syncing', 'error', 'conflict', 'local-corrupt', 'local-newer-version', 'lease-conflict', 'recovery-conflict', 'recovery-unavailable', 'identity-missing', 'identity-mismatch'].includes(value.state)
       && typeof value.dirtyCount === 'number' && Number.isSafeInteger(value.dirtyCount) && value.dirtyCount >= 0
       && hasBoundedOptionalString(value, 'workspaceId', MAX_IDENTIFIER_BYTES)
       && hasBoundedOptionalInteger(value, 'revision', 0)
@@ -187,16 +187,14 @@ function browserNativeControlFrameError(value: unknown): string | undefined {
   const knownNotice = ['owner', 'released', 'unavailable', 'workspace', 'workspace-lease', 'workspace-lease-released', 'pagehide-ack']
   if (!knownNotice.includes(value.notice.type)) return 'CONTROL_NOTICE_UNSUPPORTED'
   if (!isNotice(value.notice)) return hasOversizedNoticeString(value.notice) ? 'CONTROL_FIELD_TOO_LARGE' : 'CONTROL_FRAME_INVALID'
-  let serialized: string | undefined
   try {
-    serialized = JSON.stringify(value)
+    const serialized = JSON.stringify(value)
+    return new TextEncoder().encode(serialized).byteLength <= BROWSER_NATIVE_CONTROL_MAX_FRAME_BYTES
+      ? undefined
+      : 'CONTROL_FRAME_TOO_LARGE'
   } catch {
     return 'CONTROL_FRAME_INVALID'
   }
-  if (serialized === undefined) return 'CONTROL_FRAME_INVALID'
-  return new TextEncoder().encode(serialized).byteLength <= BROWSER_NATIVE_CONTROL_MAX_FRAME_BYTES
-    ? undefined
-    : 'CONTROL_FRAME_TOO_LARGE'
 }
 
 function hasOversizedNoticeString(value: Record<string, unknown>): boolean {

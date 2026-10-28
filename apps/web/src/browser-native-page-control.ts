@@ -32,6 +32,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value)
+}
+
 interface RecoveryBlob {
   readonly name: string
   readonly byteLength: number
@@ -47,7 +51,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function readLocalRecoveryData(workspaceId: string): Promise<Record<string, unknown>> {
+async function readLocalRecoveryData(workspaceId: string, maxBytes = 64 * 1024 * 1024): Promise<Record<string, unknown>> {
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open('dsh-browser-native-workspace-v1')
     request.onsuccess = () => { resolve(request.result) }
@@ -82,7 +86,6 @@ async function readLocalRecoveryData(workspaceId: string): Promise<Record<string
   const missingBlobs: string[] = []
   const unreadableBlobs: { readonly name: string; readonly error: string }[] = []
   let bytesRead = 0
-  const maxBytes = 64 * 1024 * 1024
   const root = await navigator.storage.getDirectory()
   let directory: FileSystemDirectoryHandle | undefined
   try {
@@ -143,14 +146,72 @@ async function readLocalRecoveryData(workspaceId: string): Promise<Record<string
   }
 }
 
-async function downloadLocalRecoveryBundle(workspaceId: string): Promise<void> {
-  const bundle = await readLocalRecoveryData(workspaceId)
+async function listLocalRecoveryWorkspaceIds(): Promise<string[]> {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('dsh-browser-native-workspace-v1')
+    request.onsuccess = () => { resolve(request.result) }
+    request.onerror = () => { reject(request.error ?? new Error('IndexedDB open failed')) }
+    request.onblocked = () => { reject(new Error('IndexedDB open was blocked')) }
+  })
+  const workspaceIds = new Set<string>()
+  try {
+    if (database.objectStoreNames.contains('workspace')) {
+      const transaction = database.transaction('workspace', 'readonly')
+      const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+        const request = transaction.objectStore('workspace').getAllKeys()
+        request.onsuccess = () => { resolve(request.result) }
+        request.onerror = () => { reject(request.error ?? new Error('Workspace metadata read failed')) }
+      })
+      for (const key of keys) {
+        if (typeof key === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
+          workspaceIds.add(key)
+        }
+      }
+    }
+  } finally {
+    database.close()
+  }
+  const root = await navigator.storage.getDirectory()
+  for await (const [name, entry] of root.entries()) {
+    if (entry.kind !== 'directory' || !name.startsWith('dsh-workspace-blobs-')) continue
+    const workspaceId = name.slice('dsh-workspace-blobs-'.length)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(workspaceId)) continue
+    const firstChild = await entry.values().next()
+    if (!firstChild.done) workspaceIds.add(workspaceId)
+  }
+  return [...workspaceIds].sort()
+}
+
+async function downloadLocalRecoveryBundle(workspaceId?: string): Promise<void> {
+  let bundle: Record<string, unknown>
+  if (workspaceId !== undefined) {
+    bundle = await readLocalRecoveryData(workspaceId)
+  } else {
+    const workspaceIds = await listLocalRecoveryWorkspaceIds()
+    if (workspaceIds.length === 0) throw new Error('No local Workspace data is available for export')
+    let remainingBytes = 64 * 1024 * 1024
+    const workspaces: Record<string, unknown>[] = []
+    for (const id of workspaceIds) {
+      const recovery = await readLocalRecoveryData(id, remainingBytes)
+      const blobs: unknown[] = isUnknownArray(recovery.blobs) ? recovery.blobs : []
+      const bytesRead = blobs.reduce<number>((total, blob) => isRecord(blob) && typeof blob.byteLength === 'number'
+        ? total + blob.byteLength
+        : total, 0)
+      remainingBytes -= bytesRead
+      workspaces.push(recovery)
+    }
+    bundle = {
+      format: 'dsh-browser-native-workspace-recovery-set-v1',
+      exportedAt: new Date().toISOString(),
+      workspaces,
+    }
+  }
   const json = JSON.stringify(bundle, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)
   const objectUrl = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
   try {
     const link = document.createElement('a')
     link.href = objectUrl
-    link.download = `dsh-workspace-recovery-${workspaceId}.json`
+    link.download = workspaceId === undefined ? 'dsh-workspaces-recovery.json' : `dsh-workspace-recovery-${workspaceId}.json`
     link.click()
   } finally {
     window.setTimeout(() => { URL.revokeObjectURL(objectUrl) }, 30_000)
@@ -214,9 +275,11 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     workspaceStatus.dataset.state = notice.state
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
-      || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable' ? '#f87171'
+      || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable'
+      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
-    if (notice.state === 'local-corrupt' || notice.state === 'local-newer-version') {
+    if (notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
+      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch') {
       const warning = document.createElement('span')
       warning.textContent = browserNativeWorkspaceRecoveryWarningCopy(document.documentElement.lang)
       warning.style.display = 'block'
@@ -238,7 +301,9 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
         font: '600 13px/1.3 system-ui, sans-serif',
       })
       button.addEventListener('click', () => {
-        void downloadLocalRecoveryBundle(notice.workspaceId ?? '').then(() => {
+        void downloadLocalRecoveryBundle(
+          notice.state === 'identity-missing' || notice.state === 'identity-mismatch' ? undefined : notice.workspaceId,
+        ).then(() => {
           showRecoveryResult(true)
         }).catch(() => {
           showRecoveryResult(false)
@@ -304,6 +369,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     clearRetryTimer()
     recoveryLocks.releaseAll()
   }
+  const isPageLeaving = (): boolean => pageLeaving
   let recoveryOwners: ReturnType<typeof readBrowserNativeRecoveryState>['owners'] = []
   let recoveryWorkspaces: (ReturnType<typeof readBrowserNativeRecoveryState>['workspaces'][number] & { readonly resumeId: string })[] = []
   try {
@@ -352,7 +418,6 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
   }
   const persistRecoveryRecord = (key: string, value: string): boolean => {
     try {
-      if (recoveryStorage === undefined) throw new Error('sessionStorage is unavailable')
       recoveryStorage.setItem(key, value)
       return true
     } catch {
@@ -362,7 +427,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
   }
   const removeRecoveryRecord = (key: string): void => {
     try {
-      recoveryStorage?.removeItem(key)
+      recoveryStorage.removeItem(key)
     } catch {
       publishLocalStatus('error', browserNativeRecoveryErrorCopy(document.documentElement.lang))
     }
@@ -379,12 +444,12 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       && typeof notice.writerToken === 'string' && Number.isSafeInteger(notice.fencingToken)) {
       const resource = { kind: 'workspace', id: notice.workspaceId } as const
       if (recoveryLocks.supported && !await recoveryLocks.acquireResource(resource)) {
-        if (pageLeaving) return
+        if (isPageLeaving()) return
         publishLocalStatus('recovery-conflict')
         stopWorker()
         return
       }
-      if (pageLeaving) {
+      if (isPageLeaving()) {
         recoveryLocks.releaseResource(resource)
         return
       }
@@ -409,12 +474,12 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     if (notice.type === 'owner') {
       const resource = { kind: 'session', id: notice.sessionId } as const
       if (recoveryLocks.supported && !await recoveryLocks.acquireResource(resource)) {
-        if (pageLeaving) return
+        if (isPageLeaving()) return
         publishLocalStatus('recovery-conflict')
         stopWorker()
         return
       }
-      if (pageLeaving) {
+      if (isPageLeaving()) {
         recoveryLocks.releaseResource(resource)
         return
       }
@@ -489,13 +554,15 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       void Promise.race([
         settled,
         new Promise<BrowserNativePagehideAck>((resolve) => {
-          window.setTimeout(() => resolve({
-            type: 'pagehide-ack',
-            requestId,
-            localPersisted: false,
-            writerReleased: false,
-            error: 'pagehide local persistence barrier timed out',
-          }), 1_500)
+          window.setTimeout(() => {
+            resolve({
+              type: 'pagehide-ack',
+              requestId,
+              localPersisted: false,
+              writerReleased: false,
+              error: 'pagehide local persistence barrier timed out',
+            })
+          }, 1_500)
         }),
       ]).then(() => {
         pagehideWaiters.delete(requestId)

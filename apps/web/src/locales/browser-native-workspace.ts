@@ -1,6 +1,6 @@
 type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict'
-  | 'recovery-unavailable'
+  | 'recovery-unavailable' | 'identity-missing' | 'identity-mismatch'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -15,6 +15,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'lease-conflict': 'Another tab currently owns Workspace write access',
     'recovery-conflict': 'Another tab is already using these DSH recovery credentials',
     'recovery-unavailable': 'Safe DSH writer recovery is unavailable in this browser context',
+    'identity-missing': 'Local Workspace data is retained, but its browser identity is unavailable',
+    'identity-mismatch': 'Local Workspace data does not match the current browser identity',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -28,6 +30,8 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'lease-conflict': '另一个标签页正在写入工作区',
     'recovery-conflict': '另一个标签页正在使用这组 DSH 恢复凭据',
     'recovery-unavailable': '当前浏览器上下文无法安全恢复 DSH 写入权',
+    'identity-missing': '本地工作区数据仍在，但无法确认对应的浏览器身份',
+    'identity-mismatch': '本地工作区数据与当前浏览器身份不匹配',
   },
 }
 
@@ -82,8 +86,8 @@ export function browserNativeRecoveryErrorCopy(language: string): string {
  */
 export function browserNativeWorkspaceRecoveryWarningCopy(language: string): string {
   return language.startsWith('zh')
-    ? '恢复包可能包含敏感文件；请先下载并妥善保存。此操作不会上传或清除数据。'
-    : 'The bundle may contain sensitive files. Store it securely. This does not upload or clear data.'
+    ? '本地恢复包可能包含敏感文件，大小上限为 64 MiB。请妥善保存；此操作不会上传或清除数据。'
+    : 'Local recovery bundles may contain sensitive files and are limited to 64 MiB. Store them securely; this does not upload or clear data.'
 }
 
 /** Format the user-initiated local recovery bundle action.
