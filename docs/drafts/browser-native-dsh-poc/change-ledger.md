@@ -280,6 +280,24 @@ deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前�
 status: implemented
 ```
 
+### BN-P2-049：独立业务 API 幂等与未知副作用恢复
+
+```text
+changeId: BN-P2-049
+upstreamBaseline: research branch at batch start; 2026-10-29; 工作区起始仅含本批计划文档
+file: docs/drafts/browser-native-dsh-poc/external-business-service.mjs; docs/drafts/browser-native-dsh-poc/cross-store-operation-ledger.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/external-business-idempotency.test.mjs; docs/drafts/browser-native-dsh-poc/tests/external-business-idempotency.e2e.mjs; docs/drafts/browser-native-dsh-poc/external-business-idempotency-validation-plan.md; docs/drafts/browser-native-dsh-poc/external-business-idempotency-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有 cross-store ledger 在 DSH backend 内模拟 business effect，不能证明独立 SaaS API 在响应丢失、服务重启或多个 backend 重试时不会重复副作用。
+existingExtensionPointsChecked: 复用 CrossStoreOperationLedger 的 operation identity/receipt/reconciliation、Workspace/Session API、现有 Worker cross-store probe、同源 backend testHooks 和 runtime validation image；未修改正式 Agent Loop、Session format、正式 package、app 或根级依赖。
+behaviorChange: 配置 `businessServiceOrigin` 后，backend 将 intent/effect/query 适配到独立 PoC HTTP 服务；外部服务以 `(principalId, operationId, payloadDigest)` 持久化幂等记录，DSH backend 只保存外部 receipt。业务响应或 DSH ledger receipt 丢失时，查询到 committed 才补 receipt；查询不可用保持 unknown。不同 payload/principal 重用 operationId 返回冲突。
+directoryOutChangeReason: `docs/drafts/README.md` 和本目录兼容矩阵位于 PoC 目录外或共享文档位置，分别用于研究目录登记和当前 checkout 能力边界；未修改其他 PoC。
+consumersUpdated: PoC external business service、backend adapter、cross-store ledger、Node 合同测试、真实 Chrome E2E、PoC README、兼容矩阵、进度文档和 drafts index。
+tests: Node external business contract tests 4/4 通过；真实 Chrome E2E 通过响应丢失、业务服务重启、DSH ledger gap、查询不可用保持 unknown、payload conflict，三次业务 effect count 均为 1 且无 page error。`node --check` 通过。真实 LLM smoke、backend 全量回归、preview build、docs gates 和 push checks 在本记录写入时尚未执行，必须按进度文档更新后再提交。
+limitations: 独立服务仍使用 PoC JSON durable store 和进程内锁；不代表生产数据库、跨主机 HA、业务数据与幂等记录同事务提交、receipt TTL/GC 或 exactly-once。无业务服务查询能力时不得自动重试未知业务副作用。Chrome Worker 仍受页面生命周期约束。
+syncReplaySteps: 上游同步后检查 backend external service adapter、CrossStoreLedger.businessReceipt、payload digest 校验和 query unknown 保守路径；运行 Node 合同测试、Chrome E2E、backend 回归、preview build、真实 LLM 普通 smoke 和文档门禁。若正式业务 API 已提供自己的幂等键，保持 DSH `operationId` 与业务幂等键一一绑定，不能改用每次 HTTP 请求的 `requestId`。
+deleteCondition: 正式 SaaS business adapter 提供等价的 durable idempotency/query/reconciliation 语义并有维护中的多实例故障测试，或 Browser-Native DSH PoC 移除该外部业务验证。
+status: implemented
+```
+
 ### BN-P2-053：跨存储 checkpoint、业务 receipt 与 overlay 可复现构建
 
 ```text

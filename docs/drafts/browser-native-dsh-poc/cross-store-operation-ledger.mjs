@@ -229,6 +229,34 @@ export class CrossStoreOperationLedger {
     })
   }
 
+  async businessReceipt(principalId, operationId, receipt, identity) {
+    const value = assertReceipt(receipt)
+    return await this.exclusive(operationId, async () => {
+      const current = this.get(principalId, operationId)
+      if (current.intent.payloadDigest !== value.payloadDigest) {
+        throw new CrossStoreLedgerError('OPERATION_ID_REUSED', 'business receipt payload differs from the operation intent', 409)
+      }
+      if (identity !== undefined) {
+        let candidate
+        try { candidate = createCrossStoreIdentity(identity) } catch (error) {
+          throw new CrossStoreLedgerError('RECEIPT_INVALID', error instanceof Error ? error.message : String(error))
+        }
+        if (JSON.stringify(candidate) !== JSON.stringify(current.identity)) throw new CrossStoreLedgerError('RECEIPT_IDENTITY_MISMATCH', 'business identity does not match the operation intent', 409)
+      }
+      const next = { status: 'committed', receipt: value, digest: digestCrossStoreValue({ status: 'committed', receipt: value }) }
+      const previous = current.receipts.business
+      if (previous !== undefined) {
+        if (previous.digest !== next.digest && previous.status === 'committed') throw new CrossStoreLedgerError('RECEIPT_CONFLICT', 'committed receipt cannot be replaced', 409)
+        if (previous.digest === next.digest) return { ...publicRecord(current), businessReceipt: clone(previous.receipt), replayed: true }
+      }
+      current.businessEffectCount = Number.isSafeInteger(value.effectCount) ? value.effectCount : 1
+      current.receipts.business = next
+      current.updatedAt = this.now()
+      await this.persist()
+      return { ...publicRecord(current), businessReceipt: value, replayed: false }
+    })
+  }
+
   query(principalId, operationId) {
     return publicRecord(this.get(principalId, operationId))
   }

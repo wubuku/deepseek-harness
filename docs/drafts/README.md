@@ -98,6 +98,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 39. [Browser-Native 缓存发布恢复规划](browser-native-dsh-poc/cache-publication-recovery-validation-plan.md)及[实施进度](browser-native-dsh-poc/cache-publication-recovery-validation-progress.md)：验证持久化下载意图、跨 Worker 本地互斥、pending/retry 保护和强制终止后的恢复；不将可重建 cache 与唯一的本地副本混同。
 40. [Browser-Native 本地写权与代际规划](browser-native-dsh-poc/local-writer-fencing-validation-plan.md)及[实施进度](browser-native-dsh-poc/local-writer-fencing-validation-progress.md)：验证 snapshot ABA、失效 Worker、保留式 IndexedDB 升级与完整 Host 接管，区分本地 epoch、Web Lock 和远端 lease。
 41. [Browser-Native 只读 range backing 规划](browser-native-dsh-poc/observer-range-backing-validation-plan.md)及[实施进度](browser-native-dsh-poc/observer-range-backing-validation-progress.md)：验证多观察者私有 OPFS、完整 hash、驻留预算、alias、强杀回收和完整 Host 的 read/grep/stale，不触碰 writer metadata。
+42. [Browser-Native 独立业务 API 幂等与未知副作用验证](browser-native-dsh-poc/external-business-idempotency-validation-plan.md)及[实施进度](browser-native-dsh-poc/external-business-idempotency-validation-progress.md)：独立 HTTP 业务服务持有 durable idempotency receipt，Chrome Worker/OPFS/IndexedDB 验证响应丢失、服务/backend 重启、查询不可用、并发重试和身份/payload 冲突；不把 PoC JSON store 外推为生产 exactly-once 或跨存储原子事务。
 
 ### 需要实现或审查代码时
 

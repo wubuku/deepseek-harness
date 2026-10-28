@@ -51,6 +51,10 @@ function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 20)
 }
 
+function fullDigest(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
 function assertSessionId(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._-]+$/.test(value) || value.length === 0 || value.length > 200) {
     throw new BackendError('INVALID_REQUEST', 'session id is invalid')
@@ -478,6 +482,48 @@ async function readRawBody(request, maximumBytes) {
     chunks.push(chunk)
   }
   return Buffer.concat(chunks)
+}
+
+async function requestExternalBusiness(origin, path, body) {
+  let response
+  try {
+    response = await fetch(`${origin}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new BackendError('BUSINESS_SERVICE_UNAVAILABLE', 'external business service could not be reached', 503)
+  }
+  let value
+  try { value = await response.json() } catch {
+    throw new BackendError('BUSINESS_SERVICE_UNAVAILABLE', 'external business service returned invalid JSON', 503)
+  }
+  if (!response.ok) {
+    const error = value?.error
+    throw new BackendError(typeof error?.code === 'string' ? error.code : 'BUSINESS_SERVICE_FAILED',
+      typeof error?.message === 'string' ? error.message : 'external business service rejected the request', response.status)
+  }
+  return value
+}
+
+async function queryExternalBusiness(origin, operationId, principalId) {
+  let response
+  try {
+    response = await fetch(`${origin}/v1/effect/${operationId}?principalId=${encodeURIComponent(principalId)}`)
+  } catch {
+    throw new BackendError('BUSINESS_QUERY_UNAVAILABLE', 'external business status could not be queried', 503)
+  }
+  let value
+  try { value = await response.json() } catch {
+    throw new BackendError('BUSINESS_QUERY_UNAVAILABLE', 'external business status was not valid JSON', 503)
+  }
+  if (!response.ok) {
+    const error = value?.error
+    throw new BackendError(typeof error?.code === 'string' ? error.code : 'BUSINESS_QUERY_UNAVAILABLE',
+      typeof error?.message === 'string' ? error.message : 'external business status query failed', response.status)
+  }
+  return value
 }
 
 function sendError(response, error) {
@@ -2732,6 +2778,9 @@ export async function createBrowserNativeV2Server(options) {
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
   await crossStoreLedger.load()
+  const businessServiceOrigin = options.businessServiceOrigin === undefined
+    ? undefined
+    : new URL(options.businessServiceOrigin).origin
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
   const workspaceDownloads = new Map()
@@ -2939,7 +2988,15 @@ export async function createBrowserNativeV2Server(options) {
         assertProtocol(body)
         const principalId = workspaces.principalFromRequest(request)
         workspaces.requireWorkspace(principalId, body.workspaceId)
-        sendJson(response, 200, await crossStoreLedger.intent(principalId, { ...body, principalId: body.principalId ?? principalId }))
+        const result = await crossStoreLedger.intent(principalId, { ...body, principalId: body.principalId ?? principalId })
+        if (businessServiceOrigin !== undefined) {
+          await requestExternalBusiness(businessServiceOrigin, '/v1/intent', {
+            operationId: body.operationId,
+            principalId,
+            payloadDigest: body.payloadDigest,
+          })
+        }
+        sendJson(response, 200, result)
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/cross-store-operation/receipt') {
@@ -2955,9 +3012,28 @@ export async function createBrowserNativeV2Server(options) {
         const body = await readBody(request)
         assertProtocol(body)
         const principalId = workspaces.principalFromRequest(request)
-        const result = await crossStoreLedger.businessEffect(principalId, body.operationId, body.payload, body.identity)
-        if (options.testHooks?.failAfterCrossStoreBusinessEffect?.(body, result) === true) {
-          throw new BackendError('E2E_INJECTED_BUSINESS_RESPONSE_FAILURE', 'E2E injected response failure after business effect', 503)
+        let result
+        if (businessServiceOrigin === undefined) {
+          result = await crossStoreLedger.businessEffect(principalId, body.operationId, body.payload, body.identity)
+          if (options.testHooks?.failAfterCrossStoreBusinessEffect?.(body, result) === true) {
+            throw new BackendError('E2E_INJECTED_BUSINESS_RESPONSE_FAILURE', 'E2E injected response failure after business effect', 503)
+          }
+        } else {
+          const current = crossStoreLedger.query(principalId, body.operationId)
+          const payloadDigest = fullDigest(body.payload)
+          if (current.intent.payloadDigest !== payloadDigest) {
+            throw new CrossStoreLedgerError('OPERATION_ID_REUSED', 'business payload differs from the operation intent', 409)
+          }
+          const external = await requestExternalBusiness(businessServiceOrigin, '/v1/effect', {
+            operationId: body.operationId,
+            principalId,
+            payloadDigest,
+          })
+          if (options.testHooks?.failAfterExternalBusinessEffectBeforeLedger?.(body, external) === true) {
+            throw new BackendError('E2E_INJECTED_EXTERNAL_BUSINESS_LEDGER_FAILURE', 'E2E injected failure after external business effect', 503)
+          }
+          result = await crossStoreLedger.businessReceipt(principalId, body.operationId, external.receipt, body.identity)
+          result = { ...result, externalBusinessReplayed: external.replayed === true }
         }
         if (options.testHooks?.dropCrossStoreBusinessResponse?.(body, result) === true) {
           response.destroy()
@@ -2972,7 +3048,18 @@ export async function createBrowserNativeV2Server(options) {
         }
         const principalId = workspaces.principalFromRequest(request)
         const operationId = url.pathname.split('/').at(-1)
-        const result = crossStoreLedger.query(principalId, operationId)
+        let result = crossStoreLedger.query(principalId, operationId)
+        if (businessServiceOrigin !== undefined && result.receipts.business?.status !== 'committed') {
+          try {
+            const external = await queryExternalBusiness(businessServiceOrigin, operationId, principalId)
+            if (external.status === 'committed' && external.receipt !== undefined) {
+              result = await crossStoreLedger.businessReceipt(principalId, operationId, external.receipt)
+            }
+          } catch (error) {
+            if (!(error instanceof BackendError)
+              || (error.code !== 'BUSINESS_QUERY_UNAVAILABLE' && error.code !== 'BUSINESS_SERVICE_UNAVAILABLE')) throw error
+          }
+        }
         if (url.searchParams.get('workspaceId') !== result.identity.workspaceId
           || url.searchParams.get('sessionId') !== result.identity.sessionId) {
           throw new CrossStoreLedgerError('OPERATION_IDENTITY_MISMATCH', 'operation query identity does not match the intent', 409)
