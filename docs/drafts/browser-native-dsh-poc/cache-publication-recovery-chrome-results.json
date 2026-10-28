@@ -1,0 +1,333 @@
+{
+  "host": {
+    "result": "passed",
+    "browser": "chrome",
+    "browserVersion": "156.0.8078.48",
+    "modelRequests": 0,
+    "expected": {
+      "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4",
+      "bytes": 3145901
+    },
+    "elapsedMs": 47570.773833,
+    "artifactDir": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu",
+    "cleanupErrors": [],
+    "scenarios": [
+      {
+        "name": "intent-durable",
+        "result": "passed",
+        "stage": "intent-durable",
+        "beforeBlob": null,
+        "afterBlob": {
+          "bytes": 3145901,
+          "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4"
+        },
+        "downloadRequests": 1,
+        "finalIntent": null,
+        "screenshots": [
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/intent-durable-interrupted.png",
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/intent-durable-final.png"
+        ],
+        "pageErrors": []
+      },
+      {
+        "name": "entry-created",
+        "result": "passed",
+        "stage": "entry-created",
+        "beforeBlob": {
+          "bytes": 0,
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "afterBlob": {
+          "bytes": 3145901,
+          "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4"
+        },
+        "downloadRequests": 1,
+        "finalIntent": null,
+        "screenshots": [
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/entry-created-interrupted.png",
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/entry-created-final.png"
+        ],
+        "pageErrors": []
+      },
+      {
+        "name": "first-chunk-written",
+        "result": "passed",
+        "stage": "first-chunk-written",
+        "beforeBlob": {
+          "bytes": 0,
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "afterBlob": {
+          "bytes": 3145901,
+          "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4"
+        },
+        "downloadRequests": 1,
+        "finalIntent": null,
+        "screenshots": [
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/first-chunk-written-interrupted.png",
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/first-chunk-written-final.png"
+        ],
+        "pageErrors": []
+      },
+      {
+        "name": "published",
+        "result": "passed",
+        "stage": "published",
+        "beforeBlob": {
+          "bytes": 3145901,
+          "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4"
+        },
+        "afterBlob": {
+          "bytes": 3145901,
+          "hash": "f325c16f90461840abacfec9774cc6be861fde429e646b0e62299c7c5be187f4"
+        },
+        "downloadRequests": 0,
+        "finalIntent": null,
+        "screenshots": [
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/published-interrupted.png",
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/published-final.png"
+        ],
+        "pageErrors": []
+      },
+      {
+        "name": "missing-intent",
+        "result": "passed",
+        "stage": "entry-created",
+        "beforeBlob": {
+          "bytes": 0,
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "afterBlob": {
+          "bytes": 0,
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "finalIntent": null,
+        "negativeState": "local-corrupt",
+        "screenshots": [
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/missing-intent-interrupted.png",
+          "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-cache-publication-validation.HMrPamY2Zk/dsh-cache-recovery-iRYyHu/missing-intent-final.png"
+        ],
+        "pageErrors": []
+      }
+    ]
+  },
+  "concurrency": {
+    "result": "passed",
+    "browserVersion": "156.0.8078.48",
+    "artifactDirectory": "/var/folders/17/x4gfsdmj74355x331tbfjts80000gn/T/dsh-store-write-concurrency-e7Cggd",
+    "cleanupErrors": [],
+    "scenarios": [
+      {
+        "name": "stale-snapshot",
+        "result": "passed",
+        "errorCode": "LOCAL_SNAPSHOT_CONFLICT"
+      },
+      {
+        "name": "unobserved-existing-snapshot",
+        "result": "passed",
+        "errorCode": "LOCAL_SNAPSHOT_CONFLICT"
+      },
+      {
+        "name": "reference-collected-before-save",
+        "result": "passed",
+        "errorCode": "LOCAL_BLOB_MISSING"
+      },
+      {
+        "name": "failed-transaction-observation",
+        "result": "passed"
+      },
+      {
+        "name": "journal-only-enumeration",
+        "result": "passed",
+        "errorCode": "LOCAL_METADATA_MISSING"
+      },
+      {
+        "name": "serial-encoding-pending",
+        "result": "passed",
+        "errorCode": 22
+      },
+      {
+        "name": "serial-encoding-retry",
+        "result": "passed",
+        "errorCode": 22
+      },
+      {
+        "name": "terminated-download-entry-created",
+        "result": "passed",
+        "sourceReads": 1,
+        "elapsedMs": 38,
+        "finalLocks": {
+          "held": [],
+          "pending": []
+        }
+      },
+      {
+        "name": "terminated-download-published",
+        "result": "passed",
+        "sourceReads": 0,
+        "elapsedMs": 48,
+        "finalLocks": {
+          "held": [],
+          "pending": []
+        }
+      }
+    ]
+  },
+  "negative": {
+    "kind": "Reconstructed reviewed pre-fix behaviors in a temporary bundle; not a historical checkout",
+    "scenarios": [
+      {
+        "name": "stale-snapshot",
+        "result": "failed",
+        "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ undefined\n- 'LOCAL_SNAPSHOT_CONFLICT'\n"
+      },
+      {
+        "name": "unobserved-existing-snapshot",
+        "result": "failed",
+        "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ undefined\n- 'LOCAL_SNAPSHOT_CONFLICT'\n"
+      },
+      {
+        "name": "reference-collected-before-save",
+        "result": "failed",
+        "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ undefined\n- 'LOCAL_BLOB_MISSING'\n"
+      },
+      {
+        "name": "failed-transaction-observation",
+        "result": "passed"
+      },
+      {
+        "name": "journal-only-enumeration",
+        "result": "failed",
+        "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ []\n- [\n-   'f2bc252f-fad5-4315-a91a-6d7404dfaae3'\n- ]\n"
+      },
+      {
+        "name": "serial-encoding-pending",
+        "result": "failed",
+        "error": "Worker B must still be waiting while the first encode is paused"
+      },
+      {
+        "name": "serial-encoding-retry",
+        "result": "failed",
+        "error": "Worker B must still be waiting while the first encode is paused"
+      }
+    ],
+    "cleanupErrors": []
+  },
+  "realLlm": {
+    "mode": "real",
+    "browser": "chrome",
+    "model": "gpt-5.6-sol",
+    "roster": "original",
+    "eventCount": 60,
+    "durableThroughSeq": 59,
+    "vfsToolSequence": [
+      "read",
+      "write",
+      "read"
+    ],
+    "vfsFileAfterRefresh": "available",
+    "workspaceCommitStatuses": [
+      200,
+      200
+    ],
+    "llmStatuses": [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+    ],
+    "llmRequestOrigins": [
+      "http://127.0.0.1:65234"
+    ],
+    "coldWorkspaceReset": {
+      "entries": [
+        "dsh-workspace-blobs-a9653d09-9b94-4d73-bbf7-79bbcfe7fd9c"
+      ],
+      "retainedSessionOutbox": true
+    },
+    "workerWarnings": [
+      "basic-compaction-engine: step compaction failed: compaction-basic: no context capacity for browser-native/browser-native; configure contextWindow on that adapter model; continuing the turn",
+      "basic-compaction-engine: step compaction failed: compaction-basic: no context capacity for browser-native/browser-native; configure contextWindow on that adapter model; continuing the turn"
+    ],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "first turn"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "first turn"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "page refresh 1 and Session reconnect"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "page refresh 1 and Session reconnect"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "page refresh 1 and Session reconnect"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "page refresh 1 and Session reconnect"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "post-refresh VFS probe"
+      },
+      {
+        "failure": "net::ERR_ABORTED",
+        "phase": "post-refresh VFS probe"
+      }
+    ],
+    "httpErrors": [
+      {
+        "path": "/open-in-app/apps",
+        "status": 404
+      },
+      {
+        "path": "/api/changes.summary",
+        "status": 404
+      },
+      {
+        "path": "/api/present.host",
+        "status": 404
+      },
+      {
+        "path": "/open-in-app/apps",
+        "status": 404
+      },
+      {
+        "path": "/api/changes.summary",
+        "status": 404
+      },
+      {
+        "path": "/api/present.host",
+        "status": 404
+      }
+    ],
+    "initialBootMs": 2261
+  },
+  "limits": [
+    "Worker.terminate，不是OS crash/自然eviction",
+    "完整metadata记录CAS不提供ABA识别或owner fencing",
+    "双完整Host组合竞争未完成；直接存储Worker9case与完整Host5case分别验证",
+    "strict durability是浏览器事务请求，不保证物理介质持久性",
+    "完整hash引用验证新增线性读取成本，未测RSS或生产SLA"
+  ],
+  "earlierFailures": [
+    "初次principal cookie fixture错误，未算PASS",
+    "测试pause帧进入正式tunnel导致unknown frame；测试代理只拦截精确测试帧",
+    "负对照在启动失败后请求stat和等待附加测试消息超时；改验正式local-corrupt状态、Host boot失败和OPFS保留",
+    "双完整Host竞争实验超过5分钟被终止，保留工件，不宣称PASS",
+    "并行客户端回归1项10秒超时，隔离重跑3/3；不改变超时或断言"
+  ]
+}

@@ -1,6 +1,8 @@
 import type { PendingBatch, WorkspaceChange, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
 import type { VfsFileBacking } from '../../../packages/experimental/webworker-runtime/src/storage/types.ts'
 import { Sha256 } from './browser-native-sha256.ts'
+import { BrowserDownloadJournal, withWorkspaceStorageLock } from './browser-native-download-journal.ts'
+import type { DownloadJournal } from './browser-native-download-journal.ts'
 
 const STORE_VERSION = 1
 const DATABASE_NAME = 'dsh-browser-native-workspace-v1'
@@ -65,7 +67,8 @@ export class DurableWorkspaceStoreError extends Error {
 
   constructor(
     readonly code: 'LOCAL_STORE_UNAVAILABLE' | 'LOCAL_STORE_NEWER_VERSION' | 'LOCAL_METADATA_INVALID'
-      | 'LOCAL_METADATA_MISSING' | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH',
+      | 'LOCAL_METADATA_MISSING' | 'LOCAL_BLOB_MISSING' | 'LOCAL_BLOB_CORRUPT' | 'LOCAL_BLOB_SIZE_MISMATCH'
+      | 'LOCAL_DOWNLOAD_PROTECTED' | 'LOCAL_SNAPSHOT_CONFLICT',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -377,21 +380,66 @@ function assertStoredSnapshot(value: unknown): asserts value is WorkspaceDatabas
   }
 }
 
-/** OPFS bytes plus IndexedDB metadata implementation used by the browser Worker. */
+/** Deterministic publication points exposed only through the PoC test port. */
+export type DownloadPublicationStage = 'intent-durable' | 'entry-created' | 'first-chunk-written' | 'published'
+
+/**
+ * OPFS bytes and IndexedDB metadata, serialized across Workers by a Workspace Web Lock.
+ * Saving an existing snapshot requires this instance to have loaded it successfully;
+ * changes since the last successful load/save reject with LOCAL_SNAPSHOT_CONFLICT.
+ * Record comparison does not replace backend writer fencing or detect identical-record ABA.
+ */
 export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   private database: IDBDatabase | undefined
   private opfsRoot: FileSystemDirectoryHandle | undefined
   private readonly blobDirectories = new Map<string, FileSystemDirectoryHandle>()
+  private readonly observedSnapshots = new Map<string, string | undefined>()
 
-  /** @param testHooks - Optional fault injection used only by Browser-Native PoC tests. */
+  /**
+   * @param testHooks - Optional fault injection used only by Browser-Native PoC tests.
+   * @param journal - Download intents committed before creating new cache entries.
+   */
   constructor(private readonly testHooks?: {
     readonly abortNextMetadataTransaction?: () => boolean
     readonly quotaNextOpfsWrite?: () => boolean
-  }) {}
+    readonly downloadStage?: (stage: DownloadPublicationStage) => Promise<void>
+  }, private readonly journal: DownloadJournal = new BrowserDownloadJournal()) {}
+
+  private async recoverDownloads(workspaceId: string): Promise<void> {
+    const intents = await this.journal.list(workspaceId)
+    if (intents.length === 0) return
+    const record = await this.readRecord(workspaceId)
+    if (record === undefined) {
+      throw new DurableWorkspaceStoreError('LOCAL_METADATA_MISSING', 'browser-native workspace: download intents exist without Workspace metadata')
+    }
+    const protectedHashes = new Set<string>()
+    for (const change of [...record.pending, ...(record.retryBatch?.changes ?? [])]) {
+      if (change.contentHash !== undefined) protectedHashes.add(change.contentHash)
+    }
+    const { blobDirectory } = await this.resources(workspaceId)
+    for (const intent of intents) {
+      let handle: FileSystemFileHandle | undefined
+      try {
+        handle = await blobDirectory.getFileHandle(intent.hash)
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error
+      }
+      if (protectedHashes.has(intent.hash)) {
+        throw new DurableWorkspaceStoreError('LOCAL_DOWNLOAD_PROTECTED', `browser-native workspace: download recovery cannot modify a pending or retry blob (${intent.hash})`)
+      }
+      if (handle !== undefined) {
+        const file = await handle.getFile()
+        if (file.size !== intent.bytes || await sha256File(file) !== intent.hash) {
+          await blobDirectory.removeEntry(intent.hash)
+        }
+      }
+      await this.journal.remove(workspaceId, intent.hash)
+    }
+  }
 
   async listWorkspaceIds(): Promise<readonly string[]> {
+    const workspaceIds = new Set(await this.journal.listWorkspaceIds())
     const database = await openDatabase()
-    const workspaceIds = new Set<string>()
     try {
       const transaction = database.transaction(METADATA_STORE, 'readonly')
       const keys = await requestResult(transaction.objectStore(METADATA_STORE).getAllKeys())
@@ -543,6 +591,18 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
 
   private async encodeChange(directory: FileSystemDirectoryHandle, change: WorkspaceChange): Promise<StoredChange> {
     if (change.contentReference !== undefined) {
+      let file: File
+      try {
+        file = await (await directory.getFileHandle(change.contentReference.hash)).getFile()
+      } catch (error) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_MISSING', `browser-native workspace: referenced blob is missing (${change.contentReference.hash})`, { cause: error })
+      }
+      if (file.size !== change.contentReference.bytes) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: referenced blob size mismatch (${change.contentReference.hash})`)
+      }
+      if (await sha256File(file) !== change.contentReference.hash) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: referenced blob hash mismatch (${change.contentReference.hash})`)
+      }
       return storedChange(change, change.contentReference.hash, true)
     }
     if (change.content === undefined) return storedChange(change)
@@ -565,6 +625,13 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   async load(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      return this.loadSnapshot(workspaceId)
+    })
+  }
+
+  private async loadSnapshot(workspaceId: string): Promise<DurableWorkspaceSnapshot | undefined> {
     const { blobDirectory } = await this.resources(workspaceId)
     const record = await this.readRecord(workspaceId)
     if (record === undefined) {
@@ -576,6 +643,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
           )
         }
       }
+      this.observedSnapshots.set(workspaceId, undefined)
       return undefined
     }
     const pending: WorkspaceChange[] = []
@@ -586,6 +654,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       changes: await this.decodeChanges(blobDirectory, record.retryBatch.changes),
       ...(record.retryBatch.operation === undefined ? {} : { operation: record.retryBatch.operation }),
     }
+    this.observedSnapshots.set(workspaceId, JSON.stringify(record))
     return {
       version: STORE_VERSION,
       workspaceId: record.workspaceId,
@@ -603,12 +672,28 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   async save(snapshot: DurableWorkspaceSnapshot): Promise<void> {
+    return withWorkspaceStorageLock(snapshot.workspaceId, async () => {
+      await this.recoverDownloads(snapshot.workspaceId)
+      await this.saveSnapshot(snapshot)
+    })
+  }
+
+  private async saveSnapshot(snapshot: DurableWorkspaceSnapshot): Promise<void> {
     const { database, blobDirectory } = await this.resources(snapshot.workspaceId)
-    const pending = await Promise.all(snapshot.pending.map(change => this.encodeChange(blobDirectory, change)))
+    const current = await this.readRecord(snapshot.workspaceId)
+    const expected = this.observedSnapshots.get(snapshot.workspaceId)
+    if ((!this.observedSnapshots.has(snapshot.workspaceId) && current !== undefined)
+      || JSON.stringify(current) !== expected) {
+      throw new DurableWorkspaceStoreError('LOCAL_SNAPSHOT_CONFLICT', 'browser-native workspace: local snapshot changed since load; retain local changes and reload before writing')
+    }
+    const pending: StoredChange[] = []
+    for (const change of snapshot.pending) pending.push(await this.encodeChange(blobDirectory, change))
+    const retryChanges: StoredChange[] = []
+    for (const change of snapshot.retryBatch?.changes ?? []) retryChanges.push(await this.encodeChange(blobDirectory, change))
     const retryBatch = snapshot.retryBatch === undefined ? undefined : {
       operationId: snapshot.retryBatch.operationId,
       baseRevision: snapshot.retryBatch.baseRevision,
-      changes: await Promise.all(snapshot.retryBatch.changes.map(change => this.encodeChange(blobDirectory, change))),
+      changes: retryChanges,
       ...(snapshot.retryBatch.operation === undefined ? {} : { operation: snapshot.retryBatch.operation }),
     }
     const record: WorkspaceDatabaseRecord = {
@@ -624,18 +709,25 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     transaction.objectStore(METADATA_STORE).put(record)
     if (this.testHooks?.abortNextMetadataTransaction?.() === true) transaction.abort()
     await committed
+    this.observedSnapshots.set(snapshot.workspaceId, JSON.stringify(record))
   }
 
   async clear(workspaceId: string): Promise<void> {
-    const { database } = await this.resources(workspaceId)
-    await this.opfsRoot?.removeEntry(`${BLOB_DIRECTORY_PREFIX}${workspaceId}`, { recursive: true })
-    this.blobDirectories.delete(workspaceId)
-    const transaction = database.transaction(METADATA_STORE, 'readwrite')
-    transaction.objectStore(METADATA_STORE).delete(workspaceId)
-    await transactionDone(transaction)
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      const intents = await this.journal.list(workspaceId)
+      const { database } = await this.resources(workspaceId)
+      await this.opfsRoot?.removeEntry(`${BLOB_DIRECTORY_PREFIX}${workspaceId}`, { recursive: true })
+      this.blobDirectories.delete(workspaceId)
+      for (const intent of intents) await this.journal.remove(workspaceId, intent.hash)
+      const transaction = database.transaction(METADATA_STORE, 'readwrite')
+      const committed = transactionDone(transaction)
+      transaction.objectStore(METADATA_STORE).delete(workspaceId)
+      await committed
+      this.observedSnapshots.delete(workspaceId)
+    })
   }
 
-  async cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void> {
+  private async cacheVerifiedBytes(workspaceId: string, hash: string, content: Uint8Array): Promise<void> {
     const { blobDirectory } = await this.resources(workspaceId)
     if (await sha256(content) !== hash) {
       throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: blob hash mismatch (${hash})`)
@@ -643,7 +735,26 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     await this.writeBlob(blobDirectory, hash, content)
   }
 
+  async cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      await this.cacheVerifiedBytes(workspaceId, hash, content)
+    })
+  }
+
   async cacheBlobFromRanges(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readRange: (offset: number, length: number) => Uint8Array,
+  ): Promise<void> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      await this.cacheRanges(workspaceId, hash, bytes, readRange)
+    })
+  }
+
+  private async cacheRanges(
     workspaceId: string,
     hash: string,
     bytes: number,
@@ -682,6 +793,13 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   async openBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      return this.openVerifiedBlob(workspaceId, hash, bytes)
+    })
+  }
+
+  private async openVerifiedBlob(workspaceId: string, hash: string, bytes: number): Promise<VfsFileBacking | undefined> {
     const { blobDirectory } = await this.resources(workspaceId)
     let handle: FileSystemFileHandle
     try {
@@ -735,7 +853,7 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
   }
 
   /**
-   * Verify the complete download before publishing OPFS bytes; failures abort the writable.
+   * Commit an intent before creating OPFS bytes; interrupted publication is reconciled under a Web Lock.
    * @param workspaceId - Workspace owning the local cache.
    * @param hash - Expected full SHA-256; existing damaged entries remain fail-closed.
    * @param bytes - Expected byte length.
@@ -748,45 +866,68 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     bytes: number,
     readChunk: (offset: number, length: number) => Promise<Uint8Array>,
   ): Promise<boolean> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      return this.cacheRemoteChunks(workspaceId, hash, bytes, readChunk)
+    })
+  }
+
+  private async cacheRemoteChunks(
+    workspaceId: string,
+    hash: string,
+    bytes: number,
+    readChunk: (offset: number, length: number) => Promise<Uint8Array>,
+  ): Promise<boolean> {
     if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('browser-native workspace: invalid blob byte length')
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new RangeError('browser-native workspace: invalid blob hash')
     const { blobDirectory } = await this.resources(workspaceId)
-    let handle: FileSystemFileHandle
-    let created = false
+    let handle: FileSystemFileHandle | undefined
     try {
       handle = await blobDirectory.getFileHandle(hash)
     } catch (error) {
       if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error
-      handle = await blobDirectory.getFileHandle(hash, { create: true })
-      created = true
     }
+    if (handle !== undefined) {
+      const existing = await handle.getFile()
+      if (existing.size !== bytes) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: local blob size mismatch (${hash})`)
+      }
+      if (await sha256File(existing) !== hash) {
+        throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local blob hash mismatch (${hash})`)
+      }
+      return true
+    }
+    if (await this.readRecord(workspaceId) === undefined) {
+      throw new DurableWorkspaceStoreError('LOCAL_METADATA_MISSING', 'browser-native workspace: download publication requires Workspace metadata')
+    }
+    await this.journal.put({ version: 1, workspaceId, hash, bytes, attemptId: crypto.randomUUID() })
+    await this.testHooks?.downloadStage?.('intent-durable')
     let writable: FileSystemWritableFileStream | undefined
     try {
-      if (!created) {
-        const existing = await handle.getFile()
-        if (existing.size !== bytes) {
-          throw new DurableWorkspaceStoreError('LOCAL_BLOB_SIZE_MISMATCH', `browser-native workspace: local blob size mismatch (${hash})`)
-        }
-        if (await sha256File(existing) !== hash) {
-          throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: local blob hash mismatch (${hash})`)
-        }
-        return true
-      }
+      handle = await blobDirectory.getFileHandle(hash, { create: true })
+      await this.testHooks?.downloadStage?.('entry-created')
       if (this.testHooks?.quotaNextOpfsWrite?.() === true) {
         throw new DOMException('browser-native workspace: injected OPFS quota failure', 'QuotaExceededError')
       }
       writable = await handle.createWritable()
       const digest = new Sha256()
       let offset = 0
+      if (bytes === 0 && (await readChunk(0, 0)).byteLength !== 0) {
+        throw new Error('browser-native workspace: remote empty blob returned bytes')
+      }
       while (offset < bytes) {
         const length = Math.min(BLOB_IO_CHUNK_BYTES, bytes - offset)
         const chunk = await readChunk(offset, length)
         if (chunk.byteLength !== length) throw new Error('browser-native workspace: remote blob chunk has an unexpected size')
         digest.update(chunk)
         await writable.write({ type: 'write', position: offset, data: toArrayBuffer(chunk) })
+        if (offset === 0) await this.testHooks?.downloadStage?.('first-chunk-written')
         offset += chunk.byteLength
       }
       if (digest.digestHex() !== hash) throw new DurableWorkspaceStoreError('LOCAL_BLOB_CORRUPT', `browser-native workspace: downloaded blob hash mismatch (${hash})`)
       await writable.close()
+      await this.testHooks?.downloadStage?.('published')
+      await this.journal.remove(workspaceId, hash)
       return true
     } catch (error) {
       try {
@@ -794,18 +935,23 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
       } catch (abortError) {
         void abortError
       }
-      if (created) {
-        try {
-          if ((await handle.getFile()).size === 0) await blobDirectory.removeEntry(hash)
-        } catch (cleanupError) {
-          throw new AggregateError([error, cleanupError], 'browser-native workspace: failed download left an unverified local cache entry')
-        }
+      try {
+        await this.recoverDownloads(workspaceId)
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'browser-native workspace: failed download requires publication recovery')
       }
       throw error
     }
   }
 
   async reconcileBlobs(workspaceId: string, retainedHashes: readonly string[]): Promise<BlobReconciliation> {
+    return withWorkspaceStorageLock(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      return this.reconcileVerifiedBlobs(workspaceId, retainedHashes)
+    })
+  }
+
+  private async reconcileVerifiedBlobs(workspaceId: string, retainedHashes: readonly string[]): Promise<BlobReconciliation> {
     const { blobDirectory } = await this.resources(workspaceId)
     const record = await this.readRecord(workspaceId)
     if (record === undefined) return { removedFiles: 0, removedBytes: 0, retainedFiles: 0, skipped: 'metadata-missing' }
@@ -842,6 +988,7 @@ export function createBrowserDurableWorkspaceStore(
   testHooks?: {
     readonly abortNextMetadataTransaction?: () => boolean
     readonly quotaNextOpfsWrite?: () => boolean
+    readonly downloadStage?: (stage: DownloadPublicationStage) => Promise<void>
   },
 ): DurableWorkspaceStore {
   return new BrowserDurableWorkspaceStore(testHooks)

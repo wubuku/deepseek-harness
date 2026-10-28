@@ -12,6 +12,20 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-049：下载缓存发布恢复
+
+```text
+changeId: BN-P2-049
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 起始与origin/research同步、工作区干净、仅主worktree
+file: 本目录browser-native-download-journal.ts、browser-native-workspace-store.ts、browser-native-workspace.ts、browser-native-worker.ts与相关测试、计划、进度、README；docs/drafts/README.md登记
+reason: Worker强杀跳过finally会留下空canonical缓存；需通过持久化意图识别可修复残留，同时禁止删除本地pending/retry唯一副本。
+existingExtensionPointsChecked: DurableWorkspaceStore、pre-boot prepareVfs、独立IndexedDB、Web Locks、PoC-only test port；不改变Agent Loop或Session/Workspace snapshot格式。
+coupling: 仅docs-owned原型；本地存储新增Web Locks要求、独立journal，未知版本和缺少证明均拒绝自动清理。目录外只更新drafts索引。
+tests: 实际命令、强杀、竞争、负对照和真实LLM结果由cache-publication-recovery-validation-progress.md维护。
+upstreamReplay: 先加入独立journal和本地锁，再接入pre-boot恢复及dirty保护，最后接入只对测试port启用的强杀切点和真实Chrome/LLM验收。
+deleteWhen: 正式Workspace provider提供同等发布意图、互斥、保守恢复与强杀证据。
+```
+
 ### BN-P2-048：块对象完整性下载流验证
 
 ```text

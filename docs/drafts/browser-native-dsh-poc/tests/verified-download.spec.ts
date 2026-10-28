@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONTENT_UPLOAD_PARAMETERS } from '../browser-native-content-upload.ts'
+import type { DownloadIntent } from '../browser-native-download-journal.ts'
 import {
   createVerifiedDownload,
   hasVerifiedDownloadCapability,
@@ -149,13 +150,52 @@ function opfsCache(existing?: Uint8Array, options: {
     }),
     removeEntry: vi.fn(async () => { canonical = undefined }),
   }
+  const records = new Map<string, unknown>([[workspaceId, { version: 1, workspaceId, revision: 0, pending: [] }]])
+  const database = {
+    version: 1,
+    transaction: () => {
+      const transaction = { oncomplete: () => {}, onerror: () => {}, onabort: () => {}, error: null,
+        objectStore: () => ({ get: (workspace: string) => {
+          const request = { result: records.get(workspace), onsuccess: () => {}, onerror: () => {} }
+          queueMicrotask(() => {
+            request.onsuccess()
+            queueMicrotask(() => { transaction.oncomplete() })
+          })
+          return request
+        } }) }
+      return transaction
+    },
+  }
   vi.stubGlobal('indexedDB', { open: () => {
-    const request = { result: { version: 1 }, onsuccess: () => {}, onerror: () => {} }
+    const request = { result: database, onsuccess: () => {}, onerror: () => {} }
     queueMicrotask(() => { request.onsuccess() })
     return request
   } })
-  vi.stubGlobal('navigator', { storage: { getDirectory: async () => ({ getDirectoryHandle: async () => directory }) } })
-  return { store: new BrowserDurableWorkspaceStore(), writable, directory, handle,
+  const lockTails = new Map<string, Promise<void>>()
+  const locks = { request: async <Result>(name: string, _options: LockOptions, callback: () => Promise<Result>) => {
+    const previous = lockTails.get(name) ?? Promise.resolve()
+    let release!: () => void
+    const completion = new Promise<void>(resolve => { release = resolve })
+    lockTails.set(name, completion)
+    await previous
+    try {
+      return await callback()
+    } finally {
+      if (lockTails.get(name) === completion) lockTails.delete(name)
+      release()
+    }
+  } }
+  const intents = new Map<string, DownloadIntent>()
+  const journal = {
+    listWorkspaceIds: async () => [...new Set([...intents.values()].map(intent => intent.workspaceId))].sort(),
+    list: async (workspace: string) => [...intents.values()].filter(intent => intent.workspaceId === workspace),
+    put: async (intent: DownloadIntent) => {
+      intents.set(`${intent.workspaceId}:${intent.hash}`, intent)
+    },
+    remove: async (workspace: string, digest: string) => { intents.delete(`${workspace}:${digest}`) },
+  }
+  vi.stubGlobal('navigator', { locks, storage: { getDirectory: async () => ({ getDirectoryHandle: async () => directory }) } })
+  return { store: new BrowserDurableWorkspaceStore(undefined, journal), writable, directory, handle,
     canonical: () => canonical }
 }
 

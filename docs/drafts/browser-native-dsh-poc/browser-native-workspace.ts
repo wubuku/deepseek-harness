@@ -19,10 +19,12 @@ import {
   type BrowserNativeEditMetrics,
 } from './browser-native-file-tools.ts'
 import type {
+  DownloadPublicationStage,
   DurableWorkspaceSnapshot,
   DurableWorkspaceStore,
 } from './browser-native-workspace-store.ts'
 import { DurableWorkspaceStoreError } from './browser-native-workspace-store.ts'
+import { DownloadJournalError } from './browser-native-download-journal.ts'
 import {
   createVerifiedDownload,
   hasVerifiedDownloadCapability,
@@ -347,8 +349,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         : error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
           ? 'local-newer-version'
           : error instanceof DurableWorkspaceStoreError && error.code !== 'LOCAL_STORE_UNAVAILABLE'
+            && error.code !== 'LOCAL_SNAPSHOT_CONFLICT'
             ? 'local-corrupt'
-            : 'error'
+            : error instanceof DownloadJournalError && error.code === 'LOCAL_DOWNLOAD_JOURNAL_INVALID'
+              ? 'local-corrupt'
+              : 'error'
       const retryAfterMs = isRecord(error) && error.code === 'WORKSPACE_ALREADY_OWNED'
         && Number.isSafeInteger(error.retryAfterMs)
         ? Number(error.retryAfterMs)
@@ -1482,6 +1487,7 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly testHooks?: {
     readonly abortNextMetadataTransaction?: () => boolean
     readonly quotaNextOpfsWrite?: () => boolean
+    readonly downloadStage?: (stage: DownloadPublicationStage) => Promise<void>
     readonly beforeLocalPersist?: () => Promise<void>
     readonly afterLocalPersist?: () => Promise<void>
     readonly fileToolYieldDelayMs?: () => number

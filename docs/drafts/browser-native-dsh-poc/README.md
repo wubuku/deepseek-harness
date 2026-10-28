@@ -258,6 +258,14 @@ backend 的 `createBrowserNativeV2Server({ workspaceChunkObjects: true })` 显�
 
 store 先完整验证一次，返回时再次验证每个 chunk，以活动引用保护下载中的块不被 GC；旧 range 语义不变。[规划](verified-stream-download-validation-plan.md)、[进度和可执行命令](verified-stream-download-validation-progress.md)及[Chrome 工件](verified-stream-download-chrome-results.json)记录 64 MiB 冷恢复从读取 4 GiB 降为 128 MiB、取消/损坏/截断恢复与真实模型 smoke。该模式仍默认关闭，不代表多实例或 OS crash 已验证。
 
+### 下载缓存发布恢复
+
+远端下载在创建 canonical OPFS 文件前，先向独立 IndexedDB journal 提交下载意图。Workspace 本地操作通过 Web Locks 串行化；新 Worker 在打开缓存和解码 pending 前核对意图。完整文件复用，只有已登记且不被 pending/retry 引用的未完成文件可删除后重新下载。没有意图的损坏文件、未知 journal 版本或 metadata 缺失继续拒绝自动修复；本地保存和云端 commit 的语义不变。
+
+保存现有 snapshot 前必须由同一 store 实例成功 load；锁内比较最后成功 load/save 的完整 metadata，发生变化时报 LOCAL_SNAPSHOT_CONFLICT 并保留较新记录。外部 blob 引用在提交前验证大小和完整 hash，编码串行收束后才释放锁。该记录比较不能识别相同记录的 ABA，也不能替代 backend writer fencing；新增完整 hash 校验有线性读取代价，不是无成本优化。
+
+[本批规划](cache-publication-recovery-validation-plan.md)和[进度](cache-publication-recovery-validation-progress.md)分别维护设计判据与实际验证状态。此路径需要 Web Locks、IndexedDB 和 OPFS，不静默退化为仅实例内互斥；它不把 Worker 强制终止恢复外推为 OS crash 或自然 eviction 的保证。
+
 ## Browser-native 文件搜索与载荷安全
 
 [本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、扫描行数、匹配数、结果行长、pattern 和 edit 载荷上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。内容、include 和 glob 的正则语法编译及匹配在可终止的嵌套 Worker 中执行；这限制了单次阻塞，但不是完整 ReDoS 保证。

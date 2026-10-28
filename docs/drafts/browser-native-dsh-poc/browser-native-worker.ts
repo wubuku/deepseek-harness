@@ -69,6 +69,7 @@ import {
   type BrowserNativeFileToolStage,
 } from './browser-native-workspace.ts'
 import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
+import type { DownloadPublicationStage } from './browser-native-workspace-store.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -83,6 +84,7 @@ let contentDefinedUpload = false
 let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
+let downloadPauseStage: DownloadPublicationStage | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
 let fileToolYieldDelayMs = 0
@@ -1555,6 +1557,12 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type === 'browser-native-workspace-test-init') {
     const port = event.ports[0]
     if (port === undefined) throw new Error('browser-native workspace test: init frame needs a MessagePort')
+    if (data.downloadPauseStage !== undefined && data.downloadPauseStage !== 'intent-durable'
+      && data.downloadPauseStage !== 'entry-created' && data.downloadPauseStage !== 'first-chunk-written'
+      && data.downloadPauseStage !== 'published') {
+      throw new Error('browser-native workspace test: invalid download pause stage')
+    }
+    downloadPauseStage = data.downloadPauseStage
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()
@@ -1671,6 +1679,12 @@ self.addEventListener('message', (event: MessageEvent) => {
       },
       ...(workspaceTestPort === undefined ? {} : {
         testHooks: {
+          downloadStage: async stage => {
+            if (stage !== downloadPauseStage) return
+            downloadPauseStage = undefined
+            self.postMessage({ type: 'browser-native-workspace-test-download-paused', stage })
+            await new Promise<void>(() => {})
+          },
           abortNextMetadataTransaction: () => {
             if (abortMetadataTransactionsRemaining === 0) return false
             abortMetadataTransactionsRemaining -= 1
