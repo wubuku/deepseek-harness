@@ -1350,7 +1350,7 @@ export class WorkspaceStore {
     const operation = workspace.operations.get(operationId)
     return operation === undefined
       ? { workspaceId, operationId, found: false }
-      : { workspaceId, operationId, found: true, receipt: structuredClone(operation.receipt) }
+      : { workspaceId, operationId, found: true, requestDigest: operation.digest, receipt: structuredClone(operation.receipt) }
   }
 
   /**

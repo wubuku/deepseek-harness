@@ -372,6 +372,8 @@ describe('durable Browser-Native Workspace state', () => {
       const method = init?.method ?? 'GET'
       if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
       if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 2, entries: [] })
+      if (url.includes('/operation/')) return jsonResponse({ workspaceId,
+        operationId: url.split('/operation/')[1]!.split('?')[0], found: false })
       if (url.endsWith('/commit')) {
         const body = JSON.parse(String(init?.body)) as { operationId: string; baseRevision: number }
         commits.push(body)
@@ -490,7 +492,8 @@ describe('durable Browser-Native Workspace state', () => {
           replayed: true,
         })
       }
-      if (url.includes('/operation/')) return jsonResponse({ found: false })
+      if (url.includes('/operation/')) return jsonResponse({ workspaceId,
+        operationId: url.split('/operation/')[1]!.split('?')[0], found: false })
       throw new Error(`unexpected request ${method} ${url}`)
     })
 

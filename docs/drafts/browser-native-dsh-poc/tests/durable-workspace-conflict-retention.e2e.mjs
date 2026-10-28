@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -130,11 +130,14 @@ try {
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'conflict', undefined, { timeout: 30_000 })
-  const localRead = await page.evaluate(async path => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'read', path }), `/dsh/home/workspace/${workspacePath}`)
-  assert.deepEqual(
-    { ok: localRead?.ok, content: localRead?.content },
-    { ok: true, content: localContent },
-  )
+  assert.equal(await page.locator('[data-composer-input][contenteditable="true"]').isVisible(), false)
+  const [download] = await Promise.all([
+    page.waitForEvent('download'), page.locator('[data-browser-native-recovery-export]').click(),
+  ])
+  const recovery = JSON.parse(await readFile(await download.path(), 'utf8'))
+  const bundle = recovery.workspaces?.[0] ?? recovery
+  const localContentRetained = bundle.blobs.some(blob => Buffer.from(blob.base64, 'base64').toString('utf8') === localContent)
+  assert.equal(localContentRetained, true)
   const conflictSnapshot = await readSnapshot(page, workspaceId)
   assert.equal(conflictSnapshot.retryBatch.operationId, originalOperationId)
   assert.equal(conflictSnapshot.retryBatch.baseRevision, 0)
@@ -151,21 +154,21 @@ try {
     return { status: response.status, content: await response.text() }
   }, { id: workspaceId, hash: remoteEntry.hash })
   assert.deepEqual(remote, { status: 200, content: remoteContent })
-  assert.equal(commitAttempts.length, 2)
+  assert.equal(commitAttempts.length, 1)
   assert.equal(commitAttempts[0].operationId, originalOperationId)
-  assert.equal(commitAttempts[1].operationId, originalOperationId)
   assert.equal((await page.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__)).state, 'conflict')
-  assert.deepEqual(pageErrors, [])
+  assert.equal(pageErrors.length, 1)
+  assert.match(pageErrors[0], /^web-preview tunnel: boot payload failed with HTTP 503: Error: Local Workspace changes use a different remote revision/)
   assert.deepEqual(nonLocalRequests, [])
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
-    scope: 'CAS-conflict-preserves-local-retry-and-remote-version',
+    scope: 'pre-boot-conflict-isolation-preserves-local-export-and-remote-version',
     workspaceId,
     localOperationId: originalOperationId,
     localBaseRevision: 0,
     remoteRevision: manifest.revision,
-    localContentRetained: localRead.content === localContent,
+    localContentRetained,
     remoteContentRetained: remote.content === remoteContent,
     commitAttempts: commitAttempts.length,
     pageErrors,

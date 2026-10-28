@@ -56,6 +56,8 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 [只读 range backing 计划](observer-range-backing-validation-plan.md)及[实际进度](observer-range-backing-validation-progress.md)验证大 Workspace 的 observer 成本。durable observer 使用实例私有 OPFS，完整 SHA-256 验证后 seedExternal，不修改 writer 的 snapshot/control/pending 或共享 blob；同一 hash 的多个路径共享一个句柄并独立关闭。默认每实例最多 4096 个唯一文件、512 MiB，可通过 createBrowserNativeWorkspaceRuntime 的 observerCacheLimits 调整；超限或 OPFS 失败拒绝启动，不回退为完整 resident 文件。下载仍为 eager hydrate，并非按需远端文件系统；volatile observer 保留整文件驻留，VFS residentBytes 也不代表 Chrome heap/RSS。
 
+[恢复一致性计划](workspace-recovery-consistency-plan.md)及[实际进度](workspace-recovery-consistency-progress.md)验证刷新前后的文件版本语义：hydrate 前核对本地 baseline 和远端 revision；retry 与后续 pending 分层重放，避免复活已删除文件；已提交 retry 经原请求摘要核对后退休，保留 DSH receipt，不覆盖后续远端修改。查询未知或 baseline 冲突时停止启动并保留本地 bytes，页面可下载既有恢复包，当前上限 64 MiB。没有 base manifest，因此没有自动三方合并；停止启动不等于冲突已经解决。Worker 与 backend 必须使用同一 PoC 查询协议，旧响应缺少 requestDigest 时不能确认已提交操作。
+
 私有目录用独立 Web Lock 表示活实例，正常 release 关闭并删除本实例缓存；后继只回收同一 Workspace 已失锁的版本化目录，Worker 强杀的 partial bytes 不进入 writer 恢复。Chrome 验证三个路径对应同一 16 MiB 文件时，VFS 逻辑文件量增加 48 MiB，驻留增量约 58 字节；read、grep、stale 拒绝和共享 metadata 不变均通过。并发实例仍重复消耗磁盘与带宽，尚无 origin 总预算、懒下载或进程内存上限保证。
 
 该研究原型将名为 `dsh-browser-native-workspace-v1` 的 IndexedDB 数据库升级到 schema 2，保留 version 1 的 Workspace snapshot、pending/retry/receipt 和 OPFS 文件，新增 control store；数据库名称不代表当前 schema 版本。首次升级前关闭旧版 PoC 标签页，再用本版刷新；被旧连接阻挡时明确拒绝，不清缓存。升级后旧版页面不得继续写入，也不支持降级写回；请保留数据并使用本版恢复。未知版本或损坏 control 均拒绝自动修复。这是 docs-owned 研究原型的数据变更，不是已发布 DSH Session 格式变更。

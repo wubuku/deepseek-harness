@@ -12,6 +12,21 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-052：恢复版本、分层重放与操作结果对账
+
+```text
+changeId: BN-P2-052
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 起始干净、与origin/research同步、仅主worktree
+file: 本目录browser-native-workspace-recovery.ts、browser-native-workspace.ts、workspace-v2.mjs与相关测试/文档；apps/web/src/browser-native-page-control.ts
+reason: 旧retry与后续pending合并排序会复活删除；先hydrate最新manifest再覆盖旧dirty可产生混合快照。查询失败不能被当成confirmed absent，已提交retry也不能覆盖后续远端修改。
+existingExtensionPointsChecked: prepareVfs、DurableWorkspaceStore、operation查询、Session receipt outbox和已有本地恢复包导出；不改Agent Loop、Session或IndexedDB schema。
+directoryOutChangeReason: 只有preview页面持有浏览器下载交互；现有恢复包按钮仅覆盖损坏/身份问题，需最小扩展到已知Workspace的conflict/error，不新增聊天UI或状态协议。
+behavior: hydrate前核对baseline与原请求摘要；分层replay；恢复已提交retry时保留tool身份与receipt；未知或冲突拒绝boot并保留本地数据。HTTP operation查询新增requestDigest，Worker/backend需同版本，不降级信任缺字段的响应。
+tests: 实际负对照、单测、Chrome、真实模型和门禁见workspace-recovery-consistency-progress.md。
+upstreamReplay: 先加入恢复分类与operation查询摘要，再接入prepare前判定/receipt持久化，最后恢复包入口及Chrome/真实LLM回归；保留CAS和本地writer fencing。
+deleteWhen: 正式Browser Workspace provider提供同等版本、时间层次、unknown对账、可取回本地数据和Session receipt证据。
+```
+
 ### BN-P2-050：本地写权与 snapshot 代际
 
 ```text

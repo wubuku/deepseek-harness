@@ -74,6 +74,8 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 ## 解释和复跑
 
+刷新恢复的版本分类与原请求对账见[恢复一致性进度](workspace-recovery-consistency-progress.md)。当前不会把旧 pending 直接覆盖到新远端 manifest；未知提交查询或 revision 冲突会阻止 Host 启动并提供本地恢复包。retry 与后续 pending 分层重放；已提交 retry 不再覆盖更新的远端 bytes，Session receipt 仍按原操作身份确认。这些证据不代表自动三方合并、任意离线并发写入或跨存储原子事务。
+
 多 Worker 本地写权、snapshot ABA、IndexedDB 保留式升级和旧写者迟到保存的本批结果见[本地写权进度](local-writer-fencing-validation-progress.md)。本地 generation、writer epoch、远端 revision 和 backend fencing token 分别表达不同事实；任何一个都不能替代其余检查。durable observer 的私有 OPFS range backing、16 MiB 文件 alias、强杀回收和 read/grep/stale 证据见[只读缓存进度](observer-range-backing-validation-progress.md)；volatile observer 仍整文件驻留，未证明整个 Chrome heap/RSS 或 origin 总磁盘预算。
 
 测试使用真实 Chrome，但除明确标记真实模型的 Session/LLM 路径外，能力和故障验收使用 scripted LLM。`default-profile-capabilities.e2e.mjs` 验证 Browser profile 的实际 schema 与受限 Bash 调用；`default-interaction-tools.e2e.mjs` 验证问答与工作目录闭环；`runtime-validation.e2e.mjs` 的真实模型文件读写序列使用独立 Browser validation roster。因此，不要把这些测试合并表述成“真实模型已验证 Browser profile 中每个工具”。

@@ -27,6 +27,12 @@ import { DurableWorkspaceStoreError } from './browser-native-workspace-store.ts'
 import { DownloadJournalError } from './browser-native-download-journal.ts'
 import { BrowserObserverCache, type ObserverCacheLimits } from './browser-native-observer-cache.ts'
 import {
+  decodeWorkspaceOperation,
+  resolveWorkspaceRecovery,
+  WorkspaceRecoveryError,
+  type WorkspaceOperationStatus,
+} from './browser-native-workspace-recovery.ts'
+import {
   createVerifiedDownload,
   hasVerifiedDownloadCapability,
   VerifiedDownloadUnsupportedError,
@@ -300,6 +306,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (this.useWriterLease && this.accessMode === 'writer') await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
       const localSnapshot = this.accessMode === 'writer' ? await this.store?.load(this.workspaceId) : undefined
       const manifest = await this.loadManifest()
+      const recoverySnapshot = localSnapshot === undefined ? undefined : resolveWorkspaceRecovery(
+        localSnapshot,
+        manifest.revision,
+        localSnapshot.retryBatch === undefined ? undefined : await this.lookupOperation(localSnapshot.retryBatch),
+      )
       if (this.accessMode === 'writer' && localSnapshot === undefined && manifest.entries.some(entry => entry.kind === 'file')) {
         await this.store?.save({ version: 1, workspaceId: this.workspaceId, revision: manifest.revision, pending: [] })
       }
@@ -358,7 +369,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
           await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
         }
-        if (localSnapshot !== undefined) await this.restoreLocalSnapshot(vfs, localSnapshot)
+        if (recoverySnapshot !== undefined) await this.restoreLocalSnapshot(vfs, recoverySnapshot)
+        if (recoverySnapshot !== localSnapshot) {
+          this.queueLocalPersist()
+          await this.awaitLocalPersist()
+        }
       }
       this.ready = true
       const dirtyCount = this.pending.size + (this.retryBatch?.changes.length ?? 0)
@@ -368,7 +383,9 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       const message = error instanceof Error ? error.message : String(error)
       this.abandonWriterLease()
       await this.observerCache?.dispose()
-      const state = error instanceof WorkspaceIdentityError
+      const state = error instanceof WorkspaceRecoveryError && error.code === 'WORKSPACE_RECOVERY_CONFLICT'
+        ? 'conflict'
+        : error instanceof WorkspaceIdentityError
         ? error.state
         : error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
           ? 'local-newer-version'
@@ -750,8 +767,8 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
 
   private async restoreLocalSnapshot(vfs: MemoryVfs, snapshot: DurableWorkspaceSnapshot): Promise<void> {
     if (snapshot.workspaceId !== this.workspaceId) throw new Error('browser-native workspace: local snapshot workspace mismatch')
-    const retryChanges = snapshot.retryBatch?.changes ?? []
-    await this.replayChanges(vfs, [...retryChanges, ...snapshot.pending])
+    if (snapshot.retryBatch !== undefined) await this.replayChanges(vfs, snapshot.retryBatch.changes)
+    await this.replayChanges(vfs, snapshot.pending)
     this.retryBatch = snapshot.retryBatch
     this.receiptOutbox.splice(0, this.receiptOutbox.length, ...(snapshot.receipts ?? []))
     for (const change of snapshot.pending) this.pending.set(change.path, change)
@@ -898,12 +915,15 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         receipts.push(this.applyReceipt(batch, receipt))
       } catch (error) {
         const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
-        const receipt = await this.lookupOperation(batch)
-        if (receipt !== undefined) {
-          receipts.push(this.applyReceipt(batch, receipt))
+        const status = await this.lookupOperation(batch)
+        if (status.state === 'committed') {
+          const receipt = status.receipt
+          receipts.push(this.applyReceipt(batch, { workspaceId: receipt.workspaceId, operationId: receipt.operationId,
+            revision: receipt.revision, digest: receipt.manifestDigest, changedPaths: receipt.paths, replayed: true }))
           continue
         }
-        const message = error instanceof Error ? error.message : String(error)
+        const detail = error instanceof Error ? error.message : String(error)
+        const message = status.state === 'unknown' ? `${detail}; operation status is unknown; local changes retained` : detail
         this.retryBatch = batch
         this.failure = { state: code === 'WORKSPACE_CONFLICT' ? 'conflict' : 'error', message }
         this.blocked = code === 'WORKSPACE_CONFLICT'
@@ -1140,18 +1160,17 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     }
   }
 
-  private async lookupOperation(batch: PendingBatch): Promise<Record<string, unknown> | undefined> {
-    if (this.workspaceId === undefined) return undefined
+  private async lookupOperation(batch: PendingBatch): Promise<WorkspaceOperationStatus> {
+    if (this.workspaceId === undefined) return { state: 'unknown', cause: new Error('Workspace identity is unavailable') }
     try {
       const response = await fetch(
         `${WORKSPACE_API}/operation/${batch.operationId}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
         { credentials: 'same-origin' },
       )
       const value = await readJson(response)
-      if (value.found !== true || !isRecord(value.receipt)) return undefined
-      return value.receipt
-    } catch {
-      return undefined
+      return decodeWorkspaceOperation(value, this.workspaceId, batch)
+    } catch (error) {
+      return { state: 'unknown', cause: error }
     }
   }
 

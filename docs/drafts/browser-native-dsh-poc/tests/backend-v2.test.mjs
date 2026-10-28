@@ -3088,6 +3088,9 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(queryBody.found, true)
     assert.equal(queryBody.receipt.operationId, operationId)
     assert.equal(queryBody.receipt.revision, 1)
+    assert.equal(queryBody.requestDigest, createHash('sha256').update(JSON.stringify({ baseRevision: 0,
+      changes: [{ path: 'fenced.txt', kind: 'file', hash: uploaded.hash, bytes: uploaded.bytes, mode: 0o600 }],
+    })).digest('hex'))
   })
 
   it('expires Workspace writer leases against the injected clock', async () => {
