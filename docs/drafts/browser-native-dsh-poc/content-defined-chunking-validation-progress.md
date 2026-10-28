@@ -16,7 +16,7 @@ description: "记录 Browser-Native Workspace 内容定义分块对照实验的�
 | M1：参数化 chunker 与属性测试 | 完成 | gear-based 原型以确定性、有界 OPFS range 读取生成连续块；6 项单测覆盖确定性、完整覆盖、最大块、短读、空文件、预取消和分段取消。 |
 | M2：真实 Chrome Worker 成本对照 | 完成 | 最新 preview 上 18 个 OPFS workload 均通过，每个策略 3 次测量；保存[脱敏原始 JSON](content-defined-chunking-chrome-results.json)，页面无错误。 |
 | M3：固定偏移恢复回归与决策 | 完成 | 64 MiB 固定偏移复用响应丢失、Worker 终止、backend 重启及刷新恢复通过；仅补传 1 MiB，revision 只提交一次。CDC 仅达成进入协议原型的门槛。 |
-| M4：真实 LLM、文档与交付 | 进行中 | 最终 preview 上 `original` roster 真实 Chrome smoke 通过；目录登记、文档门禁、提交和推送待完成。 |
+| M4：真实 LLM、文档与交付 | 完成 | 最终 preview 上 `original` roster 真实 Chrome smoke、目录登记与文档门禁通过；实现已提交并推送到 `origin/research`。 |
 
 ## 实测结果
 
@@ -32,7 +32,6 @@ description: "记录 Browser-Native Workspace 内容定义分块对照实验的�
 | 重复模板 16 MiB，中部插入 64 KiB | 8.06 MiB | 3.06 MiB | 3.06 MiB |
 | 文本 64 MiB，中部等长替换 4 KiB | 1.00 MiB | 0.76 MiB | 1.00 MiB |
 | 重复模板 16 MiB，中部等长替换 4 KiB | 1.00 MiB | 1.00 MiB | 1.00 MiB |
-| 重复模板 16 MiB，中部插入 64 KiB | 8.06 MiB | 3.06 MiB | 3.06 MiB |
 
 每个场景的三个 target 准备样本以中位数汇总；源码与数据由固定种子生成。8/8 的核心移位场景通过计划的“上行减少至少 50%”门槛；等长修改没有任何内容类型超过固定偏移的两倍。64 MiB 样本中 512 KiB 配置生成 66 个 chunk、7,306 bytes descriptor JSON，满足不超过 512 个 chunk 和 256 KiB descriptor 的门槛。
 
@@ -78,7 +77,7 @@ description: "记录 Browser-Native Workspace 内容定义分块对照实验的�
 
 下一阶段要比较“后端复制 chunk 到完整文件 staging”和“manifest 直接引用 immutable chunk 对象”两种成本，测量对象/文件数、写放大、来源索引建立与缓存、提交/读取/GC 延迟、响应丢失恢复及 Worker 重启。需另外优化或替换结构化文本上偏大的 chunk 分布；不得从本次 18 个固定合成样本推断通用 chunker 性能。
 
-文档门禁、提交和推送结果在完成后补录。
+实现和测试已提交并推送到 `origin/research`；pre-commit staged lint、空白检查、vendor guard 和 pre-push 5 项增量类型检查均通过。工作区在推送后干净。
 
 ## Dev Note
 
