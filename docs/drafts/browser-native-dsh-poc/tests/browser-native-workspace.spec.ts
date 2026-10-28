@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createBrowserNativeWorkspaceRuntime } from '../browser-native-workspace.ts'
 import { MemoryDurableWorkspaceStore } from '../browser-native-workspace-store.ts'
 import { createWorkspaceBlobProtocolMock } from './workspace-blob-protocol-mock.ts'
+import { observerCacheFixture } from './observer-cache-fixture.ts'
 
 const workspaceId = '7cb327fe-f71a-4d54-ac91-17f0ab4fb163'
 const manifestBytes = new TextEncoder().encode('restored from cloud\n')
@@ -28,6 +29,8 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 describe('browser-native Workspace VFS sync', () => {
   it('hydrates a lease-conflict observer from committed blobs without reading or changing local pending state', async () => {
+    const environment = observerCacheFixture()
+    vi.stubGlobal('navigator', { storage: { getDirectory: environment.root }, locks: environment.locks })
     const store = new MemoryDurableWorkspaceStore()
     const localContent = new TextEncoder().encode('local pending bytes')
     const originalSnapshot = {
@@ -117,6 +120,8 @@ describe('browser-native Workspace VFS sync', () => {
     await expect(runtime.authorizeFileTool('read')).rejects.toThrow('snapshot is stale')
     expect(requests.filter(url => url.includes('/revision?'))).toHaveLength(revisionChecks)
     await expect(runtime.ensureWriterLease()).rejects.toThrow('cannot acquire writer access')
+    await runtime.releaseWriter()
+    expect(environment.held.size).toBe(0)
   })
 
   it('does not downgrade identity, transport, or unrelated lease failures to an observer', async () => {

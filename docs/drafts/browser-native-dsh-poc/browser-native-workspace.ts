@@ -25,6 +25,7 @@ import type {
 } from './browser-native-workspace-store.ts'
 import { DurableWorkspaceStoreError } from './browser-native-workspace-store.ts'
 import { DownloadJournalError } from './browser-native-download-journal.ts'
+import { BrowserObserverCache, type ObserverCacheLimits } from './browser-native-observer-cache.ts'
 import {
   createVerifiedDownload,
   hasVerifiedDownloadCapability,
@@ -234,6 +235,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private activeOperation: WorkspaceToolOperation | undefined
   private accessMode: WorkspaceAccessMode = 'writer'
   private verifiedDownloads = false
+  private observerCache: BrowserObserverCache | undefined
 
   constructor(
     private readonly onStatus = statusMessage,
@@ -242,6 +244,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     private readonly testHooks?: BrowserNativeWorkspaceRuntimeOptions['testHooks'],
     private readonly onAccessMode?: (mode: WorkspaceAccessMode) => void,
     private readonly contentDefinedUpload = false,
+    private readonly observerCacheLimits: ObserverCacheLimits = { maxFiles: 4096, maxBytes: 512 * 1024 * 1024 },
   ) {}
 
   async prepare(vfs: MemoryVfs): Promise<void> {
@@ -312,11 +315,22 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         vfs.seedDirectory(`${WORKSPACE_ROOT}/${path}`, seedOptions)
       }
       const files = manifest.entries.filter(entry => entry.kind === 'file')
+      if (this.accessMode === 'observer' && this.store !== undefined) {
+        this.observerCache = await BrowserObserverCache.create(this.workspaceId, files.map(entry => {
+          if (entry.hash === undefined || entry.bytes === undefined) throw new Error('browser-native workspace: invalid observer file identity')
+          return { hash: entry.hash, bytes: entry.bytes }
+        }), this.observerCacheLimits)
+      }
       for (const entry of files) {
         const path = assertWorkspacePath(entry.path)
         if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
         if (this.accessMode === 'observer') {
-          vfs.seed(`${WORKSPACE_ROOT}/${path}`, await this.downloadBlob(entry.hash, entry.bytes), { mode: entry.mode })
+          if (this.observerCache === undefined) {
+            vfs.seed(`${WORKSPACE_ROOT}/${path}`, await this.downloadBlob(entry.hash, entry.bytes), { mode: entry.mode })
+          } else {
+            const backing = await this.openObserverBlob(entry.hash, entry.bytes)
+            vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
+          }
           this.knownBlobHashes.add(entry.hash)
           continue
         }
@@ -353,6 +367,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.abandonWriterLease()
+      await this.observerCache?.dispose()
       const state = error instanceof WorkspaceIdentityError
         ? error.state
         : error instanceof DurableWorkspaceStoreError && error.code === 'LOCAL_STORE_NEWER_VERSION'
@@ -606,6 +621,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   }
 
   async releaseWriter(): Promise<void> {
+    if (this.accessMode !== 'writer') {
+      this.ready = false
+      await this.observerCache?.dispose()
+      return
+    }
     if (this.accessMode === 'writer') this.invalidateLocalWriter()
     if (!this.useWriterLease || this.workspaceId === undefined || this.writerToken === undefined || this.fencingToken === undefined) return
     this.clearWriterHeartbeat()
@@ -1348,13 +1368,13 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     if (completed.complete !== true) throw new Error('browser-native workspace: backend did not complete blob upload')
   }
 
-  private async downloadBlobChunk(hash: string, totalBytes: number, offset: number, length: number): Promise<Uint8Array> {
+  private async downloadBlobChunk(hash: string, totalBytes: number, offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0
       || offset + length > totalBytes) throw new RangeError('browser-native workspace: invalid blob chunk range')
     const index = Math.floor(offset / WORKSPACE_BLOB_CHUNK_BYTES)
     const response = await fetch(
       `${WORKSPACE_API}/blob/${hash}/chunk/${String(index)}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId ?? '')}`,
-      { credentials: 'same-origin' },
+      { credentials: 'same-origin', ...(signal === undefined ? {} : { signal }) },
     )
     if (!response.ok) throw new Error(`browser-native workspace: blob chunk download failed with HTTP ${String(response.status)}`)
     const bytes = new Uint8Array(await response.arrayBuffer())
@@ -1386,6 +1406,22 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       this.workspaceId!, hash, totalBytes,
       async (offset, length) => await this.downloadBlobChunk(hash, totalBytes, offset, length),
     )
+  }
+
+  private async openObserverBlob(hash: string, bytes: number) {
+    if (this.observerCache === undefined) throw new Error('browser-native workspace: observer cache is unavailable')
+    if (this.verifiedDownloads) {
+      try {
+        return await this.observerCache.open(hash, createVerifiedDownload(this.workspaceId!, hash, bytes))
+      } catch (error) {
+        if (!(error instanceof VerifiedDownloadUnsupportedError)) throw error
+      }
+    }
+    const controller = new AbortController()
+    return await this.observerCache.open(hash, {
+      read: async (offset, length) => length === 0 ? new Uint8Array(0) : await this.downloadBlobChunk(hash, bytes, offset, length, controller.signal),
+      close: async () => { controller.abort() },
+    })
   }
 
   private async downloadBlob(hash: string, totalBytes: number): Promise<Uint8Array> {
@@ -1523,6 +1559,8 @@ export interface BrowserNativeWorkspaceRuntimeOptions {
   readonly writerLease?: boolean
   /** Opt in to the frozen experimental content-defined upload protocol; never falls back. */
   readonly contentDefinedUpload?: boolean
+  /** Per-observer private OPFS admission limits; defaults to 4096 unique files and 512 MiB. */
+  readonly observerCacheLimits?: ObserverCacheLimits
   /** Notify tool publication when this Worker becomes a read-only observer or stale. */
   readonly onAccessMode?: (mode: WorkspaceAccessMode) => void
   /** Inject storage faults through the PoC-only Worker test port. */
@@ -1554,6 +1592,7 @@ export function createBrowserNativeWorkspaceRuntime(
     options.testHooks,
     options.onAccessMode,
     options.contentDefinedUpload === true,
+    options.observerCacheLimits,
   )
   vfs = new MemoryVfs({ sink: mirror })
   return {

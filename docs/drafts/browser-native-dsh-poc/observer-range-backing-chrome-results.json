@@ -1,0 +1,59 @@
+{
+  "scope": "PoC-local private OPFS observer backing; synthetic Chrome races plus a separate real LLM writer smoke",
+  "browser": "Chrome 156.0.8078.48",
+  "fullHost": {
+    "result": "passed",
+    "businessStepsElapsedMs": 21027,
+    "uniqueFileBytes": 16777216,
+    "aliasPaths": 3,
+    "logicalWorkspaceBytes": 50331648,
+    "baselineVfsResidentBytes": 34504135,
+    "observerVfsResidentBytes": 34504193,
+    "verifiedStreamRequests": 1,
+    "grepModelRequests": 2,
+    "staleRejected": true,
+    "sharedWriterMetadataUnchanged": true,
+    "privateDirectoriesAfterRelease": 0,
+    "pageErrors": [],
+    "externalRequests": [],
+    "cleanupErrors": []
+  },
+  "directWorkers": {
+    "logicalBytes": 4194304,
+    "vfsResidentBytes": 0,
+    "downloadReads": 4,
+    "maxDownloadReadBytes": 1048576,
+    "partialDownloadWorkerTerminated": true,
+    "unlockedOrphanReclaimed": true,
+    "liveReaderPreserved": true,
+    "corruptBytesRejected": true,
+    "privateDirectoriesAfterDispose": 0
+  },
+  "volatileControl": {
+    "result": "expected failure",
+    "baselineVfsResidentBytes": 34504135,
+    "observerVfsResidentBytes": 84835841,
+    "historicalBundle": false
+  },
+  "realLlmWriterSmoke": {
+    "model": "gpt-5.6-sol",
+    "turns": 3,
+    "llmHttp200": 8,
+    "llmRequests": 8,
+    "sessionEvents": 60,
+    "durableThroughSeq": 59,
+    "firstTurnFileTools": ["read", "write", "read"],
+    "workspaceCommitHttp200": 2,
+    "refreshAndMemoryPassed": true,
+    "coldWorkspaceCacheRecoveryPassed": true,
+    "pageErrors": [],
+    "diagnostics": ["Existing compaction headroom warning", "Auxiliary preview API 404", "ERR_ABORTED near stream end or refresh"],
+    "doesNotProveAutonomousObserverFaultScheduling": true
+  },
+  "limitations": [
+    "VFS resident bytes are not Chrome heap or RSS",
+    "Eager download; per-instance disk duplication; no origin-wide budget",
+    "No natural eviction, OS crash, power-loss, cross-device or production HA claim",
+    "Dedicated Workers remain subject to page lifetime"
+  ]
+}

@@ -8,9 +8,9 @@ description: "Browser-native DSH PoC v2 的可恢复实施进度、验证记录�
 
 - **阶段**：已完成 v2 PoC；preview build、默认 preview acceptance、scripted/real 浏览器 E2E、文档门禁和 typecheck 已通过。通用人工验收步骤见[手动验收说明](manual-acceptance.md)。
 - **目标**：在现有 DSH Web UI 和真实 DSH Host/Agent Loop 上实现 browser-native PoC；旧独立 HTML/loop 不是完成结果。
-- **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness-browser-native-poc`。
-- **当前分支**：`research-browser-native-poc`。
-- **checkpoint**：实现已提交并推送到 `origin/research-browser-native-poc`；维护文档不固定 commit hash，恢复时用 `git log --all --grep='browser-native' --oneline` 定位最近的实现提交。后续文档 review 产生的新提交应继续保持本文件、README 和 change ledger 一致。
+- **当前 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness`，仅主工作区。
+- **当前分支**：`research`。
+- **checkpoint**：早期隔离分支已由主工作区吸收，后续批次直接在 research 留档和提交；恢复时用 `git log --all --grep='browser-native' --oneline` 定位实现记录。当前只读缓存批次的验收与交付状态见[本批进度](observer-range-backing-validation-progress.md)。
 - **主 worktree**：`/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness` 的 `research` 分支保持不变。
 - **连续无修改审计计数**：3/3 已完成；后续实现中的文档修改不再属于规划审计循环。
 

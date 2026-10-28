@@ -54,6 +54,10 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 [本地写权与代际计划](local-writer-fencing-validation-plan.md)及[实际进度](local-writer-fencing-validation-progress.md)验证多 Worker 的共享 OPFS/IndexedDB 安全：snapshot 具有独立本地 generation，writer 具有一次性实例身份和 epoch，接管后旧实例不能通过 load 恢复权限。远端 lease 模式在取得本地操作锁后重新核对服务端写权；observer 不接管本地 metadata。本地写权不替代 backend lease 或身份授权。
 
+[只读 range backing 计划](observer-range-backing-validation-plan.md)及[实际进度](observer-range-backing-validation-progress.md)验证大 Workspace 的 observer 成本。durable observer 使用实例私有 OPFS，完整 SHA-256 验证后 seedExternal，不修改 writer 的 snapshot/control/pending 或共享 blob；同一 hash 的多个路径共享一个句柄并独立关闭。默认每实例最多 4096 个唯一文件、512 MiB，可通过 createBrowserNativeWorkspaceRuntime 的 observerCacheLimits 调整；超限或 OPFS 失败拒绝启动，不回退为完整 resident 文件。下载仍为 eager hydrate，并非按需远端文件系统；volatile observer 保留整文件驻留，VFS residentBytes 也不代表 Chrome heap/RSS。
+
+私有目录用独立 Web Lock 表示活实例，正常 release 关闭并删除本实例缓存；后继只回收同一 Workspace 已失锁的版本化目录，Worker 强杀的 partial bytes 不进入 writer 恢复。Chrome 验证三个路径对应同一 16 MiB 文件时，VFS 逻辑文件量增加 48 MiB，驻留增量约 58 字节；read、grep、stale 拒绝和共享 metadata 不变均通过。并发实例仍重复消耗磁盘与带宽，尚无 origin 总预算、懒下载或进程内存上限保证。
+
 该研究原型将名为 `dsh-browser-native-workspace-v1` 的 IndexedDB 数据库升级到 schema 2，保留 version 1 的 Workspace snapshot、pending/retry/receipt 和 OPFS 文件，新增 control store；数据库名称不代表当前 schema 版本。首次升级前关闭旧版 PoC 标签页，再用本版刷新；被旧连接阻挡时明确拒绝，不清缓存。升级后旧版页面不得继续写入，也不支持降级写回；请保留数据并使用本版恢复。未知版本或损坏 control 均拒绝自动修复。这是 docs-owned 研究原型的数据变更，不是已发布 DSH Session 格式变更。
 
 [下一批完整性与生命周期计划](next-integrity-and-lifecycle-plan.md)选择四个正式产品前仍有直接风险的验证面：冷 hydrate 分块写入和增量 SHA-256、OPFS orphan blob 的保守回收、页面离开前的本地 durable barrier，以及 Session receipt、Workspace outbox、云端 commit unknown 和 writer fencing 的组合恢复。实际证据和限制见[进度记录](next-integrity-and-lifecycle-progress.md)。
