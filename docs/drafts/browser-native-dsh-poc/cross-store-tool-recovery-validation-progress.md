@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 跨 Session 与 Workspace 工具恢复�
 
 ## 当前状态
 
-状态：M0-M4 验证完成；真实 Chrome/LLM smoke、PoC 定向回归、typecheck、preview build、`test:docs`（21/21）和 `doc-sync`（43/43）已通过。pre-push typecheck hook、commit 与 push 仍待执行。当前工作位于 `research` 主 worktree；起始基线与 `origin/research` 同步且干净，本轮未创建隔离 worktree。Chrome 是本批唯一浏览器目标。
+状态：M0-M4 完成；真实 Chrome/LLM smoke、PoC 定向回归、typecheck、preview build、`test:docs`（21/21）和 `doc-sync`（43/43）通过。变更已提交并推送至 `origin/research`；推送时 pre-push typecheck 5/5 通过，最终远端与本地 HEAD 一致且工作区干净。本轮在 `research` 主 worktree 实施，未创建隔离 worktree。Chrome 是本批唯一浏览器目标。
 
 本记录只描述当前 checkout 和实际命令结果。Scripted 故障测试是持久化时序证据，不是真实 LLM 证据。Session 与 Workspace 仍是独立存储；不声称跨存储原子事务或普遍 exactly-once。
 
@@ -18,7 +18,7 @@ description: "记录 Browser-Native DSH 跨 Session 与 Workspace 工具恢复�
 | M1：receipt 完整身份匹配 | `passed` | Provider 对账要求 originating `tool/call` 与 Session receipt、Workspace commit receipt 的完整身份字段一致；缺少 call 或任一字段错配均 fail closed。负例覆盖 Session、turn、step、callId、toolName、seq、operationId、workspace、revisions、digest、paths 和 replay 标志。 | 完成。 |
 | M2：durable receipt flush 响应丢失 | `passed` | Chrome scripted DSH `write` 后，backend 已将 receipt seq 18 flush 至 durable watermark；随后 Worker 被终止、同一 dataDir backend 重启且 flush response 被丢弃。刷新后 Session watermark 为 21，receipt/call/result 各一份，Workspace revision 与 commit 各为 1，outbox 清空。 | 完成。 |
 | M3：真实 LLM 与回归 | `passed` | 真实 `gpt-5.6-sol` Chrome smoke 完成 3 轮、刷新后继续，执行 `read → write → read`、跨轮记忆和刷新后文件读取；59 个 Session events、durable watermark 58、8/8 LLM HTTP 200、同源 LLM 请求、无 page error。首次可见 assistant UI 更新约 103 秒，而首个 Session 文本 chunk 约 6.6 秒；另观测到 compaction capacity warning、若干刷新取消请求和三个 preview 路由的 404，故本次证明闭环可运行，不代表首屏流式体验或 preview 路由无告警。 | 完成。 |
-| M4：文档与交付 | `passed` | README、兼容矩阵、drafts 索引和 change ledger 已更新；`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43 均通过。 | 执行提交、push 与远端/工作区复核。 |
+| M4：文档与交付 | `complete` | README、兼容矩阵、drafts 索引和 change ledger 已更新；`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43 均通过，pre-push typecheck 5/5 通过；变更已推送且 checkout 干净。 | 完成。 |
 
 ## 执行记录
 
@@ -39,7 +39,10 @@ description: "记录 Browser-Native DSH 跨 Session 与 Workspace 工具恢复�
 | 2026-10-28 | `pnpm run typecheck`; `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`; `node --check` changed `.mjs`; `git diff --check` | typecheck 5/5、preview build 和语法/差异检查通过；build 有既存 native platform、弃用和大 chunk warnings。 | 完成。 |
 | 2026-10-28 | `pnpm run test:docs` | doc-quick 21/21 gates 通过，包括 Markdown links/wrap、translation pairing、type equivalence、repository references、README gates 与 doc budgets。 | 完成。 |
 | 2026-10-28 | `pnpm run doc-sync` | 43/43 gates 通过，包括 doc-typecheck、documentation build、generated catalogs、subsystem pages、repository references、site checks 与 quick documentation gates。 | 完成。 |
-| 2026-10-28 | `pnpm --silent run change-scope --base origin/research` | 确认 HEAD 与 `origin/research` 同为 `f844b58c4119e6a424157e9558dd9cc54778ff45`；变更均为本批 PoC 源码、测试、计划/进度与索引/README/账本。 | 按 pre-push skill 再做 diff/status 复核，随后提交。 |
+| 2026-10-28 | `pnpm --silent run change-scope --base origin/research` | 确认 `research` HEAD 与 `origin/research` 同步；变更均为本批 PoC 源码、测试、计划/进度与索引/README/账本。 | 按 pre-push skill 再做 diff/status 复核，随后提交。 |
+| 2026-10-28 | `git commit -m "test(browser-native): reconcile durable workspace receipts"` | 提交成功；pre-commit staged lint、whitespace 和 vendor manifest guard 均通过。 | 推送 `research`。 |
+| 2026-10-28 | `git push origin research` | 推送成功；pre-push incremental typecheck 5/5 通过。 | 核验本地/远端 HEAD、工作区与 worktree。 |
+| 2026-10-28 | `git status --short --branch`; `git rev-parse HEAD origin/research`; `git worktree list` | 本地与 `origin/research` HEAD 一致，工作区干净，只有 research 主 worktree。 | 完成。 |
 
 ## 当前结论与限制
 
