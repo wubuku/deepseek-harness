@@ -20,6 +20,7 @@ const { chromium } = playwright.default ?? playwright
 const port = Number(process.env.DSH_POC_PORT ?? '0')
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-opfs-agent-file-tools-')))
 const scenario = process.env.DSH_POC_OPFS_ENVELOPE_SCENARIO ?? '12m'
+const disableChunkReuse = process.env.DSH_POC_DISABLE_CHUNK_REUSE === '1'
 const filePath = scenario === 'workset'
   ? '/dsh/home/workspace/envelope-16mib-0.txt'
   : '/dsh/home/workspace/opfs-agent-file.txt'
@@ -135,6 +136,7 @@ const llmStatuses = []
 const commitStatuses = []
 const consoleMessages = []
 const uploadRequests = []
+const reuseReports = []
 const workerHeapSamples = []
 let cdp
 let heapSampleTimer
@@ -194,6 +196,19 @@ try {
   const origin = await app.listen(port)
   browser = await chromium.launch({ headless: true, channel: process.env.DSH_POC_BROWSER ?? 'chrome' })
   page = await browser.newPage({ locale: 'en-US', timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 1000 } })
+  await page.route('**/api/browser-native/workspace/blob-upload/*/reuse', async route => {
+    if (disableChunkReuse) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+      return
+    }
+    const startedAt = performance.now()
+    const response = await route.fetch()
+    assert.equal(response.status(), 200)
+    const report = await response.json()
+    reuseReports.push({ ...report, elapsedMs: performance.now() - startedAt,
+      requestBytes: route.request().postDataBuffer()?.byteLength ?? 0 })
+    await route.fulfill({ response })
+  })
   cdp = await page.context().newCDPSession(page)
   cdp.on('Target.attachedToTarget', event => {
     if (event.targetInfo.type !== 'worker') return
@@ -393,9 +408,12 @@ try {
   }
   const duringEditStorageEstimate = await page.evaluate(async () => await navigator.storage.estimate())
   const editUploadRequests = uploadRequests.slice(seedUploadCount)
-  assert.equal(editUploadRequests.reduce((sum, upload) => sum + upload.bytes, 0), fileBytes,
-    'file-level content-addressed edit must upload the complete changed blob')
+  assert.equal(editUploadRequests.reduce((sum, upload) => sum + upload.bytes, 0), 1024 * 1024,
+    'fixed-offset reuse must upload only the one changed 1 MiB chunk')
   assert.equal(editUploadRequests.every(upload => upload.bytes > 0 && upload.bytes <= 1024 * 1024), true)
+  assert.equal(reuseReports.length, 1)
+  assert.equal(reuseReports[0].reused.length, Math.ceil(fileBytes / (1024 * 1024)) - 1)
+  assert.equal(reuseReports[0].stagedReuseBytes, fileBytes - 1024 * 1024)
   releaseCommit()
   let firstTurn
   try {
@@ -613,6 +631,10 @@ try {
     editMetrics,
     editUploadBytes: editUploadRequests.reduce((sum, upload) => sum + upload.bytes, 0),
     editUploadChunkCount: editUploadRequests.length,
+    reusedFileBytes: fileBytes - editUploadRequests.reduce((sum, upload) => sum + upload.bytes, 0),
+    targetChunkHashReadBytes: fileBytes,
+    disableChunkReuse,
+    reuseReports,
     editUploadMaxBodyBytes: Math.max(0, ...editUploadRequests.map(upload => upload.bytes)),
     editElapsedMs: editMetrics.elapsedMs,
     seedCommitCount,

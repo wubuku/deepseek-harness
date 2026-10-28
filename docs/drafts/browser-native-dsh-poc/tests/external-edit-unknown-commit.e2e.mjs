@@ -21,12 +21,14 @@ const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdi
 const workspacePath = '/dsh/home/workspace/external-edit-crash.txt'
 const fileBytes = Number(process.env.DSH_POC_EXTERNAL_EDIT_FILE_BYTES ?? '0')
 const largeFile = fileBytes !== 0
+const crashDuringReuse = process.env.DSH_POC_EXTERNAL_EDIT_CRASH_STAGE === 'reuse'
 const marker = largeFile
   ? 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_64M_E2E'
   : 'BROWSER_NATIVE_EXTERNAL_EDIT_CRASH_WINDOW_E2E'
 const beforeContent = 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V1'
 const afterContent = 'BROWSER_NATIVE_EXTERNAL_EDIT_64M_V2'
 if (largeFile && fileBytes !== 64 * 1024 * 1024) throw new Error('DSH_POC_EXTERNAL_EDIT_FILE_BYTES must be 67108864')
+if (crashDuringReuse && !largeFile) throw new Error('reuse crash requires the 64 MiB external edit scenario')
 
 let image
 let app
@@ -173,6 +175,27 @@ try {
     commitResponseLost = true
     await route.abort()
   })
+  if (crashDuringReuse) {
+    await page.route(`${origin}/api/browser-native/workspace/blob-upload/*/reuse`, async route => {
+      const response = await route.fetch()
+      assert.equal(response.status(), 200)
+      const body = await response.json()
+      assert.equal(body.reused.length, 63)
+      assert.deepEqual(body.missing, [0])
+      lostOperationId = body.operationId
+      const durableSession = await readSessionWithBrowserCookie(sessionId)
+      const editCall = durableSession.events.find(event => event.type === 'tool/call' && event.data.name === 'edit')
+      assert.ok(editCall)
+      assert.ok(sessionFlushes.some(flush => flush.durableThroughSeq >= editCall.seq))
+      await page.evaluate(() => {
+        if (window.__dshBrowserWorkers.length === 0) throw new Error('Dedicated Worker was not captured')
+        for (const worker of window.__dshBrowserWorkers) worker.terminate()
+      })
+      await restartBackend()
+      commitResponseLost = true
+      await route.abort()
+    })
+  }
 
   await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&browser-native-test=workspace-recovery&preview-fixture=none`)
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
@@ -196,7 +219,7 @@ try {
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.revision === 1, undefined, { timeout: 30_000 })
-  loseNextCommit = true
+  loseNextCommit = !crashDuringReuse
   await page.locator('[data-composer-input][contenteditable="true"]').last().fill(largeFile
     ? `${marker}：先读取第二行，再把 ${beforeContent} 替换为 ${afterContent}。`
     : `${marker}：先读取，再把 before 编辑为 after。`)
@@ -208,10 +231,11 @@ try {
   )
   sessionId = createRequest.body.sessionId
   await waitFor(() => commitResponseLost, 'backend external edit commit before response loss', 60_000)
-  assert.equal(commits.length, 2, 'the seed and external edit must each make one commit request')
-  assert.equal(commits[1].operationId, lostOperationId)
+  assert.equal(commits.length, crashDuringReuse ? 1 : 2, 'only completed uploads can reach Workspace commit')
+  if (!crashDuringReuse) assert.equal(commits[1].operationId, lostOperationId)
   const editUploadBytes = uploadRequests.slice(seededUploadCount).reduce((sum, bytes) => sum + bytes, 0)
-  if (largeFile) assert.equal(editUploadBytes, fileBytes, '64 MiB file-level edit must upload the complete changed blob')
+  if (largeFile) assert.equal(editUploadBytes, crashDuringReuse ? 0 : 1024 * 1024,
+    '64 MiB edit must upload only the changed 1 MiB chunk after reuse is acknowledged')
 
   const beforeReload = await readSessionWithBrowserCookie(sessionId)
   const editCalls = beforeReload.events.filter(event => event.type === 'tool/call' && event.data.name === 'edit')
@@ -249,11 +273,14 @@ try {
   )).json(), { id: workspaceId, operationId: lostOperationId })
   assert.equal(operation.found, true)
   assert.equal(operation.receipt.revision, 2)
-  assert.equal(commits.length, 3, 'recovery must make one idempotent replay after the seed and lost-response commit')
+  assert.equal(commits.length, crashDuringReuse ? 2 : 3, 'recovery must commit once or replay the original commit once')
   assert.equal(commits[1].operationId, lostOperationId)
-  assert.equal(commits[2].operationId, lostOperationId)
-  assert.equal(commits[2].baseRevision, commits[1].baseRevision)
-  assert.deepEqual(commits[2].changes, commits[1].changes)
+  if (!crashDuringReuse) {
+    assert.equal(commits[2].operationId, lostOperationId)
+    assert.equal(commits[2].baseRevision, commits[1].baseRevision)
+    assert.deepEqual(commits[2].changes, commits[1].changes)
+  }
+  if (largeFile) assert.equal(uploadRequests.slice(seededUploadCount).reduce((sum, bytes) => sum + bytes, 0), 1024 * 1024)
   const manifest = await page.evaluate(async id => await (await fetch(
     `/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${encodeURIComponent(id)}`,
   )).json(), workspaceId)
@@ -280,7 +307,8 @@ try {
   process.stdout.write(`${JSON.stringify({
     result: 'passed',
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
-    scope: 'real-DSH-external-edit-unknown-commit-after-backend-restart',
+    scope: crashDuringReuse ? 'real-DSH-external-edit-lost-reuse-response-after-backend-restart'
+      : 'real-DSH-external-edit-unknown-commit-after-backend-restart',
     sessionId,
     workspaceId,
     operationId: lostOperationId,
@@ -293,7 +321,7 @@ try {
     recoveredContent: largeFile ? afterContent : remote.content,
     recoveredBlobBytes: largeFile ? remote.bytes : undefined,
     recoveredBlobHash: largeFile ? remote.digest : undefined,
-    editUploadBytes,
+    editUploadBytes: uploadRequests.slice(seededUploadCount).reduce((sum, bytes) => sum + bytes, 0),
     editUploadChunkCount: uploadRequests.slice(seededUploadCount).length,
     commitOperationIds: commits.map(commit => commit.operationId),
     pageErrors,

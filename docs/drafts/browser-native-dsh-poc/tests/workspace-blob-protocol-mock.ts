@@ -8,6 +8,7 @@ interface UploadState {
   readonly chunkCount: number
   readonly chunks: Map<number, Uint8Array>
   complete: boolean
+  reusePlanned?: boolean
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
@@ -58,7 +59,7 @@ export function createWorkspaceBlobProtocolMock() {
         if (previous !== undefined && (previous.hash !== body.hash || previous.totalBytes !== body.totalBytes
           || previous.chunkCount !== chunkCount)) return jsonResponse({ error: { code: 'UPLOAD_ID_CONFLICT' } }, 409)
         if (previous === undefined) uploads.set(id, { hash: body.hash, totalBytes: body.totalBytes, chunkCount, chunks: new Map(), complete: false })
-        return jsonResponse({ complete: uploads.get(id)?.complete === true })
+        return jsonResponse({ complete: uploads.get(id)?.complete === true, reusePlanned: uploads.get(id)?.reusePlanned === true })
       }
 
       const status = url.pathname.match(/\/blob-upload\/([0-9a-f-]{36}-[a-f0-9]{64})$/i)
@@ -71,6 +72,25 @@ export function createWorkspaceBlobProtocolMock() {
       }
 
       const chunk = url.pathname.match(/\/blob-upload\/([0-9a-f-]{36}-[a-f0-9]{64})\/([0-9]+)$/i)
+      const reuse = url.pathname.match(/\/blob-upload\/([0-9a-f-]{36}-[a-f0-9]{64})\/reuse$/i)
+      if (method === 'POST' && reuse !== null) {
+        const upload = uploads.get(reuse[1] ?? '')
+        const body = JSON.parse(String(init?.body)) as { baseHash: string; chunkHashes: string[] }
+        const base = remoteBlobs.get(body.baseHash)
+        if (upload === undefined || base === undefined) return jsonResponse({ error: { code: 'BLOB_NOT_FOUND' } }, 404)
+        upload.reusePlanned = true
+        const reused: number[] = []
+        for (let index = 0; index < upload.chunkCount; index += 1) {
+          const length = Math.min(CHUNK_BYTES, upload.totalBytes - index * CHUNK_BYTES)
+          const bytes = base.subarray(index * CHUNK_BYTES, index * CHUNK_BYTES + length)
+          if (bytes.byteLength === length && hashBytes(bytes) === body.chunkHashes[index]) {
+            upload.chunks.set(index, bytes.slice())
+            reused.push(index)
+          }
+        }
+        return jsonResponse({ reused })
+      }
+
       if (method === 'PUT' && chunk !== null) {
         const upload = uploads.get(chunk[1] ?? '')
         if (upload === undefined) return jsonResponse({ error: { code: 'UPLOAD_NOT_FOUND' } }, 404)

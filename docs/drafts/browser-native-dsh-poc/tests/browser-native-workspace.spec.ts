@@ -309,6 +309,64 @@ describe('browser-native Workspace VFS sync', () => {
     expect(requests.find(request => request.url.includes('/manifest?'))?.method).toBe('GET')
   })
 
+  it('retries a lost reuse response with the same upload and only sends the changed chunk before committing', async () => {
+    const source = new Uint8Array(3 * 1024 * 1024 + 19).fill(0x41)
+    const sourceHash = createHash('sha256').update(source).digest('hex')
+    const target = source.slice()
+    target[0] = 0x42
+    const targetHash = createHash('sha256').update(target).digest('hex')
+    const protocol = createWorkspaceBlobProtocolMock()
+    protocol.registerBlob(sourceHash, source)
+    const reuseRequests: string[] = []
+    const startRequests: string[] = []
+    const commits: unknown[] = []
+    let loseReuseResponse = true
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.endsWith('/blob-upload/start')) startRequests.push(String(init?.body))
+      const transfer = protocol.respond(input, init)
+      if (url.endsWith('/reuse')) {
+        reuseRequests.push(JSON.stringify({ url, body: JSON.parse(String(init?.body)) }))
+        if (loseReuseResponse) {
+          loseReuseResponse = false
+          return jsonResponse({ error: { code: 'TEMPORARY', message: 'reuse response lost' } }, 503)
+        }
+      }
+      if (transfer !== undefined) return transfer
+      if (url.endsWith('/identity')) return jsonResponse({ workspaceId })
+      if (url.includes('/manifest?')) return jsonResponse({ workspaceId, revision: 1,
+        entries: [{ path: 'large.bin', kind: 'file', hash: sourceHash, bytes: source.byteLength, mode: 0o600 }] })
+      if (url.endsWith('/commit')) {
+        commits.push(JSON.parse(String(init?.body)))
+        return jsonResponse({ workspaceId, revision: 2 })
+      }
+      throw new Error(`unexpected request ${url}`)
+    }))
+    const runtime = createBrowserNativeWorkspaceRuntime()
+    runtime.vfs.seedDirectory('/dsh/home/workspace')
+    await runtime.prepareVfs(runtime.vfs)
+    runtime.vfs.writeFileSync('/dsh/home/workspace/large.bin', target)
+    await expect(runtime.flushWorkspace()).rejects.toThrow('reuse response lost')
+    expect(commits).toHaveLength(0)
+    expect(createHash('sha256').update(runtime.vfs.readFileSync('/dsh/home/workspace/large.bin')).digest('hex')).toBe(targetHash)
+    await runtime.flushWorkspace()
+    expect(reuseRequests).toHaveLength(1)
+    const firstStart = JSON.parse(startRequests[0] ?? '{}') as { operationId: string }
+    const secondStart = JSON.parse(startRequests[1] ?? '{}') as { operationId: string }
+    expect(firstStart.operationId).toBe(secondStart.operationId)
+    const first = JSON.parse(reuseRequests[0] ?? '{}') as { url: string; body: { baseHash: string; chunkHashes: string[] } }
+    expect(first.body.baseHash).toBe(sourceHash)
+    expect(first.body.chunkHashes).toHaveLength(4)
+    expect(protocol.readonlyUploads.map(upload => upload.index)).toEqual([0])
+    expect(protocol.readonlyUploads[0]?.bytes.byteLength).toBe(1024 * 1024)
+    const completed = protocol.completedBlobs.get(targetHash)
+    if (completed === undefined) throw new Error('target blob was not completed')
+    expect(completed.byteLength).toBe(target.byteLength)
+    expect(createHash('sha256').update(completed).digest('hex')).toBe(targetHash)
+    expect(commits).toHaveLength(1)
+    expect(commits[0]).toMatchObject({ baseRevision: 1, changes: [{ path: 'large.bin', hash: targetHash, bytes: target.byteLength }] })
+  })
+
   it('retains a stable operation id after an ambiguous commit failure and does not claim durability', async () => {
     const commits: Array<{ operationId: string; baseRevision: number }> = []
     let failCommit = true

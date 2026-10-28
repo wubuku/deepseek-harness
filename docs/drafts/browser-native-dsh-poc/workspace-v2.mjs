@@ -322,7 +322,7 @@ function validateLoadedIdentities(raw) {
 function isValidUploadMetadata(value, workspaceId, operationId, hash) {
   const fields = ['version', 'workspaceId', 'operationId', 'hash', 'totalBytes', 'chunkBytes', 'chunkCount', 'chunks', 'createdAt', 'updatedAt']
   return isRecord(value)
-    && Object.keys(value).length === fields.length
+    && Object.keys(value).every(field => fields.includes(field) || field === 'reuse')
     && fields.every(field => Object.hasOwn(value, field))
     && value.version === 1
     && value.workspaceId === workspaceId
@@ -332,9 +332,17 @@ function isValidUploadMetadata(value, workspaceId, operationId, hash) {
     && value.chunkBytes === WORKSPACE_BLOB_CHUNK_BYTES
     && value.chunkCount === Math.ceil(value.totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
     && Array.isArray(value.chunks) && value.chunks.length <= value.chunkCount
-    && value.chunks.every(chunkHash => typeof chunkHash === 'string' && /^[a-f0-9]{64}$/.test(chunkHash))
+    && value.chunks.every(chunkHash => chunkHash === null || typeof chunkHash === 'string' && /^[a-f0-9]{64}$/.test(chunkHash))
+    && (value.reuse === undefined || isValidReusePlan(value.reuse, value.chunkCount))
     && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
     && Number.isSafeInteger(value.updatedAt) && value.updatedAt >= 0
+}
+
+function isValidReusePlan(value, chunkCount) {
+  return isRecord(value) && Object.keys(value).length === 2
+    && typeof value.baseHash === 'string' && /^[a-f0-9]{64}$/.test(value.baseHash)
+    && Array.isArray(value.chunkHashes) && value.chunkHashes.length === chunkCount
+    && value.chunkHashes.every(hash => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash))
 }
 
 function stableManifest(entries) {
@@ -709,9 +717,62 @@ export class WorkspaceStore {
       }
       const missing = []
       for (let index = 0; index < chunkCount; index += 1) {
-        if (metadata.chunks[index] === undefined) missing.push(index)
+        if (typeof metadata.chunks[index] !== 'string') missing.push(index)
       }
-      return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount, missing }
+      return { workspaceId, operationId, hash, complete: false, chunkBytes: metadata.chunkBytes, chunkCount, missing,
+        reusePlanned: metadata.reuse !== undefined }
+    })
+  }
+
+  async reuseBlobChunks(request, workspaceId, operationId, hash, input) {
+    const principalId = this.principalFromRequest(request)
+    workspaceId = assertId(workspaceId, 'workspaceId')
+    assertUploadIdentity(operationId, hash)
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
+      const plan = { baseHash: input.baseHash, chunkHashes: input.chunkHashes }
+      if (!isValidReusePlan(plan, metadata.chunkCount)) {
+        throw new WorkspaceError('INVALID_REQUEST', 'reuse requires a base hash and one SHA-256 per target chunk')
+      }
+      if (metadata.reuse !== undefined && JSON.stringify(metadata.reuse) !== JSON.stringify(plan)) {
+        throw new WorkspaceError('UPLOAD_ID_CONFLICT', 'upload reuse plan cannot change', 409)
+      }
+      const base = [...workspace.entries.values()].find(entry => entry.kind === 'file' && entry.hash === plan.baseHash)
+      if (base === undefined) throw new WorkspaceError('BLOB_NOT_FOUND', 'reuse source is not referenced by this Workspace', 404)
+      if (!await this.blobStore.verify(base.hash, base.bytes)) {
+        throw new WorkspaceError('BLOB_CORRUPT', 'reuse source failed size or SHA-256 verification', 500)
+      }
+      const chunks = Array.from({ length: metadata.chunkCount }, (_, index) => metadata.chunks[index] ?? null)
+      if (chunks.some((chunk, index) => chunk !== null && chunk !== plan.chunkHashes[index])) {
+        throw new WorkspaceError('UPLOAD_CHUNK_CONFLICT', 'stored chunk conflicts with the reuse plan', 409)
+      }
+      if (metadata.reuse === undefined) {
+        await atomicWrite(this.uploadMetadataPath(workspaceId, operationId, hash), JSON.stringify({
+          ...metadata, reuse: plan, updatedAt: this.now(),
+        }))
+      }
+      const reused = []
+      let comparedSourceBytes = 0
+      let stagedReuseBytes = 0
+      for (let index = 0; index < metadata.chunkCount; index += 1) {
+        const length = expectedChunkBytes(metadata.totalBytes, index, metadata.chunkCount)
+        const offset = index * WORKSPACE_BLOB_CHUNK_BYTES
+        if (offset + length > base.bytes) continue
+        const bytes = await this.blobStore.getRange(base.hash, offset, length)
+        comparedSourceBytes += bytes.byteLength
+        if (bytes.byteLength !== length || hashBytes(bytes) !== plan.chunkHashes[index]) continue
+        await atomicWrite(join(this.uploadDirectory(workspaceId, operationId, hash), `${String(index)}.part`), bytes)
+        chunks[index] = plan.chunkHashes[index]
+        reused.push(index)
+        stagedReuseBytes += bytes.byteLength
+      }
+      await atomicWrite(this.uploadMetadataPath(workspaceId, operationId, hash), JSON.stringify({
+        ...metadata, reuse: plan, chunks, updatedAt: this.now(),
+      }))
+      const missing = chunks.flatMap((chunk, index) => chunk === null ? [index] : [])
+      return { workspaceId, operationId, hash, reused, missing,
+        baseVerificationBytes: base.bytes, comparedSourceBytes, stagedReuseBytes }
     })
   }
 
@@ -726,7 +787,7 @@ export class WorkspaceStore {
       const missing = []
       for (let index = 0; index < metadata.chunkCount; index += 1) {
         const expectedDigest = metadata.chunks[index]
-        if (expectedDigest === undefined) {
+        if (typeof expectedDigest !== 'string') {
           missing.push(index)
           continue
         }
@@ -756,10 +817,13 @@ export class WorkspaceStore {
       const metadata = await this.readUploadMetadata(workspaceId, operationId, hash)
       const expectedBytes = expectedChunkBytes(metadata.totalBytes, chunkIndex, metadata.chunkCount)
       if (bytes.byteLength !== expectedBytes) throw new WorkspaceError('UPLOAD_CHUNK_SIZE_MISMATCH', 'uploaded chunk has an invalid byte length')
+      if (metadata.reuse !== undefined && metadata.reuse.chunkHashes[chunkIndex] !== chunkHash) {
+        throw new WorkspaceError('UPLOAD_CHUNK_CONFLICT', 'uploaded chunk conflicts with the reuse plan', 409)
+      }
       const directory = this.uploadDirectory(workspaceId, operationId, hash)
       const path = join(directory, `${String(chunkIndex)}.part`)
       const previousHash = metadata.chunks[chunkIndex]
-      if (previousHash !== undefined) {
+      if (typeof previousHash === 'string') {
         if (previousHash !== chunkHash) {
           throw new WorkspaceError('UPLOAD_CHUNK_CONFLICT', 'chunk index was already stored with different content', 409)
         }
@@ -773,7 +837,7 @@ export class WorkspaceStore {
         }
       }
       await atomicWrite(path, bytes)
-      const chunks = [...metadata.chunks]
+      const chunks = Array.from({ length: metadata.chunkCount }, (_, index) => metadata.chunks[index] ?? null)
       chunks[chunkIndex] = chunkHash
       await atomicWrite(this.uploadMetadataPath(workspaceId, operationId, hash), JSON.stringify({
         ...metadata,
@@ -804,6 +868,7 @@ export class WorkspaceStore {
         reused = true
       } else {
         const temporary = join(this.uploadDirectory(workspaceId, operationId, hash), 'assembled.upload')
+        await rm(temporary, { force: true })
         const output = await open(temporary, 'wx', 0o600)
         const digest = createHash('sha256')
         let totalBytes = 0

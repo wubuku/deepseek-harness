@@ -1137,6 +1137,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private async uploadChanges(operationId: string, changes: readonly WorkspaceChange[]): Promise<readonly Record<string, unknown>[]> {
     const output: Record<string, unknown>[] = []
     const uploadedHashes = new Set<string>()
+    let reuseManifest: WorkspaceManifest | undefined
     for (const change of changes) {
       if (change.deleted === true) {
         output.push({ path: change.path, deleted: true })
@@ -1145,6 +1146,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (change.kind === 'directory') {
         output.push({ path: change.path, kind: 'directory', mode: change.mode })
         continue
+      }
+      let baseHash: string | undefined
+      if (change.bytes !== undefined && change.bytes > WORKSPACE_BLOB_CHUNK_BYTES) {
+        reuseManifest ??= await this.loadManifest()
+        baseHash = reuseManifest.entries.find(entry => entry.path === change.path && entry.kind === 'file')?.hash
       }
       if (change.contentReference !== undefined) {
         const reference = change.contentReference
@@ -1155,6 +1161,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
             reference.hash,
             reference.bytes,
             (offset, length) => this.vfs!.readFileRangeSync(`${WORKSPACE_ROOT}/${change.path}`, offset, length),
+            baseHash,
           )
           this.knownBlobHashes.add(reference.hash)
           uploadedHashes.add(reference.hash)
@@ -1166,7 +1173,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (content === undefined) throw new Error(`browser-native workspace: pending file ${change.path} has no content`)
       const hash = await sha256(content)
       if (!this.knownBlobHashes.has(hash) && !uploadedHashes.has(hash)) {
-        await this.uploadBlob(operationId, hash, content)
+        await this.uploadBlob(operationId, hash, content, baseHash)
         this.knownBlobHashes.add(hash)
         uploadedHashes.add(hash)
       }
@@ -1175,9 +1182,9 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     return output
   }
 
-  private async uploadBlob(operationId: string, hash: string, content: Uint8Array): Promise<void> {
+  private async uploadBlob(operationId: string, hash: string, content: Uint8Array, baseHash?: string): Promise<void> {
     await this.uploadBlobFromRanges(operationId, hash, content.byteLength,
-      (offset, length) => content.subarray(offset, offset + length))
+      (offset, length) => content.subarray(offset, offset + length), baseHash)
   }
 
   private async uploadBlobFromRanges(
@@ -1185,6 +1192,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     hash: string,
     totalBytes: number,
     readRange: (offset: number, length: number) => Uint8Array,
+    baseHash?: string,
   ): Promise<void> {
     if (this.workspaceId === undefined) {
       throw new Error('browser-native workspace: blob upload has no durable operation identity')
@@ -1208,13 +1216,38 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     const started = await readJson(startResponse)
     if (started.complete === true) return
 
+    if (baseHash !== undefined && baseHash !== hash && started.reusePlanned !== true) {
+      const chunkHashes: string[] = []
+      for (let offset = 0; offset < totalBytes; offset += WORKSPACE_BLOB_CHUNK_BYTES) {
+        const length = Math.min(WORKSPACE_BLOB_CHUNK_BYTES, totalBytes - offset)
+        const chunk = readRange(offset, length)
+        if (chunk.byteLength !== length) throw new Error('browser-native workspace: short range during upload hashing')
+        chunkHashes.push(await sha256(chunk))
+      }
+      const reuseResponse = await fetch(`${uploadPath}/reuse`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: crypto.randomUUID(),
+          workspaceId: this.workspaceId,
+          baseHash,
+          chunkHashes,
+        }),
+      })
+      await readJson(reuseResponse)
+    }
+
     const statusResponse = await fetch(
       `${uploadPath}?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
       { credentials: 'same-origin' },
     )
     const status = await readJson(statusResponse)
     if (status.complete === true) return
-    if (!Array.isArray(status.missing) || status.missing.some(index => !Number.isSafeInteger(index))) {
+    const chunkCount = Math.ceil(totalBytes / WORKSPACE_BLOB_CHUNK_BYTES)
+    if (!Array.isArray(status.missing) || status.missing.some(index => !Number.isSafeInteger(index) || index < 0 || index >= chunkCount)
+      || new Set(status.missing).size !== status.missing.length) {
       throw new Error('browser-native workspace: backend returned an invalid blob upload status')
     }
     for (const index of status.missing) {

@@ -342,6 +342,26 @@ async function uploadWorkspaceChunk(origin, identity, operationId, hash, index, 
   return { response, value: await response.json() }
 }
 
+async function startReuseUpload(origin, identity, source, target, hash = createHash('sha256').update(target).digest('hex')) {
+  const base = await uploadWorkspaceBlob(origin, identity, source)
+  const committed = await postWorkspace(origin, identity, 'commit', {
+    operationId: randomUUID(), baseRevision: 0,
+    changes: [{ path: 'reuse.bin', kind: 'file', hash: base.hash, bytes: source.byteLength, mode: 0o600 }],
+  })
+  assert.equal(committed.response.status, 200)
+  const operationId = randomUUID()
+  const path = `/api/browser-native/workspace/blob-upload/${operationId}-${hash}`
+  await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('reuse-start', {
+    workspaceId: identity.workspaceId, operationId, hash, totalBytes: target.byteLength, chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+  }))
+  const chunkHashes = []
+  for (let offset = 0; offset < target.byteLength; offset += WORKSPACE_BLOB_CHUNK_BYTES) {
+    chunkHashes.push(createHash('sha256').update(target.subarray(offset, offset + WORKSPACE_BLOB_CHUNK_BYTES)).digest('hex'))
+  }
+  const plan = envelope('reuse-plan', { workspaceId: identity.workspaceId, baseHash: base.hash, chunkHashes })
+  return { base, hash, operationId, path, plan }
+}
+
 afterEach(async () => {
   for (const app of liveApps) {
     await app.close()
@@ -1774,6 +1794,158 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(chunkResponse.headers.get('x-chunk-count'), '3')
     assert.deepEqual(downloadedChunk, new Uint8Array(finalChunk))
     assert.equal(chunkResponse.headers.get('x-content-sha256'), createHash('sha256').update(finalChunk).digest('hex'))
+  })
+
+  it('restarts a partially reused upload with a leading hole and repairs corrupt staging without another revision', async () => {
+    const dataDir = await temporaryDirectory()
+    const first = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(first.origin)
+    const source = Buffer.concat([Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x41),
+      Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x42), Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x43), Buffer.alloc(37, 0x44)])
+    const target = Buffer.from(source)
+    target[17] = 0x45
+    const upload = await startReuseUpload(first.origin, identity, source, target)
+    const reuse = await postAuthenticatedWorkspace(first.origin, identity, `${upload.path}/reuse`, upload.plan)
+    assert.deepEqual(reuse.reused, [1, 2, 3])
+    assert.deepEqual(reuse.missing, [0])
+    assert.deepEqual((await postAuthenticatedWorkspace(first.origin, identity, `${upload.path}/reuse`, upload.plan)).reused, [1, 2, 3])
+    const directory = join(dataDir, 'workspace-v2', 'uploads', identity.workspaceId, `${upload.operationId}-${upload.hash}`)
+    assert.equal(JSON.parse(await readFile(join(directory, 'upload.json'), 'utf8')).chunks[0], null)
+    await first.app.close()
+    liveApps.delete(first.app)
+    const second = await start({ dataDir, llmMode: 'scripted' })
+    await writeFile(join(directory, '2.part'), 'damaged')
+    const status = await fetch(`${second.origin}${upload.path}?protocolVersion=1&workspaceId=${identity.workspaceId}`, {
+      headers: { cookie: identity.cookie },
+    })
+    assert.equal(status.status, 200)
+    assert.deepEqual((await status.json()).missing, [0, 2])
+    await writeFile(join(directory, 'assembled.upload'), 'interrupted assembly')
+    for (const index of [2, 0]) {
+      const written = await uploadWorkspaceChunk(second.origin, identity, upload.operationId, upload.hash, index,
+        target.subarray(index * WORKSPACE_BLOB_CHUNK_BYTES, (index + 1) * WORKSPACE_BLOB_CHUNK_BYTES))
+      assert.equal(written.response.status, 200)
+    }
+    const completeBody = envelope('reuse-complete', { workspaceId: identity.workspaceId })
+    assert.equal((await postAuthenticatedWorkspace(second.origin, identity, `${upload.path}/complete`, completeBody)).complete, true)
+    const changes = [{ path: 'reuse.bin', kind: 'file', hash: upload.hash, bytes: target.byteLength, mode: 0o600 }]
+    const committed = await postWorkspace(second.origin, identity, 'commit', { operationId: upload.operationId, baseRevision: 1, changes })
+    const replay = await postWorkspace(second.origin, identity, 'commit', { operationId: upload.operationId, baseRevision: 1, changes })
+    assert.equal(committed.value.revision, 2)
+    assert.equal(replay.value.revision, 2)
+    assert.equal(replay.value.replayed, true)
+    assert.deepEqual(await second.app.workspaces.blobStore.get(upload.hash), target)
+  })
+
+  for (const scenario of ['boundary', 'insert', 'append', 'truncate']) {
+    it(`retains complete file integrity for fixed-offset reuse with ${scenario} edits`, async () => {
+      const { origin, app } = await start({ dataDir: await temporaryDirectory(), llmMode: 'scripted' })
+      const identity = await openWorkspaceIdentity(origin)
+      const source = Buffer.concat([Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x41),
+        Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x42), Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x43), Buffer.alloc(37, 0x44)])
+      let target
+      let expectedReused
+      if (scenario === 'boundary') {
+        target = Buffer.from(source)
+        target.fill(0x5a, WORKSPACE_BLOB_CHUNK_BYTES - 4, WORKSPACE_BLOB_CHUNK_BYTES + 4)
+        expectedReused = [2, 3]
+      } else if (scenario === 'insert') {
+        target = Buffer.concat([Buffer.from('Z'), source])
+        expectedReused = []
+      } else if (scenario === 'append') {
+        target = Buffer.concat([source, Buffer.from('Z')])
+        expectedReused = [0, 1, 2]
+      } else {
+        target = source.subarray(0, WORKSPACE_BLOB_CHUNK_BYTES + 17)
+        expectedReused = [0, 1]
+      }
+      const upload = await startReuseUpload(origin, identity, source, target)
+      const reuse = await postAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, upload.plan)
+      assert.deepEqual(reuse.reused, expectedReused)
+      for (const index of [...reuse.missing].reverse()) {
+        const written = await uploadWorkspaceChunk(origin, identity, upload.operationId, upload.hash, index,
+          target.subarray(index * WORKSPACE_BLOB_CHUNK_BYTES, (index + 1) * WORKSPACE_BLOB_CHUNK_BYTES))
+        assert.equal(written.response.status, 200)
+      }
+      assert.equal((await postAuthenticatedWorkspace(origin, identity, `${upload.path}/complete`,
+        envelope('reuse-complete', { workspaceId: identity.workspaceId }))).complete, true)
+      assert.deepEqual(await app.workspaces.blobStore.get(upload.hash), target)
+      assert.equal(app.workspaces.manifest({ headers: { cookie: identity.cookie } }, identity.workspaceId).revision, 1)
+    })
+  }
+
+  it('rejects unreferenced and cross-Workspace reuse sources, changed plans and incompatible target chunks', async () => {
+    const { origin } = await start({ dataDir: await temporaryDirectory(), llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const source = Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES + 19, 0x41)
+    const target = Buffer.from(source)
+    target[0] = 0x42
+    const upload = await startReuseUpload(origin, identity, source, target)
+    const other = await openWorkspaceIdentity(origin)
+    const foreign = await uploadWorkspaceBlob(origin, other, Buffer.from('private foreign content'))
+    const foreignCommit = await postWorkspace(origin, other, 'commit', { operationId: randomUUID(), baseRevision: 0,
+      changes: [{ path: 'secret.txt', kind: 'file', hash: foreign.hash, bytes: foreign.bytes, mode: 0o600 }] })
+    assert.equal(foreignCommit.response.status, 200)
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, {
+      ...upload.plan, baseHash: foreign.hash,
+    })).code, 'BLOB_NOT_FOUND')
+    assert.equal((await failureAuthenticatedWorkspace(origin, other, `${upload.path}/reuse`, upload.plan)).status, 403)
+    const uncommitted = await uploadWorkspaceBlob(origin, identity, Buffer.from('not in manifest'))
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, {
+      ...upload.plan, baseHash: uncommitted.hash,
+    })).code, 'BLOB_NOT_FOUND')
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, {
+      ...upload.plan, chunkHashes: ['invalid'],
+    })).code, 'INVALID_REQUEST')
+    await postAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, upload.plan)
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, {
+      ...upload.plan, chunkHashes: [upload.base.hash, upload.plan.chunkHashes[1]],
+    })).code, 'UPLOAD_ID_CONFLICT')
+    const incompatible = await uploadWorkspaceChunk(origin, identity, upload.operationId, upload.hash, 0,
+      Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES, 0x5a))
+    assert.equal(incompatible.value.error.code, 'UPLOAD_CHUNK_CONFLICT')
+  })
+
+  it('rejects a corrupt reuse source and a false whole-file hash without committing either file', async () => {
+    const { app, origin } = await start({ dataDir: await temporaryDirectory(), llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const source = Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES + 19, 0x41)
+    const upload = await startReuseUpload(origin, identity, source, source, '0'.repeat(64))
+    await writeFile(app.workspaces.blobStore.path(upload.base.hash), Buffer.alloc(source.byteLength, 0x42))
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, upload.plan)).code, 'BLOB_CORRUPT')
+    await writeFile(app.workspaces.blobStore.path(upload.base.hash), source)
+    const reused = await postAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, upload.plan)
+    assert.deepEqual(reused.missing, [])
+    assert.equal((await failureAuthenticatedWorkspace(origin, identity, `${upload.path}/complete`,
+      envelope('invalid-whole-hash', { workspaceId: identity.workspaceId }))).code, 'UPLOAD_BLOB_HASH_MISMATCH')
+    assert.equal(app.workspaces.manifest({ headers: { cookie: identity.cookie } }, identity.workspaceId).revision, 1)
+  })
+
+  it('finishes self-contained reused staging after the base blob is removed and garbage collected', async () => {
+    const { app, origin } = await start({ dataDir: await temporaryDirectory(), llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const source = Buffer.alloc(WORKSPACE_BLOB_CHUNK_BYTES + 19, 0x41)
+    const target = Buffer.from(source)
+    target[0] = 0x42
+    const upload = await startReuseUpload(origin, identity, source, target)
+    await postAuthenticatedWorkspace(origin, identity, `${upload.path}/reuse`, upload.plan)
+    const removed = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(), baseRevision: 1, changes: [{ path: 'reuse.bin', deleted: true }],
+    })
+    assert.equal(removed.value.revision, 2)
+    await app.workspaces.collectGarbage(identity.workspaceId)
+    assert.equal(await app.workspaces.blobStore.stat(upload.base.hash), undefined)
+    const resumed = await postAuthenticatedWorkspace(origin, identity, '/api/browser-native/workspace/blob-upload/start', envelope('reuse-resume-after-gc', {
+      workspaceId: identity.workspaceId, operationId: upload.operationId, hash: upload.hash,
+      totalBytes: target.byteLength, chunkBytes: WORKSPACE_BLOB_CHUNK_BYTES,
+    }))
+    assert.equal(resumed.reusePlanned, true)
+    assert.deepEqual(resumed.missing, [0])
+    assert.equal((await uploadWorkspaceChunk(origin, identity, upload.operationId, upload.hash, 0,
+      target.subarray(0, WORKSPACE_BLOB_CHUNK_BYTES))).response.status, 200)
+    assert.equal((await postAuthenticatedWorkspace(origin, identity, `${upload.path}/complete`,
+      envelope('complete-after-gc', { workspaceId: identity.workspaceId }))).complete, true)
+    assert.deepEqual(await app.workspaces.blobStore.get(upload.hash), target)
   })
 
   it('reports a corrupted staged chunk as missing and accepts its verified replacement', async () => {

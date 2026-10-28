@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-044：固定偏移分块复用与非顺序上传恢复
+
+```text
+changeId: BN-P2-044
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 起始工作区干净，仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-workspace.spec.ts; docs/drafts/browser-native-dsh-poc/tests/workspace-blob-protocol-mock.ts; docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs; 本批计划/进度、README、兼容矩阵、change-ledger；docs/drafts/README.md
+reason: 有界 copy-on-write 不能消除小修改的完整文件上传。正式产品前需要证明分块复用可以减少上行，同时不破坏 upload 恢复、整文件完整性、Workspace CAS、operationId 和 Session receipt。
+existingExtensionPointsChecked: 复用现有 upload start/status/put/complete、同 principal Workspace manifest 授权、blob-lifecycle lock、OPFS range reader、Session receipt 与现有 Chrome Worker test port。没有修改正式 packages/apps、Agent Loop、Session 格式或根依赖。
+behaviorChange: 新增 PoC upload reuse 请求，冻结同 upload 的来源/hash 计划，只从当前 Workspace manifest 引用的完整校验来源按固定偏移复制匹配块。upload metadata 允许 null 表示缺块，修复非顺序上传持久化后被误判损坏的问题；重试可识别已有 reuse plan 并通过 status 续传，旧来源不再存在也不影响自包含 staging 的最终组装。组装重试先清理本 upload 内的旧临时 assembled 文件。文件提交仍需完整 SHA-256 与 manifest CAS；reuse 或 upload complete 不产生工具成功回执。
+directoryOutChangeReason: 唯一 PoC 子目录外文件为 docs/drafts/README.md，仅登记本批文档；本目录已在中文 scratch 翻译豁免内。
+tests: backend 56/56、Workspace/chunk-editor/durable-store Vitest 44/44；Chrome 64 MiB 等长 edit 上行 1 MiB、4×16 MiB 工作集单路径 edit 上行 1 MiB、禁用复用的 12 MiB 负对照按预期失败。真实模型普通文件 smoke、commit unknown 与复用响应丢失恢复的最终结果和门禁见本批进度。
+syncReplaySteps: 上游同步后核对 upload metadata 的 null 缺块、reuse plan 持久化顺序、来源授权和完整 hash、uploadId 身份、Workspace CAS 与 Session receipt。运行 backend/Workspace 单测、preview build、64 MiB 与 workset Chrome 场景、reuse-response-loss 和 commit-response-loss 恢复、真实 LLM smoke 和文档检查。旧 backend 不支持 reuse 时当前大文件 edit 会明确失败，部署须同时更新 Worker 与 backend，不静默宣称兼容。
+deleteCondition: 正式 Workspace 同步提供等价授权、分块复用、hash/CAS 与恢复测试后迁移本 PoC；或移除 Browser-Native PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-043：OPFS 标准文件工具资源包络与大文件 unknown commit
 
 ```text

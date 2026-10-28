@@ -115,7 +115,7 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 [可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)记录独立的 OPFS copy-on-write 算法原型。之后该实现已接入当前 checkout 的 DSH 标准 `edit`、Worker VFS 外部 backing 与 Workspace mirror；最新 Chrome 资源数据见[标准工具资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[进度](opfs-standard-tool-envelope-validation-progress.md)。
 
-该接入仍是 PoC，不是已发布的正式文件系统能力。标准 `edit` 通过 1 MiB copy-on-write buffer 读取并发布 external backing，VFS 驻留量在 64 MiB 样本中仅增加 10,589 bytes；Workspace 仍上传完整的 64 MiB 新 content-addressed blob，分为 64 个 1 MiB 请求。它不是块级 delta、零拷贝或生产 Workspace API。旧进度中的 `residentBytes` 对照值描述接入之前的完整 materialize 路径，不代表当前 checkout。
+该接入仍是 PoC，不是已发布的正式文件系统能力。标准 `edit` 通过 1 MiB copy-on-write buffer 读取并发布 external backing，VFS 驻留量在 64 MiB 样本中仅增加 10,589 bytes。资源包络批次记录了完整新 blob 上传；当前 checkout 的[分块复用验证](chunk-reuse-upload-validation-plan.md)进一步复用当前 Workspace 已提交来源文件的相同偏移块。服务端仍组装并保存完整文件，它不是零拷贝或生产 Workspace API。旧进度中的 `residentBytes` 对照值描述接入之前的完整 materialize 路径，不代表当前 checkout。
 
 复跑原型和对照：
 
@@ -166,7 +166,7 @@ Chrome 终止 Worker 后可能暂时保留 OPFS sync access handle。Store 会�
 
 ## OPFS 外置大文件的 DSH 工具闭环
 
-[早期文件工具验证](opfs-agent-file-tools-validation-plan.md)覆盖 12 MiB scripted 工具序列；本批[资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[实测进度](opfs-standard-tool-envelope-validation-progress.md)将标准 DSH 工具扩展到 64 MiB 单文件和 4×16 MiB 工作集。真实 Chrome Worker/Host 通过 12 MiB `read → grep → edit → read`、64 MiB `read → edit → read`、工作集冷 hydrate 后单文件编辑与刷新校验；编辑使用有界 copy-on-write buffer，Workspace 仍传完整变化文件。scripted handler 固定工具选择；另有真实模型普通文件 smoke，不据此宣称模型自主处理大文件。
+[早期文件工具验证](opfs-agent-file-tools-validation-plan.md)覆盖 12 MiB scripted 工具序列；[资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[实测进度](opfs-standard-tool-envelope-validation-progress.md)将标准 DSH 工具扩展到 64 MiB 单文件和 4×16 MiB 工作集。真实 Chrome Worker/Host 通过 12 MiB `read → grep → edit → read`、64 MiB `read → edit → read`、工作集冷 hydrate 后单文件编辑与刷新校验；编辑使用有界 copy-on-write buffer。随后新增的固定偏移分块复用及实际上传成本见[分块复用进度](chunk-reuse-upload-validation-progress.md)。scripted handler 固定工具选择；另有真实模型普通文件 smoke，不据此宣称模型自主处理大文件。
 
 在 preview 构建后运行模型无关的大文件验收：
 
@@ -191,6 +191,21 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ROST
 ```
 
 真实模型结果只覆盖普通大小文件 `read → write → read` 和刷新恢复，不覆盖大文件 scripted 场景、模型自主选择大文件工具或大型 tool arguments。`grep` 仍是有界 JavaScript fallback，不是完整 ripgrep；详细字节数、heap 采样限制、unknown commit 证据和已知 preview warning 见[资源包络进度](opfs-standard-tool-envelope-validation-progress.md)。
+
+## 固定偏移分块复用上传
+
+当前 upload 可从同一 Workspace 当前 manifest 引用的已提交文件复用相同偏移、长度及 SHA-256 的 1 MiB 分块。客户端先计算目标各块 hash；服务端验证来源完整文件 hash，把匹配块复制到 upload staging，只要求客户端上传缺块。复用计划在写入前持久化，同一 upload 不得换计划；重启后从 status 的缺块继续，不重新执行 DSH edit。最终仍校验完整目标 hash，并通过原有 manifest CAS、operationId 和 Session receipt 提交。
+
+在 Chrome 64 MiB 等长 marker 场景中，标准 `edit` 上行 binary body 为一个 1 MiB chunk，复用 63 MiB；禁用复用的负对照会在流量断言失败。固定偏移复用不能保证插入/删除节省流量：文件开头插入一个 byte 可能改变所有后续块。它不提供内容定义分块、byte delta 或块级对象存储；服务端仍持有完整 staging 和完整新 blob，也增加了来源读取和复制。成本、失败、恢复及真实模型 smoke 的实际结果见[验证计划](chunk-reuse-upload-validation-plan.md)及[进度](chunk-reuse-upload-validation-progress.md)。
+
+构建 preview 后复跑正常路径和复用响应丢失恢复：
+
+```sh
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_OPFS_ENVELOPE_SCENARIO=64m \
+  node docs/drafts/browser-native-dsh-poc/tests/opfs-agent-file-tools.e2e.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js DSH_POC_EXTERNAL_EDIT_FILE_BYTES=67108864 DSH_POC_EXTERNAL_EDIT_CRASH_STAGE=reuse \
+  node docs/drafts/browser-native-dsh-poc/tests/external-edit-unknown-commit.e2e.mjs
+```
 
 ## Browser-native 文件搜索与载荷安全
 

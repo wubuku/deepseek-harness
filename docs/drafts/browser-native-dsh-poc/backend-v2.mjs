@@ -2697,6 +2697,15 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, await workspaces.startBlobUpload(request, body))
         return
       }
+      const uploadReuse = url.pathname.match(/^\/api\/browser-native\/workspace\/blob-upload\/([0-9a-f-]{36})-([a-f0-9]{64})\/reuse$/i)
+      if (request.method === 'POST' && uploadReuse !== null) {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.reuseBlobChunks(
+          request, body.workspaceId, uploadReuse[1], uploadReuse[2], body,
+        ))
+        return
+      }
       const uploadStatus = url.pathname.match(/^\/api\/browser-native\/workspace\/blob-upload\/([0-9a-f-]{36})-([a-f0-9]{64})$/i)
       if (request.method === 'GET' && uploadStatus !== null) {
         if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
