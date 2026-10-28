@@ -240,6 +240,18 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules
 env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_CONTENT_UPLOAD=1 DSH_POC_ROSTER=original DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 ```
 
+## 不可变块对象存储原型
+
+backend 的 `createBrowserNativeV2Server({ workspaceChunkObjects: true })` 显式选择本地不可变块与文件版本描述符；Worker 仍需 `contentDefinedUpload: true` 才走 CDC 引用路径。默认 fixed、已有完整 blob 和当前 manifest 文件身份保持原语义。该 dataDir 一旦初始化块存储，重启必须沿用该选项，缺失时以 `CHUNK_STORE_REQUIRED` 拒绝，不把原文件显示为空。该选项不能与外部 `workspaceBlobStore` 混用。
+
+设计、验收矩阵、实测与未完成项见[规划](chunk-object-storage-validation-plan.md)和[进度](chunk-object-storage-validation-progress.md)。块数据先持久化，文件完整 SHA-256 验证后才发布有序版本，最后仍需原 manifest CAS。pending upload metadata 是 GC root；来源被删除不等于可以删除未完成目标依赖的块。该实验不提供生产对象存储或多实例事务。
+
+[Chrome 脱敏工件](chunk-object-storage-chrome-results.json)包含 9 场景 14 runs、最终四阶段响应丢失恢复、64 MiB 冷缓存与 GC、强制 staging 负对照。写入复用/组装降为 0，但当前每次 range 都验证全文件，64 MiB 冷恢复实际读取 4 GiB；该选项保持默认关闭。真实 LLM 三轮也已单独通过，命令与验收服务见上述进度，不能用成本矩阵代替真实模型验证。
+
+本批使用全新 dataDir；旧完整 blob 的读取和 fixed 写入保留，但已有 CDC staging/布局到块对象的在线迁移不在本批范围。不能为切换模式删除 outbox、替换 operationId 或承诺旧 CDC 来源自动变成可引用的块。
+
+首次从远端恢复文件时，mirror 先验证原本地 snapshot，并在无本地状态时登记干净 metadata，再下载到 OPFS。已有 OPFS bytes 却丢失 metadata 仍拒绝自动覆盖；不能把缓存清除、可重新下载与本地未同步状态损坏混为一类。
+
 ## Browser-native 文件搜索与载荷安全
 
 [本批计划](browser-file-tools-validation-plan.md)和[实施进度](browser-file-tools-validation-progress.md)记录为 Browser Worker 提供 `grep`/`glob` fallback、限制搜索结果和扫描字节、拒绝会放大 Session 载荷的 `edit` 输入，以及取消后的 Worker 可用性。fallback 只搜索 `/dsh/home/workspace`，使用 JavaScript 正则和有限 glob 语义；它不启动主机子进程、不等同 ripgrep、也不提供块级编辑。搜索和编辑都设有文件数、扫描字节、扫描行数、匹配数、结果行长、pattern 和 edit 载荷上限，超限 fail closed；`grep`/`glob` 采用显式栈遍历和分块读取，二进制/非法 UTF-8 文件返回明确错误，provider 的文件工具名称集中登记。内容、include 和 glob 的正则语法编译及匹配在可终止的嵌套 Worker 中执行；这限制了单次阻塞，但不是完整 ReDoS 保证。

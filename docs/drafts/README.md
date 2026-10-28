@@ -92,6 +92,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 34. [OPFS 标准工具资源包络验证](browser-native-dsh-poc/opfs-standard-tool-envelope-validation-plan.md)及[实施进度](browser-native-dsh-poc/opfs-standard-tool-envelope-validation-progress.md)：Chrome 验证 12/64 MiB 标准文件工具、4×16 MiB 冷工作集、Worker heap 采样与 64 MiB commit unknown 恢复；真实 LLM 普通文件 smoke 单独通过。该批记录完整变化文件上传；当前固定偏移复用的成本和限制见[分块复用计划](browser-native-dsh-poc/chunk-reuse-upload-validation-plan.md)及[进度](browser-native-dsh-poc/chunk-reuse-upload-validation-progress.md)。采样和算法计数不代表进程内存上限或全部 I/O。
 35. [Browser-Native Workspace 内容定义分块验证](browser-native-dsh-poc/content-defined-chunking-validation-plan.md)及[实测进度](browser-native-dsh-poc/content-defined-chunking-validation-progress.md)：18 个 Chrome Dedicated Worker/OPFS workload 比较 gear-based CDC 与固定偏移上行估算、块长分布、读取和 hash 成本；8/8 核心移位场景达到准入门槛。合成原始结果见[Chrome 数据](browser-native-dsh-poc/content-defined-chunking-chrome-results.json)，实际上传与恢复另见[协议验证](browser-native-dsh-poc/content-upload-protocol-validation-progress.md)。
 36. [Browser-Native 内容分块上传协议规划](browser-native-dsh-poc/content-upload-protocol-validation-plan.md)及[实施进度](browser-native-dsh-poc/content-upload-protocol-validation-progress.md)：显式 CDC 协商、实际缺块 HTTP 上传、来源授权、完整文件验证、同 operation 重启续传与服务端 I/O 成本；保留默认固定分块和完整 blob 权威。
+37. [Browser-Native 不可变块对象存储规划](browser-native-dsh-poc/chunk-object-storage-validation-plan.md)及[实施进度](browser-native-dsh-poc/chunk-object-storage-validation-progress.md)：验证复用块引用、文件版本、pending GC、重启恢复与实际磁盘成本；完整文件 hash 和 manifest CAS 仍独立于块上传。
 
 ### 需要实现或审查代码时
 

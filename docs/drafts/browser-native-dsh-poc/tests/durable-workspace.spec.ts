@@ -42,6 +42,46 @@ afterEach(() => {
 })
 
 describe('durable Browser-Native Workspace state', () => {
+  it('registers clean remote metadata before caching the first downloaded blob', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    const load = store.load.bind(store)
+    const cache = store.cacheBlob.bind(store)
+    vi.spyOn(store, 'load').mockImplementation(async workspace => {
+      const snapshot = await load(workspace)
+      if (snapshot === undefined && (await store.listWorkspaceIds()).includes(workspace)) {
+        throw new DurableWorkspaceStoreError('LOCAL_METADATA_MISSING', 'local OPFS blobs exist without IndexedDB metadata')
+      }
+      return snapshot
+    })
+    vi.spyOn(store, 'cacheBlob').mockImplementation(async (workspace, hash, bytes) => {
+      expect(await load(workspace)).toMatchObject({ revision: 9, pending: [] })
+      await cache(workspace, hash, bytes)
+    })
+    stubRemoteManifest(9, [{ path: 'restored.txt', kind: 'file', hash: remoteHash, bytes: remoteBytes.byteLength, mode: 0o600 }])
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: () => {} })
+    await runtime.prepareVfs(runtime.vfs)
+    expect(runtime.vfs.readFileSync('/dsh/home/workspace/restored.txt')).toEqual(remoteBytes)
+    expect(await load(workspaceId)).toMatchObject({ revision: 9, pending: [] })
+    const resumed = createBrowserNativeWorkspaceRuntime({ store, onStatus: () => {} })
+    await resumed.prepareVfs(resumed.vfs)
+    expect(resumed.vfs.readFileSync('/dsh/home/workspace/restored.txt')).toEqual(remoteBytes)
+    expect(await resumed.flushWorkspace()).toEqual([])
+    expect(store.cacheBlob).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not download remote bytes when clean metadata registration fails', async () => {
+    const store = new MemoryDurableWorkspaceStore()
+    vi.spyOn(store, 'save').mockRejectedValue(new DOMException('metadata transaction aborted', 'AbortError'))
+    const cache = vi.spyOn(store, 'cacheBlob')
+    const streamed = vi.spyOn(store, 'cacheBlobFromChunks')
+    stubRemoteManifest(9, [{ path: 'restored.txt', kind: 'file', hash: remoteHash, bytes: remoteBytes.byteLength, mode: 0o600 }])
+    const runtime = createBrowserNativeWorkspaceRuntime({ store, onStatus: () => {} })
+    await expect(runtime.prepareVfs(runtime.vfs)).rejects.toThrow('metadata transaction aborted')
+    expect(cache).not.toHaveBeenCalled()
+    expect(streamed).not.toHaveBeenCalled()
+    expect(runtime.vfs.existsSync('/dsh/home/workspace/restored.txt')).toBe(false)
+  })
+
   it('round-trips pending bytes and clones content', async () => {
     const store = new MemoryDurableWorkspaceStore()
     const content = new Uint8Array([1, 2, 3])

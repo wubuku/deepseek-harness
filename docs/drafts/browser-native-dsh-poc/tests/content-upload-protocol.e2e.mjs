@@ -1,7 +1,7 @@
 /** Real Chrome upload costs and durable response-loss recovery; consumes a freshly built preview. */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -18,6 +18,9 @@ const workspacePath = '/dsh/home/workspace/fixture.bin'
 const api = '/api/browser-native/workspace'
 const previewQuery = 'browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none'
 const forceFixed = process.env.DSH_POC_CONTENT_UPLOAD_FORCE_FIXED === '1'
+const chunkObjectComparison = process.env.DSH_POC_CHUNK_OBJECTS === '1'
+const forceStaging = process.env.DSH_POC_CHUNK_OBJECTS_FORCE_STAGING === '1'
+const coldRead = process.env.DSH_POC_CHUNK_OBJECTS_COLD_READ === '1'
 const timeout = Number(process.env.DSH_POC_CONTENT_UPLOAD_TIMEOUT_MS ?? 240_000)
 assert.ok(Number.isSafeInteger(timeout) && timeout > 0, 'DSH_POC_CONTENT_UPLOAD_TIMEOUT_MS must be a positive integer')
 const scenarios = [
@@ -40,7 +43,9 @@ const resultFile = resolve(process.env.DSH_POC_RESULT_FILE ?? join(tmpdir(), `ds
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-content-upload-backend-')))
 const startedAt = performance.now()
 const evidence = {
-  result: 'running', selection, forceFixedNegativeControl: forceFixed, browser: process.env.DSH_POC_BROWSER ?? 'chrome',
+  result: 'running', selection, forceFixedNegativeControl: forceFixed, chunkObjectComparison, forceStagingNegativeControl: forceStaging,
+  coldRead,
+  browser: process.env.DSH_POC_BROWSER ?? 'chrome',
   model: 'not used; no composer submission or ctx.agentLoop execution',
   measurements: 'Actual HTTP request bodies; backend response I/O counters exclude audit downloads and metadata filesystem I/O',
   storageIsolation: 'Each strategy and case owns a new backend dataDir and empty blob store; recovery reuses only its own dataDir and port',
@@ -53,6 +58,33 @@ let browser
 let origin
 let active
 let currentDataDir
+
+async function storageSnapshot() {
+  const totals = { chunks: { files: 0, bytes: 0 }, versions: { files: 0, bytes: 0 },
+    blobs: { files: 0, bytes: 0 }, staging: { files: 0, bytes: 0 }, metadata: { files: 0, bytes: 0 } }
+  const visit = async (directory, prefix = '') => {
+    let entries
+    try { entries = await readdir(directory, { withFileTypes: true }) } catch (error) {
+      if (error.code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      const relative = `${prefix}${entry.name}`
+      if (entry.isDirectory()) await visit(path, `${relative}/`)
+      else if (entry.isFile()) {
+        const category = relative.startsWith('chunk-objects/chunks/') ? 'chunks'
+          : relative.startsWith('chunk-objects/files/') ? 'versions'
+            : relative.startsWith('blobs/') ? 'blobs'
+              : /\.(part|upload)$/.test(relative) ? 'staging' : 'metadata'
+        totals[category].files += 1
+        totals[category].bytes += (await stat(path)).size
+      }
+    }
+  }
+  await visit(join(currentDataDir, 'workspace-v2'))
+  return { disk: totals, chunkIo: app.workspaces.chunkObjects?.getMetrics() }
+}
 
 function deferred() {
   let resolveValue
@@ -207,13 +239,14 @@ async function createRun(scenario, strategy) {
   app = undefined
   await mkdir(dataDir, { recursive: true })
   currentDataDir = await mkdtemp(join(dataDir, 'run-'))
-  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted' })
+  const chunkObjects = strategy === 'cdc-objects'
+  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted', workspaceChunkObjects: chunkObjects && !forceStaging })
   origin = await app.listen(0)
   const context = await browser.newContext({ locale: 'en-US', timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' })
   const run = {
-    strategy, lossStage: scenario.lossStage, context, phase: 'boot', epoch: 0,
-    contentDefinedUpload: strategy === 'cdc' && !forceFixed, sessionIds: new Set(), sessionTraffic: [], llmRequests: [],
-    requests: [], externalRequests: [], pageErrors: [], workerErrors: [], routeErrors: [], routes: new Set(), closing: false,
+    strategy, chunkObjects, lossStage: scenario.lossStage, context, phase: 'boot', epoch: 0,
+    contentDefinedUpload: strategy !== 'fixed' && !forceFixed, sessionIds: new Set(), sessionTraffic: [], llmRequests: [],
+    requests: [], externalRequests: [], pageErrors: [], workerErrors: [], consoleWarnings: [], routeErrors: [], routes: new Set(), closing: false,
   }
   active = run
   await context.addInitScript(({ enabled }) => {
@@ -265,6 +298,9 @@ async function createRun(scenario, strategy) {
   })
   run.page = await context.newPage()
   run.page.on('pageerror', error => run.pageErrors.push(error.message))
+  run.page.on('console', message => {
+    if (message.type() === 'error' || message.type() === 'warning') run.consoleWarnings.push(message.text())
+  })
   run.page.on('worker', worker => worker.on('pageerror', error => run.workerErrors.push(error.message)))
   await openPreview(run.page, `${origin}/preview.html?${previewQuery}`)
   await workspaceReady(run, 0)
@@ -320,16 +356,52 @@ function assertHealthy(run) {
 }
 
 async function reloadWorkspace(run, expected) {
-  run.phase = 'refresh'
+  run.phase = coldRead ? 'cold-hydrate' : 'refresh'
   await action(run, { action: 'close-vfs' })
-  await run.page.reload({ waitUntil: 'domcontentloaded' })
-  await waitForPreview(run.page)
+  let cleared
+  const before = performance.now()
+  const ioBefore = app.workspaces.chunkObjects?.getMetrics()
+  if (coldRead) {
+    await run.page.goto(`${origin}/api/browser-native/health`, { waitUntil: 'domcontentloaded' })
+    cleared = await bounded(run.page.evaluate(async () => {
+      const root = await navigator.storage.getDirectory()
+      const entries = []
+      for await (const [name] of root.entries()) {
+        await root.removeEntry(name, { recursive: true })
+        entries.push(name)
+      }
+      const databases = []
+      for (const { name } of await indexedDB.databases()) {
+        if (name === undefined) continue
+        await new Promise((resolveDeleted, rejectDeleted) => {
+          const request = indexedDB.deleteDatabase(name)
+          request.onsuccess = () => resolveDeleted()
+          request.onerror = () => rejectDeleted(request.error)
+          request.onblocked = () => rejectDeleted(new Error(`database deletion blocked: ${name}`))
+        })
+        databases.push(name)
+      }
+      return { entries, databases }
+    }), 'clear OPFS and IndexedDB after Worker unload')
+    assert.ok(cleared.entries.length > 0)
+    assert.ok(cleared.databases.includes('dsh-browser-native-workspace-v1'))
+    await run.page.goto(`${origin}/preview.html?${previewQuery}`, { waitUntil: 'domcontentloaded' })
+  } else await run.page.reload({ waitUntil: 'domcontentloaded' })
+  try { await waitForPreview(run.page) } catch (error) {
+    run.readinessFailure = await run.page.evaluate(() => ({
+      body: document.body.innerText.slice(0, 4000), status: window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__,
+    }))
+    throw error
+  }
   const status = await workspaceReady(run, 2)
   const read = await action(run, { action: 'read-digest', path: workspacePath })
   assert.equal(read.digest, expected.digest)
   assert.equal(read.bytes, expected.bytes)
   const manifest = await verifyManifest(run, expected, 2)
-  return { status, read, manifest, usage: await action(run, { action: 'usage' }) }
+  const ioAfter = app.workspaces.chunkObjects?.getMetrics()
+  return { status, read, manifest, usage: await action(run, { action: 'usage' }), cleared,
+    elapsedMs: performance.now() - before,
+    ...(ioBefore === undefined ? {} : { chunkIoDelta: Object.fromEntries(Object.keys(ioBefore).map(key => [key, ioAfter[key] - ioBefore[key]])) }) }
 }
 
 async function recoverWorkload(run, expected) {
@@ -361,7 +433,7 @@ async function recoverWorkload(run, expected) {
   const port = Number(new URL(origin).port)
   await app.close()
   app = undefined
-  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted' })
+  app = await createBrowserNativeV2Server({ dataDir: currentDataDir, distRoot: image.distRoot, llmMode: 'scripted', workspaceChunkObjects: run.chunkObjects && !forceStaging })
   assert.equal(await app.listen(port), origin, 'restart must preserve origin and browser storage')
   const afterRestart = await auditJson(run, uploadPath)
   assert.equal(afterRestart.complete, beforeRestart.complete)
@@ -456,7 +528,11 @@ function assertUpload(run, phase, expected) {
     assert.equal(reuse.length, 1, 'a durable reuse plan must be reused after restart')
     assert.ok(reuse[0].response.baseVerificationBytes > 0)
     assert.ok(reuse[0].response.comparedSourceBytes > 0)
-    assert.ok(reuse[0].response.stagedReuseBytes > 0)
+    if (run.chunkObjects) {
+      assert.equal(reuse[0].response.stagedReuseBytes, 0)
+      assert.ok(reuse[0].response.referencedChunkBytes > 0)
+      assert.ok(completes.every(request => request.response.assembledWriteBytes === 0))
+    } else assert.ok(reuse[0].response.stagedReuseBytes > 0)
   }
   return summarizeRequests(requests)
 }
@@ -483,6 +559,7 @@ async function runScenario(scenario, strategy, result) {
     result.source.elapsedMs = performance.now() - sourceStarted
     result.source.manifest = await verifyManifest(run, source, 1)
     result.source.remote = await hashRemoteBlob(run, source)
+    result.source.storage = await storageSnapshot()
     run.phase = 'target'
     process.stderr.write(`${JSON.stringify({ scenario: scenario.name, strategy, phase: run.phase })}\n`)
     const targetStarted = performance.now()
@@ -495,10 +572,23 @@ async function runScenario(scenario, strategy, result) {
     result.target.manifest = await verifyManifest(run, target, 2)
     result.target.remote = await hashRemoteBlob(run, target)
     result.target.usage = await action(run, { action: 'usage' })
-    if (strategy === 'cdc') result.refresh = await reloadWorkspace(run, target)
+    result.target.storage = await storageSnapshot()
+    if (run.chunkObjects) {
+      assert.equal(result.target.storage.disk.blobs.files, 0, 'CDC chunk versions must not create full blob files')
+      assert.equal(result.target.storage.disk.staging.files, 0, 'CDC chunk versions must not retain part/assembly copies')
+      assert.ok(result.target.storage.disk.versions.files >= 2)
+      assert.ok(result.target.storage.disk.chunks.files > 0)
+    }
+    if (run.contentDefinedUpload) result.refresh = await reloadWorkspace(run, target)
     result.source.cost = assertUpload(run, 'source', source)
     result.target.cost = assertUpload(run, 'target', target)
     assertHealthy(run)
+    if (chunkObjectComparison) {
+      result.garbageCollection = await app.workspaces.collectGarbage(run.workspaceId)
+      result.afterGarbageCollection = await storageSnapshot()
+      await verifyManifest(run, target, 2)
+      await hashRemoteBlob(run, target)
+    }
     result.userAgent = await run.page.evaluate(() => navigator.userAgent)
     result.pageErrors = run.pageErrors
     result.workerErrors = run.workerErrors
@@ -511,7 +601,8 @@ async function runScenario(scenario, strategy, result) {
     result.result = 'failed'
     throw error
   } finally {
-    Object.assign(result, { pageErrors: run.pageErrors, workerErrors: run.workerErrors, externalRequests: run.externalRequests, routeErrors: run.routeErrors })
+    Object.assign(result, { pageErrors: run.pageErrors, workerErrors: run.workerErrors, externalRequests: run.externalRequests,
+      routeErrors: run.routeErrors, consoleWarnings: run.consoleWarnings, readinessFailure: run.readinessFailure })
     await closeRun(run)
   }
 }
@@ -538,7 +629,10 @@ try {
   for (const scenario of selected) {
     const result = { ...scenario, runs: [] }
     evidence.scenarios.push(result)
-    for (const strategy of scenario.lossStage === undefined ? ['fixed', 'cdc'] : ['cdc']) {
+    const strategies = chunkObjectComparison
+      ? scenario.lossStage === undefined ? ['cdc-staging', 'cdc-objects'] : ['cdc-objects']
+      : scenario.lossStage === undefined ? ['fixed', 'cdc'] : ['cdc']
+    for (const strategy of strategies) {
       process.stderr.write(`${JSON.stringify({ scenario: scenario.name, strategy, state: 'started' })}\n`)
       const runResult = { result: 'running' }
       result.runs.push(runResult)
@@ -550,20 +644,29 @@ try {
       assert.equal(fixed.target.remote.digest, cdc.target.remote.digest)
       assert.equal(fixed.target.manifest.revision, cdc.target.manifest.revision)
       assert.deepEqual(fixed.target.manifest.entries, cdc.target.manifest.entries)
-      result.comparison = {
+      result.comparison = chunkObjectComparison ? {
+        staging: fixed.target.cost, objects: cdc.target.cost,
+        stagingDisk: fixed.target.storage.disk, objectsDisk: cdc.target.storage.disk,
+      } : {
         fixedPutBytes: fixed.target.cost.uploadPutBytes, cdcPutBytes: cdc.target.cost.uploadPutBytes,
         savedPutBytes: fixed.target.cost.uploadPutBytes - cdc.target.cost.uploadPutBytes,
         savedPutFraction: 1 - cdc.target.cost.uploadPutBytes / fixed.target.cost.uploadPutBytes,
         fixed: fixed.target.cost, cdc: cdc.target.cost,
       }
-      if (scenario.contentKind === 'binary' && scenario.editKind !== 'replace') {
+      if (chunkObjectComparison) {
+        assert.equal(fixed.target.cost.uploadPutBytes, cdc.target.cost.uploadPutBytes, 'storage choice must not change chunker or HTTP bytes')
+        assert.equal(cdc.target.cost.backendIo.assembledWriteBytes, 0)
+        assert.equal(cdc.target.cost.backendIo.stagedReuseBytes, 0)
+        assert.ok(cdc.target.cost.backendIo.chunkObjectWriteBytes <= cdc.target.cost.uploadPutBytes)
+        assert.ok(cdc.target.storage.disk.chunks.bytes < fixed.target.storage.disk.blobs.bytes)
+      } else if (scenario.contentKind === 'binary' && scenario.editKind !== 'replace') {
         assert.ok(result.comparison.savedPutFraction > 0.5, 'CDC shift edit must reduce actual HTTP PUT bytes by more than 50%')
       }
     }
     result.result = 'passed'
     process.stderr.write(`${JSON.stringify({ scenario: scenario.name, state: 'passed', comparison: result.comparison })}\n`)
   }
-  if (selection === 'normal' || selection === 'all') {
+  if (!chunkObjectComparison && (selection === 'normal' || selection === 'all')) {
     const shiftSavings = evidence.scenarios.filter(scenario => scenario.lossStage === undefined && scenario.editKind !== 'replace')
     assert.ok(shiftSavings.filter(scenario => scenario.comparison.savedPutFraction > 0.5).length >= 2,
       'at least two shift edits must reduce actual HTTP PUT bytes by more than 50%')

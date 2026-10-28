@@ -2628,6 +2628,9 @@ async function serveStatic(response, root, pathname) {
 }
 
 export async function createBrowserNativeV2Server(options) {
+  if (options.workspaceChunkObjects !== undefined && typeof options.workspaceChunkObjects !== 'boolean') {
+    throw new TypeError('workspaceChunkObjects must be a boolean')
+  }
   const dataDirLock = await acquireDataDirLock(options.dataDir)
   let released = false
   const releaseDataDirLock = async () => {
@@ -2648,6 +2651,7 @@ export async function createBrowserNativeV2Server(options) {
     now: options.testHooks?.workspaceNow ?? options.testHooks?.now,
     pendingUploadTtlMs: options.pendingUploadTtlMs,
     blobStore: options.workspaceBlobStore,
+    chunkObjects: options.workspaceChunkObjects === true,
   })
   await workspaces.load()
   const llm = await createLlmConfig(options)
@@ -2683,7 +2687,8 @@ export async function createBrowserNativeV2Server(options) {
             throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported upload capability parameter')
           }
         }
-        sendJson(response, 200, { contentLayout: WORKSPACE_CONTENT_LAYOUT })
+        sendJson(response, 200, { contentLayout: WORKSPACE_CONTENT_LAYOUT,
+          ...(options.workspaceChunkObjects === true ? { fileStorage: { version: 1, kind: 'chunk-objects' } } : {}) })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/manifest') {

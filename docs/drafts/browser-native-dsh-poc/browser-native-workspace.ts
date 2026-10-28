@@ -276,7 +276,11 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         }
       }
       if (this.useWriterLease && this.accessMode === 'writer') await cleanupAbandonedBrowserNativeEdits(this.workspaceId)
+      const localSnapshot = this.accessMode === 'writer' ? await this.store?.load(this.workspaceId) : undefined
       const manifest = await this.loadManifest()
+      if (this.accessMode === 'writer' && localSnapshot === undefined && manifest.entries.some(entry => entry.kind === 'file')) {
+        await this.store?.save({ version: 1, workspaceId: this.workspaceId, revision: manifest.revision, pending: [] })
+      }
       this.knownPaths.clear()
       this.knownBlobHashes.clear()
       for (const entry of manifest.entries) this.knownPaths.add(entry.path)
@@ -325,7 +329,6 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       }
       this.revision = manifest.revision
       if (this.accessMode === 'writer') {
-        const localSnapshot = await this.store?.load(this.workspaceId)
         if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
           await this.store.reconcileBlobs(this.workspaceId, files.flatMap(entry => entry.hash === undefined ? [] : [entry.hash]))
         }

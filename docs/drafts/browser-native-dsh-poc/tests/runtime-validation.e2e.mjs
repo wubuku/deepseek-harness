@@ -23,6 +23,7 @@ const envFile = process.env.DSH_POC_ENV_FILE
 const roster = process.env.DSH_POC_ROSTER ?? 'browser'
 const durableWorkspace = process.env.DSH_POC_DURABLE_WORKSPACE === '1'
 const contentDefinedUpload = process.env.DSH_POC_CONTENT_UPLOAD === '1'
+const chunkObjects = process.env.DSH_POC_CHUNK_OBJECTS === '1'
 const blockWorkspaceCommitOnce = process.env.DSH_POC_BLOCK_WORKSPACE_COMMIT_ONCE === '1'
 const skipPostRefreshTurns = process.env.DSH_POC_SKIP_POST_REFRESH_TURNS === '1'
 const port = Number(process.env.DSH_POC_PORT ?? '0')
@@ -47,6 +48,7 @@ if (!['chromium', 'chrome', 'webkit'].includes(browserName)) throw new Error('DS
 if (!['browser', 'original'].includes(roster)) throw new Error('DSH_POC_ROSTER must be browser or original')
 if (mode === 'real' && envFile === undefined) throw new Error('DSH_POC_ENV_FILE is required for real mode')
 if (contentDefinedUpload && !durableWorkspace) throw new Error('content upload smoke requires a durable Workspace')
+if (chunkObjects && !contentDefinedUpload) throw new Error('chunk object smoke requires content-defined uploads')
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('DSH_POC_PORT must be a TCP port')
 if (!Number.isInteger(turnTimeout) || turnTimeout < 1_000) throw new Error('DSH_POC_TURN_TIMEOUT_MS must be at least 1000')
 if (!Number.isInteger(refreshCycles) || refreshCycles < 1 || refreshCycles > 5) {
@@ -91,7 +93,8 @@ const llmStatuses = []
 let blockedWorkspaceCommit = false
 try {
   image = await createRuntimeValidationDist({ roster })
-  app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: mode, envFile })
+  app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: mode, envFile,
+    workspaceChunkObjects: chunkObjects })
   origin = await app.listen(port)
   const launcher = browserName === 'webkit' ? webkit : chromium
   browser = await launcher.launch({ headless: true, ...(browserName === 'chrome' ? { channel: 'chrome' } : {}) })
@@ -345,8 +348,17 @@ try {
     assert.equal(requests.filter(request => request.path.endsWith('/workspace/commit') && request.status === 200).length >= 1, true,
       'Worker reconstruction must retry the durable Workspace commit')
   }
-  const durable = JSON.parse(await readFile(join(dataDir, 'sessions', `${first.sessionId}.json`), 'utf8'))
+  const durable = await waitFor(async () => {
+    const snapshot = JSON.parse(await readFile(join(dataDir, 'sessions', `${first.sessionId}.json`), 'utf8'))
+    return snapshot.durableThroughSeq === session.events.length - 1 ? snapshot : undefined
+  }, 'the final Session event to reach durable storage', 30_000)
   assert.equal(durable.durableThroughSeq, durable.events.length - 1)
+  const chunkObjectIo = app.workspaces.chunkObjects?.getMetrics()
+  if (chunkObjects) {
+    assert.ok(chunkObjectIo.chunkWriteBytes > 0, 'real file tools must persist chunk bytes')
+    assert.ok(chunkObjectIo.descriptorWrites > 0, 'real file tools must publish a file descriptor')
+    assert.equal(chunkObjectIo.assembledWriteBytes, 0, 'chunk object smoke must not assemble a complete blob')
+  }
   const firstTurnFlushes = requests.filter(request => request.path.endsWith('/session/flush')
     && request.startedAt >= first.submittedAt && request.startedAt <= first.settledAt && request.settledAt !== undefined)
   const firstTextChunkAt = session.events
@@ -359,6 +371,8 @@ try {
     roster,
     durableWorkspace,
     contentDefinedUpload,
+    chunkObjects,
+    chunkObjectIo,
     blockedWorkspaceCommit,
     workspaceCommitStatuses: requests.filter(request => request.path.endsWith('/workspace/commit')).map(request => request.status),
     model: app.llm.model,

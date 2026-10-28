@@ -12,6 +12,20 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-047：不可变块对象与文件版本存储验证
+
+```text
+changeId: BN-P2-047
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 2026-10-29; 起始research与origin/research同步、工作区干净、仅主worktree
+file: docs/drafts/browser-native-dsh-poc/chunk-object-store.mjs; workspace-v2.mjs; backend-v2.mjs; browser-native-workspace.ts; tests/chunk-object-store.test.mjs; tests/chunk-object-workspace.test.mjs; tests/content-upload-protocol.e2e.mjs; tests/runtime-validation.e2e.mjs; tests/durable-workspace.spec.ts; 本批计划/进度、README和目录索引
+reason: 上批实际HTTP证明CDC减少部分上行，但服务端仍复制复用bytes并完整组装文件；需验证存储端能否消除这两类数据写入，同时保护pending和共享引用。冷缓存实测另发现首次hydrate下载早于metadata登记，导致已确认远端文件被误判本地损坏；本批一并修复顺序并保留真实孤立bytes拒绝语义。
+existingExtensionPointsChecked: 复用WorkspaceStore blobStore、既有全局blob-lifecycle锁、版本化upload/layout、OPFS/IndexedDB retry、manifest CAS和principal授权；未改Agent Loop或Session格式。
+coupling: 仅docs-owned原型；backend显式选择chunkObjects，默认fixed和完整blob仍可使用。新dataDir重启缺少选项会拒绝，不把新descriptor当旧blob。
+tests: 实际命令、负对照、Chrome成本与四阶段恢复、真实LLM、限制见chunk-object-storage-validation-progress.md。
+upstreamReplay: 先加入块对象store与单测，再接入upload/status/reuse/complete和GC roots；最后运行同语料冷存储对照与真实模型，不沿用上批PASS。
+deleteWhen: 正式Workspace provider拥有同等文件版本、pending引用GC、完整性、恢复与成本证据；不可只删根引用保护测试。
+```
+
 ### BN-P2-046：内容分块的实际上传与恢复协议
 
 ```text
