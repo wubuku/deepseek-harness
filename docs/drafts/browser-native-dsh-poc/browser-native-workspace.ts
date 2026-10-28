@@ -73,6 +73,7 @@ export interface WorkspaceChange {
 
 /** DSH tool call that caused one or more Workspace mutations. */
 export interface WorkspaceToolOperation {
+  readonly operationId?: string
   readonly sessionId: string
   readonly turn: number
   readonly step: number
@@ -1224,7 +1225,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     })
     for (const change of changes) this.pending.delete(change.path)
     return {
-      operationId: crypto.randomUUID(),
+      operationId: operation?.operationId ?? crypto.randomUUID(),
       baseRevision: this.revision ?? 0,
       changes,
       ...(operation === undefined ? {} : { operation }),

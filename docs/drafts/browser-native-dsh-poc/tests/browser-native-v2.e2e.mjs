@@ -83,14 +83,16 @@ async function chooseWorkspace(page) {
 }
 
 async function readSession(origin, id) {
-  const response = await fetch(`${origin}/api/browser-native/session/read`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ protocolVersion: 1, requestId: `e2e-read-${id}`, sessionId: id, offset: 0 }),
-  })
-  const body = await response.json()
-  assert.equal(response.ok, true, JSON.stringify(body))
-  return body
+  const result = await page.evaluate(async sessionId => {
+    const response = await fetch('/api/browser-native/session/read', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ protocolVersion: 1, requestId: `e2e-read-${sessionId}`, sessionId, offset: 0 }),
+    })
+    return { ok: response.ok, body: await response.json() }
+  }, id)
+  assert.equal(result.ok, true, JSON.stringify(result.body))
+  return result.body
 }
 
 function eventText(event) {

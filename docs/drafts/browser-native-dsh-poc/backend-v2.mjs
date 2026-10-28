@@ -15,6 +15,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_CONTENT_LAYOUT, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
+import { CrossStoreLedgerError, CrossStoreOperationLedger } from './cross-store-operation-ledger.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -480,7 +481,7 @@ async function readRawBody(request, maximumBytes) {
 }
 
 function sendError(response, error) {
-  const detail = error instanceof BackendError || error instanceof WorkspaceError
+  const detail = error instanceof BackendError || error instanceof WorkspaceError || error instanceof CrossStoreLedgerError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -2729,6 +2730,8 @@ export async function createBrowserNativeV2Server(options) {
     chunkObjects: options.workspaceChunkObjects === true,
   })
   await workspaces.load()
+  const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
+  await crossStoreLedger.load()
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
   const workspaceDownloads = new Map()
@@ -2931,6 +2934,52 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, workspaces.operation(request, url.searchParams.get('workspaceId'), operationId))
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/cross-store-operation/intent') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, body.workspaceId)
+        sendJson(response, 200, await crossStoreLedger.intent(principalId, { ...body, principalId: body.principalId ?? principalId }))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/cross-store-operation/receipt') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request)
+        sendJson(response, 200, await crossStoreLedger.receipt(
+          principalId, body.operationId, body.kind, body.status, body.receipt, body.identity,
+        ))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/cross-store-operation/business') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request)
+        const result = await crossStoreLedger.businessEffect(principalId, body.operationId, body.payload, body.identity)
+        if (options.testHooks?.failAfterCrossStoreBusinessEffect?.(body, result) === true) {
+          throw new BackendError('E2E_INJECTED_BUSINESS_RESPONSE_FAILURE', 'E2E injected response failure after business effect', 503)
+        }
+        if (options.testHooks?.dropCrossStoreBusinessResponse?.(body, result) === true) {
+          response.destroy()
+          return
+        }
+        sendJson(response, 200, result)
+        return
+      }
+      if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/cross-store-operation\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new CrossStoreLedgerError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const principalId = workspaces.principalFromRequest(request)
+        const operationId = url.pathname.split('/').at(-1)
+        const result = crossStoreLedger.query(principalId, operationId)
+        if (url.searchParams.get('workspaceId') !== result.identity.workspaceId
+          || url.searchParams.get('sessionId') !== result.identity.sessionId) {
+          throw new CrossStoreLedgerError('OPERATION_IDENTITY_MISMATCH', 'operation query identity does not match the intent', 409)
+        }
+        sendJson(response, 200, result)
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/commit') {
         const body = await readBody(request)
         assertProtocol(body)
@@ -3021,6 +3070,7 @@ export async function createBrowserNativeV2Server(options) {
     server,
     store,
     workspaces,
+    crossStoreLedger,
     llm,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {

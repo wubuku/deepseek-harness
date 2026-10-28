@@ -8,7 +8,9 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)；随后离线 retry、CAS conflict 和过期 writer lease 的真实 Chrome 验证见[进阶恢复计划](advanced-recovery-validation-plan.md)及[进度记录](advanced-recovery-validation-progress.md)。再后的 OPFS quota 错误恢复、backend 重启租约 fencing 与同源身份存储隔离见[存储隔离计划](storage-isolation-and-restart-validation-plan.md)及[实测进度](storage-isolation-and-restart-validation-progress.md)。文件工具 durable 确认与易失状态隔离见[持久化确认计划](durable-tool-ack-validation-plan.md)、[持久化确认进度](durable-tool-ack-validation-progress.md)、[易失状态隔离计划](volatile-workspace-isolation-plan.md)和[隔离验证进度](volatile-workspace-isolation-progress.md)：本地保存失败会阻止 Agent 后续读写与搜索未确认的 Worker 内存文件，刷新后可在同 Session 显式重试。可写 chunk-backed 编辑原型、64 MiB OPFS 资源证据和当前 DSH `edit` materialize 对照见[验证计划](chunk-backed-edit-validation-plan.md)及[实施进度](chunk-backed-edit-validation-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
 
-最新的 [Worker 控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度](next-control-channel-conformance-validation-progress.md)记录了 dsh-TUI live/replay 纪律在页面控制通道上的 PoC 落地：`control-ready` 基线、统一 `channelId/seq`、重复去重、跳号与同序冲突 fail-closed，以及刷新后的新通道。[载荷约束验证](next-control-payload-bounds-validation-plan.md)及[进度](next-control-payload-bounds-validation-progress.md)进一步记录 exact-key schema、4 KiB UTF-8 文本上限、16 KiB JSON frame 上限、未知/循环数据拒绝和诊断脱敏。控制通道只投影 owner、Workspace、lease 和 pagehide 状态，不取代 DSH Session event log。
+最新的 [Worker 控制通道连续性验证计划](next-control-channel-conformance-validation-plan.md)及[进度](next-control-channel-conformance-validation-progress.md)记录了 dsh-TUI live/replay 纪律在页面控制通道上的 PoC 落地：`control-ready` 基线、统一 `channelId/seq`、重复去重、跳号与同序冲突 fail-closed，以及刷新后的新通道。[载荷约束验证](next-control-payload-bounds-validation-plan.md)及[进度](next-control-payload-bounds-validation-progress.md)进一步记录 exact-key schema、4 KiB UTF-8 文本与 16 KiB JSON frame 上限、未知/循环数据拒绝和诊断脱敏。控制通道只投影 owner、Workspace、lease 和 pagehide 状态，不取代 DSH Session event log。
+
+本批[跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[进度](cross-store-checkpoint-reconciliation-progress.md)新增 operation ledger、稳定 `operationId`、Workspace/Session/业务 receipt 对账和 Chrome Worker/OPFS/IndexedDB 恢复证据。它证明响应丢失时可以查询原 operation 并避免重复 mock 业务副作用；不证明 Session、Workspace 和业务 API 共享原子事务，也不把单进程 JSON ledger 当作生产 HA 存储。真实 LLM 另完成普通文件/Session smoke，但未用于确定性 partial-success 故障注入。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
@@ -19,6 +21,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 v2 使用现有 `AppWebEntry`、现有 DSH Web UI 和由 Worker 承载的真实 Host。先构建 preview，再从本目录的 launcher 启动同源 Session/LLM backend：
 
 ```sh
+node docs/drafts/browser-native-dsh-poc/build-profile-overlay.mjs
 pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
   --port 4185 \
@@ -834,6 +837,23 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 ```
 
 真实 LLM smoke 验证 Browser Worker、普通文件工具、Session 和 Workspace refresh recovery，不是 A/B 两身份真实模型测试。多 backend、正式 SaaS identity/authorization、自然 eviction、OS crash、静态存储加密和 Safari/WebKit 未验证。
+
+## 跨存储 checkpoint 与业务副作用对账
+
+[跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。
+
+Chrome scripted E2E 使用真实 Dedicated Worker、OPFS、IndexedDB、Workspace commit、Session receipt 和同源 mock 业务 endpoint。响应丢失后刷新查询原 operation，最终 Workspace revision 为 `1`、Session seq 为 `0`、业务 effect count 为 `1`、Workspace commit count 为 `1`，决策为 `reconciled`，页面没有错误。Node ledger/reconciliation tests 为 8/8；这证明的是保守的可查询 saga 和去重语义，不是跨存储原子提交。
+
+复跑本批验证：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/cross-store-operation-ledger.test.mjs \
+  docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/cross-store-reconciliation.e2e.mjs
+```
+
+当前 ledger 使用单进程 `dataDir` JSON 和 per-operation queue；多 backend、生产数据库/对象存储、真实租户授权、自然 eviction、OS crash、业务 API 的生产幂等保证和真实 LLM 触发 partial-success 仍未验证。真实模型只完成普通 Browser-Native 文件/Session smoke；未知结果仍需查询原 operation，禁止自动重放未知业务副作用。
 
 ## Timed HITL 与 Worker 恢复
 

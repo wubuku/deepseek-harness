@@ -65,4 +65,4 @@
       name: './browser-native-session-persistence.js'
     - id: llm-browser-native
       name: './browser-native-llm.js'
-      inject: [llm, agents]
+      inject: [llm]

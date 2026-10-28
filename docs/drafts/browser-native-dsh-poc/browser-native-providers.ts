@@ -1222,7 +1222,6 @@ function createLlmModule(publication: BrowserNativeCapabilityPublication): unkno
         ctx.on('agent/disposed', ({ agent }) => {
           controlledAgents.delete(String(agent.id))
         })
-        for (const agent of ctx.agents.list()) installAgentControls(agent)
       },
       RemoteLlmAdapter,
     }

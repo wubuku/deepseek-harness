@@ -473,6 +473,7 @@ function assertStoredChange(value: unknown): asserts value is StoredChange {
 
 function assertStoredOperation(value: unknown): asserts value is WorkspaceToolOperation {
   if (!isRecord(value) || typeof value.sessionId !== 'string' || value.sessionId.length === 0
+    || value.operationId !== undefined && (typeof value.operationId !== 'string' || value.operationId.length === 0)
     || !Number.isSafeInteger(value.turn) || !Number.isSafeInteger(value.step)
     || typeof value.callId !== 'string' || value.callId.length === 0
     || typeof value.toolName !== 'string' || value.toolName.length === 0

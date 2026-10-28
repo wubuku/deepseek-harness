@@ -15,7 +15,9 @@ const searchParams = new URLSearchParams(window.location.search)
 const browserNative = searchParams.get('browser-native') === '1'
 const browserNativeDurable = browserNative && searchParams.get('browser-native-durable') === '1'
 const browserNativeWorkspaceLease = browserNative && searchParams.get('browser-native-workspace-lease') === '1'
-const browserNativeWorkspaceTest = browserNative && searchParams.get('browser-native-test') === 'workspace-recovery'
+const browserNativeWorkspaceTest = browserNative
+  && (searchParams.get('browser-native-test') === 'workspace-recovery'
+    || searchParams.get('browser-native-test') === 'cross-store')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
@@ -25,7 +27,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
     | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
   readonly stage?: 'before' | 'after'
@@ -40,6 +42,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly length?: number
   readonly mode?: number
   readonly sessionId?: string
+  readonly operationId?: string
   readonly ownerId?: string
   readonly ownerToken?: string
   readonly ownerEpoch?: number

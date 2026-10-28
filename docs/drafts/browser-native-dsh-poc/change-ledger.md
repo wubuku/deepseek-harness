@@ -280,6 +280,24 @@ deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前�
 status: implemented
 ```
 
+### BN-P2-053：跨存储 checkpoint、业务 receipt 与 overlay 可复现构建
+
+```text
+changeId: BN-P2-053
+upstreamBaseline: research branch at batch start; 2026-10-29; 工作区起始干净，仅主 worktree
+file: apps/web/src/preview.ts; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-profile-overlay.tar.gz; docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs; docs/drafts/browser-native-dsh-poc/build-profile-overlay.mjs; docs/drafts/browser-native-dsh-poc/cross-store-checkpoint-reconciliation-plan.md; docs/drafts/browser-native-dsh-poc/cross-store-checkpoint-reconciliation-progress.md; docs/drafts/browser-native-dsh-poc/cross-store-checkpoint.mjs; docs/drafts/browser-native-dsh-poc/cross-store-operation-ledger.mjs; docs/drafts/browser-native-dsh-poc/tests/cross-store-operation-ledger.test.mjs; docs/drafts/browser-native-dsh-poc/tests/cross-store-reconciliation.e2e.mjs; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Session、Workspace 和业务 API 没有共同事务；页面收到响应前丢失可能造成重复副作用或错误显示已保存。已有 Workspace receipt 对账不足以证明业务副作用的稳定身份和查询恢复。复核真实模型 smoke 时还发现 checked-in profile overlay 落后于 YAML，且 macOS 默认 tar 产生 Worker parser 不支持的 Pax 条目。
+existingExtensionPointsChecked: 复用 PoC backend 的 Workspace principal/lease、Session append/flush、Workspace receipt outbox、Dedicated Worker test port 和既有 `ctx.agentLoop`；复用静态 Browser capability roster 和 preview overlay 入口。未修改正式 Agent Loop、Session format、正式 package、根依赖或其他 PoC。
+whyDraftOnlyWasInsufficient: 纯协议测试不能证明 Worker 中的 OPFS/IndexedDB、Workspace commit、业务 effect、Session receipt、响应丢失和刷新查询共同工作；静态 YAML 也不能证明实际构建产物使用同一 profile。确定性 scripted E2E 用来固定故障时序，真实 LLM 只作为改动后的普通文件/Session smoke。
+behaviorChange: 新增跨存储 operation ledger intent/receipt/business/query API。operation identity 同时绑定 principal、Session、Workspace、owner epoch、Workspace fencing token、turn、step、callId、tool name 和 tool-call sequence；payload digest 或身份不一致时拒绝，重复 operation 返回既有 receipt，业务 effect 只计数一次。Worker test port 通过 OPFS/IndexedDB Workspace commit、mock business effect、Session receipt 和刷新后的 operation query 完成对账。新增 `build-profile-overlay.mjs` 使用 `ustar`、禁用 xattrs 和 `COPYFILE_DISABLE=1` 生成与 YAML 同步的 overlay；Browser profile 明确禁用 `read_image`，LLM row 只注入 `llm`。
+directoryOutChangeReason: `apps/web/src/preview.ts` 必须把 `browser-native-test=cross-store` 接到已有 Worker test port；`docs/drafts/README.md` 登记本批计划与进度。除此之外未修改共享 app、正式 package 或根依赖。
+consumersUpdated: backend routes/error mapping, Worker test request/response, Workspace operation identity, Session/Workspace receipt flow, checked-in profile overlay, preview test selector, cross-store unit/E2E tests, PoC README, drafts index, plan/progress and this ledger.
+tests: `node --test` ledger/reconciliation 8/8；capability Vitest 8/8；preview build 通过；Chrome scripted v2 smoke 1 turn、19 events、LLM 2/2 HTTP 200，模型 roster 不含 `read_image`；Chrome cross-store E2E 通过，Workspace revision 1、Session seq 0、business effect count 1、business response recovered true、decision reconciled、Workspace commit count 1、page errors 0；真实 `gpt-5.6-sol` Chrome smoke 3 turns、41 events、durableThroughSeq 40、5/5 HTTP 200、同 Session memory 和 todo persistence 通过。首次 overlay E2E 因 Pax 条目失败，重生成并重建 preview 后通过。未运行全仓测试、Safari/WebKit、真实模型故障注入、多实例 backend 或生产存储测试。
+syncReplaySteps: 上游同步后检查 preview 的 Worker test selector、`WorkspaceToolOperation.operationId`、backend route 身份校验和 ledger 状态查询；运行 `node build-profile-overlay.mjs` 后检查 tar 只含 ustar entries 且 profile 的 `readImage: false`；运行 ledger/reconciliation tests、capability Vitest、Web typecheck、preview build、cross-store Chrome E2E 和真实 Chrome LLM smoke。不要把 ledger 的 per-operation queue 写成跨进程锁，不要把 `reconciled` 写成跨存储原子提交，不要把真实 LLM normal smoke 写成 partial-success 证明。
+deleteCondition: 正式 Session/Workspace/business operation service 提供唯一约束、条件更新、稳定 idempotency key、状态查询和等价 Chrome failure/recovery tests；preview 有正式 overlay 构建入口且无需 docs-owned test selector；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-022：多 Session 共享 Workspace observer 与 stale revision 拒绝
 
 ```text

@@ -184,7 +184,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -217,6 +217,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly toolStage?: BrowserNativeFileToolStage
   readonly timeoutMs?: number
   readonly sessionId?: string
+  readonly operationId?: string
   readonly ownerId?: string
   readonly ownerToken?: string
   readonly ownerEpoch?: number
@@ -239,6 +240,12 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'session-outbox-probe') return true
+  if (data.action === 'cross-store-probe') {
+    return (data.path === undefined || typeof data.path === 'string')
+      && (data.content === undefined || typeof data.content === 'string')
+      && (data.sessionId === undefined || typeof data.sessionId === 'string')
+      && (data.operationId === undefined || typeof data.operationId === 'string')
+  }
   if (data.action === 'abort-metadata-transactions') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
@@ -309,6 +316,170 @@ async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
 
 function workspaceTestResponse(requestId: string, response: Record<string, unknown>): void {
   workspaceTestPort?.postMessage({ ...response, requestId })
+}
+
+async function browserNativeJson(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ protocolVersion: 1, requestId: crypto.randomUUID(), ...body }),
+  })
+  const value: unknown = await response.json()
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('cross-store response is invalid')
+  if (!response.ok) {
+    const error = 'error' in value && value.error !== null && typeof value.error === 'object' && !Array.isArray(value.error)
+      ? value.error as Record<string, unknown>
+      : undefined
+    throw new Error(typeof error?.message === 'string' ? error.message : `cross-store request failed with ${String(response.status)}`)
+  }
+  return value as Record<string, unknown>
+}
+
+async function browserNativeGet(path: string): Promise<Record<string, unknown>> {
+  const response = await fetch(path, { credentials: 'same-origin' })
+  const value: unknown = await response.json()
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('cross-store response is invalid')
+  if (!response.ok) throw new Error(`cross-store query failed with ${String(response.status)}`)
+  return value as Record<string, unknown>
+}
+
+async function runCrossStoreProbe(request: BrowserNativeWorkspaceTestRequest): Promise<Record<string, unknown>> {
+  if (workspaceRuntime === undefined || !workspaceRuntime.isDurableWorkspace()) throw new Error('cross-store probe requires a durable Workspace')
+  const path = request.path ?? `/dsh/home/workspace/cross-store-${crypto.randomUUID()}.txt`
+  const content = request.content ?? 'browser-native cross-store checkpoint\n'
+  const identityResponse = await fetch('/api/browser-native/workspace/identity', {
+    credentials: 'same-origin',
+    headers: { 'x-browser-native-identity-mode': 'existing' },
+  })
+  const identity: unknown = await identityResponse.json()
+  if (!identityResponse.ok || identity === null || typeof identity !== 'object' || Array.isArray(identity)
+    || typeof (identity as Record<string, unknown>).workspaceId !== 'string') throw new Error('cross-store Workspace identity is unavailable')
+  const workspaceId = String((identity as Record<string, unknown>).workspaceId)
+  const sessionId = request.sessionId ?? crypto.randomUUID()
+  const session = await browserNativeJson('/api/browser-native/session/create', {
+    sessionId,
+    header: { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
+    inheritedEventCount: 0,
+  })
+  const owner = session.owner
+  if (owner === null || typeof owner !== 'object' || Array.isArray(owner)
+    || typeof owner.ownerToken !== 'string' || !Number.isSafeInteger(owner.ownerEpoch)) throw new Error('cross-store Session owner is unavailable')
+  const lease = workspaceRuntime.getWriterLease()
+  const revision = workspaceRuntime.getRevision()
+  if (lease === undefined || revision === undefined) throw new Error('cross-store Workspace lease is unavailable')
+  const operationId = request.operationId ?? crypto.randomUUID()
+  const operation = {
+    operationId,
+    sessionId,
+    workspaceId,
+    ownerEpoch: Number(owner.ownerEpoch),
+    workspaceFencingToken: lease.fencingToken,
+    turn: 1,
+    step: 1,
+    callId: `cross-store-${operationId}`,
+    toolName: 'write',
+    toolCallSeq: 1,
+    operationKind: 'browser-native-cross-store-probe',
+    payloadDigest: await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ path, content }))).then(bytes => {
+      return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
+    }),
+    payloadBytes: new TextEncoder().encode(JSON.stringify({ path, content })).byteLength,
+  }
+  await browserNativeJson('/api/browser-native/workspace/cross-store-operation/intent', operation)
+  const workspaceReceipt = await workspaceRuntime.runToolOperation({ ...operation }, async () => {
+    workspaceRuntime!.vfs.writeFileSync(path, content)
+    await workspaceRuntime!.flushLocalWorkspace()
+    const receipts = await workspaceRuntime!.flushWorkspace()
+    const receipt = receipts[0]
+    if (receipt === undefined) throw new Error('cross-store Workspace commit produced no receipt')
+    return receipt
+  })
+  const receipt = workspaceReceipt as Record<string, unknown>
+  await browserNativeJson('/api/browser-native/workspace/cross-store-operation/receipt', {
+    operationId,
+    kind: 'workspace',
+    status: 'committed',
+    receipt: {
+      workspaceId,
+      baseRevision: receipt.baseRevision,
+      revision: receipt.revision,
+      digest: receipt.manifestDigest,
+      changedPaths: receipt.paths,
+    },
+  })
+  let business: Record<string, unknown>
+  let businessResponseRecovered = false
+  try {
+    business = await browserNativeJson('/api/browser-native/workspace/cross-store-operation/business', {
+      operationId,
+      payload: { path, content },
+    })
+  } catch {
+    const recovered = await browserNativeGet(`/api/browser-native/workspace/cross-store-operation/${operationId}?protocolVersion=1&workspaceId=${encodeURIComponent(workspaceId)}&sessionId=${encodeURIComponent(sessionId)}`)
+    const receipts = recovered.receipts
+    const businessReceipt = receipts !== null && typeof receipts === 'object' && !Array.isArray(receipts)
+      ? (receipts as Record<string, unknown>).business
+      : undefined
+    if (businessReceipt === null || typeof businessReceipt !== 'object' || Array.isArray(businessReceipt)
+      || businessReceipt.status !== 'committed') throw new Error('cross-store business outcome is unknown')
+    business = recovered
+    businessResponseRecovered = true
+  }
+  const sessionEvent = {
+    seq: 0,
+    time: Date.now(),
+    type: 'browser-native/workspace-receipt',
+    ignorable: true,
+    data: {
+      turn: operation.turn,
+      step: operation.step,
+      callId: operation.callId,
+      toolName: operation.toolName,
+      toolCallSeq: operation.toolCallSeq,
+      operationId,
+      workspaceId,
+      baseRevision: receipt.baseRevision,
+      revision: receipt.revision,
+      manifestDigest: receipt.manifestDigest,
+      paths: receipt.paths,
+      replayed: receipt.replayed,
+    },
+  }
+  const appended = await browserNativeJson('/api/browser-native/session/append', {
+    sessionId,
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+    expectedNextSeq: 0,
+    events: [sessionEvent],
+  })
+  const flushed = await browserNativeJson('/api/browser-native/session/flush', {
+    sessionId,
+    ownerToken: owner.ownerToken,
+    ownerEpoch: owner.ownerEpoch,
+  })
+  const queriedSessionSeq = Number(flushed.durableThroughSeq)
+  const ledgerSession = await browserNativeJson('/api/browser-native/workspace/cross-store-operation/receipt', {
+    operationId,
+    kind: 'session',
+    status: 'committed',
+    receipt: { sessionId, seq: queriedSessionSeq, durableThroughSeq: queriedSessionSeq },
+  })
+  await workspaceRuntime.acknowledgeReceipt(operationId)
+  return {
+    ok: true,
+    operationId,
+    sessionId,
+    workspaceId,
+    workspaceRevision: receipt.revision,
+    sessionSeq: queriedSessionSeq,
+    sessionAppendCount: appended.acceptedCount,
+    businessEffectCount: business.businessEffectCount,
+    businessResponseRecovered,
+    pendingReceiptCount: workspaceRuntime.pendingReceiptCount(),
+    decision: (ledgerSession.decision as Record<string, unknown>)?.decision,
+    path,
+  }
 }
 
 function reportFileToolStage(stage: BrowserNativeFileToolStage): void {
@@ -1160,6 +1331,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'reference-edit-probe') {
       workspaceTestResponse(request.requestId, await runReferenceEditProbe(request))
+      return
+    }
+    if (request.action === 'cross-store-probe') {
+      workspaceTestResponse(request.requestId, await runCrossStoreProbe(request))
       return
     }
     if (request.action === 'session-handoff') {
