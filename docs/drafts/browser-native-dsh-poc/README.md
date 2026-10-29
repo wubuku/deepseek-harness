@@ -136,6 +136,8 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 Chrome scripted E2E 通过 16 MiB 附件上传、真实 DSH `read`、删除 OPFS 附件缓存、刷新后 backend 补水并在原 Session 再读；backend 收到 256 个流块，最大块为 130,276 bytes。真实 Chrome/LLM E2E 另以小文本附件完成两轮真实 `read`、Session FileBlock 持久化和 OPFS 清理后的补水，Workspace revision 保持不变。验收按 turn/step 与 callId 配对；Session 不承诺 callId 单独构成跨 turn 的全局身份。
 
+[附件提交与恢复验证](attachment-commit-recovery-validation-plan.md)和[实施进度](attachment-commit-recovery-validation-progress.md)记录了 composer 状态与 backend/Session 提交状态不一致时的故障恢复。Chrome scripted E2E 在 OPFS quota 拒绝后禁止发送，随后注入 backend 503、对象已发布但响应体被截断，以及 FileBlock append 已接受但响应丢失；同 hash 重试复用对象，Session readback 避免重复 append，最终只有一条 FileBlock、一条 prompt 和一次标准 `read`。该故障 E2E 使用 scripted LLM；真实 LLM smoke 单独验证正常的两轮附件读取与刷新补水，不代表真实模型路径触发了故障。
+
 在 preview 构建后复跑本批验收：
 
 ```sh
@@ -145,11 +147,12 @@ node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 export DSH_POC_BROWSER=chrome
 export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
 node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/attachment-commit-recovery.e2e.mjs
 DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 ```
 
-附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。未验证自然 eviction、OS 级崩溃、多设备恢复、上传期间 quota/服务端 outage 和大附件真实 LLM。
+附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断与 Session append 响应丢失；自然 eviction、自然网络中断、OS/磁盘崩溃、上传期间移除 draft/取消竞态、多设备恢复和大附件真实 LLM 尚未验证。
 
 ## 可写 chunk-backed 编辑验证
 

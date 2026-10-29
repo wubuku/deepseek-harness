@@ -195,3 +195,68 @@ test('an interrupted attachment upload leaves no staging or published object', a
   }
   assert.deepEqual(remaining, [], 'an interrupted upload must remove its temporary object')
 })
+
+test('concurrent same-content uploads publish one verified object and report reuse', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-browser-attachments-concurrent-'))
+  const { app, origin } = await openServer(dataDir)
+  t.after(async () => {
+    await app.close()
+    await rm(dataDir, { recursive: true, force: true })
+  })
+
+  const owner = await newIdentity(origin)
+  const content = Buffer.from('same immutable attachment across concurrent composer drafts\n')
+  const hash = digest(content)
+  const [first, second] = await Promise.all([
+    sendAttachment(origin, owner, hash, content, 'first.txt'),
+    sendAttachment(origin, owner, hash, content, 'second.txt'),
+  ])
+  const receipts = await Promise.all([first.json(), second.json()])
+  assert.deepEqual([first.status, second.status], [200, 200])
+  assert.deepEqual(receipts.map(receipt => receipt.attachmentId), [`sha256:${hash}`, `sha256:${hash}`])
+  assert.deepEqual(receipts.map(receipt => receipt.bytes), [content.byteLength, content.byteLength])
+  assert.deepEqual(receipts.map(receipt => receipt.reused).sort(), [false, true])
+  assert.deepEqual(await listFiles(join(dataDir, 'attachments-v1', owner.workspaceId)), [hash])
+
+  const download = await fetch(`${origin}${ATTACHMENTS}/${hash}?workspaceId=${owner.workspaceId}`, {
+    headers: { cookie: owner.cookie },
+  })
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), content)
+})
+
+test('upload response loss after object publication retries by hash without a duplicate object', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-browser-attachments-response-loss-'))
+  let dropResponse = true
+  const { app, origin } = await openServer(dataDir, {
+    testHooks: {
+      dropAttachmentUploadResponse: () => {
+        if (!dropResponse) return false
+        dropResponse = false
+        return true
+      },
+    },
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(dataDir, { recursive: true, force: true })
+  })
+
+  const owner = await newIdentity(origin)
+  const content = Buffer.from('upload committed before its response was lost')
+  const hash = digest(content)
+  const unknownResponse = await sendAttachment(origin, owner, hash, content)
+  assert.equal(unknownResponse.status, 200, 'the server may publish before the response body is interrupted')
+  await assert.rejects(unknownResponse.json(), 'the client must observe the incomplete response body')
+  assert.deepEqual(await listFiles(join(dataDir, 'attachments-v1', owner.workspaceId)), [hash])
+
+  const retry = await sendAttachment(origin, owner, hash, content)
+  assert.equal(retry.status, 200)
+  assert.deepEqual(await retry.json(), {
+    protocolVersion: 1,
+    attachmentId: `sha256:${hash}`,
+    name: 'attachment.txt',
+    bytes: content.byteLength,
+    reused: true,
+  })
+  assert.deepEqual(await listFiles(join(dataDir, 'attachments-v1', owner.workspaceId)), [hash])
+})

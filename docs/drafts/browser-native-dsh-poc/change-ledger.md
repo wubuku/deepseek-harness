@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-059：composer 附件提交状态与故障恢复
+
+```text
+changeId: BN-P2-059
+upstreamBaseline: research synchronized with origin/research at batch start; 2026-10-29; DSH v0.2.1-rc.2; 工作区干净；仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/attachment-backend.test.mjs; docs/drafts/browser-native-dsh-poc/tests/attachment-commit-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/attachment-commit-recovery-validation-plan.md; docs/drafts/browser-native-dsh-poc/attachment-commit-recovery-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: composer 的 `ready`、附件对象发布、Session 接受 FileBlock 和 Session durable 是不同状态；需要确认浏览器遇到 quota、上传响应 unknown 或 append 响应 unknown 时不会误显示已保存、重复提交 prompt 或丢失可恢复附件。
+existingExtensionPointsChecked: 复用同源 backend attachment route 的 `testHooks`、正式 composer Retry、Session append response-loss hook、现有 Session exact readback reconciliation、内容寻址附件对象和 runtime-test-support 的 Session 权威快照。故障控制只在 backend 测试构造器启用；没有新增 query/header 故障开关。
+behaviorChange: hard-link 并发发布中，竞争输家在校验已发布 hash 与字节数后返回 `reused: true`。新增仅供 E2E 构造器使用的附件 503 与对象发布后截断响应体故障钩子。Chrome E2E 覆盖 OPFS quota 拒绝、上传 503、响应丢失后的 hash 重试，以及 FileBlock append 接受但响应丢失后的 Session readback；真实 LLM E2E 单独验证正常两轮 `read` 与 OPFS 清缓存后补水。
+directoryOutChangeReason: 所有运行时与测试实现留在 `docs/drafts/browser-native-dsh-poc/`；唯一目录外改动是 `docs/drafts/README.md` 的研究索引。本批未修改正式 packages、apps、根级依赖或 lockfile。
+consumersUpdated: PoC backend、附件 backend tests、Chrome composer/Session E2E、PoC README、操作兼容矩阵、计划/进度、drafts 索引和本账本。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/attachment-backend.test.mjs` 5/5；`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 56/56；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；Chrome 156 scripted `attachment-commit-recovery.e2e.mjs` 通过，quota 时 0 PUT、随后 503/截断响应/hash 重试，FileBlock append 仅一次、prompt/FileBlock/read 各一次、Workspace revision 0、无 page error 或跨源请求；Chrome 156 真实 LLM `browser-native-file-attachment.e2e.mjs` 通过，37-byte 附件两轮读取、OPFS 清除后 backend 补水一次、5 次模型请求、Workspace revision 0。故障 E2E 使用 scripted LLM，真实 LLM smoke 不触发故障注入。文档门禁结果记录在本批进度。
+syncReplaySteps: 上游同步后检查 backend 内容寻址 hard-link 的 `EEXIST` 路径与对象验证、正式 composer Retry 状态、Session append response loss/readback 语义和 FileBlock DTO。复跑 attachment/backend-v2 Node tests、preview build、Chrome scripted 恢复 E2E、Chrome 真实 LLM 通用附件 E2E 与文档门禁。删除或迁移测试钩子时保持其只能由测试构造器启用；不得把测试注入称为真实网络中断、自然 eviction 或跨存储事务。
+deleteCondition: 正式 Browser-Native runtime 提供可持久恢复的附件提交收据、幂等上传和 Session/FileBlock 对账，并由维护中的 composer E2E 覆盖同等故障语义；或 Browser-Native DSH PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-058：正式 composer 通用文件附件的 OPFS、Session 与 backend 恢复
 
 ```text

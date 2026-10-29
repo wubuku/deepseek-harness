@@ -216,6 +216,7 @@ Agentic UI 事实核查
 22. [Browser-Native 共享 authority 并发与恢复验证计划](browser-native-dsh-poc/shared-authority-concurrency-validation-plan.md)及[进度](browser-native-dsh-poc/shared-authority-concurrency-validation-progress.md)：双 backend Node 合同矩阵验证 Session/Workspace/业务 effect 并发与幂等；Chrome 双页验证唯一 claim、主体隔离、authority outage fail-closed 和 Worker/文件恢复。真实模型未触发工具，多 Agent Loop、authority 进程强杀和生产 HA 未验证。
 
 23. [Composer 通用文件附件验证计划](browser-native-dsh-poc/generic-file-attachment-validation-plan.md)与[进度/经验](browser-native-dsh-poc/generic-file-attachment-validation-progress.md)：真实 DSH composer 的 FileUploads → Session FileBlock → Worker OPFS/VFS → 标准 `read` → 刷新补水闭环；scripted Chrome 覆盖 16 MiB 流式上传，真实 LLM 覆盖小文件多轮读取，附件不改变 Workspace manifest，并记录身份、事务和存储限制。
+24. [附件提交与恢复验证计划](browser-native-dsh-poc/attachment-commit-recovery-validation-plan.md)与[进度/经验](browser-native-dsh-poc/attachment-commit-recovery-validation-progress.md)：Chrome 定向触发 OPFS quota、backend 503、附件对象发布后响应体截断及 Session FileBlock append 响应丢失；检查 retry、hash 幂等、Session readback 去重和真实 LLM 正常附件 smoke，并明确自然 eviction、OS crash、取消竞态与跨存储事务限制。
 
 ### 路径 C：直接复现 PoC
 
@@ -244,6 +245,7 @@ Agentic UI 事实核查
 21. [External reference Agent Loop 验证](browser-native-dsh-poc/external-edit-agent-loop-validation-progress.md)：验证标准 DSH `edit` 的 Session durable 屏障、Workspace commit unknown/backend 重启恢复、OPFS 句柄恢复 fallback，以及并发 CAS conflict 下 local/remote 版本均不被静默覆盖。
 22. [通用文件附件 Chrome E2E](browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs)与[backend contract tests](browser-native-dsh-poc/tests/attachment-backend.test.mjs)：复现正式 composer 上传、真实 DSH `read`、Session FileBlock、清除 OPFS 后补水，以及对象授权、摘要校验、中断清理和 backend 重启读取。
 23. [多 backend 共享 authority E2E](browser-native-dsh-poc/tests/multi-instance-backend.e2e.mjs)：真实 Chrome 通过 round-robin proxy 命中两个 backend，重启 backend/authority，并验证 Workspace commit response loss 只保留一个 operation；真实 LLM 路径单独报告未触发工具的限制。
+24. [附件提交与恢复 Chrome E2E](browser-native-dsh-poc/tests/attachment-commit-recovery.e2e.mjs)：复现 quota 拒绝后的 composer Retry、上传 503、对象提交后响应截断及 FileBlock append unknown；所有故障路径使用 scripted LLM，真实 LLM 正常路径另由通用文件附件 E2E 验证。
 
 ### 路径 D：Cloud Agent 和长期执行
 

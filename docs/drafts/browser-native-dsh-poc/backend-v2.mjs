@@ -495,6 +495,7 @@ async function storeAttachmentObject(
   const digest = createHash('sha256')
   let bytes = 0
   let closed = false
+  let reused = false
   try {
     onStage('upload-body')
     for await (const chunk of request) {
@@ -525,6 +526,7 @@ async function storeAttachmentObject(
       if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
       const committedBytes = await verifyAttachmentObject(target, hash)
       if (committedBytes !== bytes) throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
+      reused = true
     }
     onStage('object-published')
     const directory = await open(directoryPath, 'r')
@@ -533,7 +535,7 @@ async function storeAttachmentObject(
     } finally {
       await directory.close()
     }
-    return { bytes, reused: false }
+    return { bytes, reused }
   } catch (error) {
     if (!closed) await handle.close().catch(() => {})
     await rm(temporaryPath, { force: true }).catch(() => {})
@@ -3166,6 +3168,9 @@ export async function createBrowserNativeV2Server(options) {
             throw new BackendError('INVALID_REQUEST', 'attachment uploads require application/octet-stream')
           }
           const name = attachmentName(url.searchParams.get('name') ?? undefined)
+          if (options.testHooks?.failAttachmentUpload?.({ workspaceId, hash, name }) === true) {
+            throw new BackendError('ATTACHMENT_UPLOAD_UNAVAILABLE', 'E2E injected attachment upload failure', 503)
+          }
           const stored = await storeAttachmentObject(
             request,
             options.dataDir,
@@ -3175,6 +3180,13 @@ export async function createBrowserNativeV2Server(options) {
             options.testHooks?.onAttachmentStage,
             options.testHooks?.onAttachmentChunk,
           )
+          if (options.testHooks?.dropAttachmentUploadResponse?.({ workspaceId, hash, name, stored }) === true) {
+            response.writeHead(200, { 'content-type': 'application/json', 'content-length': '256' })
+            response.write('{"attachmentId":')
+            await new Promise(resolveDelay => setTimeout(resolveDelay, 25))
+            request.socket.destroy()
+            return
+          }
           sendJson(response, 200, {
             attachmentId: `sha256:${hash}`,
             name,
