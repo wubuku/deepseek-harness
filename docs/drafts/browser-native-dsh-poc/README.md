@@ -954,6 +954,27 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 \
 
 真实 LLM 命令要求本机 `docs/drafts/.env` 已配置；backend 读取凭据，页面与 Worker 不接收模型密钥。
 
+## 多 backend 与共享 Session/Workspace authority 验证
+
+[本批计划](multi-instance-backend-authority-validation-plan.md)及[实施进度](multi-instance-backend-authority-validation-progress.md)验证两个无状态 PoC backend 是否能在 round-robin 路由下共同服务同一浏览器 Session。Session、Workspace、operation ledger 和 LLM owner epoch 校验由一个共享 authority 处理；authority 和任一 backend 重启后，页面仍能从同一 durable JSON store 恢复事实。共享 authority 只允许内部 token 访问，浏览器请求仍必须经过 backend。
+
+真实 Chrome scripted E2E 使用真实 Dedicated Worker、DSH Host、OPFS、IndexedDB 和同源代理，覆盖两个 backend 命中、backend/authority 重启、Workspace commit 已完成但响应丢失、operation 查询恢复和旧 owner fencing。最终记录 `eventCount=35`、`durableThroughSeq=34`、`llmRequestCount=4`、一个 `tool/call`、一个 Workspace operation 和无页面错误。唯一 Workspace operation 没有因 `503` response loss 被重复提交。
+
+真实 Chrome/LLM smoke 覆盖两轮模型流、刷新和双进程重启，记录 `eventCount=28`、`durableThroughSeq=27`、`llmRequestCount=3`、双 backend 命中和无页面错误；本轮模型没有选择工具，因此不能宣称真实模型完成 `write/read` 或真实业务副作用。工具闭环证据来自 scripted LLM，模型工具选择仍需单独验证。
+
+复跑本批验证：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs \
+  docs/drafts/browser-native-dsh-poc/tests/shared-state-authority.test.mjs
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/multi-instance-backend.e2e.mjs
+DSH_POC_LLM_MODE=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node --use-env-proxy docs/drafts/browser-native-dsh-poc/tests/multi-instance-backend.e2e.mjs
+```
+
+本批仍不是生产共享数据库、跨主机 fencing、跨区域复制、Cloud Durable Worker、exactly-once 或 RPO/RTO 证据；代理会缓冲上传请求，authority 仍是单进程 PoC JSON service。自然 eviction、OS/磁盘崩溃、Safari/WebKit、正式多租户授权和真实模型大型工具参数未验证。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

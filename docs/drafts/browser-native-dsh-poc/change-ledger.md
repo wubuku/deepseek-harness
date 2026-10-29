@@ -280,6 +280,24 @@ deleteCondition: 正式 Browser-Native boot coordinator 在创建 DSH Host 前�
 status: implemented
 ```
 
+### BN-P2-054：多 backend 共享 Session/Workspace authority 与未知结果恢复
+
+```text
+changeId: BN-P2-054
+upstreamBaseline: research branch at batch start; 2026-10-29; 工作区起始干净，仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/run-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/shared-state-authority.test.mjs; docs/drafts/browser-native-dsh-poc/tests/multi-instance-backend.e2e.mjs; docs/drafts/browser-native-dsh-poc/multi-instance-backend-authority-validation-plan.md; docs/drafts/browser-native-dsh-poc/multi-instance-backend-authority-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/README.md
+reason: 单 backend PoC 的本地 JSON store 不能证明 round-robin 路由、backend 重启、共享 owner fencing 或 response-loss 后的唯一 operation。DSH-TUI 的执行者、观察者和事实源纪律要求把这些状态从单个界面/进程内存中移出；本批用独立 PoC authority 验证 Browser-Native 请求的最小共享状态依赖。
+existingExtensionPointsChecked: 复用现有 backend Session/Workspace/operation API、同源 Cookie、LLM adapter、Worker Session provider、Workspace receipt 和 Chrome E2E；没有修改正式 package、Session format、Agent Loop、Web app 或根依赖。
+whyDraftOnlyWasInsufficient: 静态代码检查不能证明同一页面的请求会命中两个 backend，也不能证明 authority/backend 重启后 Session durable watermark、Workspace revision、owner epoch 和 operation receipt 保持一致。真实 Chrome 还必须验证浏览器 Worker、OPFS、IndexedDB、Session 和 response-loss recovery 的组合时序。
+behaviorChange: 配置 state authority 后，Session、Workspace 和 operation 请求由 backend 转发到共享 authority，LLM owner 校验也回到 authority；内部 state token 不接受浏览器直连。新增 response-loss test hook 和 launcher 参数。round-robin Chrome E2E 在 authority 已接受 Workspace commit 后丢弃响应，客户端用相同 operationId 查询原结果，不生成第二次 revision；authority/backend 重启后旧 owner 仍被 fencing。
+directoryOutChangeReason: none; 所有代码、测试和文档均在 docs/drafts/browser-native-dsh-poc 或 docs/drafts。
+consumersUpdated: PoC backend launcher、共享 authority/多实例合同测试、Chrome scripted/real E2E、PoC README、插件兼容矩阵、docs/drafts 导读、验证计划/进度和本账本。
+tests: `node --check` 通过；backend contract 与 shared authority tests 57/57 通过；preview build 通过。Scripted Chrome E2E 通过，记录 35 个 Session events、durableThroughSeq 34、4 个 LLM requests、1 个 tool call、1 个 Workspace operation、commit response 503、双 backend 命中、authority/backend 重启和 0 个页面错误。真实 Chrome/LLM E2E 通过，记录 28 个 events、durableThroughSeq 27、3 个 LLM requests、双 backend 命中、authority/backend 重启和 0 个页面错误，但真实模型本轮没有 tool call，因此不宣称真实 write/read 或真实业务副作用闭环。首次 scripted E2E 发现并修复了计数值与布尔值比较的测试断言错误。
+syncReplaySteps: 上游同步后检查 state authority 转发、内部 token、Session owner epoch、Workspace CAS/operation lookup 和 LLM authorize 路由；运行 57/57 backend tests、preview build、Chrome scripted 多实例 E2E 和真实 LLM 多实例 smoke。保留单进程 JSON authority、proxy buffering、未触发真实工具和未验证生产 HA 的限制；不得把 scripted tool call 写成真实模型工具选择。
+deleteCondition: 正式 Session/Workspace authority 提供等价共享事实源、owner fencing、operation query 和多实例 Chrome/生产存储验证；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-049：独立业务 API 幂等与未知副作用恢复
 
 ```text

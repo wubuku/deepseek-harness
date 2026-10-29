@@ -207,6 +207,7 @@ Agentic UI 事实核查
 16. [文件工具下一批验证计划](browser-native-dsh-poc/browser-file-tools-next-validation-plan.md)与[进度](browser-native-dsh-poc/browser-file-tools-next-validation-progress.md)：验证 Worker 内结构化 `grep`/`glob` 的遍历、分块 UTF-8、结果预算、二进制拒绝、取消和失败后继续；明确不引入完整 Shell/WASI runtime，也不把文件级分块读取写成块级同步。
 19. [Browser-Native 文件搜索隔离计划](browser-native-dsh-poc/browser-file-search-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/browser-file-search-isolation-validation-progress.md)：真实 Chrome DSH turn 验证内容 regex、grep `include` 与 glob matcher 的可终止 Worker、单批超时、超长行拒绝、取消及失败后继续；真实 LLM 只覆盖普通 grep，不证明恶意输入下的模型行为。
 20. [Browser-Native 模型流故障验证计划](browser-native-dsh-poc/llm-stream-failure-validation-plan.md)及[进度](browser-native-dsh-poc/llm-stream-failure-validation-progress.md)：真实 Chrome/DSH Worker 验证文本和工具流半包、Worker 流中止刷新、Stop/上游取消与 Session/Workspace fail-closed 语义；fake upstream 只验证代理取消传播，真实供应商自然断流仍未验证。
+21. [Browser-Native 多 backend 共享 authority 验证计划](browser-native-dsh-poc/multi-instance-backend-authority-validation-plan.md)及[进度](browser-native-dsh-poc/multi-instance-backend-authority-validation-progress.md)：真实 Chrome 验证两个 backend 通过 round-robin 路由共享 Session/Workspace/LLM owner authority、进程重启和 Workspace response loss 对账；真实模型只完成流/恢复 smoke，PoC authority 仍是单进程 JSON service。
 
 ### 路径 C：直接复现 PoC
 
@@ -233,6 +234,7 @@ Agentic UI 事实核查
 19. [可写分块编辑验证](browser-native-dsh-poc/chunk-backed-edit-validation-progress.md)：记录 64 MiB OPFS copy-on-write 原型、六个故障点、资源预算和当前 DSH `edit` 的 materialize 对照。
 20. [External reference 编辑验证](browser-native-dsh-poc/reference-backed-edit-validation-progress.md)：记录 external reference 接入 `MemoryVfs` mutation、Workspace range cache/upload、manifest CAS、compact receipt、真实 Chrome 刷新恢复和失败重试；明确不是正式 `edit` 或块级 delta。
 21. [External reference Agent Loop 验证](browser-native-dsh-poc/external-edit-agent-loop-validation-progress.md)：验证标准 DSH `edit` 的 Session durable 屏障、Workspace commit unknown/backend 重启恢复、OPFS 句柄恢复 fallback，以及并发 CAS conflict 下 local/remote 版本均不被静默覆盖。
+22. [多 backend 共享 authority E2E](browser-native-dsh-poc/tests/multi-instance-backend.e2e.mjs)：真实 Chrome 通过 round-robin proxy 命中两个 backend，重启 backend/authority，并验证 Workspace commit response loss 只保留一个 operation；真实 LLM 路径单独报告未触发工具的限制。
 
 ### 路径 D：Cloud Agent 和长期执行
 
@@ -338,6 +340,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | [mock-and-crash-boundary-validation-plan.md](browser-native-dsh-poc/mock-and-crash-boundary-validation-plan.md) / [进度](browser-native-dsh-poc/mock-and-crash-boundary-validation-progress.md) | 局部浏览器存储丢失、Chrome `SIGKILL`、多 backend 竞争、大型工具参数和 MinIO blob 验证；记录身份恢复与共享 `dataDir` 限制，不把故障注入外推为自然 eviction、OS crash 或生产对象存储。 |
 | [browser-lifecycle-ownership-validation-plan.md](browser-native-dsh-poc/browser-lifecycle-ownership-validation-plan.md) / [进度](browser-native-dsh-poc/browser-lifecycle-ownership-validation-progress.md) | 首次 Session/Workspace claim 竞争、冻结页面时 Worker 续租、身份 cookie 丢失导出、Chrome BFCache 诊断及 1/4/8 Worker 容量；真实 BFCache 未命中，容量数据为单机诊断。 |
 | [operational-compatibility-matrix.md](browser-native-dsh-poc/operational-compatibility-matrix.md) | 当前 checkout 中真实 Chrome Worker 已执行、由同源 backend 提供、明确排除和逐插件尚未验证的能力；不把模块加载视为插件兼容。 |
+| [multi-instance-backend-authority-validation-plan.md](browser-native-dsh-poc/multi-instance-backend-authority-validation-plan.md) / [进度](browser-native-dsh-poc/multi-instance-backend-authority-validation-progress.md) | 两个 backend 经 round-robin 共享 Session、Workspace、operation 和 LLM owner authority；Chrome scripted E2E 覆盖重启、response loss 和唯一 operation，真实 LLM 未触发工具；不证明生产 HA。 |
 | [timed-hitl-lifecycle-validation-plan.md](browser-native-dsh-poc/timed-hitl-lifecycle-validation-plan.md) / [进度](browser-native-dsh-poc/timed-hitl-lifecycle-validation-progress.md) | 临时 timed schema 的截止前答案、迟答、刷新恢复、迟答去重和关闭恢复；显式 Stop 由活动 HITL 专项验证。 |
 | [active-hitl-stop-validation-plan.md](browser-native-dsh-poc/active-hitl-stop-validation-plan.md) / [进度](browser-native-dsh-poc/active-hitl-stop-validation-progress.md) | 官方问答 composer 注入 Session-scoped cancel；Chrome scripted E2E 覆盖 legacy/timed 活动问答、continued 负例、Session aborted 与无 Workspace 副作用；真实 LLM smoke 单独记录。 |
 | [browser-runtime-integrity-validation-plan.md](browser-native-dsh-poc/browser-runtime-integrity-validation-plan.md) / [进度](browser-native-dsh-poc/browser-runtime-integrity-validation-progress.md) | 默认交互工具闭环、本地缓存清除后的 backend outage fail-closed、双标签 Worker 写权交接及既有恢复路径回归；脚本使用 scripted LLM，真实模型和生产级故障仍未验证。 |

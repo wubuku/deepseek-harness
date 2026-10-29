@@ -422,6 +422,78 @@ function sendBytes(response, bytes, headers = {}) {
   response.end(bytes)
 }
 
+function isSharedStatePath(pathname) {
+  return pathname.startsWith('/api/browser-native/workspace/')
+    || pathname.startsWith('/api/browser-native/session/')
+}
+
+async function proxySharedStateRequest(request, response, origin, secret) {
+  const body = request.method === 'GET' || request.method === 'HEAD'
+    ? undefined
+    : await readRawBody(request, MAX_BODY_BYTES)
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (name === 'host' || name === 'connection' || name === 'content-length') continue
+    if (typeof value === 'string') headers.set(name, value)
+  }
+  headers.set('x-browser-native-state-token', secret)
+  let upstream
+  try {
+    upstream = await fetch(`${origin}${request.url ?? '/'}`, {
+      method: request.method,
+      headers,
+      body,
+      redirect: 'manual',
+    })
+  } catch (error) {
+    throw new BackendError('SHARED_STATE_UNAVAILABLE', `shared browser state service is unavailable: ${String(error)}`, 503)
+  }
+  const responseHeaders = {}
+  for (const [name, value] of upstream.headers) {
+    if (name === 'connection' || name === 'keep-alive' || name === 'transfer-encoding') continue
+    responseHeaders[name] = value
+  }
+  const setCookies = typeof upstream.headers.getSetCookie === 'function'
+    ? upstream.headers.getSetCookie() : []
+  if (setCookies.length > 0) responseHeaders['set-cookie'] = setCookies
+  response.writeHead(upstream.status, responseHeaders)
+  if (upstream.body === null) {
+    response.end()
+    return
+  }
+  try {
+    await pipeline(Readable.fromWeb(upstream.body), response)
+  } catch {
+    if (!response.destroyed) response.destroy()
+  }
+}
+
+async function authorizeRemoteLlm(request, body, origin, secret) {
+  const headers = new Headers({
+    'content-type': 'application/json',
+    'x-browser-native-state-token': secret,
+  })
+  let upstream
+  try {
+    upstream = await fetch(`${origin}/api/browser-native/internal/session/authorize-llm`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    throw new BackendError('SHARED_STATE_UNAVAILABLE', `shared Session authority is unavailable: ${String(error)}`, 503)
+  }
+  if (upstream.ok) return
+  let value
+  try { value = await upstream.json() } catch { value = undefined }
+  const detail = value?.error
+  throw new BackendError(
+    typeof detail?.code === 'string' ? detail.code : 'SESSION_AUTHORIZATION_FAILED',
+    typeof detail?.message === 'string' ? detail.message : 'shared Session authority rejected the model request',
+    upstream.status,
+  )
+}
+
 async function streamWorkspaceBlob(request, response, workspaces, workspaceId, hash, downloadTimeoutMs, controller) {
   let reader
   let closeResult
@@ -930,6 +1002,10 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
         ownerEpoch: session.ownerEpoch,
         hasMore: offset + events.length < session.events.length,
       })
+    }
+    if (operation === 'authorize-llm') {
+      store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+      return { authorized: true, ownerEpoch: session.ownerEpoch }
     }
     if (operation === 'close') {
       store.assertOwnerToken(session, body.ownerToken)
@@ -2746,6 +2822,18 @@ export async function createBrowserNativeV2Server(options) {
   if (options.workspaceVerifiedDownloads === true && options.workspaceChunkObjects !== true) {
     throw new TypeError('workspaceVerifiedDownloads requires workspaceChunkObjects: true')
   }
+  const sharedStateOrigin = options.stateAuthorityOrigin === undefined
+    ? undefined : new URL(options.stateAuthorityOrigin).origin
+  const sharedStateToken = options.stateAuthorityToken
+  if (sharedStateOrigin !== undefined
+    && (typeof sharedStateToken !== 'string' || sharedStateToken.length < 32 || sharedStateToken.length > 200)) {
+    throw new TypeError('stateAuthorityToken must contain 32 to 200 characters when stateAuthorityOrigin is configured')
+  }
+  if (sharedStateOrigin === undefined
+    && sharedStateToken !== undefined
+    && (typeof sharedStateToken !== 'string' || sharedStateToken.length < 32 || sharedStateToken.length > 200)) {
+    throw new TypeError('stateAuthorityToken must contain 32 to 200 characters')
+  }
   const workspaceDownloadMaxReaders = timeoutMs(options.workspaceDownloadMaxReaders === undefined ? 4
     : options.workspaceDownloadMaxReaders, 'workspaceDownloadMaxReaders')
   const workspaceDownloadTimeoutMs = timeoutMs(options.workspaceDownloadTimeoutMs === undefined ? 30_000
@@ -2787,6 +2875,12 @@ export async function createBrowserNativeV2Server(options) {
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
+      const internalStateRequest = sharedStateToken !== undefined
+        && request.headers['x-browser-native-state-token'] === sharedStateToken
+      if (sharedStateOrigin !== undefined && !internalStateRequest && isSharedStatePath(url.pathname)) {
+        await proxySharedStateRequest(request, response, sharedStateOrigin, sharedStateToken)
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/health') {
         sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model, ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }) })
         return
@@ -3070,7 +3164,21 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/commit') {
         const body = await readBody(request)
         assertProtocol(body)
-        sendJson(response, 200, await workspaces.commit(request, body))
+        const result = await workspaces.commit(request, body)
+        if (options.testHooks?.dropWorkspaceCommitResponse?.(body, result) === true) {
+          response.destroy()
+          return
+        }
+        sendJson(response, 200, result)
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/internal/session/authorize-llm') {
+        if (!internalStateRequest) throw new BackendError('NOT_FOUND', 'route not found', 404)
+        const body = await readBody(request)
+        assertProtocol(body)
+        const session = store.get(body.sessionId)
+        store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+        sendJson(response, 200, { authorized: true, ownerEpoch: session.ownerEpoch })
         return
       }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
@@ -3108,11 +3216,15 @@ export async function createBrowserNativeV2Server(options) {
           throw new BackendError('INVALID_REQUEST', 'purpose must be compaction or session-title')
         }
         if (body.sessionId !== undefined) {
-          const session = store.get(body.sessionId)
           if (typeof body.ownerToken !== 'string' || body.ownerToken.length === 0) {
             throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
           }
-          store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+          if (sharedStateOrigin === undefined) {
+            const session = store.get(body.sessionId)
+            store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+          } else {
+            await authorizeRemoteLlm(request, body, sharedStateOrigin, sharedStateToken)
+          }
         }
         if (options.testHooks?.failLlmRequest?.(body) === true) {
           throw new BackendError('E2E_INJECTED_LLM_FAILURE', 'E2E injected model request failure', 400)

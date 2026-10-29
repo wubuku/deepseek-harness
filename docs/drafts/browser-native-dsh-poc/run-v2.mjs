@@ -42,6 +42,8 @@ Options:
   --model <name>        Override the configured real-provider model
   --llm-timeout-ms <n>  Upstream model request deadline (default: 60000)
   --owner-lease-ms <n>  Write lease duration in milliseconds (default: 30000)
+  --state-authority-origin <url>  PoC shared Session/Workspace authority
+  --state-authority-token <token> Internal token for the shared authority
   --help                Show this message
 
 Open:
@@ -66,6 +68,8 @@ function parseArgs(argv) {
     model: undefined,
     llmTimeoutMs: undefined,
     ownerLeaseMs: undefined,
+    stateAuthorityOrigin: undefined,
+    stateAuthorityToken: undefined,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const option = argv[index]
@@ -101,6 +105,12 @@ function parseArgs(argv) {
     } else if (option === '--owner-lease-ms') {
       values.ownerLeaseMs = Number(requiredValue(argv, index, option))
       if (!Number.isSafeInteger(values.ownerLeaseMs) || values.ownerLeaseMs < 300) throw new Error('--owner-lease-ms must be an integer of at least 300')
+      index += 1
+    } else if (option === '--state-authority-origin') {
+      values.stateAuthorityOrigin = requiredValue(argv, index, option)
+      index += 1
+    } else if (option === '--state-authority-token') {
+      values.stateAuthorityToken = requiredValue(argv, index, option)
       index += 1
     } else {
       throw new Error(`unknown option: ${option}`)
