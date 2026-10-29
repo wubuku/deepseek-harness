@@ -114,10 +114,10 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
-### BN-P2-060：附件 Worker 强制终止后的临时项回收与内容幂等恢复
+### BN-P2-061：附件 Worker 强制终止后的临时项回收与内容幂等恢复
 
 ```text
-changeId: BN-P2-060
+changeId: BN-P2-061
 upstreamBaseline: research synchronized with origin/research at batch start; 2026-10-29; DSH v0.2.1-rc.2; 工作区干净；仅主 worktree
 file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-attachments.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/attachment-worker-crash-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/attachment-worker-crash-recovery-validation-plan.md; docs/drafts/browser-native-dsh-poc/attachment-worker-crash-recovery-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
 reason: AbortSignal cancellation already cleaned cooperative uploads, but Worker termination skips finally/abort cleanup. The PoC needed an owner signal that lets a new Worker reclaim abandoned OPFS staging without deleting another tab's active upload, and a deterministic matrix for backend partial upload and published-object response loss. A second tab remains subject to the existing Workspace writer lease; the test must prove that read-only recovery cannot bypass that permission.
