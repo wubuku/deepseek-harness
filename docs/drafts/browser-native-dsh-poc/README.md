@@ -18,6 +18,8 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 [独立业务 API 幂等验证计划](external-business-idempotency-validation-plan.md)及[进度](external-business-idempotency-validation-progress.md)把业务 effect 移到独立 PoC HTTP 服务和独立 durable JSON store，验证真实 Chrome Worker/OPFS/IndexedDB 在业务响应丢失、业务服务重启、DSH backend ledger 缺口、查询不可用和 payload/principal 冲突时的结算。运行 `node --test docs/drafts/browser-native-dsh-poc/tests/external-business-idempotency.test.mjs` 可执行服务与 backend 合同测试；构建 preview 后运行 `node docs/drafts/browser-native-dsh-poc/tests/external-business-idempotency.e2e.mjs` 可执行 Chrome 验证。该服务只证明“外部 API 自己提供 durable idempotency record 时可查询恢复”；它不是生产数据库、跨主机 HA 或 exactly-once 事务，未知结果仍不得盲目重试。
 
+[Session 挂载与恢复验证计划](session-mount-lifecycle-validation-plan.md)及[进度](session-mount-lifecycle-validation-progress.md)验证页面同时管理多个 Session 投影时的 `active`/`parked`、history-before-live、重复事件、Worker identity 重连、`occupied`/`busy`/`unavailable` 和 dispose 后 `unknown` 语义。真实 Chrome probe 只证明 PoC-local coordinator 在 Dedicated Worker 中执行这些状态规则；真实 LLM 只复跑普通文件与刷新恢复，不证明正式多 Session UI、页面关闭后的后台 Agent 或云端 handoff。
+
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
 旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。

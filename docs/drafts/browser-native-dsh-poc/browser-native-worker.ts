@@ -74,6 +74,8 @@ import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.t
 import type { DownloadPublicationStage } from './browser-native-workspace-store.ts'
 import { createBrowserNativeBuiltinMemberTrace } from './browser-native-builtin-member-trace.ts'
 import { createBrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
+import { BrowserNativeSessionMountCoordinator } from './browser-native-session-mount.ts'
+import type { BrowserNativeExecutionIdentity, BrowserNativeSessionEvent } from './browser-native-session-adapter.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -194,7 +196,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -251,6 +253,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-outbox-probe') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  if (data.action === 'session-mount-probe') return true
   if (data.action === 'wait-attachment-opfs-staging-write'
     || data.action === 'attachment-opfs-write-state'
     || data.action === 'release-attachment-opfs-write'
@@ -322,7 +325,83 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+}
+
+function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
+  return { sessionId, backendId: 'browser-native-probe-backend', workerInstanceId, ownerEpoch }
+}
+
+function sessionMountProbeEvent(seq: number, text: string): BrowserNativeSessionEvent {
+  return { seq, type: 'assistant/message', data: { text } }
+}
+
+function runSessionMountProbe(): Record<string, unknown> {
+  const coordinator = new BrowserNativeSessionMountCoordinator()
+  const sessionIds = ['mount-a', 'mount-b', 'mount-c']
+  for (const sessionId of sessionIds) {
+    coordinator.mount({
+      sessionId,
+      identity: sessionMountProbeIdentity(sessionId, 'worker-1', 1),
+      ownerId: 'page-1',
+    })
+    coordinator.hydrate(sessionId, [sessionMountProbeEvent(0, `${sessionId}:history`)], 1)
+  }
+  coordinator.activate('mount-a')
+  coordinator.beginExecution('mount-a', 'turn-a')
+  coordinator.activate('mount-b')
+  const parkedExecutionContinued = coordinator.snapshots().some(snapshot => snapshot.sessionId === 'mount-a'
+    && snapshot.view === 'parked' && snapshot.execution?.state === 'running')
+  const duplicate = coordinator.acceptLive('mount-a', sessionMountProbeIdentity('mount-a', 'worker-1', 1), sessionMountProbeEvent(0, 'mount-a:history'))
+  const liveA = coordinator.acceptLive('mount-a', sessionMountProbeIdentity('mount-a', 'worker-1', 1), sessionMountProbeEvent(1, 'mount-a:live'))
+  const liveB = coordinator.acceptLive('mount-b', sessionMountProbeIdentity('mount-b', 'worker-1', 1), sessionMountProbeEvent(1, 'mount-b:live'))
+  coordinator.setAvailability('mount-c', 'occupied')
+  let occupiedRejected = false
+  try { coordinator.activate('mount-c') } catch (error) { occupiedRejected = error instanceof Error && error.message.includes('occupied') }
+  coordinator.setAvailability('mount-c', 'busy')
+  let busyRejected = false
+  try { coordinator.activate('mount-c') } catch (error) { busyRejected = error instanceof Error && error.message.includes('busy') }
+  coordinator.setAvailability('mount-c', 'unavailable')
+  let unavailableRejected = false
+  try { coordinator.activate('mount-c') } catch (error) { unavailableRejected = error instanceof Error && error.message.includes('unavailable') }
+  const reconnected = coordinator.reconnect(
+    'mount-a',
+    sessionMountProbeIdentity('mount-a', 'worker-2', 2),
+    'page-1',
+    [sessionMountProbeEvent(0, 'mount-a:history'), sessionMountProbeEvent(1, 'mount-a:live')],
+    2,
+  )
+  const newIdentityAccepted = coordinator.acceptLive('mount-a', sessionMountProbeIdentity('mount-a', 'worker-2', 2), sessionMountProbeEvent(2, 'new'))
+  let oldIdentityRejected = false
+  try {
+    coordinator.acceptLive('mount-a', sessionMountProbeIdentity('mount-a', 'worker-1', 1), sessionMountProbeEvent(3, 'old'))
+  } catch (error) { oldIdentityRejected = error instanceof Error && error.message.includes('identity changed') }
+  coordinator.setAvailability('mount-c', 'available')
+  coordinator.activate('mount-c')
+  coordinator.beginExecution('mount-c', 'hitl-c', 'waiting')
+  const disposed = coordinator.dispose('Worker terminated with parked and active executions')
+  const lateIgnored = coordinator.settleExecution('mount-a', 'turn-a', { settlement: 'confirmed' }) === false
+  const waitingUnknown = disposed.every(snapshot => snapshot.execution === undefined
+    || snapshot.execution.state === 'unknown' || snapshot.execution.state === 'settled')
+  return {
+    ok: parkedExecutionContinued && duplicate === 'duplicate' && liveA === 'accepted' && liveB === 'accepted'
+      && occupiedRejected && busyRejected && unavailableRejected && reconnected.cursor.identity.workerInstanceId === 'worker-2'
+      && oldIdentityRejected && newIdentityAccepted === 'accepted' && lateIgnored && waitingUnknown,
+    parkedExecutionContinued,
+    duplicate,
+    liveA,
+    liveB,
+    occupiedRejected,
+    busyRejected,
+    unavailableRejected,
+    reconnectedWorker: reconnected.cursor.identity.workerInstanceId,
+    oldIdentityRejected,
+    newIdentityAccepted,
+    lateIgnored,
+    waitingUnknown,
+    mountCount: disposed.length,
+    detachedCount: disposed.filter(snapshot => snapshot.view === 'detached').length,
+  }
 }
 
 async function pauseAttachmentOpfsStagingWrite(bytesWritten: number, signal?: AbortSignal): Promise<void> {
@@ -1441,6 +1520,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         claimedPendingEvents: claimed.pendingEvents.length,
         remainingSeq: afterAcknowledgement.pendingEvents.map(event => Number(event.seq)),
       })
+      return
+    }
+    if (request.action === 'session-mount-probe') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionMount: runSessionMountProbe() })
       return
     }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')

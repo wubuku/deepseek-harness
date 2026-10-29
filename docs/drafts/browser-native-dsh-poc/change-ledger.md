@@ -1543,3 +1543,21 @@ syncReplaySteps: 上游同步后检查 packer `sweepImage()` roots、module tran
 deleteCondition: 正式 packer 或 Browser runtime 提供同等可复现的 profile-scoped dependency audit 和执行兼容证据，且报告与 package API 消费方已迁移；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-025：多 Session 挂载、视图切换与 Worker 生命周期
+
+```text
+changeId: BN-P2-025
+upstreamBaseline: research branch at batch start; 2026-10-29; 主工作区干净；无隔离 worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-mount.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-session-mount.spec.ts; docs/drafts/browser-native-dsh-poc/tests/session-mount-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-mount-lifecycle-validation-plan.md; docs/drafts/browser-native-dsh-poc/session-mount-lifecycle-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有验证分别覆盖 Session cursor、owner handoff、observer 和单 Worker 生命周期，但没有验证一个页面同时投影多个 Session 时 active/parked 切换、history-before-live、Worker identity 重连和未结算 execution 的 unknown 语义。需要先固定这些页面投影规则，避免未来 UI 把切换视图误当作取消 turn，或把页面关闭后的未知结果显示为成功。
+existingExtensionPointsChecked: 复用 `BrowserNativeSessionCursor`、现有 Worker test MessagePort、Preview URL allowlist、Session owner identity 和既有真实 LLM runtime-validation smoke。未修改 Agent Loop、Session format、正式 Session API、默认 Web UI 或根依赖。
+whyDraftOnlyWasInsufficient: 纯协议或页面单测不能证明 coordinator 确实被打入 Dedicated Worker bundle，也不能观察旧 Worker identity 的迟到事件和 dispose 后结果。真实模型不适合作为确定性状态机故障发生器，因此状态矩阵由模型无关的 Chrome probe 驱动，真实模型只做接线回归。
+behaviorChange: 新增 PoC-local `BrowserNativeSessionMountCoordinator`，为每个 mount 保存 view、availability、owner、cursor 和 execution；`active`/`parked` 切换不取消 parked execution，history 未完成、seq gap、同序冲突和 identity 改变 fail closed，Worker reconnect 使用新 identity 重新 hydrate，dispose 将 running/waiting execution 标为 unknown 并忽略晚到 settlement。Preview 新增 URL-gated `session-mount` probe；默认 preview 和默认 Browser-Native 入口不启用它。
+directoryOutChangeReason: `apps/web/src/preview.ts` 位于 PoC 目录外，因为页面 preview 持有 URL allowlist、test MessagePort 和响应类型；只增加显式 `session-mount` 测试接线，没有改变普通 Web/Preview 行为。
+consumersUpdated: Session mount coordinator、Worker test action、preview allowlist、coordinator Vitest、真实 Chrome E2E、PoC README、兼容矩阵、docs/drafts 索引、验证计划/进度和本 ledger。
+tests: Session adapter/mount/read 三个 Vitest 文件共 11/11 通过；Web TypeScript 检查和 preview build 通过；`node --check` 通过。`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-mount-lifecycle.e2e.mjs` 通过：3 个 Session、parked execution 继续、duplicate/live event 去重、occupied/busy/unavailable 拒绝、worker-2 reconnect、旧 identity 拒绝、dispose 后 unknown 与 late result 忽略，`pageErrors=0`、`workerErrors=0`、`externalRequests=0`。真实 `gpt-5.6-sol` Chrome smoke 完成普通 `read → write → read` 和刷新恢复，59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200；日志保留既有 preview API 404 与 compaction warning，不作为完全干净 console 证据。Safari/WebKit、正式多 Session UI、真实模型自主多 Session、页面自然关闭、BFCache、生产多实例 handoff、自然 eviction、OS/磁盘崩溃和云端 executor handoff 未验证。
+syncReplaySteps: 上游同步后先核对 `BrowserNativeSessionCursor` identity/seq 语义、Worker test MessagePort 生命周期、Preview URL allowlist 和现有 owner/handoff/recovery API。运行 Session adapter/mount/read Vitest、`node --check`、preview build、`session-mount-lifecycle.e2e.mjs` Chrome probe 和 `runtime-validation.e2e.mjs` 真实 LLM smoke；区分 scripted 状态矩阵与真实模型接线回归，不把 parked mount 写成后台 Agent。
+deleteCondition: 正式 Session mount/client service 提供等价的多 Session 投影、事件 replay、owner fencing、unknown settlement 和真实浏览器生命周期测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
