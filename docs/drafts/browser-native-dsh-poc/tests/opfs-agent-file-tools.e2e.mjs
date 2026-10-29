@@ -60,6 +60,14 @@ async function testAction(page, request) {
   return await page.evaluate(async value => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.(value), request)
 }
 
+function traceCallCount(snapshot, specifier, member) {
+  return snapshot.members.find(call => call.specifier === specifier && call.member === member)?.calls ?? 0
+}
+
+function traceCallDelta(before, after, specifier, member) {
+  return traceCallCount(after, specifier, member) - traceCallCount(before, specifier, member)
+}
+
 function eventText(event) {
   const content = event.data?.message?.content ?? event.data?.content
   if (typeof content === 'string') return content
@@ -277,6 +285,14 @@ try {
   await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-workspace-lease=1&browser-native-test=workspace-recovery&preview-fixture=none`)
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function'
     && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
+  const unsupportedProbeCommitCount = commits.length
+  const unsupportedProbeLlmCount = llmBodies.length
+  const unsupportedProbe = await testAction(page, { action: 'unsupported-builtin-probe' })
+  assert.equal(unsupportedProbe?.ok, true)
+  assert.equal(unsupportedProbe?.error, 'web-preview: node:net.createServer is not available in the worker host')
+  assert.equal(typeof unsupportedProbe?.requestId, 'string')
+  assert.equal(commits.length, unsupportedProbeCommitCount, 'the refused host API must not commit Workspace state')
+  assert.equal(llmBodies.length, unsupportedProbeLlmCount, 'the refused host API must not send a model request')
   const beforeWriteUsage = await testAction(page, { action: 'usage' })
   const initialStorageEstimate = await page.evaluate(async () => await navigator.storage.estimate())
   const invalidPattern = await testAction(page, {
@@ -340,6 +356,8 @@ try {
   assert.ok(coldHeapSampledBytes > 0 && (coldHeapAfterForcedGcBytes ?? 0) > 0,
     'Chrome CDP must report the Dedicated Worker heap')
 
+  const builtinTraceBeforeFirstTurn = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+  assert.ok(builtinTraceBeforeFirstTurn, 'test-port Worker must expose the opt-in builtin call trace')
   holdNextCommit = true
   const firstTurnPromise = sendTurn({
     page,
@@ -462,6 +480,12 @@ try {
   const firstCalls = firstTurn.session.events.filter(event => event.type === 'tool/call' && event.data.turn === firstTurn.turn)
   const expectedToolSequence = scenario === '64m' ? ['read', 'edit', 'read'] : ['read', 'grep', 'edit', 'read']
   assert.deepEqual(firstCalls.map(event => event.data.name), expectedToolSequence)
+  const builtinTraceAfterFirstTurn = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+  assert.ok(builtinTraceAfterFirstTurn, 'Worker builtin call trace must remain available after the DSH turn')
+  assert.equal(builtinTraceAfterFirstTurn.droppedCalls, 0)
+  const firstTurnReadFileCalls = traceCallDelta(
+    builtinTraceBeforeFirstTurn, builtinTraceAfterFirstTurn, 'node:fs/promises', 'readFile',
+  )
   const results = new Map(firstTurn.session.events.filter(event => event.type === 'tool/result').map(event => [toolResultId(event), event]))
   for (const call of firstCalls) {
     const result = results.get(call.data.callId)
@@ -536,6 +560,8 @@ try {
     JSON.stringify({ coldUsage, restoredUsage }))
   let restoredTurn
   let restoredCalls = []
+  let builtinTraceBeforeRestoreRead
+  let builtinTraceAfterRestoreRead
   if (scenario === 'workset') {
     for (const [index, path] of filePaths.entries()) {
       const restored = await testAction(page, { action: 'read-digest', path })
@@ -546,6 +572,8 @@ try {
       else assert.equal(restored.digest, generatedFiles[index].digest)
     }
   } else {
+    builtinTraceBeforeRestoreRead = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+    assert.ok(builtinTraceBeforeRestoreRead, 'refreshed Worker must expose its test-port builtin call trace')
     try {
       restoredTurn = await sendTurn({
         page,
@@ -572,6 +600,8 @@ try {
     }
     restoredCalls = restoredTurn.session.events.filter(event => event.type === 'tool/call' && event.data.turn === restoredTurn.turn)
     assert.deepEqual(restoredCalls.map(event => event.data.name), ['read'])
+    builtinTraceAfterRestoreRead = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+    assert.ok(builtinTraceAfterRestoreRead, 'refreshed Worker builtin call trace must remain available')
     const restoredResults = restoredTurn.session.events.filter(event => event.type === 'tool/result')
     const restoredResult = restoredResults.find(event => toolResultId(event) === restoredCalls[0].data.callId)
     assert.ok(restoredResult)
@@ -588,6 +618,13 @@ try {
     assert.notEqual(restoredResult.data.message?.isError, true, eventText(restoredResult))
     assert.match(eventText(restoredResult), new RegExp(targetAfter))
   }
+  const builtinTraceBeforeDirectRead = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+  const directShimRead = await testAction(page, { action: 'node-fs-read', path: filePath, marker: targetAfter })
+  assert.equal(directShimRead?.ok, true, JSON.stringify(directShimRead))
+  assert.equal(directShimRead?.markerFound, true, 'node:fs/promises must observe the committed content through the Worker VFS')
+  const builtinTraceAfterDirectRead = (await testAction(page, { action: 'builtin-member-trace' }))?.trace
+  assert.equal(traceCallDelta(builtinTraceBeforeDirectRead, builtinTraceAfterDirectRead, 'node:fs/promises', 'readFile'), 1,
+    'the explicit node:fs/promises probe must increment the shim method trace once')
   assert.equal(commits.length, seedCommitCount + 1, 'refresh and read must not replay the edit or add a Workspace commit')
   const finalSession = await sessionRequest(origin, 'read', { sessionId: firstTurn.sessionId, offset: 0 })
   assert.equal(finalSession.status, 200)
@@ -609,6 +646,18 @@ try {
     sessionId: firstTurn.sessionId,
     workspaceId: identity.workspaceId,
     firstTurnToolSequence: firstCalls.map(event => event.data.name),
+    builtinReadCalls: {
+      firstDshTurn: firstTurnReadFileCalls,
+      afterRefresh: builtinTraceBeforeRestoreRead === undefined || builtinTraceAfterRestoreRead === undefined ? null : traceCallDelta(
+        builtinTraceBeforeRestoreRead,
+        builtinTraceAfterRestoreRead,
+        'node:fs/promises',
+        'readFile',
+      ),
+      explicitShimProbe: traceCallDelta(builtinTraceBeforeDirectRead, builtinTraceAfterDirectRead, 'node:fs/promises', 'readFile'),
+    },
+    builtinReadCallAttribution: 'per-turn counts are diagnostic only; unrelated Worker reads may occur during DSH turns',
+    unsupportedBuiltin: 'node:net.createServer rejected without Workspace commit or model request',
     grepResult: scenario === '64m' ? null : eventText(results.get(firstCalls[1].data.callId)),
     restoredTurnToolSequence: restoredCalls.map(event => event.data.name),
     seedResidentBytes: seededUsage.residentBytes,

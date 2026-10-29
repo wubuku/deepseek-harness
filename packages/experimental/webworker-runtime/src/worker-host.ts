@@ -34,7 +34,7 @@ import type { RequestListener } from './transport/synthetic-http.ts'
 import { TunnelServer, type TunnelPort } from './transport/tunnel.ts'
 import { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 import { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
-import { setActiveVfs } from './storage/active.ts'
+import { setActiveVfs, type NodeBuiltinMemberObserver } from './storage/active.ts'
 import { setTextViewer } from './shell/process/xdg-open.ts'
 import {
   DEFAULT_ROOT, IMAGE_EMPTY_DIRECTORIES, IMAGE_HOME_DIRECTORY, IMAGE_MANIFEST_PATH, LOWERING_VERSION,
@@ -87,6 +87,8 @@ export interface WorkerHostOptions {
   readonly staticModulePrefixes?: Readonly<Record<string, StaticModuleFactory>>
   /** Maximum number of module request/load trace events retained for diagnostics. */
   readonly moduleTraceCapacity?: number
+  /** Optional observer for instrumented `node:fs` shim calls; it receives names only, not arguments. */
+  readonly onNodeBuiltinMemberCall?: NodeBuiltinMemberObserver
   /**
    * The webserver's request listener, captured by the app's fake `node:http`.
    * Awaited on first tunnel use, so it may resolve after the tree binds.
@@ -211,7 +213,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       }
       vfs = mounted
       await options.prepareVfs?.(mounted)
-      setActiveVfs(mounted)
+      setActiveVfs(mounted, options.onNodeBuiltinMemberCall)
 
       const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
       const manifest = readImageManifest(mounted, manifestPath)

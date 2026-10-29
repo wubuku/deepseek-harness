@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-057：Worker Node 文件 API 调用观测与 DSH VFS 路径核验
+
+```text
+changeId: BN-P2-057
+upstreamBaseline: research branch at batch start; 2026-10-29; 起始工作区干净、与 origin/research 同步；仅主 worktree
+file: packages/experimental/webworker-runtime/src/storage/active.ts; packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/fs.ts; packages/experimental/webworker-runtime/src/worker-host.ts; packages/experimental/webworker-runtime/src/index.ts; packages/experimental/webworker-runtime/tests/node/fs-member-observer.spec.ts; packages/experimental/webworker-runtime/README.md; packages/experimental/webworker-runtime/README.zh.md; packages/experimental/webworker-runtime/README.i18n.yaml; 本目录 browser-native-builtin-member-trace.ts、browser-native-worker.ts、tests/browser-native-builtin-member-trace.spec.ts、tests/opfs-agent-file-tools.e2e.mjs、Node 文件能力计划/进度、README、operational-compatibility-matrix.md；docs/drafts/README.md
+reason: 静态模块请求图不能说明文件 API 的真实调用。真实 DSH read 实际使用 ctx.fs 而非 node:fs；若仅凭路径名或 Worker 总调用数做归因，会误报插件需求。需要同时验证 VFS-backed Node shim 可见同一 Workspace 文件，并核实不支持的宿主 API 明确失败。
+existingExtensionPointsChecked: 复用 WorkerHostOptions、active VFS slot、Node fs/promises shim 入口、PoC Worker test MessagePort、真实 DSH tools/execute、OPFS 文件工具 E2E 和同源真实 LLM smoke。没有改 Agent Loop、Session 格式、默认 profile、Web/desktop 应用行为或根级依赖。
+directoryOutChangeReason: webworker-runtime 是 VFS Node shim、Worker Host 选项和公开类型的实际 owner，需在该处观测公开方法入口；observer opt-in，默认不分配 trace，也不包装函数/namespace。PoC trace recorder 和测试动作仅在本目录，只有专用 test MessagePort 存在时才注入 observer。runtime 中英文 README 和 pairing sidecar 同步更新；无其他目录外改动。
+behavior: 新增只接收 node:fs 或 node:fs/promises 与成员名的可选 observer；Promise wrapper 委托同步实现时不重复计数，递归 cp 的内部调用不伪装成外部调用。PoC recorder 按 builtin/member 聚合并限制唯一成员数，不记录参数、路径、内容或调用栈。test port 增加隔离 Node shim read probe 与 node:net.createServer refusal probe。标准 DSH read 仍经 ctx.fs；没有更改其实现。
+tests: runtime Vitest 3 files/93 tests；PoC trace Vitest 1 file/3 tests；webworker-runtime TypeScript build、preview build 与完整 build 9/9 通过。Chrome 12 MiB scripted OPFS E2E 通过真实 DSH read/grep/edit/read、刷新、独立 node:fs/promises 同 VFS marker 读取、node:net 明确拒绝、无额外模型请求/commit、无页面错误或跨源请求；edit 上传 1 MiB 并复用 11 MiB。Chrome real gpt-5.6-sol original-roster smoke 通过 read/write/read、刷新恢复及再次读取，同源 LLM 8/8 HTTP 200，Session 60 events，durableThroughSeq 59，Workspace commits 2/2 HTTP 200；secret 检查通过。真实模型日志存在非致命 compaction warning、preview API 404 和刷新请求中止。README pairing 一致，test:docs 21/21、doc-sync 43/43、定向 Oxlint 通过。完整 lint 的本批 fs.ts 问题已修复；重跑后只剩未修改 apps/web/src/browser-native-recovery.ts 两项和 packages/core/tools/tests/json-schema.spec.ts 一项 lint error。hygiene 为 18 pass/3 fail：既存 vendor rescope residue、嵌套 packages 目录约束和未修改 apps/web route 路径。 |
+upstreamReplay: 上游同步后核对 active VFS 安装生命周期、已插桩 Node fs 方法入口、Promise wrapper/内部委托与递归 cp 的计数边界、WorkerHost options 类型及根导出；若上游提供等价 diagnostics hook，则迁移 PoC observer。复跑 fs observer/fs/node-stubs Vitest、PoC trace Vitest、runtime TypeScript build、preview build、Chrome 12 MiB opfs-agent-file-tools E2E、真实 Chrome runtime-validation E2E、文档门禁与 pre-push 检查。保留标准 read 使用 ctx.fs 的事实；Worker 总 trace 不能对单个 tool call 归因，不得写成工具经 Node shim 执行或 Node 完整兼容。
+deleteWhen: Worker runtime 提供等价 opt-in API observation 且 Browser-Native PoC 测试已迁移，或 Browser-Native PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-055：共享 authority 并发、业务幂等与失联恢复
 
 ```text

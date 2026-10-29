@@ -72,6 +72,7 @@ import {
 } from './browser-native-workspace.ts'
 import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
 import type { DownloadPublicationStage } from './browser-native-workspace-store.ts'
+import { createBrowserNativeBuiltinMemberTrace } from './browser-native-builtin-member-trace.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -86,6 +87,7 @@ let contentDefinedUpload = false
 let workspaceWriterLease = false
 let workspaceRuntime: BrowserNativeWorkspaceRuntime | undefined
 let workspaceTestPort: MessagePort | undefined
+let builtinMemberTrace: ReturnType<typeof createBrowserNativeBuiltinMemberTrace> | undefined
 let downloadPauseStage: DownloadPublicationStage | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
@@ -186,7 +188,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -304,7 +306,12 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  if (data.action === 'node-fs-read') {
+    return typeof data.path === 'string' && data.path.startsWith('/dsh/home/workspace/')
+      && !data.path.split('/').includes('..')
+      && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
+  }
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -1166,7 +1173,44 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (request.action === 'module-trace') {
       const moduleTrace = host?.modules?.requestTrace()
       if (moduleTrace === undefined) throw new Error('browser-native worker: module trace is disabled')
-      workspaceTestResponse(request.requestId, { ok: true, moduleTrace })
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        moduleTrace,
+        builtinMemberTrace: builtinMemberTrace?.snapshot() ?? { members: [], droppedCalls: 0 },
+      })
+      return
+    }
+    if (request.action === 'builtin-member-trace') {
+      if (builtinMemberTrace === undefined) throw new Error('browser-native worker: builtin member trace is disabled')
+      workspaceTestResponse(request.requestId, { ok: true, trace: builtinMemberTrace.snapshot() })
+      return
+    }
+    if (request.action === 'node-fs-read') {
+      if (host?.modules === undefined || request.path === undefined || request.marker === undefined) {
+        throw new Error('browser-native worker: node filesystem probe needs a ready loader, path, and marker')
+      }
+      const fsPromises = host.modules.requireFrom('/dsh')('node:fs/promises') as typeof import('node:fs/promises')
+      const content = await fsPromises.readFile(request.path, 'utf8')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        path: request.path,
+        characters: content.length,
+        markerFound: content.includes(request.marker),
+      })
+      return
+    }
+    if (request.action === 'unsupported-builtin-probe') {
+      if (host?.modules === undefined) throw new Error('browser-native worker: module loader is not ready')
+      try {
+        const net = host.modules.requireFrom('/dsh')('node:net') as typeof import('node:net')
+        net.createServer()
+        workspaceTestResponse(request.requestId, { ok: false, error: 'node:net.createServer unexpectedly returned' })
+      } catch (error) {
+        workspaceTestResponse(request.requestId, {
+          ok: true,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
       return
     }
     if (request.action === 'control-inject') {
@@ -1887,8 +1931,13 @@ self.addEventListener('message', (event: MessageEvent) => {
       }),
     })
     workspaceRuntime = workspace
+    const nodeBuiltins = createNodeBuiltins()
+    builtinMemberTrace = workspaceTestPort === undefined ? undefined : createBrowserNativeBuiltinMemberTrace()
     const created = createWorkerHost({
-      staticModules: { ...createNodeBuiltins(), ...createBrowserNativeStaticModules(workspace, sessionOutbox, capabilityPublication) },
+      staticModules: {
+        ...nodeBuiltins,
+        ...createBrowserNativeStaticModules(workspace, sessionOutbox, capabilityPublication),
+      },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,
@@ -1897,6 +1946,9 @@ self.addEventListener('message', (event: MessageEvent) => {
       vfs: workspace.vfs,
       prepareVfs: workspace.prepareVfs,
       ...(workspaceTestPort === undefined ? {} : { moduleTraceCapacity: 50_000 }),
+      ...(builtinMemberTrace === undefined
+        ? {}
+        : { onNodeBuiltinMemberCall: (specifier, member) => builtinMemberTrace?.record(specifier, member) }),
     })
     host = created
     for (const queued of pending) {

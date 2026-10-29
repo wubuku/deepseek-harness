@@ -49,7 +49,7 @@ export {
 export { loadVfsImage, loadVfsOverlay, MemoryVfs, type MemoryVfsOptions } from './storage/memory.ts'
 export { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 export { packTar, parseTar, type TarEntry } from './storage/tar.ts'
-export { requireActiveVfs, setActiveVfs } from './storage/active.ts'
+export { requireActiveVfs, setActiveVfs, type NodeBuiltinMemberObserver } from './storage/active.ts'
 export {
   type VfsDeferredArchive, type VfsDeferredFile, type VfsDir, type VfsDirent, type VfsEncoding, type VfsError,
   type VfsFileBacking, type VfsFileReference,

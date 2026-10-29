@@ -102,6 +102,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 
 43. [Browser-Native 并行 Agent Loop 与 Workspace writer fencing](browser-native-dsh-poc/concurrent-agent-execution-validation-plan.md)及[进度](browser-native-dsh-poc/concurrent-agent-execution-validation-progress.md)：真实 Chrome 双 Worker/DSH Host 在共享 authority 下并发运行独立 Session，验证双 backend LLM 路由、owner/observer 工具权限和 32 MiB 长 edit 的 lease 接管 fencing；真实 LLM 另验证普通文件工具与刷新恢复，未证明生产 HA、模型自主冲突协调或渐进 UI 流式效果。
 44. [Browser-Native Worker 运行时模块追踪](browser-native-dsh-poc/worker-runtime-module-trace-validation-plan.md)及[进度](browser-native-dsh-poc/worker-runtime-module-trace-validation-progress.md)：将 packer 静态 request graph 与 Chrome scripted/真实 LLM Worker trace 对账；结果只覆盖执行过的模块请求，不证明 Node 兼容性、全部插件能力或未触发模块不可达。
+45. [Browser-Native Node 文件能力验证](browser-native-dsh-poc/node-builtin-file-capability-validation-plan.md)及[进度](browser-native-dsh-poc/node-builtin-file-capability-validation-progress.md)：真实 Chrome 验证 DSH `ctx.fs` 工具路径、同一 VFS 的 Node shim 直接读取、grep fallback、OPFS durable edit 和 `node:net.createServer()` 拒绝；Worker 级 trace 不采集参数，且不能归因到单个工具或证明 Node API 完整兼容。
 
 ### 需要实现或审查代码时
 

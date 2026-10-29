@@ -4,7 +4,7 @@
  * is Node-API-shaped and not VFS business: Buffer results, `Dirent` objects,
  * file descriptors, `mkdtemp`, access checks, watchers, streams, and the promise face.
  */
-import { requireActiveVfs } from '../../../storage/active.ts'
+import { recordActiveNodeBuiltinMember, requireActiveVfs } from '../../../storage/active.ts'
 import type {
   Vfs, VfsBigIntStats, VfsOpenFile, VfsStatOptions, VfsStats, VfsWriteOptions,
 } from '../../../storage/types.ts'
@@ -17,6 +17,19 @@ import {
 } from './fs-watch.ts'
 
 const vfs = (): Vfs => requireActiveVfs()
+let fsCallTraceSuppression = 0
+const recordFsCall = (member: string): void => {
+  if (fsCallTraceSuppression === 0) recordActiveNodeBuiltinMember('node:fs', member)
+}
+const recordFsPromisesCall = (member: string): void => { recordActiveNodeBuiltinMember('node:fs/promises', member) }
+const withoutFsCallTrace = <T>(operation: () => T): T => {
+  fsCallTraceSuppression += 1
+  try {
+    return operation()
+  } finally {
+    fsCallTraceSuppression -= 1
+  }
+}
 
 export { FSWatcher, StatWatcher, unwatchFile, watch, watchFile }
 
@@ -112,6 +125,7 @@ export const constants = {
  * @returns bytes, or text when an encoding is given.
  */
 export function readFileSync(path: PathArg, options?: EncodingOption): Buffer | string {
+  recordFsCall('readFileSync')
   const encoding = encodingOf(options)
   const bytes = bytesOf(asPath(path))
   return encoding === undefined || encoding === 'utf8' || encoding === 'utf-8'
@@ -126,6 +140,7 @@ export function readFileSync(path: PathArg, options?: EncodingOption): Buffer | 
  * @param options - write flag and creation mode, forwarded to the VFS.
  */
 export function writeFileSync(path: PathArg, data: string | Uint8Array, options?: VfsWriteOptions): void {
+  recordFsCall('writeFileSync')
   vfs().writeFileSync(asPath(path), data, options)
 }
 
@@ -135,6 +150,7 @@ export function writeFileSync(path: PathArg, data: string | Uint8Array, options?
  * @param data - bytes or text.
  */
 export function appendFileSync(path: PathArg, data: string | Uint8Array): void {
+  recordFsCall('appendFileSync')
   vfs().appendFileSync(asPath(path), data)
 }
 
@@ -144,6 +160,7 @@ export function appendFileSync(path: PathArg, data: string | Uint8Array): void {
  * @returns true when present.
  */
 export function existsSync(path: PathArg): boolean {
+  recordFsCall('existsSync')
   return vfs().existsSync(asPath(path))
 }
 
@@ -154,6 +171,7 @@ export function existsSync(path: PathArg): boolean {
  * @returns the stats, in the plain or BigInt shape.
  */
 export function statSync(path: PathArg, options?: VfsStatOptions): VfsStats | VfsBigIntStats {
+  recordFsCall('statSync')
   return vfs().statSync(asPath(path), options)
 }
 
@@ -168,13 +186,22 @@ export function stat(
   optionsOrCallback: VfsStatOptions | ((error: NodeJS.ErrnoException | null, stats?: VfsStats | VfsBigIntStats) => void),
   maybeCallback?: (error: NodeJS.ErrnoException | null, stats?: VfsStats | VfsBigIntStats) => void,
 ): void {
+  recordFsCall('stat')
   const options = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback
   const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback
   if (callback === undefined) throw new TypeError('The "callback" argument must be of type function')
+  scheduleStat(path, options, callback)
+}
+
+function scheduleStat(
+  path: PathArg,
+  options: VfsStatOptions | undefined,
+  callback: (error: NodeJS.ErrnoException | null, stats?: VfsStats | VfsBigIntStats) => void,
+): void {
   queueMicrotask(() => {
     let result: VfsStats | VfsBigIntStats
     try {
-      result = statSync(path, options)
+      result = withoutFsCallTrace(() => statSync(path, options))
     } catch (error) {
       callback(error as NodeJS.ErrnoException)
       return
@@ -189,6 +216,7 @@ export function stat(
  * @param mode - new permission bits (`0o777` mask), numeric or Node's octal string form.
  */
 export function chmodSync(path: PathArg, mode: number | string): void {
+  recordFsCall('chmodSync')
   vfs().chmodSync(asPath(path), numericMode(mode))
 }
 
@@ -199,7 +227,8 @@ export function chmodSync(path: PathArg, mode: number | string): void {
  * @returns the stats, in the plain or BigInt shape.
  */
 export function lstatSync(path: PathArg, options?: VfsStatOptions): VfsStats | VfsBigIntStats {
-  return statSync(path, options)
+  recordFsCall('lstatSync')
+  return withoutFsCallTrace(() => statSync(path, options))
 }
 
 /**
@@ -213,7 +242,11 @@ export function lstat(
   optionsOrCallback: VfsStatOptions | ((error: NodeJS.ErrnoException | null, stats?: VfsStats | VfsBigIntStats) => void),
   maybeCallback?: (error: NodeJS.ErrnoException | null, stats?: VfsStats | VfsBigIntStats) => void,
 ): void {
-  stat(path, optionsOrCallback, maybeCallback)
+  recordFsCall('lstat')
+  const options = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback
+  const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback
+  if (callback === undefined) throw new TypeError('The "callback" argument must be of type function')
+  scheduleStat(path, options, callback)
 }
 
 /**
@@ -222,6 +255,7 @@ export function lstat(
  * @returns the resolved path.
  */
 export function realpathSync(path: PathArg): string {
+  recordFsCall('realpathSync')
   return vfs().realpathSync(asPath(path))
 }
 
@@ -231,10 +265,11 @@ export function realpathSync(path: PathArg): string {
  * @param callback - Asynchronous completion with the canonical path or filesystem error.
  */
 export function realpath(path: PathArg, callback: (error: NodeJS.ErrnoException | null, path?: string) => void): void {
+  recordFsCall('realpath')
   queueMicrotask(() => {
     let result: string
     try {
-      result = realpathSync(path)
+      result = withoutFsCallTrace(() => realpathSync(path))
     } catch (error) {
       callback(error as NodeJS.ErrnoException)
       return
@@ -254,6 +289,7 @@ export function readdirSync(
   path: PathArg,
   options?: { withFileTypes?: boolean } | BufferEncoding | null,
 ): string[] | Dirent[] {
+  recordFsCall('readdirSync')
   const target = asPath(path)
   const names = vfs().readdirSync(target)
   if (typeof options !== 'object' || options === null || options.withFileTypes !== true) return names
@@ -267,6 +303,7 @@ export function readdirSync(
  * @returns the first created path when recursive, else undefined.
  */
 export function mkdirSync(path: PathArg, options?: { recursive?: boolean; mode?: number }): string | undefined {
+  recordFsCall('mkdirSync')
   return vfs().mkdirSync(asPath(path), options)
 }
 
@@ -276,6 +313,7 @@ export function mkdirSync(path: PathArg, options?: { recursive?: boolean; mode?:
  * @returns the created directory path.
  */
 export function mkdtempSync(prefix: string): string {
+  recordFsCall('mkdtempSync')
   // Not crypto.randomUUID: browsers expose that only in secure contexts.
   const suffix = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(3)), byte => byte.toString(16).padStart(2, '0')).join('')
   const target = `${prefix}${suffix}`
@@ -289,6 +327,7 @@ export function mkdtempSync(prefix: string): string {
  * @param options - `recursive`/`force`, as in Node.
  */
 export function rmSync(path: PathArg, options?: { recursive?: boolean; force?: boolean }): void {
+  recordFsCall('rmSync')
   vfs().rmSync(asPath(path), options)
 }
 
@@ -297,6 +336,7 @@ export function rmSync(path: PathArg, options?: { recursive?: boolean; force?: b
  * @param path - the path.
  */
 export function unlinkSync(path: PathArg): void {
+  recordFsCall('unlinkSync')
   vfs().rmSync(asPath(path))
 }
 
@@ -306,6 +346,7 @@ export function unlinkSync(path: PathArg): void {
  * @param to - target path.
  */
 export function renameSync(from: PathArg, to: PathArg): void {
+  recordFsCall('renameSync')
   vfs().renameSync(asPath(from), asPath(to))
 }
 
@@ -314,6 +355,7 @@ export function renameSync(from: PathArg, to: PathArg): void {
  * @param path - the path.
  */
 export function accessSync(path: PathArg): void {
+  recordFsCall('accessSync')
   vfs().realpathSync(asPath(path))
 }
 
@@ -334,6 +376,7 @@ let nextFd = 3
  * @returns the descriptor.
  */
 export function openSync(path: PathArg, flags = 'r', mode?: number): number {
+  recordFsCall('openSync')
   const target = asPath(path)
   const file = vfs().openFileSync(target, flags, mode)
   const fd = nextFd++
@@ -370,6 +413,7 @@ export function readSync(
   length = buffer.byteLength,
   position: number | null = null,
 ): number {
+  recordFsCall('readSync')
   const file = fileOf(fd, 'read')
   const from = position ?? file.position
   const slice = file.file.read(from, length)
@@ -385,6 +429,7 @@ export function readSync(
  * @returns bytes written.
  */
 export function writeSync(fd: number, data: string | Uint8Array): number {
+  recordFsCall('writeSync')
   const file = fileOf(fd, 'write')
   const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
   const position = file.file.append ? file.file.stat().size : file.position
@@ -398,6 +443,7 @@ export function writeSync(fd: number, data: string | Uint8Array): number {
  * @param fd - descriptor.
  */
 export function closeSync(fd: number): void {
+  recordFsCall('closeSync')
   const opened = openFiles.get(fd)
   if (opened === undefined) {
     fileOf(fd, 'close')
@@ -413,6 +459,7 @@ export function closeSync(fd: number): void {
  * @param to - new path.
  */
 export function linkSync(from: PathArg, to: PathArg): void {
+  recordFsCall('linkSync')
   vfs().linkSync(asPath(from), asPath(to))
 }
 
@@ -764,6 +811,7 @@ export class WriteStream extends Writable {
  * @returns The readable file stream.
  */
 export function createReadStream(path: PathArg, options?: ReadStreamOptions | BufferEncoding): ReadStream {
+  recordFsCall('createReadStream')
   return new ReadStream(path, typeof options === 'string' ? { encoding: options } : options)
 }
 
@@ -774,6 +822,7 @@ export function createReadStream(path: PathArg, options?: ReadStreamOptions | Bu
  * @returns The writable file stream.
  */
 export function createWriteStream(path: PathArg, options?: WriteStreamOptions | BufferEncoding): WriteStream {
+  recordFsCall('createWriteStream')
   return new WriteStream(path, typeof options === 'string' ? { encoding: options } : options)
 }
 
@@ -794,8 +843,9 @@ export interface Dir {
  * @returns the handle.
  */
 export function opendirSync(path: PathArg): Dir {
+  recordFsCall('opendirSync')
   const target = asPath(path)
-  const entries = readdirSync(target, { withFileTypes: true }) as Dirent[]
+  const entries = withoutFsCallTrace(() => readdirSync(target, { withFileTypes: true })) as Dirent[]
   let index = 0
   const next = (): Dirent | null => entries[index++] ?? null
   return {
@@ -809,6 +859,19 @@ export function opendirSync(path: PathArg): Dir {
   }
 }
 
+async function copyPath(sourcePath: PathArg, targetPath: PathArg): Promise<void> {
+  const source = asPath(sourcePath)
+  const target = asPath(targetPath)
+  if (withoutFsCallTrace(() => statSync(source)).isDirectory()) {
+    withoutFsCallTrace(() => mkdirSync(target, { recursive: true }))
+    for (const name of vfs().readdirSync(source)) await copyPath(`${source}/${name}`, `${target}/${name}`)
+    return
+  }
+  withoutFsCallTrace(() => mkdirSync(dirname(target), { recursive: true }))
+  await vfs().whenReadable(source)
+  withoutFsCallTrace(() => { writeFileSync(target, bytesOf(source)) })
+}
+
 /**
  * Promise face (`node:fs/promises`) over the same VFS. Each member answers the
  * union the VFS produces rather than Node's encoding-dependent overloads, so the
@@ -816,62 +879,108 @@ export function opendirSync(path: PathArg): Dir {
  */
 export const promises = {
   readFile: async (path: PathArg, options?: EncodingOption): Promise<Buffer | string> => {
+    recordFsPromisesCall('readFile')
     await vfs().whenReadable(asPath(path))
-    return readFileSync(path, options)
+    return withoutFsCallTrace(() => readFileSync(path, options))
   },
   writeFile: async (
     path: PathArg,
     data: string | Uint8Array,
     options?: { flag?: string; mode?: number } | BufferEncoding | null,
   ): Promise<void> => {
+    recordFsPromisesCall('writeFile')
     const flag = typeof options === 'object' && options !== null ? options.flag : undefined
     const mode = typeof options === 'object' && options !== null ? options.mode : undefined
-    if (flag !== undefined && flag.includes('x') && existsSync(path)) {
+    if (flag !== undefined && flag.includes('x') && withoutFsCallTrace(() => existsSync(path))) {
       const error = new Error(`EEXIST: file already exists, open '${asPath(path)}'`) as Error & { code: string }
       error.code = 'EEXIST'
       throw error
     }
-    if (flag !== undefined && flag.startsWith('a')) appendFileSync(path, data)
-    else writeFileSync(path, data, { ...flag === undefined ? {} : { flag }, ...mode === undefined ? {} : { mode } })
+    if (flag !== undefined && flag.startsWith('a')) {
+      withoutFsCallTrace(() => { appendFileSync(path, data) })
+    } else {
+      withoutFsCallTrace(() => {
+        writeFileSync(path, data, { ...flag === undefined ? {} : { flag }, ...mode === undefined ? {} : { mode } })
+      })
+    }
   },
-  appendFile: async (path: PathArg, data: string | Uint8Array): Promise<void> => { appendFileSync(path, data) },
-  mkdir: async (path: PathArg, options?: { recursive?: boolean; mode?: number }): Promise<string | undefined> => mkdirSync(path, options),
-  mkdtemp: async (prefix: string): Promise<string> => mkdtempSync(prefix),
+  appendFile: async (path: PathArg, data: string | Uint8Array): Promise<void> => {
+    recordFsPromisesCall('appendFile')
+    withoutFsCallTrace(() => { appendFileSync(path, data) })
+  },
+  mkdir: async (path: PathArg, options?: { recursive?: boolean; mode?: number }): Promise<string | undefined> => {
+    recordFsPromisesCall('mkdir')
+    return withoutFsCallTrace(() => mkdirSync(path, options))
+  },
+  mkdtemp: async (prefix: string): Promise<string> => {
+    recordFsPromisesCall('mkdtemp')
+    return withoutFsCallTrace(() => mkdtempSync(prefix))
+  },
   readdir: async (
     path: PathArg,
     options?: { withFileTypes?: boolean } | BufferEncoding,
-  ): Promise<string[] | Dirent[]> => readdirSync(path, options),
-  stat: async (path: PathArg, options?: VfsStatOptions): Promise<VfsStats | VfsBigIntStats> => statSync(path, options),
-  lstat: async (path: PathArg, options?: VfsStatOptions): Promise<VfsStats | VfsBigIntStats> => lstatSync(path, options),
-  realpath: async (path: PathArg): Promise<string> => realpathSync(path),
-  rm: async (path: PathArg, options?: { recursive?: boolean; force?: boolean }): Promise<void> => { rmSync(path, options) },
-  unlink: async (path: PathArg): Promise<void> => { unlinkSync(path) },
-  rename: async (from: PathArg, to: PathArg): Promise<void> => { renameSync(from, to) },
-  access: async (path: PathArg): Promise<void> => { accessSync(path) },
-  chmod: async (path: PathArg, mode: number | string): Promise<void> => { chmodSync(path, mode) },
+  ): Promise<string[] | Dirent[]> => {
+    recordFsPromisesCall('readdir')
+    return withoutFsCallTrace(() => readdirSync(path, options))
+  },
+  stat: async (path: PathArg, options?: VfsStatOptions): Promise<VfsStats | VfsBigIntStats> => {
+    recordFsPromisesCall('stat')
+    return withoutFsCallTrace(() => statSync(path, options))
+  },
+  lstat: async (path: PathArg, options?: VfsStatOptions): Promise<VfsStats | VfsBigIntStats> => {
+    recordFsPromisesCall('lstat')
+    return withoutFsCallTrace(() => lstatSync(path, options))
+  },
+  realpath: async (path: PathArg): Promise<string> => {
+    recordFsPromisesCall('realpath')
+    return withoutFsCallTrace(() => realpathSync(path))
+  },
+  rm: async (path: PathArg, options?: { recursive?: boolean; force?: boolean }): Promise<void> => {
+    recordFsPromisesCall('rm')
+    withoutFsCallTrace(() => { rmSync(path, options) })
+  },
+  unlink: async (path: PathArg): Promise<void> => {
+    recordFsPromisesCall('unlink')
+    withoutFsCallTrace(() => { unlinkSync(path) })
+  },
+  rename: async (from: PathArg, to: PathArg): Promise<void> => {
+    recordFsPromisesCall('rename')
+    withoutFsCallTrace(() => { renameSync(from, to) })
+  },
+  access: async (path: PathArg): Promise<void> => {
+    recordFsPromisesCall('access')
+    withoutFsCallTrace(() => { accessSync(path) })
+  },
+  chmod: async (path: PathArg, mode: number | string): Promise<void> => {
+    recordFsPromisesCall('chmod')
+    withoutFsCallTrace(() => { chmodSync(path, mode) })
+  },
   cp: async (from: PathArg, to: PathArg): Promise<void> => {
-    const source = asPath(from)
-    const target = asPath(to)
-    if (statSync(source).isDirectory()) {
-      mkdirSync(target, { recursive: true })
-      for (const name of vfs().readdirSync(source)) await promises.cp(`${source}/${name}`, `${target}/${name}`)
-      return
-    }
-    mkdirSync(dirname(target), { recursive: true })
-    await vfs().whenReadable(source)
-    writeFileSync(target, bytesOf(source))
+    recordFsPromisesCall('cp')
+    await copyPath(from, to)
   },
   // The VFS keeps both names attached to one file identity until either name is removed.
-  link: async (from: PathArg, to: PathArg): Promise<void> => { linkSync(from, to) },
+  link: async (from: PathArg, to: PathArg): Promise<void> => {
+    recordFsPromisesCall('link')
+    withoutFsCallTrace(() => { linkSync(from, to) })
+  },
   open: async (path: PathArg, flags?: string, mode?: number): Promise<FileHandle> => {
+    recordFsPromisesCall('open')
     await vfs().whenReadable(asPath(path))
     return openHandleSync(path, flags, mode)
   },
-  opendir: async (path: PathArg): Promise<Dir> => opendirSync(path),
+  opendir: async (path: PathArg): Promise<Dir> => {
+    recordFsPromisesCall('opendir')
+    return withoutFsCallTrace(() => opendirSync(path))
+  },
   truncate: async (path: PathArg, length = 0): Promise<void> => {
+    recordFsPromisesCall('truncate')
     vfs().truncateSync(asPath(path), length)
   },
-  watch: watchAsync,
+  watch: (path: PathArg, options?: Parameters<typeof watchAsync>[1]) => {
+    recordFsPromisesCall('watch')
+    return watchAsync(path, options)
+  },
   constants,
 } satisfies Partial<Record<keyof typeof import('node:fs/promises'), unknown>>
 
