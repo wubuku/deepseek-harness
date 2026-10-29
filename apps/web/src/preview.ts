@@ -10,7 +10,6 @@ import { connectBrowserNativePageControl } from './browser-native-page-control.t
 import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
-import type { WorkerModuleTraceSnapshot } from '@deepseek-ai/dsh-experimental-webworker-runtime'
 
 const searchParams = new URLSearchParams(window.location.search)
 const browserNative = searchParams.get('browser-native') === '1'
@@ -74,7 +73,7 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly logicalBytes?: number
   readonly residentBytes?: number
   readonly receipts?: readonly Record<string, unknown>[]
-  readonly moduleTrace?: WorkerModuleTraceSnapshot
+  readonly moduleTrace?: { readonly events: readonly unknown[]; readonly droppedEvents: number }
   readonly executionHandoff?: {
     readonly state: string
     readonly checkpoint?: Readonly<Record<string, unknown>>
