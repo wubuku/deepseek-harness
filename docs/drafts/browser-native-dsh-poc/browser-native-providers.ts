@@ -19,6 +19,7 @@ import type {
   StreamChunk,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-tool-skill'
 import type {
   SessionEvent,
   SessionHeader,
@@ -736,7 +737,7 @@ function createRemoteSessionPersistenceClass(
                     throw new (runtimeFs().FsError)(error.message, code)
                   }
                 })
-                if (!directResult.isError) ctx.emit('fs/observed', target, {
+                if (!directResult.isError) exec.agent.ctx.emit('fs/observed', target, {
                   kind: 'present',
                   version: runtimeFs().FsVersion(browserNativeFsVersion(workspace.vfs, targetPath)),
                 }, exec)
@@ -1028,6 +1029,10 @@ function toWireMessage(message: RequestMessage): WireMessage {
   }
 }
 
+function isSkillCatalogMessage(message: RequestMessage): boolean {
+  return 'source' in message && message.source?.kind === 'skill-catalog'
+}
+
 async function flushLocalWorkspaceOrDegrade(
   workspace: BrowserNativeWorkspaceRuntime,
   publication: BrowserNativeCapabilityPublication,
@@ -1106,7 +1111,9 @@ function createRemoteLlmAdapterClass(publication: BrowserNativeCapabilityPublica
         provider: options.provider,
         model: options.model,
         ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
-        messages: options.messages.map(toWireMessage),
+        messages: options.messages
+          .filter(message => publication.isToolPublished('skill') || !isSkillCatalogMessage(message))
+          .map(toWireMessage),
         tools: toWireTools(options.tools, publication),
         temperature: options.temperature,
         maxTokens: options.maxTokens,

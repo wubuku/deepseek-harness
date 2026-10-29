@@ -383,6 +383,18 @@ env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u AL
 
 PoC backend 可在测试启动时注入 S3 blob adapter；默认 `run-v2.mjs` 仍使用本地文件 blob store。真实 Chrome Worker + MinIO 验证了 2,097,189-byte staging 文件流式上传、Range 下载、503 outage、刷新后补传先前丢失的已上传对象和 backend 重启读回。adapter 流式校验 SHA-256；关闭 AWS SDK 的可选 request checksum 后兼容所测 MinIO 版本。Session、manifest、identity、writer lease 与 operation ledger 仍驻留单机 JSON `dataDir`；结果不证明真实 AWS/GCS/Azure、生产权限模型或多实例安全。
 
+## DSH skill 文件系统集成
+
+[验证计划](worker-skill-filesystem-validation-plan.md)和[进度记录](worker-skill-filesystem-validation-progress.md)覆盖验证专用 profile 中真实 `dsh-skill-filesystem`、`dsh-skill` 和 `dsh-tool-skill` 的 Chrome Worker 闭环。scripted E2E 验证缺失根创建、DSH `read → edit → edit → skill`、frontmatter 目录更新、Session 正文投影、删除撤回、OPFS 保存失败隔离和同 Session 刷新恢复；真实 LLM E2E 验证模型调用 skill、刷新续聊、同源请求及凭据隔离。该能力没有加入默认 Browser profile，外部 VFS 删除依赖异步 Chokidar 通知，页面关闭后 watcher 不运行。
+
+复跑本批验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_LLM=scripted DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/worker-skill-filesystem.e2e.mjs
+DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/worker-skill-filesystem.e2e.mjs
+```
+
 ### Durable metadata 与远端 blob 生命周期
 
 [元数据和 blob 生命周期验证计划](durable-metadata-and-blob-lifecycle-validation-plan.md)及[实施进度](durable-metadata-and-blob-lifecycle-validation-progress.md)记录当前 checkout 对 Workspace metadata 冷加载和显式 GC 的验证。backend 在 listen 前严格校验 version 1 metadata 的字段、UUID、路径树、operation receipt、pending upload hash/timestamp 和 identity 引用；未知字段或损坏记录会拒绝启动。旧 Workspace 缺少 `uploadedAt` 时，pending hash 会永久保留，不按猜测期限删除。

@@ -1299,6 +1299,91 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     && typeof message.content === 'string'
     && !message.content.startsWith('Current runtime context.')
     && !message.content.startsWith('Time sampled while preparing turn'))?.content ?? ''
+  const skillPrompt = [...messages].reverse().find(message => message.role === 'user'
+    && typeof message.content === 'string' && /BROWSER_NATIVE_SKILL_/.test(message.content))
+  const skillMarker = typeof skillPrompt?.content === 'string'
+    ? skillPrompt.content.match(/BROWSER_NATIVE_SKILL_(EMPTY_CATALOG|ROOT_CREATED|LOAD_INITIAL|EDIT_AND_RELOAD|AFTER_REFRESH|AFTER_DELETE|VOLATILE|AFTER_VOLATILE_REFRESH)/)?.[0]
+    : undefined
+  if (skillMarker !== undefined) {
+    const markerIndex = messages.lastIndexOf(skillPrompt)
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const currentCatalog = [...messages].reverse().find(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes('<available_skills>'))?.content ?? ''
+    if (skillMarker === 'BROWSER_NATIVE_SKILL_EMPTY_CATALOG' || skillMarker === 'BROWSER_NATIVE_SKILL_ROOT_CREATED') {
+      scriptedText(response, `${skillMarker}_DONE`)
+      return
+    }
+    if ((skillMarker === 'BROWSER_NATIVE_SKILL_AFTER_DELETE' && !currentCatalog.includes('- `browser-proof`'))
+      || (skillMarker === 'BROWSER_NATIVE_SKILL_AFTER_VOLATILE_REFRESH' && !currentCatalog.includes('- `volatile-proof`'))) {
+      scriptedText(response, `${skillMarker}_DONE`)
+      return
+    }
+    if (skillMarker === 'BROWSER_NATIVE_SKILL_VOLATILE') {
+      if (toolResults.length === 0) {
+        await scriptedWorkspaceToolCall(response, {
+          id: 'browser-native-skill-volatile-write',
+          name: 'write',
+          arguments: {
+            file_path: '/dsh/home/workspace/.agents/skills/volatile-proof/SKILL.md',
+            content: `---\nname: volatile-proof\ndescription: Unconfirmed browser skill\n---\n\nUncommitted instruction marker: BROWSER_SKILL_VOLATILE_BODY\n`,
+          },
+        })
+        return
+      }
+      if (hasTool(tools, 'skill')) {
+        await scriptedWorkspaceToolCall(response, {
+          id: 'browser-native-skill-volatile-load',
+          name: 'skill',
+          arguments: { name: 'volatile-proof' },
+        })
+        return
+      }
+      scriptedText(response, `${skillMarker}_DONE`)
+      return
+    }
+    if (skillMarker === 'BROWSER_NATIVE_SKILL_EDIT_AND_RELOAD' && toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-skill-edit-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/.agents/skills/browser-proof/SKILL.md' },
+      })
+      return
+    }
+    if (skillMarker === 'BROWSER_NATIVE_SKILL_EDIT_AND_RELOAD' && toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-skill-edit-description',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/.agents/skills/browser-proof/SKILL.md',
+          old_string: 'description: Browser worker integration fixture',
+          new_string: 'description: Updated browser worker integration fixture',
+        },
+      })
+      return
+    }
+    if (skillMarker === 'BROWSER_NATIVE_SKILL_EDIT_AND_RELOAD' && toolResults.length === 2) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-skill-edit-body',
+        name: 'edit',
+        arguments: {
+          file_path: '/dsh/home/workspace/.agents/skills/browser-proof/SKILL.md',
+          old_string: 'Instruction marker: BROWSER_SKILL_BODY_INITIAL',
+          new_string: 'Updated instruction marker: BROWSER_SKILL_BODY_UPDATED',
+        },
+      })
+      return
+    }
+    if (toolResults.length === 0 || skillMarker === 'BROWSER_NATIVE_SKILL_EDIT_AND_RELOAD' && toolResults.length === 3) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-${skillMarker.toLowerCase()}-load`,
+        name: 'skill',
+        arguments: { name: 'browser-proof' },
+      })
+      return
+    }
+    scriptedText(response, `${skillMarker}_DONE`)
+    return
+  }
   const workerPlacementMarker = latestUserText.match(/BROWSER_NATIVE_WORKER_PLACEMENT_[A-Z0-9_]+/)?.[0]
   if (workerPlacementMarker !== undefined && hasTool(tools, 'write') && hasTool(tools, 'read')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'

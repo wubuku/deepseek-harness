@@ -1,0 +1,75 @@
+- id: session-persistence-jsonl
+  disabled: true
+
+- id: agent-default-model
+  config:
+    provider: browser-native
+    model: browser-native
+
+- id: preset-standard
+  config:
+    id: standard
+    name: Browser skill filesystem validation
+    order: 1
+    plugins:
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          prefix: >-
+            You are running in a browser Dedicated Worker, not a host operating
+            system. Files belong to the Worker virtual filesystem. Only the
+            configured Workspace skill root is available. Do not claim access
+            to the user's disk or host directories. Report tool errors honestly.
+          suffix: Reply in the user's language.
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+        config:
+          readImage: false
+      - id: tool-fs-search
+        name: '@deepseek-ai/dsh-tool-fs-search'
+        config:
+          sampleOverCapGlobResults: false
+      - id: skill-filesystem
+        name: '@deepseek-ai/dsh-skill-filesystem'
+        config:
+          includeDefaultRoots: false
+          customSkillDirs:
+            - /dsh/home/workspace/.agents/skills
+          watch: true
+          watchStabilityThresholdMs: 20
+          watchPollIntervalMs: 10
+      - id: tool-skill
+        name: '@deepseek-ai/dsh-tool-skill'
+      - id: tool-todo
+        name: '@deepseek-ai/dsh-tool-todo'
+        config:
+          allowParallelInProgress: true
+      - id: compaction
+        name: cordis:group
+        group: true
+        isolate:
+          compaction: true
+          toolResultPruner: true
+        config:
+          - id: compaction-basic
+            name: '@deepseek-ai/dsh-compaction-basic'
+            config:
+              thresholdRatio: 0.8
+              headroomTokens: 512
+              retainTokens: 256
+              maxTokens: 512
+          - id: command-compact
+            name: '@deepseek-ai/dsh-command-compact'
+          - id: tool-result-pruner
+            name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+            config:
+              thresholdChars: 2048
+              headChars: 512
+              tailChars: 256
+
+- insert:
+    - id: session-persistence-browser-native
+      name: './browser-native-session-persistence.js'
+    - id: llm-browser-native
+      name: './browser-native-llm.js'
+      inject: [llm]

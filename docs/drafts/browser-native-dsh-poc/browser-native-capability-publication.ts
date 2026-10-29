@@ -22,6 +22,7 @@ export class BrowserNativeCapabilityPublication {
   private active = false
   private workspaceReadOnly = false
   private workspaceStale = false
+  private skillFilesystemValidation = false
   private readonly degraded = new Set<BrowserNativeCapabilityId>()
   private readonly listeners = new Set<() => void>()
 
@@ -58,9 +59,17 @@ export class BrowserNativeCapabilityPublication {
     this.notify()
   }
 
+  /** Allow the skill tool only in the dedicated PoC validation profile. */
+  enableSkillFilesystemValidation(): void {
+    if (this.skillFilesystemValidation) return
+    this.skillFilesystemValidation = true
+    this.notify()
+  }
+
   /** Return the tools that are currently eligible for a DSH model request. */
   publishedToolNames(): ReadonlySet<string> {
     const names = publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST, this.capabilities()).map(tool => tool.name)
+    if (this.skillFilesystemValidation) names.push('skill')
     if (this.workspaceStale || this.degraded.size > 0) {
       return new Set(names.filter(name => !this.isWorkspaceTool(name)))
     }
@@ -76,9 +85,11 @@ export class BrowserNativeCapabilityPublication {
   /** Return the workspace-backed tools that must be hidden at this state. */
   unavailableWorkspaceToolNames(): readonly string[] {
     const published = this.publishedToolNames()
-    return BROWSER_NATIVE_PROFILE_MANIFEST.tools
+    const unavailable = BROWSER_NATIVE_PROFILE_MANIFEST.tools
       .filter(tool => WORKSPACE_CAPABILITIES.includes(tool.capability) && !published.has(tool.name))
       .map(tool => tool.name)
+    if (this.skillFilesystemValidation && !published.has('skill')) unavailable.push('skill')
+    return unavailable
   }
 
   /** Subscribe to synchronous roster transitions. */
@@ -105,8 +116,9 @@ export class BrowserNativeCapabilityPublication {
   }
 
   private isWorkspaceTool(name: string): boolean {
-    return BROWSER_NATIVE_PROFILE_MANIFEST.tools.some(tool => tool.name === name
-      && WORKSPACE_CAPABILITIES.includes(tool.capability))
+    return (this.skillFilesystemValidation && name === 'skill')
+      || BROWSER_NATIVE_PROFILE_MANIFEST.tools.some(tool => tool.name === name
+        && WORKSPACE_CAPABILITIES.includes(tool.capability))
   }
 
   private notify(): void {

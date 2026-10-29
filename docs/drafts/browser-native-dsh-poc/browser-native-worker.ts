@@ -1790,6 +1790,7 @@ self.addEventListener('message', (event: MessageEvent) => {
       throw new Error('browser-native workspace test: invalid download pause stage')
     }
     downloadPauseStage = data.downloadPauseStage
+    if (data.skillFilesystem === true) capabilityPublication.enableSkillFilesystemValidation()
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()

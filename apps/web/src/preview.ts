@@ -17,7 +17,8 @@ const browserNativeDurable = browserNative && searchParams.get('browser-native-d
 const browserNativeWorkspaceLease = browserNative && searchParams.get('browser-native-workspace-lease') === '1'
 const browserNativeWorkspaceTest = browserNative
   && (searchParams.get('browser-native-test') === 'workspace-recovery'
-    || searchParams.get('browser-native-test') === 'cross-store')
+    || searchParams.get('browser-native-test') === 'cross-store'
+    || searchParams.get('browser-native-test') === 'skill-filesystem')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
@@ -170,7 +171,10 @@ try {
         pending.delete(event.data.requestId)
       })
       channel.port1.start()
-      currentWorker.postMessage({ type: 'browser-native-workspace-test-init' }, [channel.port2])
+      currentWorker.postMessage({
+        type: 'browser-native-workspace-test-init',
+        skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
+      }, [channel.port2])
       window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
         const requestId = browserNativeTestUuid()
         pending.set(requestId, resolve)

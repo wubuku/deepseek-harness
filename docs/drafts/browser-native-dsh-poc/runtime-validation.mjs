@@ -11,13 +11,13 @@ const here = new URL('.', import.meta.url)
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
   distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout,
 } = {}) {
-  if (!['browser', 'original'].includes(roster)) throw new Error('roster must be browser or original')
+  if (!['browser', 'original', 'browser-skill'].includes(roster)) throw new Error('roster must be browser, original, or browser-skill')
   if (!Number.isSafeInteger(largeFileChars) || largeFileChars < 0 || largeFileChars > 1_000_000) {
     throw new Error('largeFileChars must be an integer between 0 and 1000000')
   }
@@ -32,7 +32,9 @@ export async function createRuntimeValidationDist({
     const outputRoot = join(temporary, 'dist')
     const home = join(imageRoot, 'home')
     await mkdir(join(home, 'browser-validation'), { recursive: true })
-    const patch = roster === 'browser' ? 'runtime-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
+    const patch = roster === 'browser'
+      ? 'runtime-validation.cordis.patch.yml'
+      : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
     if (timedQuestionTimeout !== undefined) {
       const entries = load(profilePatch)
