@@ -104,6 +104,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 44. [Browser-Native Worker 运行时模块追踪](browser-native-dsh-poc/worker-runtime-module-trace-validation-plan.md)及[进度](browser-native-dsh-poc/worker-runtime-module-trace-validation-progress.md)：将 packer 静态 request graph 与 Chrome scripted/真实 LLM Worker trace 对账；结果只覆盖执行过的模块请求，不证明 Node 兼容性、全部插件能力或未触发模块不可达。
 45. [Browser-Native Node 文件能力验证](browser-native-dsh-poc/node-builtin-file-capability-validation-plan.md)及[进度](browser-native-dsh-poc/node-builtin-file-capability-validation-progress.md)：真实 Chrome 验证 DSH `ctx.fs` 工具路径、同一 VFS 的 Node shim 直接读取、grep fallback、OPFS durable edit 和 `node:net.createServer()` 拒绝；Worker 级 trace 不采集参数，且不能归因到单个工具或证明 Node API 完整兼容。
 46. [Browser Worker DSH skill 文件系统集成验证](browser-native-dsh-poc/worker-skill-filesystem-validation-plan.md)及[进度](browser-native-dsh-poc/worker-skill-filesystem-validation-progress.md)：validation-only Chrome profile 运行真实 `dsh-skill-filesystem`、`dsh-skill` 和 `dsh-tool-skill`，验证 VFS watcher、目录变化、Session catalog、OPFS 保存失败、同 Session 刷新和真实 LLM；结果不启用默认 Browser profile，也不证明页面关闭后 watcher 持续运行。
+47. [Browser-Native 权限与审批生命周期验证](browser-native-dsh-poc/permission-approval-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/permission-approval-lifecycle-validation-progress.md)：Chrome Worker 复用正式权限预设、沙箱和审批服务，验证只读拒绝、工作区写入、审批拒绝、Full access 风险确认及 Session 权限事件；真实 LLM 仅做普通 smoke，`allowed-once`、取消/超时和强杀后专门恢复仍未验证。
 
 ### 需要实现或审查代码时
 

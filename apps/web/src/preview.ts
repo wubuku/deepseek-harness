@@ -18,7 +18,8 @@ const browserNativeWorkspaceLease = browserNative && searchParams.get('browser-n
 const browserNativeWorkspaceTest = browserNative
   && (searchParams.get('browser-native-test') === 'workspace-recovery'
     || searchParams.get('browser-native-test') === 'cross-store'
-    || searchParams.get('browser-native-test') === 'skill-filesystem')
+    || searchParams.get('browser-native-test') === 'skill-filesystem'
+    || searchParams.get('browser-native-test') === 'permission-lifecycle')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
@@ -28,7 +29,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
     | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
   readonly stage?: 'before' | 'after'
@@ -81,6 +82,14 @@ interface BrowserNativeWorkspaceTestResponse {
     readonly nextOwner?: { readonly ownerToken: string; readonly ownerEpoch: number }
   }
   readonly controlInjection?: string
+  readonly permission?: {
+    readonly sessionId: string
+    readonly currentPreset: string
+    readonly sandboxMode: string
+    readonly approvalPolicy: string
+    readonly availablePresets: readonly string[]
+    readonly workspaceRoot: string
+  }
 }
 
 function browserNativeTestUuid(): string {

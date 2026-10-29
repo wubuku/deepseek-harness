@@ -114,6 +114,24 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
+### BN-P2-062：Browser Worker 正式权限预设、沙箱与审批生命周期
+
+```text
+changeId: BN-P2-062
+upstreamBaseline: research branch at batch start; 2026-10-29; 主工作区干净且无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-permission-probe.ts; docs/drafts/browser-native-dsh-poc/browser-native-permission-probe.js; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/build-profile-overlay.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-profile-overlay.tar.gz; docs/drafts/browser-native-dsh-poc/tests/permission-approval-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/permission-approval-lifecycle-validation-plan.md; docs/drafts/browser-native-dsh-poc/permission-approval-lifecycle-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Browser Worker 已经复用正式 DSH Agent Loop 和文件工具，但尚无证据证明权限预设、sandbox policy、approval policy 与实际 VFS 结果及 Session 事件一致。本批验证这些服务在 Worker 镜像中的加载、只读/工作区/完全权限路径和 fail-closed 审批拒绝，不增加隐藏 YOLO 开关，也不修改正式权限包。
+existingExtensionPointsChecked: 复用正式 `permissionPresets`、`sandboxPolicy`、`approval` service、现有 Web permission picker、Worker Host static module table、Session event log、同源 backend 和 URL-gated test MessagePort。只增加 PoC-local read-only probe/test action、profile overlay 接线和确定性测试 responder；未修改正式权限包、Agent Loop、Session format 或根级依赖。
+whyDraftOnlyWasInsufficient: package 单测不能证明正式权限 service 在 Dedicated Worker 镜像中加载，也不能把 UI 选择、sandbox enforcement、approval event 和 Workspace 文件结果放在同一真实 Chrome turn 中对账。测试 responder 初始只读取顶层 `isError`，而 DSH `tool/result` 的错误标记位于嵌套 message；同 Session 历史 marker 还会污染后续 scripted turn。两处只修复 PoC 测试适配层，不放宽运行时权限。
+behaviorChange: Worker profile 增加只读 permission probe；`permission-state` 测试动作返回当前 Session 的 preset、sandbox mode、approval policy、目录和 workspace root，不注册模型工具且不能修改权限。Preview 支持 `browser-native-test=permission-lifecycle`。Chrome E2E 验证 `read-only` 写入被拒、`workspace-write` 写入成功、`ask` 下带 justification 的 Bash 请求产生 approval/asked 并在 Reject 后不创建文件，以及 Full access 风险确认后使用 `danger-full-access`/`never` 且不显示审批卡。scripted responder 只按当前用户 prompt 选择场景，并识别正式 tool result 的嵌套错误字段。
+directoryOutChangeReason: 仅 `apps/web/src/preview.ts` 位于 PoC 目录外，因为现有 preview test channel 在该入口定义；它只增加显式 URL-gated permission lifecycle action。未修改正式 packages、默认 profile、根依赖或其他 PoC。
+consumersUpdated: Worker static modules、profile overlay builder/runtime validation overlay、preview test channel、scripted backend responder、权限生命周期 Chrome E2E、PoC README、兼容矩阵、drafts index、validation plan/progress 与本 ledger。
+tests: Preview build 和 `pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 通过。Chrome 156.0.8078.48 scripted E2E 通过：三种 preset、10 个 permission events、只读拒绝、审批拒绝、工作区写入、Full access 确认、0 page errors、0 Worker errors、0 cross-origin requests。真实 Chrome `gpt-5.6-sol` smoke 通过：3 turns、5/5 LLM HTTP 200、41 Session events、`durableThroughSeq=40`、多轮记忆和 todo 持久化；浏览器仍记录既有 `/open-in-app/apps` 404，本批不把它写成全 console clean。真实模型只验证普通 Agent Loop，不验证自主权限选择或审批。`allowed-once`、answerer cancel/timeout/unavailable、Worker 强杀后的专门权限 replay、生产认证和跨设备授权未执行。
+syncReplaySteps: 上游同步后检查正式 permission preset catalog、sandbox policy resolve、approval schema 对 Worker image 的依赖是否仍可静态加载；运行 preview build、Web typecheck、权限生命周期 Chrome scripted E2E 和真实 `browser-native-v2` smoke。保持 permission-state 只读且只在测试通道可达；保持 `danger-full-access` 的表述限定在 Worker 内 DSH policy，不写成宿主机权限或后台 Agent。若扩展审批矩阵，新增独立的 allowed-once/cancel/timeout/unavailable 证据，不用真实模型替代确定性授权时序。
+deleteCondition: 正式 Browser runtime 提供等价的权限服务加载、preset/sandbox/approval 对账和维护中的 Chrome 生命周期测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-061：附件 Worker 强制终止后的临时项回收与内容幂等恢复
 
 ```text

@@ -1078,6 +1078,24 @@ env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u AL
 
 真实模型凭据只由 Node backend 从本机 `docs/drafts/.env` 读取。Chrome smoke 另观察到 Worker compaction context capacity warning 和 preview API 404；这些诊断没有使该次 smoke 失败，但本批不验证 warning 的根因。自然 eviction、OS/浏览器进程崩溃、Safari/WebKit、生产共享数据库和后台 Agent 未验证。
 
+## 权限预设与审批生命周期
+
+[权限与审批生命周期计划](permission-approval-lifecycle-validation-plan.md)及[进度](permission-approval-lifecycle-validation-progress.md)记录当前 checkout 对正式 `dsh-permission-presets`、`dsh-sandbox-policy` 和 `dsh-user-approval` 在 Browser Worker 中的验证。Worker 通过只读 `permission-state` 测试动作观察当前 Session 的 preset、sandbox mode、approval policy、可用目录和 workspace root；该探针不注册模型工具，也不能改变权限。Chrome scripted E2E 验证 `read-only` 写入被拒、`workspace-write` 写入成功、`ask` 下带 justification 的受保护 Bash 操作产生审批并在拒绝后不产生文件，以及 Full access 的显式风险确认、`never` 策略和无审批卡片。权限快照、实际文件和 Session 事件共同作为证据，Agent 文本不是唯一断言。
+
+本批还完成一次真实 `gpt-5.6-sol` Chrome smoke：3 turns、5 个同源模型请求、Session durable watermark 和 todo 持久化通过。真实模型 smoke 只证明普通 Agent Loop 没有退化，不证明模型自主选择权限或审批路径。`allowed-once`、answerer cancel/timeout/unavailable、Worker 强杀后的专门权限恢复、生产认证和跨设备授权仍未验证。Full access 在此处只表示 Browser Worker 内 DSH 策略，不是宿主机权限、Node 权限或页面关闭后的后台 Agent。
+
+复跑本批：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec tsc -p apps/web/tsconfig.json --noEmit
+env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+  DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/permission-approval-lifecycle.e2e.mjs
+env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u all_proxy \
+  DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_ENV_FILE=docs/drafts/.env \
+  DSH_POC_TURN_TIMEOUT_MS=600000 node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
+```
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

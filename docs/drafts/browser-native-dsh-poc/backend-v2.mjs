@@ -1339,6 +1339,15 @@ function hasToolResult(messages) {
   return messages.some(message => message.role === 'tool')
 }
 
+function toolResultIsError(result) {
+  if (result?.isError === true || result?.message?.isError === true) return true
+  const content = typeof result?.content === 'string' ? result.content
+    : Array.isArray(result?.content) ? result.content.filter(item => item?.type === 'text' && typeof item.text === 'string')
+      .map(item => item.text).join('\n')
+    : ''
+  return /^\s*Error:/i.test(content) || /\b(file access denied|permission denied|approval rejected)\b/i.test(content)
+}
+
 function hasTool(tools, name) {
   return Array.isArray(tools) && tools.some(tool => tool?.function?.name === name || tool?.name === name)
 }
@@ -2624,6 +2633,56 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } })
     writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } })
     response.end()
+    return
+  }
+
+  const permissionWriteMarker = [
+    'BROWSER_NATIVE_PERMISSION_READ_ONLY_E2E',
+    'BROWSER_NATIVE_PERMISSION_WORKSPACE_WRITE_E2E',
+    'BROWSER_NATIVE_PERMISSION_DANGER_E2E',
+  ].find(marker => latestUserText.includes(marker))
+  if (permissionWriteMarker !== undefined && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(permissionWriteMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-permission-${permissionWriteMarker.toLowerCase().replaceAll('_', '-')}`,
+        name: 'write',
+        arguments: {
+          file_path: `/dsh/home/workspace/${permissionWriteMarker.toLowerCase()}.txt`,
+          content: `${permissionWriteMarker}_WRITE_OK\n`,
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResultIsError(toolResults[0])
+      ? `${permissionWriteMarker}_BLOCKED`
+      : `${permissionWriteMarker}_DONE`)
+    return
+  }
+
+  const permissionApprovalMarker = 'BROWSER_NATIVE_PERMISSION_APPROVAL_E2E'
+  if (hasUserMarker(messages, permissionApprovalMarker) && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(permissionApprovalMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-permission-approval-bash',
+        name: 'bash',
+        arguments: {
+          command: "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK\\n' > approval-result.txt",
+          description: 'Write the approval lifecycle fixture in the Worker workspace.',
+          sandbox_permissions: 'danger-full-access',
+          justification: 'The permission lifecycle test requests one approved Worker workspace write.',
+        },
+      })
+      return
+    }
+    scriptedText(response, toolResultIsError(toolResults[0])
+      ? 'BROWSER_NATIVE_PERMISSION_APPROVAL_REJECTED'
+      : 'BROWSER_NATIVE_PERMISSION_APPROVAL_ALLOWED')
     return
   }
 
