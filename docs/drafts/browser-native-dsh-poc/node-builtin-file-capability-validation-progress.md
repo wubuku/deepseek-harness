@@ -18,7 +18,7 @@ description: "记录 Browser-Native DSH 文件工具、Node builtin 方法调用
 | M1：有界方法调用 trace | `complete` | runtime 与 PoC 定向单测通过；observer 默认关闭，不包装 namespace/function；Promise wrapper 委托内部同步实现时不重复计数；记录只含 builtin/member 与计数。首轮新测试因空 VFS 没有 `/dsh` 目录失败，修正为递归建目录后通过。 | 扩展到真实 Chrome DSH 文件工具 E2E。 |
 | M2：Worker stub 与 DSH 文件工具 | `complete` | Chrome scripted 12 MiB OPFS E2E 通过真实 DSH `read → grep → edit → read`、刷新后同 Session 再读、`node:fs/promises.readFile` 测试通道读取已提交 marker，以及 `node:net.createServer()` 明确拒绝。Worker trace 显示 first turn 为 0 次、刷新 turn 为 2 次、隔离 shim probe 恰为 1 次；turn 级调用数只作诊断，不作工具归因。编辑只上传 1 MiB、复用 11 MiB；Workspace revision 从 1 到 2，刷新未重放 edit；page/worker errors 与跨源请求均为 0。 | 更新兼容矩阵、文档索引和变更账本。 |
 | M3：真实 LLM smoke | `complete` | Chrome + original roster + 同源 backend + `docs/drafts/.env` 的真实 `gpt-5.6-sol` 完成 `read → write → read`、流式文本、多轮记忆、刷新恢复与刷新后再次 DSH read。Session 60 events，`durableThroughSeq=59`；8/8 LLM HTTP 200，Workspace 两次提交均 HTTP 200。浏览器只向同源 LLM proxy 发模型请求，secret 检查和 page-error 断言通过；模型未用于 12 MiB scripted 大文件场景。 | 保留真实模型与 scripted 大文件证据分开陈述。 |
-| M4：文档、提交与推送 | `in-progress` | PoC README、兼容矩阵、drafts 索引、runtime 中英文 README 与 pairing sidecar 已更新。`test:docs` 21/21、`doc-sync` 43/43、本批 Oxlint 和完整 `pnpm run build` 9/9 通过；完整 lint 有两处未修改文件错误，hygiene 有三项仓库既有失败。最终 diff、change-scope、提交与 push 待完成。 | 完成变更账本和 pre-push 检查，再提交并推送 `research`。 |
+| M4：文档、提交与推送 | `complete` | PoC README、兼容矩阵、drafts 索引、runtime 中英文 README 与 pairing sidecar 已更新。`test:docs` 21/21、`doc-sync` 43/43、本批 Oxlint 和完整 `pnpm run build` 9/9 通过；完整 lint 有两处未修改文件错误，hygiene 有三项仓库既有失败。两笔提交已推送到 `origin/research`，pre-commit 全过、pre-push typecheck 5/5，最终工作区干净；仅主 worktree。 | 批次完成；Safari/WebKit 本轮暂停。 |
 
 ## 实际命令
 
