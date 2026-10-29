@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 并行 Agent Loop、共享 authority、W
 
 ## 当前状态
 
-状态：实现、Chrome 验证和文档门禁完成；提交与推送待完成。
+状态：实现、Chrome 验证、文档门禁、提交和推送均完成。
 
 基线：`research` 分支起始工作区干净，只有主 worktree。DSH-TUI 参考 checkout 为干净的 `main`。本批只验证 Chrome，Safari/WebKit 暂停。
 
@@ -19,7 +19,7 @@ description: "记录 Browser-Native DSH 并行 Agent Loop、共享 authority、W
 | M2：Workspace owner/observer 与单写权 | `complete` | owner DSH `write` 提交后，observer DSH `read` 成功；observer 工具 schema 仅含 `read`/`grep`/`glob`，模型伪造的 `write` 在 Worker 被拒绝，manifest 与 commit 数不变。 | 已完成 |
 | M3：长 edit 接管与 fencing | `complete` | 32 MiB OPFS edit 在 `copy-prefix` 暂停；token 从 1 转到 2 后旧 Worker 仍在途，但本地 writer invalidation 在发布前拒绝旧 edit，无 receipt、无旧本地发布或远端覆盖。新 owner 提交唯一最终内容。 | 已完成 |
 | M4：真实 LLM 文件工具 smoke | `complete-with-limitations` | `gpt-5.6-sol` 在真实 Chrome 完成 `read → write → read`、跨轮记忆和刷新恢复；58 个 Session events，`durableThroughSeq=57`。Session 记录流式 chunks，但可见 DOM 只采到一次更新，不作为渐进渲染通过证据。 | 保留该 UI 流式证据缺口 |
-| M5：文档门禁、提交和推送 | `in-progress` | backend-v2 tests 56/56、test:docs 21/21、doc-sync 43/43、whitespace 与 change-scope 均通过；Git 发布待执行。 | 提交并推送 `research`，核对远端 head 和干净工作区 |
+| M5：文档门禁、提交和推送 | `complete` | backend-v2 tests 56/56、test:docs 21/21、doc-sync 43/43、whitespace 与 change-scope 均通过；pre-commit 和 pre-push hooks 通过，`research` 已推送且远端 head 与本地一致。 | 无 |
 
 ## 执行记录
 
@@ -32,6 +32,7 @@ description: "记录 Browser-Native DSH 并行 Agent Loop、共享 authority、W
 | 2026-10-29 | `pnpm run test:docs` | 21/21 gates 通过。 | 完整文档同步门禁。 |
 | 2026-10-29 | `pnpm run doc-sync` | 43/43 gates 通过。 | 最终 diff 与变更范围核对。 |
 | 2026-10-29 | `git diff --check`; `pnpm run change-scope --base origin/research` | whitespace 检查通过；范围仅含本批 8 个文件，无其他工作区修改或隔离 worktree。 | 提交并推送。 |
+| 2026-10-29 | `git commit -m "test: validate concurrent browser-native agent loops"`; `git push origin research` | pre-commit lint/whitespace/vendor guard 通过；pre-push 增量 typecheck 5/5 通过；推送成功，随后核对 `HEAD` 与 `origin/research` 相同且工作区干净。 | 无 |
 
 ## 经验记录
 
