@@ -1258,6 +1258,7 @@ export function createBrowserNativeStaticModules(
   attachmentTestHooks?: BrowserNativeAttachmentTestHooks,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
+  attachmentTestHooks?.onModuleReady?.(attachments)
   return {
     '@deepseek-ai/dsh-browser-native-attachments': attachments.factory,
     '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(

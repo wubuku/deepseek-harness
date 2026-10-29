@@ -140,6 +140,8 @@ Chrome scripted E2E 通过 16 MiB 附件上传、真实 DSH `read`、删除 OPFS
 
 [附件取消与发布竞态验证](attachment-cancellation-validation-plan.md)和[实施进度](attachment-cancellation-validation-progress.md)进一步覆盖用户在上传中移除文件。Chrome E2E 在 Worker 的 OPFS `WritableFileStream.write()` 成功后暂停，确认 `upload-*` 临时项存在；点击正式 composer 的 Remove 后，AbortSignal 使 writer abort，临时项清除且 backend 未收到 PUT。另两次取消分别发生在 backend 收到 body 但尚未发布对象时，以及对象已发布但 receipt 尚未返回时。发布前取消清除 `.part` 且没有远端对象；发布后取消不能撤销已发布对象，但 late response 不恢复 FileCard、不产生 Session FileBlock，用户可以继续提交纯文本。该对象是 orphan 风险；由于 FileBlock 没有独立 Workspace namespace，本 PoC 不按时间戳或局部 Session 视图实现 GC。
 
+[附件 Worker 强制终止恢复验证](attachment-worker-crash-recovery-validation-plan.md)和[实施进度](attachment-worker-crash-recovery-validation-progress.md)覆盖与 AbortSignal 不同的 Worker 消失路径。Chrome 156 在 A 标签页持有 OPFS staging 锁和 Workspace writer lease 时由 B 标签页扫描；B 的只读上传被拒绝，活动 `upload-*`/`.crswap` 不被删除，终止 A 后新 Worker 只回收可取得锁的孤儿 staging。backend 收到部分 body 后终止会清理 `.part`，对象已发布而 receipt 返回时终止则保留完整对象；用户重新选择相同内容后通过 hash `reused` 恢复。该路径不自动补交 prompt 或 FileBlock，不实现附件引用账本和远端 GC。
+
 在 preview 构建后复跑本批验收：
 
 ```sh
@@ -151,6 +153,7 @@ export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
 node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/attachment-commit-recovery.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/attachment-cancellation.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/attachment-worker-crash-recovery.e2e.mjs
 DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 ```

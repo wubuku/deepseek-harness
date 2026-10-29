@@ -3207,6 +3207,7 @@ export async function createBrowserNativeV2Server(options) {
             bytes: stored.bytes,
             reused: stored.reused,
           })
+          options.testHooks?.onAttachmentStage?.('receipt-sent')
           return
         }
         await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash)

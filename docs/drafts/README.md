@@ -218,6 +218,7 @@ Agentic UI 事实核查
 23. [Composer 通用文件附件验证计划](browser-native-dsh-poc/generic-file-attachment-validation-plan.md)与[进度/经验](browser-native-dsh-poc/generic-file-attachment-validation-progress.md)：真实 DSH composer 的 FileUploads → Session FileBlock → Worker OPFS/VFS → 标准 `read` → 刷新补水闭环；scripted Chrome 覆盖 16 MiB 流式上传，真实 LLM 覆盖小文件多轮读取，附件不改变 Workspace manifest，并记录身份、事务和存储限制。
 24. [附件提交与恢复验证计划](browser-native-dsh-poc/attachment-commit-recovery-validation-plan.md)与[进度/经验](browser-native-dsh-poc/attachment-commit-recovery-validation-progress.md)：Chrome 定向触发 OPFS quota、backend 503、附件对象发布后响应体截断及 Session FileBlock append 响应丢失；检查 retry、hash 幂等、Session readback 去重和真实 LLM 正常附件 smoke，并明确自然 eviction、OS crash、取消竞态与跨存储事务限制。
 25. [附件取消与发布竞态验证计划](browser-native-dsh-poc/attachment-cancellation-validation-plan.md)与[进度](browser-native-dsh-poc/attachment-cancellation-validation-progress.md)：真实 Chrome composer 分别在 Worker OPFS staging 写入中、backend 对象发布前及发布后 receipt 返回前移除文件；核对 AbortSignal、两侧 staging 清理、不可撤销的已发布对象、Session 无 FileBlock 和纯文本续聊，并明确不安全 GC 尚未实现。
+26. [附件 Worker 强制终止恢复验证计划](browser-native-dsh-poc/attachment-worker-crash-recovery-validation-plan.md)与[进度](browser-native-dsh-poc/attachment-worker-crash-recovery-validation-progress.md)：真实 Chrome 验证 Web Lock 保护双标签活动 staging、Worker 强杀后的 OPFS 临时项回收、backend 部分上传清理、对象发布后 receipt 未知和同 hash 显式重试；真实 LLM 仅复验正常附件路径，不覆盖自然 eviction、OS crash 或附件引用 GC。
 
 ### 路径 C：直接复现 PoC
 

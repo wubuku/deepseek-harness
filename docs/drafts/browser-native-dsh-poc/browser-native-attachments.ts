@@ -14,6 +14,7 @@ const MAX_FILE_BYTES = 64 * 1024 * 1024
 const OPFS_WRITE_CHUNK_BYTES = 64 * 1024
 const ATTACHMENT_API = '/api/browser-native/workspace/attachments'
 const FILE_ID_PATTERN = /^sha256:([a-f0-9]{64})$/
+const TEMPORARY_FILE_PATTERN = /^(upload|download)-([0-9a-f-]{36})(?:\.crswap)?$/iu
 const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu
 
 interface RuntimeAttachmentModule {
@@ -36,6 +37,7 @@ interface FileRefUploadResponse {
 interface OpfsWorkspaceDirectory {
   readonly directory: FileSystemDirectoryHandle
   readonly files: Map<string, FileSystemFileHandle>
+  ready: Promise<void>
 }
 
 interface SharedOpfsBacking {
@@ -47,6 +49,8 @@ interface SharedOpfsBacking {
 /** Worker module and history hydrator sharing one OPFS/VFS attachment cache. */
 export interface BrowserNativeAttachmentModule {
   readonly factory: StaticModuleFactory
+  /** Reconcile abandoned staging files in the active Workspace OPFS directory. */
+  reconcileTemporaryFiles(): Promise<void>
   ensureSessionFiles(
     events: readonly import('@deepseek-ai/dsh-session').SessionEvent[],
     signal?: AbortSignal,
@@ -56,6 +60,8 @@ export interface BrowserNativeAttachmentModule {
 /** Optional Worker-only hooks for deterministic attachment lifecycle tests. */
 export interface BrowserNativeAttachmentTestHooks {
   readonly afterOpfsStagingWrite?: (bytesWritten: number, signal?: AbortSignal) => Promise<void>
+  /** Expose module lifecycle probes only when the Worker test port is enabled. */
+  readonly onModuleReady?: (module: BrowserNativeAttachmentModule) => void
 }
 
 function loaderRequire(): (specifier: string) => unknown {
@@ -101,6 +107,20 @@ function assertFileReference(value: FileAttachmentRef): string {
 function filePath(ref: FileAttachmentRef): string {
   const hash = assertFileReference(ref)
   return `/dsh/home/attachments/v1/files/${hash.slice(0, 2)}/${hash}/${ref.name}`
+}
+
+function temporaryFileLockName(workspaceId: string, fileName: string): string {
+  return `dsh-browser-native-attachment-temp:${workspaceId}:${fileName}`
+}
+
+async function withTemporaryFileLock<T>(
+  workspaceId: string,
+  fileName: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const locks = globalThis.navigator?.locks
+  if (typeof locks?.request !== 'function') return await operation()
+  return await locks.request(temporaryFileLockName(workspaceId, fileName), { mode: 'exclusive' }, operation)
 }
 
 function readResponseError(value: FileRefUploadResponse, fallback: string): string {
@@ -235,6 +255,7 @@ export function createBrowserNativeAttachmentModule(
     events: readonly import('@deepseek-ai/dsh-session').SessionEvent[],
     signal?: AbortSignal,
   ) => Promise<void>) | undefined
+  let reconcileAttachmentTemps: (() => Promise<void>) | undefined
   const factory: StaticModuleFactory = () => {
     if (module !== undefined) return module
     const { AttachmentStore, AttachmentError, AttachmentId } = runtimeAttachments()
@@ -287,27 +308,26 @@ export function createBrowserNativeAttachmentModule(
         const workspaceId = workspaceIdOf(workspace)
         const displayName = fileLeafName(input.name)
         const directory = await opfsWorkspace(workspaceId)
-        const temporary = await directory.directory.getFileHandle(`upload-${crypto.randomUUID()}`, { create: true })
-        const stored = await writeStreamToOpfs(
-          directory.directory,
-          temporary,
-          input.data,
-          input.signal,
-          testHooks.afterOpfsStagingWrite,
-        )
-        const ref: FileAttachmentRef = {
-          attachmentId: AttachmentId(`sha256:${stored.hash}`),
-          name: displayName,
-          bytes: stored.bytes,
-        }
-        try {
+        const temporaryName = `upload-${crypto.randomUUID()}`
+        return await withTemporaryFileLock(workspaceId, temporaryName, async () => {
+          const temporary = await directory.directory.getFileHandle(temporaryName, { create: true })
+          const stored = await writeStreamToOpfs(
+            directory.directory,
+            temporary,
+            input.data,
+            input.signal,
+            testHooks.afterOpfsStagingWrite,
+          )
+          const ref: FileAttachmentRef = {
+            attachmentId: AttachmentId(`sha256:${stored.hash}`),
+            name: displayName,
+            bytes: stored.bytes,
+          }
           const object = await publishLocalObject(directory, temporary, stored.hash, stored.bytes)
           await uploadObject(workspaceId, object, ref, input.signal)
           await mountFile(directory, ref, stored.hash)
           return ref
-        } catch (error) {
-          throw error
-        }
+        })
       }
 
       override async *readFileStream(ref: FileAttachmentRef, signal?: AbortSignal): AsyncIterable<Uint8Array> {
@@ -389,7 +409,10 @@ export function createBrowserNativeAttachmentModule(
 
     async function opfsWorkspace(workspaceId: string): Promise<OpfsWorkspaceDirectory> {
       let value = filesByWorkspace.get(workspaceId)
-      if (value !== undefined) return value
+      if (value !== undefined) {
+        await value.ready
+        return value
+      }
       const storage = globalThis.navigator?.storage
       if (storage === undefined || typeof storage.getDirectory !== 'function') {
         throw new Error('browser-native attachments: OPFS is unavailable in this Worker')
@@ -397,9 +420,33 @@ export function createBrowserNativeAttachmentModule(
       const root = await storage.getDirectory()
       const namespace = await root.getDirectoryHandle(OPFS_DIRECTORY, { create: true })
       const directory = await namespace.getDirectoryHandle(workspaceId, { create: true })
-      value = { directory, files: new Map() }
+      value = { directory, files: new Map(), ready: Promise.resolve() }
       filesByWorkspace.set(workspaceId, value)
+      value.ready = cleanupTemporaryFiles(directory, workspaceId)
+      await value.ready
       return value
+    }
+
+    async function cleanupTemporaryFiles(directory: FileSystemDirectoryHandle, workspaceId: string): Promise<void> {
+      const locks = globalThis.navigator?.locks
+      if (typeof locks?.request !== 'function') return
+      const candidates = new Set<string>()
+      for await (const [name, entry] of directory.entries()) {
+        if (entry.kind !== 'file') continue
+        const match = TEMPORARY_FILE_PATTERN.exec(name)
+        if (match?.[1] !== undefined && match[2] !== undefined) candidates.add(`${match[1]}-${match[2]}`)
+      }
+      for (const fileName of candidates) {
+        await locks.request(
+          temporaryFileLockName(workspaceId, fileName),
+          { mode: 'exclusive', ifAvailable: true },
+          async lock => {
+            if (lock === null) return
+            await directory.removeEntry(fileName).catch(() => {})
+            await directory.removeEntry(`${fileName}.crswap`).catch(() => {})
+          },
+        )
+      }
     }
 
     async function publishLocalObject(
@@ -473,34 +520,38 @@ export function createBrowserNativeAttachmentModule(
       const url = new URL(`${ATTACHMENT_API}/${hash}`, globalThis.location.origin)
       url.searchParams.set('workspaceId', workspaceId)
       const response = await fetch(url, { credentials: 'same-origin', ...(signal === undefined ? {} : { signal }) })
-      if (!response.ok || response.body === null) {
+      const responseBody = response.body
+      if (!response.ok || responseBody === null) {
         const detail = await response.json().catch(() => ({})) as FileRefUploadResponse
         throw new Error(readResponseError(detail, `attachment download failed with HTTP ${String(response.status)}`))
       }
-      const temporary = await directory.directory.getFileHandle(`download-${crypto.randomUUID()}`, { create: true })
-      const writer = await temporary.createWritable({ keepExistingData: false })
-      const reader = response.body.getReader()
-      const digest = new Sha256()
-      let bytes = 0
-      try {
-        while (true) {
-          const item = await reader.read()
-          if (item.done) break
-          bytes = digestStreamChunk(digest, item.value, bytes)
-          await writer.write(item.value)
+      const temporaryName = `download-${crypto.randomUUID()}`
+      await withTemporaryFileLock(workspaceId, temporaryName, async () => {
+        const temporary = await directory.directory.getFileHandle(temporaryName, { create: true })
+        const writer = await temporary.createWritable({ keepExistingData: false })
+        const reader = responseBody.getReader()
+        const digest = new Sha256()
+        let bytes = 0
+        try {
+          while (true) {
+            const item = await reader.read()
+            if (item.done) break
+            bytes = digestStreamChunk(digest, item.value, bytes)
+            await writer.write(item.value)
+          }
+          if (bytes !== ref.bytes || digest.digestHex() !== hash) {
+            throw new Error('browser-native attachments: downloaded file failed SHA-256 verification')
+          }
+          await writer.close()
+        } catch (error) {
+          await writer.abort(error).catch(() => {})
+          await directory.directory.removeEntry(temporary.name).catch(() => {})
+          throw error
+        } finally {
+          reader.releaseLock()
         }
-        if (bytes !== ref.bytes || digest.digestHex() !== hash) {
-          throw new Error('browser-native attachments: downloaded file failed SHA-256 verification')
-        }
-        await writer.close()
-      } catch (error) {
-        await writer.abort(error).catch(() => {})
-        await directory.directory.removeEntry(temporary.name).catch(() => {})
-        throw error
-      } finally {
-        reader.releaseLock()
-      }
-      await publishLocalObject(directory, temporary, hash, ref.bytes)
+        await publishLocalObject(directory, temporary, hash, ref.bytes)
+      })
     }
 
     async function mountFile(
@@ -537,10 +588,22 @@ export function createBrowserNativeAttachmentModule(
       BrowserNativeAttachmentStore,
     }
     hydrateSessionFiles = hydrateSessionFilesForEvents
+    reconcileAttachmentTemps = async () => {
+      const workspaceId = workspaceIdOf(workspace)
+      const directory = await opfsWorkspace(workspaceId)
+      await cleanupTemporaryFiles(directory.directory, workspaceId)
+    }
     return module
   }
   return {
     factory,
+    async reconcileTemporaryFiles(): Promise<void> {
+      factory()
+      if (reconcileAttachmentTemps === undefined) {
+        throw new Error('browser-native attachments: temporary file reconciler is unavailable')
+      }
+      await reconcileAttachmentTemps()
+    },
     async ensureSessionFiles(events, signal): Promise<void> {
       factory()
       if (hydrateSessionFiles === undefined) throw new Error('browser-native attachments: Session hydrator is unavailable')
