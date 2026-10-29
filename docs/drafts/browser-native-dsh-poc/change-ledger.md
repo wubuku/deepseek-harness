@@ -12,10 +12,10 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
-### BN-P2-053：共享 authority 并发、业务幂等与失联恢复
+### BN-P2-055：共享 authority 并发、业务幂等与失联恢复
 
 ```text
-changeId: BN-P2-053
+changeId: BN-P2-055
 upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 仅主 worktree
 file: 本目录 shared-authority-concurrency-validation-plan.md、shared-authority-concurrency-validation-progress.md、tests/shared-authority-concurrency.test.mjs、tests/shared-authority-concurrency.e2e.mjs、README.md、operational-compatibility-matrix.md；docs/drafts/README.md
 reason: 既有多 backend 验证只覆盖 round-robin 顺序路由、服务实例重建和 Workspace response loss，未覆盖同 Session/Workspace 的并发裁决、业务 effect 跨 backend 幂等、principal 隔离或 authority outage。
