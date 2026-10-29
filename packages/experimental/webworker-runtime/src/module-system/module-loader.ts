@@ -101,11 +101,69 @@ export interface WorkerModuleLoaderOptions {
   /** Overrides {@link DEFAULT_CONDITIONS}. */
   readonly conditions?: readonly string[]
   /**
+   * Maximum number of request and load events retained for diagnostics. Omit
+   * this option to disable tracing; values above 100,000 are rejected.
+   */
+  readonly moduleTraceCapacity?: number
+  /**
    * Ambient-store snapshot face for the suspended `rewrite-await` route; it is
    * read only when that route is the configured {@link lowering}.
    */
   readonly alsCausality?: AlsCausality
 }
+
+/** Module request recorded by an enabled {@link WorkerModuleLoader} trace. */
+export interface WorkerModuleRequestTraceEvent {
+  /** Monotonic event number; gaps identify events dropped after the capacity was reached. */
+  readonly sequence: number
+  /** Event category. */
+  readonly type: 'request'
+  /** Importing module path, or its resolution directory for a root request. */
+  readonly importer: string
+  /** Exact module specifier passed to the loader. */
+  readonly specifier: string
+  /** Loader API that issued the request. */
+  readonly requestKind: 'require' | 'require-resolve' | 'internal-import' | 'internal-resolve' | 'meta-resolve' | 'direct-resolve'
+  /** Whether the request resolved to a static module, VFS file, or no module. */
+  readonly resolution: 'static' | 'file' | 'unresolved'
+  /** Static specifier or VFS path when resolution succeeded. */
+  readonly target?: string
+  /** Error code when resolution failed and the thrown error exposed one. */
+  readonly errorCode?: string
+}
+
+/** Module evaluation or cache event recorded by an enabled loader trace. */
+export interface WorkerModuleLoadTraceEvent {
+  /** Monotonic event number; gaps identify events dropped after the capacity was reached. */
+  readonly sequence: number
+  /** Event category. */
+  readonly type: 'load'
+  /** Importing module path, or the Worker root when loaded during bootstrap. */
+  readonly importer: string
+  /** Static module, JSON file, or CommonJS file. */
+  readonly moduleKind: 'static' | 'json' | 'commonjs'
+  /** Static specifier or VFS path supplied to the loader. */
+  readonly target: string
+  /** Whether the module was returned by a static factory, evaluated, cached, or rejected. */
+  readonly outcome: 'returned' | 'evaluated' | 'cached' | 'failed'
+  /** Error code when loading failed and the thrown error exposed one. */
+  readonly errorCode?: string
+}
+
+/** Request and load records retained by an opt-in Worker module trace. */
+export type WorkerModuleTraceEvent = WorkerModuleRequestTraceEvent | WorkerModuleLoadTraceEvent
+
+/** Snapshot returned by {@link WorkerModuleLoader.requestTrace}. */
+export interface WorkerModuleTraceSnapshot {
+  /** Recorded events in observation order. */
+  readonly events: readonly WorkerModuleTraceEvent[]
+  /** Events not retained after the configured capacity was reached. */
+  readonly droppedEvents: number
+}
+
+type WorkerModuleTraceEventInput =
+  | Omit<WorkerModuleRequestTraceEvent, 'sequence'>
+  | Omit<WorkerModuleLoadTraceEvent, 'sequence'>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -122,6 +180,10 @@ export class WorkerModuleLoader {
   private readonly modules = new Map<string, ModuleRecord>()
   private readonly manifests = new Map<string, PackageManifest>()
   private readonly stack: string[] = []
+  private readonly moduleTraceCapacity: number | undefined
+  private readonly moduleTraceEvents: WorkerModuleTraceEvent[] | undefined
+  private moduleTraceSequence = 0
+  private moduleTraceDroppedEvents = 0
   private cascaded: CascadedLoader | undefined
 
   /**
@@ -145,10 +207,21 @@ export class WorkerModuleLoader {
     this.staticPrefixes = Object.entries(options.staticModulePrefixes ?? {})
       .sort(([left], [right]) => right.length - left.length)
     this.conditions = new Set(options.conditions ?? DEFAULT_CONDITIONS)
+    const traceCapacity = options.moduleTraceCapacity
+    if (traceCapacity !== undefined && (!Number.isSafeInteger(traceCapacity) || traceCapacity < 1 || traceCapacity > 100_000)) {
+      throw new RangeError('webworker modules: moduleTraceCapacity must be an integer from 1 through 100000')
+    }
+    this.moduleTraceCapacity = traceCapacity
+    this.moduleTraceEvents = traceCapacity === undefined ? undefined : []
     this.als = createAlsRuntime(options.alsCausality)
-    const resolveInternal = (specifier: string, parentURL?: string): WorkerInternalResolution => {
+    const resolveInternal = (
+      specifier: string,
+      parentURL: string | undefined,
+      requestKind: 'internal-resolve',
+    ): WorkerInternalResolution => {
       const from = parentURL === undefined ? this.root : this.baseDirectoryOf(parentURL)
-      const resolution = this.resolve(specifier, from)
+      const importer = parentURL === undefined ? undefined : this.modulePathOf(parentURL)
+      const resolution = this.resolveRequest(specifier, from, requestKind, importer)
       if (resolution.kind === 'static') return { format: 'builtin', url: resolution.specifier }
       return {
         format: resolution.path.endsWith('.json') ? 'json' : 'commonjs',
@@ -159,10 +232,11 @@ export class WorkerModuleLoader {
       version: 'worker',
       import: async (specifier: string, parentURL?: string): Promise<unknown> => {
         const from = parentURL === undefined ? this.root : this.baseDirectoryOf(parentURL)
-        return this.load(this.resolve(specifier, from))
+        const importer = parentURL === undefined ? this.stack.at(-1) ?? this.root : this.modulePathOf(parentURL)
+        return this.load(this.resolveRequest(specifier, from, 'internal-import', importer), importer)
       },
-      resolve: async (specifier: string, parentURL?: string) => resolveInternal(specifier, parentURL),
-      resolveSync: resolveInternal,
+      resolve: async (specifier: string, parentURL?: string) => resolveInternal(specifier, parentURL, 'internal-resolve'),
+      resolveSync: (specifier, parentURL) => resolveInternal(specifier, parentURL, 'internal-resolve'),
     }
   }
 
@@ -191,6 +265,11 @@ export class WorkerModuleLoader {
     const path = text.startsWith('file://') ? fileUrlToPath(text) : text
     if (path.endsWith('/')) return resolvePath(path)
     return this.vfs.existsSync(path) && this.vfs.statSync(path).isDirectory() ? resolvePath(path) : dirname(path)
+  }
+
+  /** @returns VFS module path represented by an internal loader parent URL. */
+  private modulePathOf(parentURL: string): string {
+    return parentURL.startsWith('file://') ? fileUrlToPath(parentURL) : parentURL
   }
 
   private manifestOf(directory: string): PackageManifest {
@@ -297,6 +376,34 @@ export class WorkerModuleLoader {
    * @returns Static module or the resolved VFS path.
    */
   resolve(specifier: string, fromDirectory: string): Resolution {
+    return this.resolveRequest(specifier, fromDirectory, 'direct-resolve')
+  }
+
+  private resolveRequest(
+    specifier: string,
+    fromDirectory: string,
+    requestKind: WorkerModuleRequestTraceEvent['requestKind'],
+    importer = this.stack.at(-1) ?? fromDirectory,
+  ): Resolution {
+    try {
+      const resolution = this.resolveUntracked(specifier, fromDirectory)
+      this.recordRequestTrace({
+        type: 'request', importer, specifier, requestKind,
+        resolution: resolution.kind,
+        target: resolution.kind === 'static' ? resolution.specifier : resolution.path,
+      })
+      return resolution
+    } catch (reason) {
+      this.recordRequestTrace({
+        type: 'request', importer, specifier, requestKind,
+        resolution: 'unresolved',
+        ...(isRecord(reason) && typeof reason.code === 'string' ? { errorCode: reason.code } : {}),
+      })
+      throw reason
+    }
+  }
+
+  private resolveUntracked(specifier: string, fromDirectory: string): Resolution {
     const staticModule = this.staticModule(specifier)
     if (staticModule !== undefined) return { kind: 'static', specifier, factory: staticModule }
     if (specifier.startsWith('cordis:') || specifier.startsWith('node:')) {
@@ -338,17 +445,42 @@ export class WorkerModuleLoader {
    * Load a resolved module, reusing the cache and tolerating cycles with
    * CommonJS partial-export semantics.
    * @param resolution - Result of {@link resolve}.
+   * @param importer - Module that requested the load, or the active module/root by default.
    * @returns The module's exports.
    */
-  load(resolution: Resolution): unknown {
-    if (resolution.kind === 'static') return resolution.factory()
+  load(resolution: Resolution, importer = this.stack.at(-1) ?? this.root): unknown {
+    if (resolution.kind === 'static') {
+      try {
+        const result = resolution.factory()
+        this.recordLoadTrace({ type: 'load', importer, moduleKind: 'static', target: resolution.specifier, outcome: 'returned' })
+        return result
+      } catch (reason) {
+        this.recordLoadTrace({
+          type: 'load', importer, moduleKind: 'static', target: resolution.specifier, outcome: 'failed',
+          ...(isRecord(reason) && typeof reason.code === 'string' ? { errorCode: reason.code } : {}),
+        })
+        throw reason
+      }
+    }
     const path = resolution.path
     const cached = this.modules.get(path)
-    if (cached !== undefined) return cached.module.exports
+    if (cached !== undefined) {
+      this.recordLoadTrace({ type: 'load', importer, moduleKind: path.endsWith('.json') ? 'json' : 'commonjs', target: path, outcome: 'cached' })
+      return cached.module.exports
+    }
     if (path.endsWith('.json')) {
-      const parsed: unknown = JSON.parse(this.vfs.readFileSync(path, 'utf8') as string)
-      this.modules.set(path, { module: { exports: parsed } })
-      return parsed
+      try {
+        const parsed: unknown = JSON.parse(this.vfs.readFileSync(path, 'utf8') as string)
+        this.modules.set(path, { module: { exports: parsed } })
+        this.recordLoadTrace({ type: 'load', importer, moduleKind: 'json', target: path, outcome: 'evaluated' })
+        return parsed
+      } catch (reason) {
+        this.recordLoadTrace({
+          type: 'load', importer, moduleKind: 'json', target: path, outcome: 'failed',
+          ...(isRecord(reason) && typeof reason.code === 'string' ? { errorCode: reason.code } : {}),
+        })
+        throw reason
+      }
     }
     const exports: Record<string, unknown> = {}
     const record: ModuleRecord = { module: { exports } }
@@ -370,15 +502,20 @@ export class WorkerModuleLoader {
           // answers a file URL; a static (built-in or proxied) module answers
           // its own specifier, the way Node echoes `node:*` back.
           resolve: (specifier: string): string => {
-            const resolution = this.resolve(specifier, directory)
+            const resolution = this.resolveRequest(specifier, directory, 'meta-resolve', path)
             return resolution.kind === 'static' ? resolution.specifier : pathToFileUrl(resolution.path)
           },
         },
         this.als,
       )
+      this.recordLoadTrace({ type: 'load', importer, moduleKind: 'commonjs', target: path, outcome: 'evaluated' })
       return record.module.exports
     } catch (reason) {
       this.modules.delete(path)
+      this.recordLoadTrace({
+        type: 'load', importer, moduleKind: 'commonjs', target: path, outcome: 'failed',
+        ...(isRecord(reason) && typeof reason.code === 'string' ? { errorCode: reason.code } : {}),
+      })
       throw reason
     } finally {
       this.stack.pop()
@@ -417,9 +554,10 @@ export class WorkerModuleLoader {
    * @returns Callable require with `resolve`.
    */
   requireFrom(fromDirectory: string): WorkerRequire {
-    const require = (specifier: string): unknown => this.load(this.resolve(specifier, fromDirectory))
+    const importer = this.stack.at(-1) ?? fromDirectory
+    const require = (specifier: string): unknown => this.load(this.resolveRequest(specifier, fromDirectory, 'require', importer), importer)
     const resolve = ((specifier: string): string => {
-      const resolution = this.resolve(specifier, fromDirectory)
+      const resolution = this.resolveRequest(specifier, fromDirectory, 'require-resolve', importer)
       if (resolution.kind === 'static') {
         return this.fail(`"${specifier}" is a worker-provided module and has no VFS path`)
       }
@@ -448,6 +586,35 @@ export class WorkerModuleLoader {
    */
   usage(): { modules: number } {
     return { modules: this.modules.size }
+  }
+
+  /**
+   * Return the bounded diagnostic trace, or undefined when tracing was not enabled.
+   * @returns A copy of recorded request/load events and the number omitted at capacity.
+   */
+  requestTrace(): WorkerModuleTraceSnapshot | undefined {
+    if (this.moduleTraceEvents === undefined) return undefined
+    return { events: this.moduleTraceEvents.map(event => ({ ...event })), droppedEvents: this.moduleTraceDroppedEvents }
+  }
+
+  private recordRequestTrace(event: Omit<WorkerModuleRequestTraceEvent, 'sequence'>): void {
+    this.recordTrace(event)
+  }
+
+  private recordLoadTrace(event: Omit<WorkerModuleLoadTraceEvent, 'sequence'>): void {
+    this.recordTrace(event)
+  }
+
+  private recordTrace(event: WorkerModuleTraceEventInput): void {
+    const events = this.moduleTraceEvents
+    const capacity = this.moduleTraceCapacity
+    if (events === undefined || capacity === undefined) return
+    this.moduleTraceSequence += 1
+    if (events.length >= capacity) {
+      this.moduleTraceDroppedEvents += 1
+      return
+    }
+    events.push({ sequence: this.moduleTraceSequence, ...event })
   }
 }
 

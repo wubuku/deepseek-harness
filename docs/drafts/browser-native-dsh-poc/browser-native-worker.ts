@@ -8,6 +8,8 @@ import './browser-native-session-events.ts'
  * Browser-Native provider injection and owner-control channel in this draft.
  */
 import { createWorkerHost } from '../../../packages/experimental/webworker-runtime/src/worker-host.ts'
+import type { WorkerHost } from '../../../packages/experimental/webworker-runtime/src/worker-host.ts'
+import type { WorkerModuleTraceSnapshot } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import '../../../packages/experimental/webworker-runtime/src/node/builtin_modules/implemented/buffer.ts'
 import {
   alsCausality,
@@ -77,7 +79,7 @@ installCryptoGlobals()
 
 console.info('browser-native dsh: worker entry active')
 
-let host: { handleMessage(data: unknown): void } | undefined
+let host: WorkerHost | undefined
 let shellRole = false
 let durableWorkspace = false
 let contentDefinedUpload = false
@@ -184,7 +186,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -302,7 +304,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -1161,6 +1163,12 @@ async function runSessionOutboxMigrationProbe(sessionId: string, event: SessionE
 
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
+    if (request.action === 'module-trace') {
+      const moduleTrace = host?.modules?.requestTrace()
+      if (moduleTrace === undefined) throw new Error('browser-native worker: module trace is disabled')
+      workspaceTestResponse(request.requestId, { ok: true, moduleTrace })
+      return
+    }
     if (request.action === 'control-inject') {
       if (request.controlInjection === undefined) throw new Error('browser-native control test: injection kind is required')
       publishBrowserNativeControlTestFrame(request.controlInjection)
@@ -1888,6 +1896,7 @@ self.addEventListener('message', (event: MessageEvent) => {
       overlays: data.overlays as string[],
       vfs: workspace.vfs,
       prepareVfs: workspace.prepareVfs,
+      ...(workspaceTestPort === undefined ? {} : { moduleTraceCapacity: 50_000 }),
     })
     host = created
     for (const queued of pending) {

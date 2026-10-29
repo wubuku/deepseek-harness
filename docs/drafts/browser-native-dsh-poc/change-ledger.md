@@ -29,6 +29,24 @@ deleteWhen: 正式共享 Session/Workspace authority 与业务 API adapter 提�
 status: implemented-as-draft
 ```
 
+### BN-P2-056：Worker 运行时模块追踪与静态请求图对账
+
+```text
+changeId: BN-P2-056
+upstreamBaseline: research branch at batch start; 2026-10-29; 主工作区干净；无隔离 worktree
+file: packages/experimental/webworker-runtime/src/index.ts; packages/experimental/webworker-runtime/src/module-system/module-loader.ts; packages/experimental/webworker-runtime/src/worker-host.ts; packages/experimental/webworker-runtime/README.md; packages/experimental/webworker-runtime/README.zh.md; packages/experimental/webworker-runtime/README.i18n.yaml; packages/experimental/webworker-runtime/tests/module-system/module-loader-trace.spec.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/worker-module-trace-report.mjs; docs/drafts/browser-native-dsh-poc/tests/worker-module-trace-report.test.mjs; docs/drafts/browser-native-dsh-poc/worker-runtime-module-trace-report.json; docs/drafts/browser-native-dsh-poc/worker-runtime-module-trace-validation-plan.md; docs/drafts/browser-native-dsh-poc/worker-runtime-module-trace-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: packer 静态 request graph 是保守静态证据，无法说明真实 Dedicated Worker 的 resolver 在 DSH Host、工具和模型请求路径中实际解析或加载了哪些模块；此前也无法区分静态 unresolved、overlay、bootstrap 与运行时 computed request。
+existingExtensionPointsChecked: 复用 `WorkerModuleLoader.resolve/load`、`createWorkerHost()` 的 loader options、packer 导出的 `moduleRequests`、Browser-Native PoC 专用 test MessagePort 和现有 Chrome/真实 LLM E2E；不修改 Agent Loop、Session format、默认 profile 或根级依赖。
+whyDraftOnlyWasInsufficient: 静态解析报告不能观测实际 importer、request kind、模块缓存和 load failure；独立模拟 resolver 也不能验证 DSH Host 的真实模块路径。Chrome scripted 与真实 LLM E2E 从同一个 Worker loader 取 trace，并按 importer/specifier 与 packer graph 对账。
+behaviorChange: `WorkerModuleLoaderOptions.moduleTraceCapacity` 与 `WorkerHostOptions.moduleTraceCapacity` opt-in 启用 request/load trace，默认不保留事件，容量范围为 1–100,000 events，快照返回副本和 dropped count。记录 resolver request kind、importer、resolution、目标、失败代码、实际 load/cache/failure。修复延迟调用的 `require` closure 归因，使 importer 保留创建它的模块路径。PoC 仅在专用 test MessagePort 存在时启用 50,000-event trace；报告存脱敏计数和有限示例，不存原始 trace。
+directoryOutChangeReason: `packages/experimental/webworker-runtime` 是 Worker loader 与 Host options 的实际实现和公共类型 owner；`apps/web/src/preview.ts` 拥有 PoC test port 的请求/响应类型，必须允许页面向该测试通道发起 trace 查询。目录外改动仅扩展 opt-in 诊断选项、PoC 测试类型及双语 package 说明，不改变默认 Web/desktop 启动或 DSH Loop。
+consumersUpdated: runtime public exports 与中英 README/pairing record、Worker Host loader options、preview/Worker test bridge、loader 和 report analyzer tests、scripted/real Chrome E2E、PoC README、compatibility matrix、drafts index、validation plan/progress 和本账本。
+tests: loader 与 `require-builtin` Vitest 18/18；report analyzer Node tests 2/2；webworker-runtime TypeScript build 通过；preview build 通过，保留既有 native platform、tsdown deprecation 和 chunk-size warnings。定向 oxlint 通过；`pnpm run test:docs` 21/21，`pnpm run doc-sync` 43/43。Chrome 156.0.8078.48 scripted default-profile E2E 通过，trace 5,237 events/2,703 requests/2,534 loads、无溢出，4,252 静态 edges 中 2,243 匹配、240 unmatched 按 overlay/bootstrap/runtime-only 分类，外部请求为 0。真实 `gpt-5.6-sol` Chrome E2E 通过 `read → write → read`、刷新 Session/Workspace 恢复及凭据/Workspace 路径检查，8 个模型请求 HTTP 200，trace 5,226 events/2,697 requests/2,529 loads、无溢出且无 unresolved runtime edge，浏览器只有同源请求且无 page error；日志另有 PoC API 404 和 compaction capacity warning。
+syncReplaySteps: upstream 更新后检查 WorkerModuleLoader resolution、internal ESM importer URL、延迟 require closure、cache/load 顺序及 WorkerHost options 是否变化；若上游提供等价 diagnostics hook，迁移 PoC trace 而不要复制 resolver。运行 loader trace/require tests、runtime package build、preview build、report analyzer tests、scripted Chrome default-profile E2E、真实 Chrome runtime-validation smoke 和文档门禁。原始 trace 只留在受信任测试内存；summary 不应提升为 Node 兼容性或 profile activation 证据。
+deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing 且 PoC E2E 与静态图报告已迁移，或 Browser-Native PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-052：恢复版本、分层重放与操作结果对账
 
 ```text

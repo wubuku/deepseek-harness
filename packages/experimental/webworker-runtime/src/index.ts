@@ -16,7 +16,8 @@ export {
 } from './transport/frames.ts'
 export {
   DEFAULT_CONDITIONS, requireActiveModuleLoader, setActiveModuleLoader, WorkerModuleLoader,
-  type Resolution, type StaticModuleFactory, type WorkerModuleLoaderOptions, type WorkerRequire,
+  type Resolution, type StaticModuleFactory, type WorkerModuleLoadTraceEvent, type WorkerModuleLoaderOptions,
+  type WorkerModuleRequestTraceEvent, type WorkerModuleTraceEvent, type WorkerModuleTraceSnapshot, type WorkerRequire,
 } from './module-system/module-loader.ts'
 export * as posixPath from './module-system/posix-path.ts'
 export { MODULE_PROXIES, MODULE_PROXY_PREFIXES } from './module-proxies.ts'

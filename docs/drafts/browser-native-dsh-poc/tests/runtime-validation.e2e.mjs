@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
 import { assistantText, openPreview, sendTurn, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
+import { summarizeWorkerModuleTrace } from './worker-module-trace-report.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -27,6 +28,7 @@ const chunkObjects = process.env.DSH_POC_CHUNK_OBJECTS === '1'
 const verifiedDownloads = process.env.DSH_POC_VERIFIED_DOWNLOADS === '1'
 const blockWorkspaceCommitOnce = process.env.DSH_POC_BLOCK_WORKSPACE_COMMIT_ONCE === '1'
 const skipPostRefreshTurns = process.env.DSH_POC_SKIP_POST_REFRESH_TURNS === '1'
+const captureModuleTrace = process.env.DSH_POC_MODULE_TRACE === '1'
 const port = Number(process.env.DSH_POC_PORT ?? '0')
 const turnTimeout = Number(process.env.DSH_POC_TURN_TIMEOUT_MS ?? (mode === 'real' ? 600_000 : 40_000))
 const refreshCycles = Number(process.env.DSH_POC_REFRESH_CYCLES ?? '1')
@@ -94,6 +96,7 @@ const consoleErrors = []
 const llmStatuses = []
 let blockedWorkspaceCommit = false
 let coldWorkspaceReset
+let moduleTraceSummary
 try {
   image = await createRuntimeValidationDist({ roster })
   app = await createBrowserNativeV2Server({ dataDir, distRoot: image.distRoot, llmMode: mode, envFile,
@@ -189,7 +192,8 @@ try {
 
   phase = 'initial preview boot'
   const initialBootStartedAt = Date.now()
-  await openPreview(page, `${origin}/preview.html?browser-native=1&${durableWorkspace ? 'browser-native-durable=1&' : ''}preview-fixture=none`)
+  await openPreview(page, `${origin}/preview.html?browser-native=1&${durableWorkspace ? 'browser-native-durable=1&' : ''}`
+    + `${captureModuleTrace ? 'browser-native-test=workspace-recovery&' : ''}preview-fixture=none`)
   const initialBootMs = Date.now() - initialBootStartedAt
   await page.getByText('Browser-native remote', { exact: true }).waitFor({ timeout: 20_000 })
 
@@ -225,6 +229,34 @@ try {
       },
     } : {}),
   })
+  if (captureModuleTrace) {
+    await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function', undefined, { timeout: 30_000 })
+    const traceResponse = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'module-trace' }))
+    assert.equal(traceResponse?.ok, true, JSON.stringify(traceResponse))
+    const trace = traceResponse.moduleTrace
+    assert.ok(trace.events.length > 0, 'the real Worker must return module request/load records')
+    assert.equal(trace.droppedEvents, 0, 'the module trace must not overflow during the real LLM tool turn')
+    const traceText = JSON.stringify(trace)
+    assert.equal(traceText.includes('/dsh/home/workspace/'), false, 'Workspace user paths must not appear in the module trace')
+    for (const secret of secrets) assert.equal(traceText.includes(secret), false, 'provider secret appeared in module trace')
+    for (const event of trace.events) {
+      const permittedKeys = event.type === 'request'
+        ? ['sequence', 'type', 'importer', 'specifier', 'requestKind', 'resolution', 'target', 'errorCode']
+        : ['sequence', 'type', 'importer', 'moduleKind', 'target', 'outcome', 'errorCode']
+      assert.ok(['request', 'load'].includes(event.type), 'module trace event kind must be recognized')
+      assert.deepEqual(Object.keys(event).sort(), Object.keys(event).filter(key => permittedKeys.includes(key)).sort(),
+        'module trace must not carry prompts, tool arguments, file contents, environment, or HTTP fields')
+    }
+    const staticReport = JSON.parse(await readFile(new URL('../worker-dependency-closure-report.json', import.meta.url), 'utf8'))
+    moduleTraceSummary = summarizeWorkerModuleTrace({
+      trace,
+      staticReport,
+      browser: browserName,
+      scenario: 'real-llm-read-write-read-turn',
+    })
+    assert.ok(moduleTraceSummary.staticGraph.matchedRuntimeEdgeCount > 0,
+      'real LLM Worker request edges must reconcile with the packer static graph')
+  }
   if (blockWorkspaceCommitOnce) {
     await waitFor(() => blockedWorkspaceCommit, 'one blocked durable Workspace commit', 30_000)
   }
@@ -317,9 +349,16 @@ try {
         assert.equal(argumentsValue.file_path, outputPath, 'failed read must probe the output path')
       }
     }
-    const callsWithArguments = calls.map(event => ({ event, arguments: JSON.parse(event.data.arguments) }))
+    const plannerCalls = calls.filter(event => event.data.name === 'todo_write')
+    for (const call of plannerCalls) {
+      assert.equal(results.get(call.data.callId).data.message?.isError, false,
+        'optional planning updates must complete without a tool error')
+    }
+    const callsWithArguments = calls
+      .filter(event => event.data.name !== 'todo_write')
+      .map(event => ({ event, arguments: JSON.parse(event.data.arguments) }))
     assert.deepEqual(callsWithArguments.map(call => call.event.data.name), ['read', 'write', 'read'],
-      'the first turn must complete exactly read → write → read without exploratory tool calls')
+      'the first turn must complete read → write → read; only side-effect-free todo_write planning is excluded')
     assert.equal(callsWithArguments[0].event.data.name, 'read')
     assert.equal(callsWithArguments[0].arguments.file_path, '/dsh/home/browser-validation/input.txt')
     const writeCalls = callsWithArguments.filter(call => call.event.data.name === 'write')
@@ -405,6 +444,7 @@ try {
     chunkObjects,
     verifiedDownloads,
     coldWorkspaceReset,
+    moduleTrace: moduleTraceSummary ?? null,
     chunkObjectIo,
     blockedWorkspaceCommit,
     workspaceCommitStatuses: requests.filter(request => request.path.endsWith('/workspace/commit')).map(request => request.status),

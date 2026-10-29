@@ -71,6 +71,7 @@ kind: "package-library"
 - **这个 shell 不是 bash**：没有循环、函数、`case`、作业控制或进程替换——语法止步于管道、`&&`/`||`、子 shell、group、重定向与展开。`&` 会就地把命令跑完，`sed` 只接受替换脚本，模式是 JavaScript 正则，命令表只有 coreutils（没有 `git`，没有网络工具）。
 - **shell 进程没有同步文件面**：它靠消息读写宿主的 VFS，因为阻塞等待回帧需要 `SharedArrayBuffer`，而那要求 GitHub Pages 给不了的跨源隔离。因此目录遍历类命令每个条目一次往返，并发的两条命令写入可以交错。
 - **外部文件引用仍是实验性能力**：`VfsFileReference`、`MemoryVfs.readFileRangeSync()` 和 `write-reference` mutation 允许 Browser-Native PoC 发布 hash/bytes 引用，而不把全部字节复制进 VFS heap。它们不定义通用文件同步协议、块级 delta 编码、崩溃持久化或已发布的 Session event format；调用方必须提供并关闭 backing，并校验其 hash 和大小。
+- **模块请求追踪仅用于诊断**：`WorkerModuleLoaderOptions.moduleTraceCapacity` 可选择启用模块请求与加载结果追踪，`requestTrace()` 返回副本和未保留事件数。该限制只约束事件数，不限制字符串字节数；importer、specifier 和 target 可能包含 VFS 模块路径。原始追踪仅用于可信测试，不应写入用户可见或长期保存的日志；追踪结果不能证明 Node API 兼容性。
 - **transport、worker-host、页面半的覆盖需要浏览器级 harness**——这些模块未达 per-file 覆盖门；单测覆盖 storage、ALS、transform 与 stub 契约。
 
 

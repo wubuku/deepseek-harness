@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
 import { assistantText, openPreview, sendTurn, sessionRequest, waitFor } from './runtime-test-support.mjs'
+import { summarizeWorkerModuleTrace } from './worker-module-trace-report.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightPath = process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright')
@@ -13,6 +14,7 @@ const playwright = await import(playwrightPath)
 const { chromium } = playwright.default ?? playwright
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-browser-default-profile-')))
 const marker = 'BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E'
+const staticModuleReport = JSON.parse(await readFile(new URL('../worker-dependency-closure-report.json', import.meta.url), 'utf8'))
 const requests = []
 const requestRecords = []
 const workspaceCommits = []
@@ -106,6 +108,32 @@ try {
   assert.ok(resultAppendIndex > callCheckpointIndex, 'the DSH tool result must follow the pre-dispatch checkpoint')
   assert.match(assistantText(result.session, result.turn), /BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_LOOP_OK/)
 
+  const traceResponse = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'module-trace' }))
+  assert.equal(traceResponse?.ok, true, JSON.stringify(traceResponse))
+  const moduleTrace = traceResponse.moduleTrace
+  assert.ok(moduleTrace.events.length > 0, 'the real Worker loader must return request and load records')
+  assert.equal(moduleTrace.droppedEvents, 0, 'the bounded module trace must not overflow during boot and the DSH tool turn')
+  for (const event of moduleTrace.events) {
+    const permittedKeys = event.type === 'request'
+      ? ['sequence', 'type', 'importer', 'specifier', 'requestKind', 'resolution', 'target', 'errorCode']
+      : ['sequence', 'type', 'importer', 'moduleKind', 'target', 'outcome', 'errorCode']
+    assert.ok(['request', 'load'].includes(event.type), 'module trace event kind must be recognized')
+    assert.deepEqual(Object.keys(event).sort(), Object.keys(event).filter(key => permittedKeys.includes(key)).sort(),
+      'module trace events must not expose payload, environment, or network fields')
+    assert.equal(typeof event.importer, 'string')
+  }
+  const moduleTraceSummary = summarizeWorkerModuleTrace({
+    trace: moduleTrace,
+    staticReport: staticModuleReport,
+    browser: process.env.DSH_POC_BROWSER ?? 'chrome',
+    scenario: 'scripted-default-profile-shell-turn',
+  })
+  assert.ok(moduleTraceSummary.staticGraph.matchedRuntimeEdgeCount > 0, 'runtime module edges must reconcile with the packer graph')
+  assert.ok(moduleTraceSummary.trace.loadEventCount > 0, 'the trace must distinguish module loads from resolve-only requests')
+  if (process.env.DSH_POC_MODULE_TRACE_REPORT !== undefined) {
+    await writeFile(resolve(process.env.DSH_POC_MODULE_TRACE_REPORT), `${JSON.stringify(moduleTraceSummary, null, 2)}\n`)
+  }
+
   const commitsBeforeShellTurn = workspaceCommits.length
   const shellSemantics = await sendTurn({
     page,
@@ -169,6 +197,7 @@ try {
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
     toolNames,
     defaultProfileCompaction: true,
+    moduleTrace: moduleTraceSummary,
     shellNegativePath: 'unsupported command produced no Workspace mutation or commit',
     executedTool: call.data.name,
     toolResultError: toolResult.data.message.isError,

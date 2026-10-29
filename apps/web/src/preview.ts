@@ -10,6 +10,7 @@ import { connectBrowserNativePageControl } from './browser-native-page-control.t
 import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
+import type { WorkerModuleTraceSnapshot } from '@deepseek-ai/dsh-experimental-webworker-runtime'
 
 const searchParams = new URLSearchParams(window.location.search)
 const browserNative = searchParams.get('browser-native') === '1'
@@ -27,7 +28,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
     | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
   readonly stage?: 'before' | 'after'
@@ -73,6 +74,7 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly logicalBytes?: number
   readonly residentBytes?: number
   readonly receipts?: readonly Record<string, unknown>[]
+  readonly moduleTrace?: WorkerModuleTraceSnapshot
   readonly executionHandoff?: {
     readonly state: string
     readonly checkpoint?: Readonly<Record<string, unknown>>

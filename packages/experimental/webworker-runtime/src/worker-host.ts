@@ -85,6 +85,8 @@ export interface WorkerHostOptions {
   readonly staticModules: Readonly<Record<string, StaticModuleFactory>>
   /** Prefix-matched proxies, for packages whose subpaths are open-ended. */
   readonly staticModulePrefixes?: Readonly<Record<string, StaticModuleFactory>>
+  /** Maximum number of module request/load trace events retained for diagnostics. */
+  readonly moduleTraceCapacity?: number
   /**
    * The webserver's request listener, captured by the app's fake `node:http`.
    * Awaited on first tunnel use, so it may resolve after the tree binds.
@@ -225,6 +227,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         root,
         staticModules,
         ...options.staticModulePrefixes === undefined ? {} : { staticModulePrefixes: options.staticModulePrefixes },
+        ...options.moduleTraceCapacity === undefined ? {} : { moduleTraceCapacity: options.moduleTraceCapacity },
         ...options.alsCausality === undefined ? {} : { alsCausality: options.alsCausality },
       })
       setActiveModuleLoader(loader)

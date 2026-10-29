@@ -1,0 +1,195 @@
+{
+  "reportVersion": 1,
+  "browser": "chrome",
+  "scenario": "scripted-default-profile-shell-turn",
+  "trace": {
+    "eventCount": 5237,
+    "droppedEvents": 0,
+    "requestEventCount": 2703,
+    "uniqueRequestEdgeCount": 2483,
+    "resolutionCounts": {
+      "file": 2394,
+      "static": 307,
+      "unresolved": 2
+    },
+    "unresolvedUniqueEdgeCount": 1,
+    "unresolvedExamples": [
+      {
+        "importer": "node_modules/@deepseek-ai/node-addon-system/lib",
+        "specifier": "@deepseek-ai/node-addon-system-linux-x64/package.json"
+      }
+    ],
+    "loadEventCount": 2534,
+    "loadCounts": {
+      "commonjs:cached": 1366,
+      "commonjs:evaluated": 860,
+      "json:evaluated": 5,
+      "static:returned": 303
+    }
+  },
+  "staticGraph": {
+    "requestCount": 4252,
+    "uniqueEdgeCount": 4252,
+    "matchedRuntimeEdgeCount": 2243,
+    "unmatchedRuntimeEdgeCount": 240,
+    "unmatchedRuntimeCategories": {
+      "home-overlay": 201,
+      "image-runtime-only": 32,
+      "worker-bootstrap": 7
+    },
+    "unmatchedRuntimeExamples": {
+      "home-overlay": [
+        {
+          "importer": "home/browser-native-llm.js",
+          "specifier": "@deepseek-ai/dsh-browser-native-llm"
+        },
+        {
+          "importer": "home/browser-native-llm.js",
+          "specifier": "@deepseek-ai/dsh-llm"
+        },
+        {
+          "importer": "home/browser-native-session-persistence.js",
+          "specifier": "@deepseek-ai/dsh-browser-native-session-persistence"
+        },
+        {
+          "importer": "home/browser-native-session-persistence.js",
+          "specifier": "@deepseek-ai/dsh-session-persistence"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/cordis-plugin-timer"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/dsh-agent"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/dsh-agent-default-model"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/dsh-agent-instructions"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/dsh-agent-loop"
+        },
+        {
+          "importer": "home/profiles/web/",
+          "specifier": "@deepseek-ai/dsh-agent-preset"
+        }
+      ],
+      "image-runtime-only": [
+        {
+          "importer": "node_modules/@deepseek-ai/cordis-plugin-loader/lib",
+          "specifier": "node-addon-require-builtin"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-client-modules/lib",
+          "specifier": "../package.json"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-hmr/lib",
+          "specifier": "node-addon-require-builtin"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-session-telemetry-otel/lib",
+          "specifier": "../package.json"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js",
+          "specifier": "koffi"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js",
+          "specifier": "file:///dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/typert.host.js"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js",
+          "specifier": "file:///dsh/node_modules/@deepseek-ai/dsh-api-account-controller/lib/typert.host.js"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js",
+          "specifier": "file:///dsh/node_modules/@deepseek-ai/dsh-api-job-controller/lib/typert.host.js"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js",
+          "specifier": "file:///dsh/node_modules/@deepseek-ai/dsh-api-remote-access/lib/typert.host.js"
+        },
+        {
+          "importer": "node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js",
+          "specifier": "file:///dsh/node_modules/@deepseek-ai/dsh-api-session-controller/lib/typert.host.js"
+        }
+      ],
+      "worker-bootstrap": [
+        {
+          "importer": "",
+          "specifier": "@deepseek-ai/cordis"
+        },
+        {
+          "importer": "",
+          "specifier": "@deepseek-ai/dsh-app-boot"
+        },
+        {
+          "importer": "",
+          "specifier": "@deepseek-ai/dsh-cmdline"
+        },
+        {
+          "importer": "",
+          "specifier": "@deepseek-ai/dsh-launch-environment"
+        },
+        {
+          "importer": "",
+          "specifier": "@deepseek-ai/dsh-tool-fs"
+        },
+        {
+          "importer": "/",
+          "specifier": "node:module"
+        },
+        {
+          "importer": "/",
+          "specifier": "node:path"
+        }
+      ]
+    },
+    "resolutionDifferenceCount": 2,
+    "resolutionDifferenceExamples": [
+      {
+        "importer": "node_modules/@opentelemetry/resources/build/src/detectors/platform/node/machine-id/getMachineId.js",
+        "specifier": "process",
+        "staticResolution": "unresolved-external",
+        "runtimeResolutions": [
+          "static"
+        ]
+      },
+      {
+        "importer": "node_modules/commander/lib/command.js",
+        "specifier": "node:process",
+        "staticResolution": "unresolved-external",
+        "runtimeResolutions": [
+          "static"
+        ]
+      }
+    ],
+    "unresolvedStaticGraphRequestCount": 64,
+    "observedUnresolvedStaticGraphEdgeCount": 2,
+    "observedUnresolvedStaticGraphExamples": [
+      {
+        "importer": "node_modules/@opentelemetry/resources/build/src/detectors/platform/node/machine-id/getMachineId.js",
+        "specifier": "process",
+        "runtimeResolutions": [
+          "static"
+        ]
+      },
+      {
+        "importer": "node_modules/commander/lib/command.js",
+        "specifier": "node:process",
+        "runtimeResolutions": [
+          "static"
+        ]
+      }
+    ]
+  },
+  "interpretation": "Module identifiers only; not module-content, Node-conformance, profile-activation, or full dynamic-reachability evidence."
+}
