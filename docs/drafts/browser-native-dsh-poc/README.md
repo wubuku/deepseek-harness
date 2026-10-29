@@ -975,6 +975,20 @@ DSH_POC_LLM_MODE=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 本批仍不是生产共享数据库、跨主机 fencing、跨区域复制、Cloud Durable Worker、exactly-once 或 RPO/RTO 证据；代理会缓冲上传请求，authority 仍是单进程 PoC JSON service。自然 eviction、OS/磁盘崩溃、Safari/WebKit、正式多租户授权和真实模型大型工具参数未验证。
 
+### 共享 authority 并发与失联恢复
+
+[并发与恢复计划](shared-authority-concurrency-validation-plan.md)及[实测进度](shared-authority-concurrency-validation-progress.md)补充双 backend 同时竞争 Session create/open/append、Workspace lease/operation/CAS 和外部业务 effect 的证据。Chrome 156 双页面通过 route barrier 同时 claim Session/Workspace；每组恰有一个成功者。authority HTTP 服务停机时，Session read、Workspace manifest 和 LLM owner 授权均 fail closed，两个 backend 本地 store 为空；同一 `dataDir` 重建后，真实 Worker 从 OPFS 与服务端 blob 读回文件，并在原 Session 续聊。该浏览器测试不运行两个并行 Agent Loop，也不强杀 authority OS 进程；真实 LLM 多 backend smoke 未产生工具调用，不能证明模型自主文件操作。
+
+复跑本批：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs \
+  docs/drafts/browser-native-dsh-poc/tests/shared-state-authority.test.mjs \
+  docs/drafts/browser-native-dsh-poc/tests/shared-authority-concurrency.test.mjs \
+  docs/drafts/browser-native-dsh-poc/tests/external-business-idempotency.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/shared-authority-concurrency.e2e.mjs
+```
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

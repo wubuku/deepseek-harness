@@ -74,6 +74,8 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 | `fs.watch` / 长期文件 watcher | 尚未验证 | 本批容量、重启、工具和 archive 测试均未创建或断言 watcher 生命周期。 | Worker 被挂起、页面关闭或浏览器重启后 watcher 会继续。 |
 | 真实子进程、原生 addon、主机二进制 | 明确排除于 Browser Worker 执行模型 | Browser profile 的 Bash 是 Worker 固定命令表；本批没有宿主进程桥接。 | “受限 Bash”可以代替系统 shell、PTY、native addon 或主机侧进程监管。 |
 
+| 共享 authority 并发与 outage recovery | 两个同源 PoC backend、同一 Chrome BrowserContext 双页、真实 Dedicated Worker、独立 authority；scripted DSH 工具 | [并发恢复 E2E](tests/shared-authority-concurrency.e2e.mjs)的两个页面经 round-robin route barrier 同时 claim Session 和 Workspace，各有一个成功、一个冲突；外部 principal 读取分别为 404/403。authority 服务停止时 Session read、Workspace manifest 和 LLM owner 授权均 503，backend 本地 Session/Workspace store 保持空；同 `dataDir` 重建后 Worker 从 OPFS 和远端 blob 读回文件，原 Session 共 35 events、watermark 34，工具调用/Workspace revision/operation 各 1。 | 双页直接竞争 HTTP claim，不运行两个并行 Agent Loop；authority 只关闭并重建同一 Node 进程中的服务实例，不是 OS 进程强杀。真实 LLM 多 backend smoke 有 28 events、3 次模型请求但 0 tool calls；不能证明真实模型文件操作。生产 DB、跨主机 HA、真实多租户授权和 Safari/WebKit 未验证。 |
+
 ## 解释和复跑
 
 刷新恢复的版本分类与原请求对账见[恢复一致性进度](workspace-recovery-consistency-progress.md)。当前不会把旧 pending 直接覆盖到新远端 manifest；未知提交查询或 revision 冲突会阻止 Host 启动并提供本地恢复包。retry 与后续 pending 分层重放；已提交 retry 不再覆盖更新的远端 bytes，Session receipt 仍按原操作身份确认。这些证据不代表自动三方合并、任意离线并发写入或跨存储原子事务。

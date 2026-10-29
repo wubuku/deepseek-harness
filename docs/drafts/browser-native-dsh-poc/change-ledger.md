@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-053：共享 authority 并发、业务幂等与失联恢复
+
+```text
+changeId: BN-P2-053
+upstreamBaseline: research checkout at DSH v0.2.1-rc.2; 仅主 worktree
+file: 本目录 shared-authority-concurrency-validation-plan.md、shared-authority-concurrency-validation-progress.md、tests/shared-authority-concurrency.test.mjs、tests/shared-authority-concurrency.e2e.mjs、README.md、operational-compatibility-matrix.md；docs/drafts/README.md
+reason: 既有多 backend 验证只覆盖 round-robin 顺序路由、服务实例重建和 Workspace response loss，未覆盖同 Session/Workspace 的并发裁决、业务 effect 跨 backend 幂等、principal 隔离或 authority outage。
+existingExtensionPointsChecked: 复用 shared-state authority 转发、Session owner/seq CAS、Workspace lease/fencing/operation CAS、独立 business service durable receipt、真实 Worker test port 和 Playwright route barrier；不修改 backend 运行实现、Agent Loop、Session format 或根依赖。
+behavior: 新增仅属于 PoC 的 Node 合同测试和 Chrome 双页 E2E。合同测试覆盖 Session create/open/append、Workspace lease/operation/revision 竞争、principal 授权、外部业务 effect 并发去重和 response-loss query。Chrome 由真实 DSH Worker 写入文件后，通过两个同 principal 页面竞争 claim；authority HTTP 服务停止时 Session/Workspace/LLM 授权均 fail closed，backend 本地 store 为空；重建同一 dataDir 后 Worker、Session 和远端 blob 可恢复。测试不运行两个并行 Agent Loop，也不强杀 authority OS 进程。
+directoryOutChangeReason: 唯一目录外改动是 docs/drafts/README.md 的专题索引；它将新计划和进度加入 Browser-Native 研究入口。正式 DSH package、apps、profile 和运行时没有改动。
+consumersUpdated: PoC README、operational compatibility matrix、drafts index、并发验证计划/进度和本账本。
+tests: 命令、64 项 Node 结果、Chrome 156 scripted E2E、真实 LLM 限制和未覆盖范围见 shared-authority-concurrency-validation-progress.md。
+upstreamReplay: 对照当前 authority proxy 与 endpoint error semantics 重跑 Node concurrency/business tests、preview build 和 Chrome dual-page E2E；保留原 operationId 查询、principal 负例、本地 store 空断言、Worker 本地/远端文件重建及真实 LLM smoke 的独立结论。authority 实现改变时不可复用当前 PASS。
+deleteWhen: 正式共享 Session/Workspace authority 与业务 API adapter 提供等价的并发、身份隔离、outage/recovery 和 durable idempotency 测试后，迁移必要验收或移除 PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-052：恢复版本、分层重放与操作结果对账
 
 ```text

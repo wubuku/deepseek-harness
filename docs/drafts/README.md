@@ -208,6 +208,7 @@ Agentic UI 事实核查
 19. [Browser-Native 文件搜索隔离计划](browser-native-dsh-poc/browser-file-search-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/browser-file-search-isolation-validation-progress.md)：真实 Chrome DSH turn 验证内容 regex、grep `include` 与 glob matcher 的可终止 Worker、单批超时、超长行拒绝、取消及失败后继续；真实 LLM 只覆盖普通 grep，不证明恶意输入下的模型行为。
 20. [Browser-Native 模型流故障验证计划](browser-native-dsh-poc/llm-stream-failure-validation-plan.md)及[进度](browser-native-dsh-poc/llm-stream-failure-validation-progress.md)：真实 Chrome/DSH Worker 验证文本和工具流半包、Worker 流中止刷新、Stop/上游取消与 Session/Workspace fail-closed 语义；fake upstream 只验证代理取消传播，真实供应商自然断流仍未验证。
 21. [Browser-Native 多 backend 共享 authority 验证计划](browser-native-dsh-poc/multi-instance-backend-authority-validation-plan.md)及[进度](browser-native-dsh-poc/multi-instance-backend-authority-validation-progress.md)：真实 Chrome 验证两个 backend 通过 round-robin 路由共享 Session/Workspace/LLM owner authority、进程重启和 Workspace response loss 对账；真实模型只完成流/恢复 smoke，PoC authority 仍是单进程 JSON service。
+22. [Browser-Native 共享 authority 并发与恢复验证计划](browser-native-dsh-poc/shared-authority-concurrency-validation-plan.md)及[进度](browser-native-dsh-poc/shared-authority-concurrency-validation-progress.md)：双 backend Node 合同矩阵验证 Session/Workspace/业务 effect 并发与幂等；Chrome 双页验证唯一 claim、主体隔离、authority outage fail-closed 和 Worker/文件恢复。真实模型未触发工具，多 Agent Loop、authority 进程强杀和生产 HA 未验证。
 
 ### 路径 C：直接复现 PoC
 
