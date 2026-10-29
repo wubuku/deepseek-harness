@@ -76,6 +76,10 @@ import { createBrowserNativeBuiltinMemberTrace } from './browser-native-builtin-
 import { createBrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
 import { BrowserNativeSessionMountCoordinator } from './browser-native-session-mount.ts'
 import type { BrowserNativeExecutionIdentity, BrowserNativeSessionEvent } from './browser-native-session-adapter.ts'
+import {
+  BrowserNativeSessionProjectionStore,
+  type BrowserNativeSessionProjectionSource,
+} from './browser-native-session-projection.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -196,7 +200,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -253,7 +257,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-outbox-probe') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
-  if (data.action === 'session-mount-probe') return true
+  if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe') return true
   if (data.action === 'wait-attachment-opfs-staging-write'
     || data.action === 'attachment-opfs-write-state'
     || data.action === 'release-attachment-opfs-write'
@@ -325,7 +329,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
@@ -401,6 +405,82 @@ function runSessionMountProbe(): Record<string, unknown> {
     waitingUnknown,
     mountCount: disposed.length,
     detachedCount: disposed.filter(snapshot => snapshot.view === 'detached').length,
+  }
+}
+
+interface SessionProjectionProbeValue {
+  readonly status: 'idle' | 'running'
+  readonly text: string
+}
+
+function narrowSessionProjection(value: unknown): SessionProjectionProbeValue | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if ((record.status !== 'idle' && record.status !== 'running') || typeof record.text !== 'string') return undefined
+  return { status: record.status, text: record.text }
+}
+
+function runSessionProjectionProbe(): Record<string, unknown> {
+  const values = new Map<string, unknown>([
+    ['projection-a', { status: 'idle', text: 'A baseline' }],
+    ['projection-b', { status: 'running', text: 'B baseline' }],
+  ])
+  const listeners = new Set<(sessionId: string, value: unknown) => void>()
+  const source: BrowserNativeSessionProjectionSource = {
+    snapshot: sessionId => values.get(sessionId),
+    subscribe: listener => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+  const publish = (sessionId: string, value: unknown): void => {
+    values.set(sessionId, value)
+    for (const listener of [...listeners]) listener(sessionId, value)
+  }
+  const remove = (sessionId: string): void => {
+    values.delete(sessionId)
+    for (const listener of [...listeners]) listener(sessionId, undefined)
+  }
+  const store = new BrowserNativeSessionProjectionStore({ narrow: narrowSessionProjection })
+  const trace: Array<{ readonly sessionId: string | undefined; readonly text?: string }> = []
+  store.subscribe(() => trace.push({ sessionId: store.sessionId, text: store.read()?.text }))
+  store.attach(source)
+  store.bind('projection-a')
+  const baseline = store.read()?.text
+  publish('projection-b', { status: 'idle', text: 'B foreign update' })
+  const foreignIgnored = store.read()?.text === 'A baseline'
+  const alphaLive = { status: 'running' as const, text: 'A live' }
+  publish('projection-a', alphaLive)
+  const activeUpdated = store.read()?.text === 'A live'
+  const traceBeforeDuplicate = trace.length
+  publish('projection-a', alphaLive)
+  const duplicateIgnored = trace.length === traceBeforeDuplicate
+  store.bind('projection-b')
+  const switched = store.read()?.text === 'B foreign update'
+  publish('projection-a', { status: 'idle', text: 'A late update' })
+  const lateForeignIgnored = store.read()?.text === 'B foreign update'
+  remove('projection-b')
+  const removedCleared = store.read() === undefined
+  store.detach(source)
+  const detachedCleared = store.read() === undefined
+  publish('projection-b', { status: 'running', text: 'B detached update' })
+  const detachedUpdateIgnored = store.read() === undefined
+  store.attach(source)
+  const reattached = store.read()?.text === 'B detached update'
+  return {
+    ok: baseline === 'A baseline' && foreignIgnored && activeUpdated && duplicateIgnored && switched
+      && lateForeignIgnored && removedCleared && detachedCleared && detachedUpdateIgnored && reattached,
+    baseline,
+    foreignIgnored,
+    activeUpdated,
+    duplicateIgnored,
+    switched,
+    lateForeignIgnored,
+    removedCleared,
+    detachedCleared,
+    detachedUpdateIgnored,
+    reattached,
+    trace,
   }
 }
 
@@ -1524,6 +1604,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'session-mount-probe') {
       workspaceTestResponse(request.requestId, { ok: true, sessionMount: runSessionMountProbe() })
+      return
+    }
+    if (request.action === 'session-projection-probe') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionProjection: runSessionProjectionProbe() })
       return
     }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')

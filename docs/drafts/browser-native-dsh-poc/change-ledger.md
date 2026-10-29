@@ -114,6 +114,24 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
+### BN-P2-026：Session projection 基线与写权观察分离
+
+```text
+changeId: BN-P2-026
+upstreamBaseline: research branch at batch start; 2026-10-29; 工作区干净；仅主 worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-projection.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-session-projection.spec.ts; docs/drafts/browser-native-dsh-poc/tests/session-projection-authority.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-projection-authority-validation-plan.md; docs/drafts/browser-native-dsh-poc/session-projection-authority-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: dsh-TUI 的 projection 经验表明页面展示读取必须按 Session 过滤，并且切换 Session 时要先读取 baseline 再接收 live update。现有 Browser-Native 研究已有 Session mount、observer 和 writer lease 证据，但没有验证 projection reseed、detach/re-attach 与展示读取和写权判定的独立性。
+existingExtensionPointsChecked: 复用 `BrowserNativeSessionMountCoordinator` 的页面生命周期原则、Worker test MessagePort、Preview URL allowlist、Session `/read`/`/append`/`/open` authority 和既有真实 LLM `runtime-validation.e2e.mjs`。未修改正式 Session format、Agent Loop、Workspace API 或根依赖。
+whyDraftOnlyWasInsufficient: projection 单测不能证明适配器进入 Dedicated Worker，也不能证明同源 observer 读取不会获得 append 权。真实模型不适合作为确定性的跨 Session 事件故障发生器，因此 projection 状态矩阵使用 Worker probe，authority 竞争使用真实 Chrome 页面，真实 LLM 只做独立接线 smoke。
+behaviorChange: 新增 PoC-local `BrowserNativeSessionProjectionStore`，在 `attach`/`bind` 时读取当前 Session baseline，`update` 只接受绑定 Session，重复 raw 值不重复通知，`reseed` 清除已删除值并在读取失败时保留稳定值，`detach` 清空可见值并取消订阅。Worker 与 preview 增加 URL-gated `session-projection` test action；默认入口不启用它。
+directoryOutChangeReason: `apps/web/src/preview.ts` 位于 PoC 目录外，因为 preview 持有 URL allowlist、Worker test port 和响应 envelope；只增加显式测试接线，没有改变普通 preview 行为。其余实现和测试留在 Browser-Native PoC 目录。
+consumersUpdated: projection adapter、Worker probe、preview allowlist、projection Vitest、Chrome authority E2E、PoC README、兼容矩阵、docs/drafts 索引、验证计划/进度和本 ledger。
+tests: projection Vitest 1 file/4 tests passed；`node --check` passed。Chrome 156.0.8078.48 scripted E2E passed：baseline、foreign filtering、A/B switch、duplicate suppression、remove/reseed、detach/re-attach 全部通过；observer read succeeded，observer append returned `409 SESSION_OWNERSHIP_LOST`；concurrent claims were `[200,409]` with `SESSION_ALREADY_OWNED`，final Session `nextSeq=1`，page errors and cross-origin requests were zero。真实 `gpt-5.6-sol` Chrome smoke 通过 3 turns、`read → write → read`、刷新恢复、59 events、`durableThroughSeq=58`、8/8 LLM HTTP 200 和两个 Workspace commit HTTP 200；日志保留既有刷新 `ERR_ABORTED`、PoC route 404 和 compaction warning。首次 probe 重复断言失败后修正测试断言并完整重跑通过，未改变运行时行为。
+syncReplaySteps: 上游同步后核对 Session mount/cursor 的 baseline-before-live 与 identity/seq 语义、preview test allowlist、Session owner/observer API 和 Worker bundle 注入。运行 projection Vitest、`node --check`、preview build、`session-projection-authority.e2e.mjs` Chrome E2E 和 `runtime-validation.e2e.mjs` 真实 LLM smoke；区分 projection read model、Session authority 和真实模型接线，不把 projection continuity 写成后台 Agent。
+deleteCondition: 正式 Session projection/client service 提供等价的 baseline、过滤、reseed、detach 和 read-only observer 语义，并由维护中的浏览器测试覆盖；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-062：Browser Worker 正式权限预设、沙箱与审批生命周期
 
 ```text

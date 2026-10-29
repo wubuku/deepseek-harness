@@ -975,6 +975,22 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-obs
 
 真实 Chrome 双标签 E2E 使用 scripted DSH 响应控制 503 retry、schema 外伪造 write、工具执行期间的 owner commit、stale read 和 lease 接管，核对 prompt 去重、唯一 operation、Session receipt 归属和同源网络；另跑真实 LLM 普通 `read → write → read` 与 durable 刷新恢复 smoke。两种证据范围不同，真实模型 smoke 不证明模型自主选择 observer/owner 时序。每个 observer 文件工具增加两次小型 revision 请求，不再下载完整 manifest；跨设备授权、多实例 backend、并发写合并、自然 eviction、OS crash 和 Safari/WebKit 未验证。
 
+## Session projection 与写权观察验证
+
+[本批计划](session-projection-authority-validation-plan.md)及[进度记录](session-projection-authority-validation-progress.md)把 Session projection 的展示读取与写权判定分开。PoC-local `BrowserNativeSessionProjectionStore` 在绑定或切换 Session 时先读取 baseline，只接受当前 Session 的 live update，重复 raw 引用不重复通知；reseed 能区分“值已删除”和“authority 读取失败”，detach 后不会接收迟到更新。该 store 只提供页面 read model，不是 Session 事实源，也不授予 Session append 或 Workspace lease。
+
+真实 Chrome Worker probe 验证 baseline、跨 Session 过滤、A/B 切换、删除、detach/re-attach；同源 authority E2E 验证只读页面可读取事件但 append 返回 `409 SESSION_OWNERSHIP_LOST`，并发 claim 只有一个 `200`、另一个为 `409 SESSION_ALREADY_OWNED`。真实 `gpt-5.6-sol` smoke 另完成 3 turns、`read → write → read`、刷新恢复、59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200 和两个 Workspace commit HTTP 200。日志仍有既有刷新 `ERR_ABORTED`、PoC route 404 和 compaction warning；不将其描述为零告警运行。
+
+复跑本批模型无关验收：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts \
+  docs/drafts/browser-native-dsh-poc/tests/browser-native-session-projection.spec.ts
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-projection-authority.e2e.mjs
+```
+
+本批没有实现正式多 Session UI，没有证明同一 Worker 内多个真实 Agent Loop、真实模型自主 observer 时序、跨设备授权、生产多实例 HA、自然 eviction、OS/磁盘 crash、Safari/WebKit 或云端 executor handoff。`parked`、detach 和 projection continuity 都不表示页面关闭后 Worker 仍在后台运行。
+
 ## Session 与 Workspace receipt 确认丢失恢复
 
 [跨存储恢复计划](cross-store-tool-recovery-validation-plan.md)与[实施进度](cross-store-tool-recovery-validation-progress.md)覆盖真实 DSH `write` 产生的 Workspace operation receipt：backend 已将包含 `tool/result` 和 receipt 的 Session 前缀 flush durable，但响应在到达 Worker 前丢失；随后旧 Worker 被终止、同 dataDir backend 重启，再刷新同一 Session。Chrome scripted E2E 检查 durable watermark、连续 Session seq、单一 tool call/result/receipt、Workspace revision、operationId 和 IndexedDB outbox，并确认刷新不重复 commit、receipt append 或原模型请求。
