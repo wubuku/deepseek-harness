@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-058：正式 composer 通用文件附件的 OPFS、Session 与 backend 恢复
+
+```text
+changeId: BN-P2-058
+upstreamBaseline: research at batch start; 2026-10-29; DSH v0.2.1-rc.2; 起始工作区干净；仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/build-profile-overlay.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/browser-native-attachments.ts; docs/drafts/browser-native-dsh-poc/browser-native-attachments.js; docs/drafts/browser-native-dsh-poc/tests/attachment-backend.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs; docs/drafts/browser-native-dsh-poc/generic-file-attachment-validation-plan.md; docs/drafts/browser-native-dsh-poc/generic-file-attachment-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Workspace mirror 只表示用户工作区文件，不是正式 composer 上传附件的存储实现。需要验证既有 Web GUI 的 `FileUploads`、DSH `AttachmentStore`/Session `FileBlock` 和标准文件工具如何在 Worker/VFS 与云端附件对象之间保持字节、身份、恢复和 Workspace 隔离语义。
+existingExtensionPointsChecked: 复用正式 composer 上传流、`AttachmentStore.saveFileStream()`/`readFileStream()`/`fileHostPath()`、Session FileBlock、RemoteSessionHandle 分页读取、`MemoryVfs.seedExternal()`、Worker Host 的 boot 前 VFS 准备和关闭路径，以及现有 Workspace principal cookie。未修改正式 packages、普通 Web profile、Session 格式、Agent Loop、根依赖或 lockfile。
+behaviorChange: PoC profile 禁用 `attachment-local`，注入 Worker-only Browser AttachmentStore。文件流写入 OPFS 临时对象并计算 SHA-256，后端按 Workspace principal 隔离、限制 64 MiB、验证后以 hard link 原子发布；成功 receipt 后返回正式 FileAttachmentRef。Worker 将内容以 OPFS sync access handle 暴露给标准 DSH `read`，打开历史 Session 时先校验 OPFS，缺失则从同源 backend 下载并在 Session read 完成前验证/挂载。附件不进入 Workspace manifest。图片拒绝；附件远端对象、Session event 与 Workspace revision 之间没有跨存储事务。
+directoryOutChangeReason: 唯一目录外改动为 docs/drafts/README.md 的研究目录索引；本批所有运行时接线、PoC profile、backend、测试和文档其余内容留在 Browser-Native PoC 目录。无正式服务、默认 profile 或全局依赖改动。
+consumersUpdated: PoC profile overlay、Worker runtime validation image、Browser AttachmentStore、同源 attachment PUT/GET、backend contract tests、正式 composer Chrome E2E、PoC README、兼容矩阵、计划/进度、drafts 索引和本账本。
+tests: node backend tests 覆盖同源 principal 授权、SHA-256 mismatch、64 MiB 配置限制、重复对象、GET integrity、backend 重启和中断上传清理；完整 backend-v2 回归覆盖原有 Session/Workspace/LLM contracts。scripted Chrome E2E 以正式 composer 上传 16 MiB，观察 backend 收到 256 个块、最大 130,276 bytes；Session 生成 FileBlock，标准 DSH `read` 成功，删除附件 OPFS cache 后刷新同一 Session，backend GET 补水后再次读取，Workspace revision/entries 不变。真实 Chrome LLM smoke 用 37-byte 文件完成两个不同提示词的 `read` turn 和 OPFS 清除后恢复；浏览器请求无跨源流量。断言分别验证每个 Session 快照的 user prompt 与 turn 内工具结果，防止复用旧 prompt 造成假阳性；不把 callId 单独当作跨 turn 唯一键。自然 eviction、OS/磁盘崩溃、图片、大附件真实 LLM、quota/outage、跨设备恢复、生产对象存储与正式认证未验证。
+syncReplaySteps: 上游同步后核对正式 composer FileUploads 的 stream/cancel 语义、AttachmentStore API、Session FileBlock 结构、Worker Host VFS 关闭、MemoryVfs seedExternal 和 Workspace/Session 身份关联。运行 attachment-backend.test.mjs、backend-v2.test.mjs、preview build、scripted 与真实 Chrome browser-native-file-attachment.e2e.mjs，以及文档门禁。若上游提供正式 Browser AttachmentStore 或 Session-scoped attachment namespace，迁移 E2E 后删除重复 provider；不要把本地 dataDir 宣称为生产云对象存储，也不要把 callId 单独视为跨 turn 唯一键。
+deleteCondition: 正式 Browser-Native runtime 提供维护中的 Worker AttachmentStore、身份绑定、OPFS/远端恢复与 composer/Session E2E，且验证迁移至正式接口；或 Browser-Native DSH PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-057：Worker Node 文件 API 调用观测与 DSH VFS 路径核验
 
 ```text

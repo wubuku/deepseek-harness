@@ -7,8 +7,9 @@
  * process and are never included in responses or logs.
  */
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { createServer } from 'node:http'
-import { mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
@@ -21,6 +22,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
+const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 const MAX_EVENTS = 100_000
 const MAX_SESSION_READ_EVENTS = 2_048
 const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
@@ -420,6 +422,141 @@ function sendBytes(response, bytes, headers = {}) {
     ...headers,
   })
   response.end(bytes)
+}
+
+function attachmentName(value) {
+  if (value === undefined) return 'file'
+  if (typeof value !== 'string' || value.length > 4096) {
+    throw new BackendError('INVALID_REQUEST', 'attachment name is invalid')
+  }
+  const leaf = value.slice(Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\')) + 1)
+  let clean = leaf.replace(/[\u0000-\u001f\u007f]/g, '').replace(/[<>:"|?*]/g, '_').trim().replace(/[. ]+$/u, '')
+  const dot = clean.indexOf('.')
+  const stem = (dot < 0 ? clean : clean.slice(0, dot)).replace(/[. ]+$/u, '')
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(stem)) clean = `_${clean}`
+  let nameBytes = 0
+  let boundedName = ''
+  for (const character of clean) {
+    const characterBytes = Buffer.byteLength(character, 'utf8')
+    if (nameBytes + characterBytes > 255) break
+    boundedName += character
+    nameBytes += characterBytes
+  }
+  clean = boundedName.replace(/[. ]+$/u, '')
+  return clean === '' || clean === '.' || clean === '..' ? 'file' : clean
+}
+
+function attachmentPath(dataDir, workspaceId, hash) {
+  return join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2), hash)
+}
+
+async function verifyAttachmentObject(path, hash) {
+  const info = await stat(path).catch(() => undefined)
+  if (info === undefined || !info.isFile() || info.size > MAX_ATTACHMENT_BYTES) return undefined
+  const digest = createHash('sha256')
+  for await (const chunk of createReadStream(path)) digest.update(chunk)
+  return digest.digest('hex') === hash ? info.size : undefined
+}
+
+async function storeAttachmentObject(
+  request,
+  dataDir,
+  workspaceId,
+  hash,
+  maximumBytes = MAX_ATTACHMENT_BYTES,
+  onStage = () => {},
+  onChunk = () => {},
+) {
+  const directoryPath = join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2))
+  await mkdir(directoryPath, { recursive: true, mode: 0o700 })
+  const target = attachmentPath(dataDir, workspaceId, hash)
+  const existing = await verifyAttachmentObject(target, hash)
+  if (existing !== undefined) {
+    let received = 0
+    const digest = createHash('sha256')
+    onStage('upload-body')
+    for await (const chunk of request) {
+      if (received > maximumBytes - chunk.byteLength) {
+        throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment exceeds the configured byte limit', 413)
+      }
+      received += chunk.byteLength
+      digest.update(chunk)
+      onChunk(chunk.byteLength)
+    }
+    if (received !== existing || digest.digest('hex') !== hash) {
+      throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
+    }
+    onStage('object-reused')
+    return { bytes: existing, reused: true }
+  }
+
+  const temporaryPath = join(directoryPath, `${randomUUID()}.part`)
+  const handle = await open(temporaryPath, 'wx', 0o600)
+  const digest = createHash('sha256')
+  let bytes = 0
+  let closed = false
+  try {
+    onStage('upload-body')
+    for await (const chunk of request) {
+      if (bytes > maximumBytes - chunk.byteLength) {
+        throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment exceeds the configured byte limit', 413)
+      }
+      digest.update(chunk)
+      onChunk(chunk.byteLength)
+      let offset = 0
+      while (offset < chunk.byteLength) {
+        const result = await handle.write(chunk, offset, chunk.byteLength - offset, bytes + offset)
+        if (result.bytesWritten < 1) throw new Error('attachment object store wrote zero bytes')
+        offset += result.bytesWritten
+      }
+      bytes += chunk.byteLength
+    }
+    if (digest.digest('hex') !== hash) {
+      throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
+    }
+    onStage('body-verified')
+    await handle.chmod(0o400)
+    await handle.sync()
+    await handle.close()
+    closed = true
+    try {
+      await link(temporaryPath, target)
+    } catch (error) {
+      if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
+      const committedBytes = await verifyAttachmentObject(target, hash)
+      if (committedBytes !== bytes) throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
+    }
+    onStage('object-published')
+    const directory = await open(directoryPath, 'r')
+    try {
+      await directory.sync()
+    } finally {
+      await directory.close()
+    }
+    return { bytes, reused: false }
+  } catch (error) {
+    if (!closed) await handle.close().catch(() => {})
+    await rm(temporaryPath, { force: true }).catch(() => {})
+    throw error
+  } finally {
+    if (!closed) await handle.close().catch(() => {})
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function streamAttachmentObject(request, response, dataDir, workspaceId, hash) {
+  const path = attachmentPath(dataDir, workspaceId, hash)
+  const bytes = await verifyAttachmentObject(path, hash)
+  if (bytes === undefined) throw new BackendError('ATTACHMENT_NOT_FOUND', 'attachment is unavailable', 404)
+  response.writeHead(200, {
+    'content-type': 'application/octet-stream',
+    'content-length': String(bytes),
+    'cache-control': 'no-store',
+    'content-disposition': 'attachment',
+    'x-content-type-options': 'nosniff',
+    'x-browser-native-protocol': String(PROTOCOL_VERSION),
+  })
+  await pipeline(createReadStream(path), response)
 }
 
 function isSharedStatePath(pathname) {
@@ -2076,6 +2213,29 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const attachmentReadMarker = 'BROWSER_NATIVE_ATTACHMENT_READ_E2E'
+  if (latestUserText.includes(attachmentReadMarker) && hasTool(tools, 'read')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(attachmentReadMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      const filePath = latestUserText.match(/\/dsh\/home\/attachments\/v1\/files\/[a-f0-9]{2}\/[a-f0-9]{64}\/[^\s"'`]+/)?.[0]
+        ?.replace(/[.,;:!?]+$/u, '')
+      if (filePath === undefined) {
+        scriptedText(response, 'BROWSER_NATIVE_ATTACHMENT_PATH_MISSING')
+        return
+      }
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-attachment-read-${String(markerIndex)}`,
+        name: 'read',
+        arguments: { file_path: filePath, offset: 1, limit: 1 },
+      })
+      return
+    }
+    scriptedText(response, 'BROWSER_NATIVE_ATTACHMENT_READ_DONE')
+    return
+  }
+
   const capabilityBashMarker = 'BROWSER_NATIVE_CAPABILITY_BASH_E2E'
   if (latestUserText.includes(capabilityBashMarker)) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
@@ -2924,6 +3084,11 @@ export async function createBrowserNativeV2Server(options) {
     : options.workspaceDownloadMaxReaders, 'workspaceDownloadMaxReaders')
   const workspaceDownloadTimeoutMs = timeoutMs(options.workspaceDownloadTimeoutMs === undefined ? 30_000
     : options.workspaceDownloadTimeoutMs, 'workspaceDownloadTimeoutMs')
+  const attachmentMaxBytes = options.attachmentMaxBytes === undefined
+    ? MAX_ATTACHMENT_BYTES : options.attachmentMaxBytes
+  if (!Number.isSafeInteger(attachmentMaxBytes) || attachmentMaxBytes < 1 || attachmentMaxBytes > MAX_ATTACHMENT_BYTES) {
+    throw new TypeError(`attachmentMaxBytes must be an integer from 1 through ${String(MAX_ATTACHMENT_BYTES)}`)
+  }
   if (workspaceDownloadTimeoutMs > 2_147_483_647) {
     throw new TypeError('workspaceDownloadTimeoutMs exceeds the Node timer limit')
   }
@@ -2987,6 +3152,38 @@ export async function createBrowserNativeV2Server(options) {
         }
         const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
         sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookies })
+        return
+      }
+      const attachmentMatch = url.pathname.match(/^\/api\/browser-native\/workspace\/attachments\/([a-f0-9]{64})$/)
+      if (attachmentMatch !== null && (request.method === 'PUT' || request.method === 'GET')) {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, workspaceId)
+        const hash = attachmentMatch[1]
+        if (request.method === 'PUT') {
+          const contentType = request.headers['content-type']
+          if (contentType !== 'application/octet-stream') {
+            throw new BackendError('INVALID_REQUEST', 'attachment uploads require application/octet-stream')
+          }
+          const name = attachmentName(url.searchParams.get('name') ?? undefined)
+          const stored = await storeAttachmentObject(
+            request,
+            options.dataDir,
+            workspaceId,
+            hash,
+            attachmentMaxBytes,
+            options.testHooks?.onAttachmentStage,
+            options.testHooks?.onAttachmentChunk,
+          )
+          sendJson(response, 200, {
+            attachmentId: `sha256:${hash}`,
+            name,
+            bytes: stored.bytes,
+            reused: stored.reused,
+          })
+          return
+        }
+        await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash)
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/upload-capabilities') {

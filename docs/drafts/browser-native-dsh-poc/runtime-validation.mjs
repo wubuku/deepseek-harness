@@ -51,7 +51,7 @@ export async function createRuntimeValidationDist({
       profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
     }
     await writeFile(join(home, 'cordis.patch.yml'), profilePatch)
-    for (const file of ['browser-native-session-persistence.js', 'browser-native-llm.js']) {
+    for (const file of ['browser-native-session-persistence.js', 'browser-native-attachments.js', 'browser-native-llm.js']) {
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
     await writeFile(join(home, 'browser-validation', 'input.txt'), 'runtime=DedicatedWorker\nfixture=VFS_INPUT_READY\n')

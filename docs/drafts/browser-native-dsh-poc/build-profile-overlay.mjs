@@ -13,6 +13,7 @@ try {
   await mkdir(home, { recursive: true })
   await cp(new URL('browser-native-profile.cordis.patch.yml', directory), join(home, 'cordis.patch.yml'))
   await cp(new URL('browser-native-session-persistence.js', directory), join(home, 'browser-native-session-persistence.js'))
+  await cp(new URL('browser-native-attachments.js', directory), join(home, 'browser-native-attachments.js'))
   await cp(new URL('browser-native-llm.js', directory), join(home, 'browser-native-llm.js'))
   await execFileAsync('tar', [
     '--format=ustar', '--no-xattrs', '-czf', output.pathname, '-C', temporary, 'home',

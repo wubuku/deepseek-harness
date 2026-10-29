@@ -59,6 +59,7 @@ import {
   BrowserNativeCapabilityPublication,
 } from './browser-native-capability-publication.ts'
 import { readSessionPages } from './browser-native-session-read.ts'
+import { createBrowserNativeAttachmentModule } from './browser-native-attachments.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
@@ -279,6 +280,10 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
     private readonly owner: BrowserNativeOwner | undefined,
     private readonly writerId: string | undefined,
     private readonly sessionOutbox: BrowserNativeSessionOutbox,
+    private readonly ensureSessionFiles: (
+      events: readonly SessionEvent[],
+      signal?: AbortSignal,
+    ) => Promise<void>,
     initialNextSeq: number,
     private readonly onClose: () => void,
   ) {
@@ -509,6 +514,7 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
           hasMore: page.hasMore,
         }
       }, offset, length, options?.signal)
+      await this.ensureSessionFiles(result.events, options?.signal)
       this.nextSeq = Math.max(this.nextSeq, required(result.nextSeq, 'nextSeq'))
       return {
         eventState: required(result.eventState, 'eventState'),
@@ -595,11 +601,12 @@ function createRemoteSessionPersistenceClass(
   workspace: BrowserNativeWorkspaceRuntime,
   sessionOutbox: BrowserNativeSessionOutbox,
   publication: BrowserNativeCapabilityPublication,
+  ensureSessionFiles: (events: readonly SessionEvent[], signal?: AbortSignal) => Promise<void>,
 ): typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistence {
   const Base = runtimePersistence().SessionPersistence
   return class RemoteSessionPersistence extends Base {
     override readonly name = 'session-persistence-browser-native'
-    static inject = ['fs', 'workingDirectory', 'sessions']
+    static inject = ['attachments', 'fs', 'workingDirectory', 'sessions']
     private readonly handles = new Set<RemoteSessionHandle>()
     private readonly writers = new Map<SessionId, RemoteSessionHandle>()
     private readonly receiptWrites = new Map<SessionId, Promise<void>>()
@@ -866,6 +873,7 @@ function createRemoteSessionPersistenceClass(
         owner,
         writerId,
         sessionOutbox,
+        ensureSessionFiles,
         required(response.nextSeq, 'nextSeq'),
         () => {
           if (owner !== undefined && activeSessionOwners.get(id)?.ownerToken === owner.ownerToken
@@ -1181,10 +1189,13 @@ function createSessionModule(
   workspace: BrowserNativeWorkspaceRuntime,
   sessionOutbox: BrowserNativeSessionOutbox,
   publication: BrowserNativeCapabilityPublication,
+  ensureSessionFiles: (events: readonly SessionEvent[], signal?: AbortSignal) => Promise<void>,
 ): unknown {
   let module: unknown
   return () => {
-    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(workspace, sessionOutbox, publication)
+    const RemoteSessionPersistence = createRemoteSessionPersistenceClass(
+      workspace, sessionOutbox, publication, ensureSessionFiles,
+    )
     module ??= { default: RemoteSessionPersistence, RemoteSessionPersistence }
     return module
   }
@@ -1242,8 +1253,12 @@ export function createBrowserNativeStaticModules(
   sessionOutbox: BrowserNativeSessionOutbox,
   publication: BrowserNativeCapabilityPublication,
 ): Readonly<Record<string, StaticModuleFactory>> {
+  const attachments = createBrowserNativeAttachmentModule(workspace)
   return {
-    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(workspace, sessionOutbox, publication),
+    '@deepseek-ai/dsh-browser-native-attachments': attachments.factory,
+    '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(
+      workspace, sessionOutbox, publication, attachments.ensureSessionFiles,
+    ),
     '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication),
   }
 }

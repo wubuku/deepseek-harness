@@ -130,6 +130,27 @@ node docs/drafts/browser-native-dsh-poc/tests/many-small-files-scale.e2e.mjs
 
 `large-file-scale.e2e.mjs` 默认生成 16 MiB 文件，可用 `DSH_POC_LARGE_FILE_BYTES=67108864` 运行 64 MiB 样本。Worker test port 生成样本时，`MemoryVfs` 持有完整 bytes；当前 durable 模式的冷 hydrate 和标准 edit 可用 OPFS 外部 backing，资源证据见[标准工具资源包络进度](opfs-standard-tool-envelope-validation-progress.md)。传输仍是完整文件 blob 分块，PoC backend 使用本地 `dataDir`；这些结果不构成块级 delta、任意大小文件能力、生产对象存储或内存 SLA。
 
+## Composer 通用文件附件
+
+[验证计划](generic-file-attachment-validation-plan.md)和[实施进度](generic-file-attachment-validation-progress.md)记录了正式 DSH composer 的通用文件路径：`FileUploads` 流经 `AttachmentStore.saveFileStream()`，Worker 将附件写入 OPFS、上传至按 Workspace principal 隔离的同源 PoC backend，再以 VFS external backing 提供标准 DSH `read`。Session 只保存正式 `FileBlock` 引用；打开历史 Session 时，Worker 从 OPFS 或 backend 补水。附件对象不进入 Workspace manifest，也不增加 Workspace revision。
+
+Chrome scripted E2E 通过 16 MiB 附件上传、真实 DSH `read`、删除 OPFS 附件缓存、刷新后 backend 补水并在原 Session 再读；backend 收到 256 个流块，最大块为 130,276 bytes。真实 Chrome/LLM E2E 另以小文本附件完成两轮真实 `read`、Session FileBlock 持久化和 OPFS 清理后的补水，Workspace revision 保持不变。验收按 turn/step 与 callId 配对；Session 不承诺 callId 单独构成跨 turn 的全局身份。
+
+在 preview 构建后复跑本批验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node --test docs/drafts/browser-native-dsh-poc/tests/attachment-backend.test.mjs
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+export DSH_POC_BROWSER=chrome
+export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
+node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
+DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
+  node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
+```
+
+附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。未验证自然 eviction、OS 级崩溃、多设备恢复、上传期间 quota/服务端 outage 和大附件真实 LLM。
+
 ## 可写 chunk-backed 编辑验证
 
 [可写分块编辑验证计划](chunk-backed-edit-validation-plan.md)和[实施进度](chunk-backed-edit-validation-progress.md)记录独立的 OPFS copy-on-write 算法原型。之后该实现已接入当前 checkout 的 DSH 标准 `edit`、Worker VFS 外部 backing 与 Workspace mirror；最新 Chrome 资源数据见[标准工具资源包络计划](opfs-standard-tool-envelope-validation-plan.md)和[进度](opfs-standard-tool-envelope-validation-progress.md)。

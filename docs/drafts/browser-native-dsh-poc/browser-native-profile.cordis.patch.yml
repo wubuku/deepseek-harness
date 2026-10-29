@@ -5,6 +5,9 @@
 - id: session-persistence-jsonl
   disabled: true
 
+- id: attachment-local
+  disabled: true
+
 - id: agent-default-model
   config:
     provider: browser-native
@@ -65,6 +68,9 @@
               tailChars: 1024
 
 - insert:
+    - id: attachment-browser-native
+      name: './browser-native-attachments.js'
+
     - id: session-persistence-browser-native
       name: './browser-native-session-persistence.js'
 
