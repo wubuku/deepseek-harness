@@ -15,6 +15,7 @@ const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdi
 const marker = 'BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_E2E'
 const requests = []
 const requestRecords = []
+const workspaceCommits = []
 const externalRequests = []
 const pageErrors = []
 let image
@@ -40,10 +41,15 @@ try {
     if (url.pathname === '/api/browser-native/llm') {
       try { requestRecords.push(JSON.parse(request.postData() ?? '{}')) } catch { requestRecords.push({}) }
     }
+    if (url.pathname.endsWith('/workspace/commit')) {
+      try { workspaceCommits.push(JSON.parse(request.postData() ?? '{}')) } catch { workspaceCommits.push({}) }
+    }
   })
 
-  await openPreview(page, `${origin}/preview.html?browser-native=1&preview-fixture=none`)
+  await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`)
   await page.getByText('Browser-native remote', { exact: true }).waitFor({ timeout: 20_000 })
+  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+    && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.dirtyCount === 0, undefined, { timeout: 60_000 })
   let result
   try {
     result = await sendTurn({
@@ -100,6 +106,7 @@ try {
   assert.ok(resultAppendIndex > callCheckpointIndex, 'the DSH tool result must follow the pre-dispatch checkpoint')
   assert.match(assistantText(result.session, result.turn), /BROWSER_NATIVE_DEFAULT_PROFILE_TOOL_LOOP_OK/)
 
+  const commitsBeforeShellTurn = workspaceCommits.length
   const shellSemantics = await sendTurn({
     page,
     origin,
@@ -120,6 +127,16 @@ try {
   assert.match(shellResults[0].data.message.content.map(block => block.text ?? '').join(''), /BROWSER_NATIVE_PIPE_X/)
   assert.match(shellResults[2].data.message.content.map(block => block.text ?? '').join(''), /BROWSER_NATIVE_REDIRECT_OK/)
   assert.match(shellResults[3].data.message.content.map(block => block.text ?? '').join(''), /exit code|not found|command/i)
+  await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced'
+    && window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.dirtyCount === 0, undefined, { timeout: 60_000 })
+  const workspaceFiles = await page.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
+    action: 'list', path: '/dsh/home/workspace/',
+  }))
+  assert.equal(workspaceFiles?.ok, true, JSON.stringify(workspaceFiles))
+  assert.equal(Array.isArray(workspaceFiles.entries), true, JSON.stringify(workspaceFiles))
+  assert.deepEqual([...workspaceFiles.entries].sort(), ['shell-redirect.txt'], 'unsupported shell execution must not create Workspace files')
+  assert.equal(workspaceCommits.length - commitsBeforeShellTurn, 1,
+    'only the supported redirection may publish a Workspace commit')
 
   const compactionTurn = await sendTurn({
     page,
@@ -152,6 +169,7 @@ try {
     browser: process.env.DSH_POC_BROWSER ?? 'chrome',
     toolNames,
     defaultProfileCompaction: true,
+    shellNegativePath: 'unsupported command produced no Workspace mutation or commit',
     executedTool: call.data.name,
     toolResultError: toolResult.data.message.isError,
     sessionId: result.sessionId,

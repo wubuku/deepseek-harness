@@ -77,6 +77,20 @@ export interface ImageInstallation {
   readonly manifest: string
 }
 
+/** One module request recorded while sweeping the Worker image. */
+export interface PackedModuleRequest {
+  /** Image path or packer root label that issued the request. */
+  readonly importer: string
+  /** Exact specifier passed to the Worker module resolver. */
+  readonly specifier: string
+  /** Whether the request loads a module or only resolves a URL. */
+  readonly requestKind: 'module' | 'meta-resolve'
+  /** How the packer's Worker resolver handled the request. */
+  readonly resolution: 'image' | 'worker-static' | 'unresolved-external'
+  /** Image-relative module path when resolution is `image`. */
+  readonly target?: string
+}
+
 /** Everything the packer needs that it cannot know by itself. */
 export interface PackOptions {
   /** Shipped profile template the worker host boots, recorded in the manifest. */
@@ -143,6 +157,8 @@ export interface PackResult {
   readonly droppedJavascriptEntries: number
   /** Third-party requests that resolve nowhere; loud at require time if hit. */
   readonly unresolvedExternalRequests: readonly string[]
+  /** Static requests recorded by the Worker image resolver sweep. */
+  readonly moduleRequests: readonly PackedModuleRequest[]
   /** What the pack-time transform did. */
   readonly transform: TransformOutcome
   /** Wrapper contract recorded in the manifest; every packed body meets it. */
@@ -295,6 +311,11 @@ interface SweepOutcome {
   readonly droppedJavascriptEntries: number
   /** Third-party requests that resolve nowhere; loud at require time if hit. */
   readonly unresolvedExternalRequests: readonly string[]
+  readonly moduleRequests: readonly PackedModuleRequest[]
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
 }
 
 /**
@@ -425,6 +446,7 @@ function sweepImage(
   const seen = new Set<string>()
   const failures: string[] = []
   const tolerated = new Set<string>()
+  const requests = new Map<string, PackedModuleRequest>()
   let visited = 0
   let rewritten = 0
   for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
@@ -442,12 +464,38 @@ function sweepImage(
       const external = importer.startsWith('node_modules/') && !importer.startsWith('node_modules/@deepseek-ai/')
       // A meta-resolve request is a URL mapping, not a load: a missing target
       // is tolerable from any importer — the call throws if it ever runs.
-      if (external || entry.meta === true) tolerated.add(`${importer}: "${specifier}"`)
+      if (external || entry.meta === true) {
+        tolerated.add(`${importer}: "${specifier}"`)
+        const request: PackedModuleRequest = {
+          importer,
+          specifier,
+          requestKind: entry.meta === true ? 'meta-resolve' : 'module',
+          resolution: 'unresolved-external',
+        }
+        requests.set(JSON.stringify(request), request)
+      }
       else failures.push(`${importer}: "${specifier}" — ${(reason as Error).message}`)
       continue
     }
-    if (resolution.kind === 'static') continue
+    if (resolution.kind === 'static') {
+      const request: PackedModuleRequest = {
+        importer,
+        specifier,
+        requestKind: entry.meta === true ? 'meta-resolve' : 'module',
+        resolution: 'worker-static',
+      }
+      requests.set(JSON.stringify(request), request)
+      continue
+    }
     const path = resolution.path
+    const request: PackedModuleRequest = {
+      importer,
+      specifier,
+      requestKind: entry.meta === true ? 'meta-resolve' : 'module',
+      resolution: 'image',
+      target: path.slice(root.length + 1),
+    }
+    requests.set(JSON.stringify(request), request)
     if (seen.has(path)) continue
     seen.add(path)
     const key = path.slice(root.length + 1)
@@ -498,6 +546,11 @@ function sweepImage(
     javascriptEntries,
     droppedJavascriptEntries: dropped,
     unresolvedExternalRequests: [...tolerated],
+    moduleRequests: [...requests.values()].sort((left, right) =>
+      compareStrings(left.importer, right.importer)
+      || compareStrings(left.specifier, right.specifier)
+      || compareStrings(left.requestKind, right.requestKind)
+      || compareStrings(left.resolution, right.resolution)),
   }
 }
 
@@ -703,7 +756,7 @@ export function packVfsImage(options: PackOptions): PackResult {
 
   const executables = dropExecutables(files)
   const rootPackages = [...packages.keys()].filter(name => options.workspaces.has(name))
-  const { swept, transform, javascriptEntries, droppedJavascriptEntries, unresolvedExternalRequests } =
+  const { swept, transform, javascriptEntries, droppedJavascriptEntries, unresolvedExternalRequests, moduleRequests } =
     sweepImage(files, options, rootPackages, root)
 
   const lazyArchives: PackedLazyArchive[] = []
@@ -747,6 +800,7 @@ export function packVfsImage(options: PackOptions): PackResult {
     javascriptEntries: manifest.javascriptEntries,
     droppedJavascriptEntries,
     unresolvedExternalRequests,
+    moduleRequests,
     transform,
     contract: WRAPPER_CONTRACT,
   }

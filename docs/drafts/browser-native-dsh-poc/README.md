@@ -341,6 +341,30 @@ DSH_POC_TOOL_CANCELLATION_SCENARIO=crash-edit node docs/drafts/browser-native-ds
 
 此验证不涵盖 OS/磁盘崩溃、自然 eviction 或 Safari/WebKit。真实 LLM 普通文件 smoke 本批因上游不可达而未通过；scripted 场景不能代替该证据。
 
+## Worker 依赖闭包审计
+
+[验证计划](worker-dependency-closure-validation-plan.md)、[实施进度](worker-dependency-closure-validation-progress.md)和[机器生成的 request graph](worker-dependency-closure-report.json)记录当前 checkout 的 `web` Worker image 请求闭包。packer 返回的图包含 Worker assembly seeds 和每个已物化 workspace package 的全部非通配符 runtime exports；这比 Cordis profile 实际启用的插件集合更宽，也不是模块求值或执行轨迹。
+
+报告包含 1,350 个 JavaScript entries 和 4,252 条静态 request records：3,693 条解析到 image 模块、450 条解析到 implemented builtin proxies、26 条解析到 structural stubs、19 条解析到 external replacements；另有 54 条未解析 Node builtin 请求和 10 条未解析 `meta-resolve` 请求。计数单位是 request record，不是唯一 package、API 成员或运行次数。`implemented` 只说明 proxy 源文件所在目录；逐导出 Node 兼容性仍须单独测试。
+
+未解析请求不能当成无害死代码：其中包括 `undici` 的 Node-only builtin 依赖。当前 Browser profile 明确不注册 `web_fetch`，本批没有执行这些请求；如需在 Worker 中提供该能力，应先选择浏览器原语或同源 backend adapter，再验证实际调用路径。完整 importer 列表和每条解析结果见 JSON 报告。
+
+重新生成报告前，先构建 preview，使 runtime proxy 表和 packer 来自当前构建产物：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/generate-worker-dependency-report.mjs
+```
+
+Chrome scripted E2E 证明受限 Bash pipeline、文件 redirection 和回读通过真实 DSH Worker/Host；unsupported host command 未新增 Workspace 文件或 commit。另有真实 `gpt-5.6-sol` smoke 在 Browser validation roster 完成 DSH `read → write → read`，刷新后同一 Session 再读 durable Workspace 文件成功。两类证据使用不同 LLM 模式；真实模型结果不能证明静态图中每个模块或 Node shim 均可用。
+
+```sh
+env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/default-profile-capabilities.e2e.mjs
+env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ROSTER=browser DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+真实模型密钥只由 backend 从 `docs/drafts/.env` 读取，不属于浏览器配置或日志输出。逐插件/逐 export conformance、全部 54 条 unresolved builtin requests 的运行覆盖、computed imports、Safari 和生产 backend 均未验证。
+
 ## 能力预检与默认插件兼容性
 
 [能力预检计划](browser-capability-preflight-plan.md)和[实施进度](browser-capability-preflight-progress.md)记录本批对 Browser-Native profile 的系统性验证：PoC capability manifest 现在集中描述 Worker VFS、结构化文件工具、受限 Shell、同源 Session/LLM backend、问答、todo、工作目录，以及主机子进程、`fs.watch`、原生 addon 和后台进程等明确不支持的能力。Worker 在创建 Workspace 和 Worker Host 前执行 fail-closed 预检；缺少 capability 时，诊断包含具体插件和能力，不留下半启动 Host。

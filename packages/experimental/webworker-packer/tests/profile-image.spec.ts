@@ -96,6 +96,38 @@ describe('image layout', () => {
     expect(yaml.load(text, { schema: entryListSchema })).toEqual(homePatch)
   })
 
+  it('records image, Worker-static, unresolved module, and meta-resolve requests', (test) => {
+    const { root, installation } = subject(test)
+    writeFileSync(join(root, 'subject/lib/index.js'), [
+      "import fs from 'node:fs'",
+      "import { helper } from './helper.js'",
+      "import unavailable from 'missing-external'",
+      "const resolved = import.meta.resolve('missing-meta-target')",
+      'export const value = [fs, helper, unavailable, resolved]',
+    ].join('\n'))
+    writeFileSync(join(root, 'subject/lib/helper.js'), 'export const helper = 1')
+    const result = packVfsImage({
+      profile: 'web', roster: ['subject'], installation: { name: '@scope/app', manifest: installation },
+      workspaces: new Map([['subject', join(root, 'subject')]]), resolveFrom: root, entries: [],
+    })
+    expect(result.moduleRequests).toContainEqual({
+      importer: 'node_modules/subject/lib/index.js', specifier: 'node:fs',
+      requestKind: 'module', resolution: 'worker-static',
+    })
+    expect(result.moduleRequests).toContainEqual({
+      importer: 'node_modules/subject/lib/index.js', specifier: './helper.js',
+      requestKind: 'module', resolution: 'image', target: 'node_modules/subject/lib/helper.js',
+    })
+    expect(result.moduleRequests).toContainEqual({
+      importer: 'node_modules/subject/lib/index.js', specifier: 'missing-external',
+      requestKind: 'module', resolution: 'unresolved-external',
+    })
+    expect(result.moduleRequests).toContainEqual({
+      importer: 'node_modules/subject/lib/index.js', specifier: 'missing-meta-target',
+      requestKind: 'meta-resolve', resolution: 'unresolved-external',
+    })
+  })
+
   it('refuses an installation that is also a roster package', (test) => {
     const { root, installation } = subject(test)
     expect(() => packVfsImage({

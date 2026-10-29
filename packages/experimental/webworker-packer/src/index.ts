@@ -8,7 +8,8 @@ export {
 } from './transform-image.ts'
 export {
   collectModuleNames, DEFAULT_ROOT, MANIFEST_PATH, packVfsImage, packVfsOverlay,
-  type ConfigTree, type ImageInstallation, type ImageTree, type PackedLazyArchive, type PackOptions,
+  type ConfigTree, type ImageInstallation, type ImageTree, type PackedLazyArchive,
+  type PackedModuleRequest, type PackOptions,
   type PackOverlayResult, type PackResult,
 } from './pack.ts'
 export {

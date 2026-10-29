@@ -6,7 +6,7 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 ## Summary
 
-当前 checkout 已在 Chrome 中运行真实 DSH Host 与 `ctx.agentLoop`，并验证部分文件工具、受限 Bash、用户问答、工作目录切换、Session/LLM backend 和 Workspace durable store。该证据只覆盖表中列明的调用路径；preview 中存在模块、模块能 import 或插件能启动，都不能单独证明插件可以工作。
+当前 checkout 已在 Chrome 中运行真实 DSH Host 与 `ctx.agentLoop`，并验证部分文件工具、受限 Bash、用户问答、工作目录切换、Session/LLM backend 和 Workspace durable store。另已生成 `web` Worker image 的保守静态 request graph；该图根包含已物化 workspace packages 的全部非通配符运行时导出，不是 Cordis 实际激活或模块求值清单。preview 中存在模块、模块能 import 或插件能启动，都不能单独证明插件可以工作。
 
 ## 状态定义
 
@@ -16,6 +16,7 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 | 同源 backend 提供 | 浏览器通过 PoC 同源 API 调用服务端实现；不是浏览器 Worker 内的本地 Node 能力。 |
 | 明确排除 | 当前 Browser PoC 的 profile/schema 不暴露此能力；不表示对应 package 无法构建或加载。 |
 | 尚未验证 | 当前证据不足以判断行为是否兼容，不能按“已支持”使用。 |
+| 静态请求图已生成 | packer 为其保守 roots 输出了请求与解析分类；不代表模块求值或运行时行为。 |
 
 ## 矩阵
 
@@ -69,9 +70,10 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 | Workspace writer lease 续租和交接 | Chrome Worker 已执行（单 backend、测试 TTL） | [heartbeat E2E](tests/workspace-writer-heartbeat.e2e.mjs)在 20 秒 TTL 下等待两个以上 TTL，注入一次 renew 503 后观察到恢复续租、竞争 claim 409，最终同一问答 turn 完成 DSH `write`；[启动失败 E2E](tests/workspace-writer-startup-failure.e2e.mjs)注入 manifest 503，确认失败 Worker 不再续租且服务端 lease 到期后可接管；[Worker handoff E2E](tests/workspace-worker-handoff.e2e.mjs)验证页面关闭后的 fencing 交接。 | Workspace prepare 失败后服务端 lease 保留至 TTL 到期；页面冻结期间 heartbeat、浏览器进程崩溃、多实例 backend 和生产 lease SLA 未验证；活动标签页测试不代表后台 Agent。 |
 | IndexedDB 前向 schema 与恢复导出 | Chrome 页面已执行（v2 数据库由 v1 PoC 读取） | [前向版本 E2E](tests/indexeddb-forward-version-export.e2e.mjs)确认 v2 database version、Workspace metadata 和未知 store 内容不变；页面 fail closed 并导出已识别的 metadata、store 名称及 hash 校验通过的 OPFS bytes。 | 不自动迁移未知 schema；未知 object store 记录不导出，也未验证更高版本数据库格式的语义兼容性。 |
 | Agent `write` 未知 commit 与 backend restart | Chrome Worker 已执行（scripted LLM、单 backend） | [未知 commit E2E](tests/agent-workspace-unknown-commit-recovery.e2e.mjs)在 Workspace commit 持久化后丢弃响应、终止 Worker 并以相同 dataDir 重启 backend；刷新后沿用 operation 查询恢复唯一 revision/receipt，原 DSH 调用记录为 `TOOL_OUTCOME_UNKNOWN`。 | 多实例存储原子性、跨服务事务、真实模型选择和任意副作用重放均未验证。 |
-| Web search、web fetch | 明确排除 | [Browser profile](browser-native-profile.cordis.patch.yml) 不注册这些工具；默认能力 E2E 断言模型 schema 不含 `web_search` / `web_fetch`。 | Browser-Native 本身绝不可能通过经过设计和授权的 backend adapter 提供网络工具。 |
+| Web search、web fetch | 明确排除 | [Browser profile](browser-native-profile.cordis.patch.yml) 不注册这些工具；默认能力 E2E 断言模型 schema 不含 `web_search` / `web_fetch`。静态闭包报告还记录 `undici` 下的 Node builtin 请求未解析；本批没有执行 web-fetch 路径。 | 当前 Worker 闭包不能据此支持 `web_fetch`；也不能推断未来使用浏览器或同源 backend adapter 提供该能力不可行。 |
 | PowerShell、subagent、后台 jobs | 明确排除 | Browser profile 不注册这些工具；默认能力 E2E 检查 schema 中不存在对应工具名。 | 所有相近的业务协作或服务器任务能力都应该由 Worker 模拟。 |
-| Worker Node builtin shim 与动态模块解析 | 尚未验证（逐插件行为） | [Worker runtime Node 实现](../../../packages/experimental/webworker-runtime/src/node/)及 [module loader](../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts) 提供受限实现；本批 E2E 不逐项调用 builtin 或第三方依赖。 | Node API 完整兼容，或凡是 import 成功的 plugin 就可正确运行。 |
+| `web` Worker 静态模块请求闭包 | 静态请求图已生成 | [机器报告](worker-dependency-closure-report.json)记录 4,252 条 request records：3,693 个 image-module 请求、450 个 implemented-builtin 请求、26 个 structural-stub 请求、19 个 external-replacement 请求、54 个 unresolved Node builtin 请求和 10 个 unresolved meta-resolve 请求；[验证进度](worker-dependency-closure-validation-progress.md)记录 Chrome 与真实 LLM 路径。 | roots 包含所有已物化 workspace package 的非通配符运行时 exports，不等于 Cordis 激活图、模块执行覆盖、唯一模块数或 API 成员兼容。 |
+| Worker Node builtin shim 与动态模块解析 | 选定 Chrome 路径已执行；逐插件/逐导出行为尚未验证 | [默认能力 E2E](tests/default-profile-capabilities.e2e.mjs)通过真实 Worker/DSH Loop 执行受限 Bash，并验证 unsupported command 不产生新 Workspace 文件或 commit；[node-stubs.spec.ts](../../../packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts)验证结构性 stub 拒绝其选定成员。 | Node API 完整兼容，或凡是 import 成功的 plugin 就可正确运行；静态 `implemented` 分类也不表示每个导出成员都实现。 |
 | `fs.watch` / 长期文件 watcher | 尚未验证 | 本批容量、重启、工具和 archive 测试均未创建或断言 watcher 生命周期。 | Worker 被挂起、页面关闭或浏览器重启后 watcher 会继续。 |
 | 真实子进程、原生 addon、主机二进制 | 明确排除于 Browser Worker 执行模型 | Browser profile 的 Bash 是 Worker 固定命令表；本批没有宿主进程桥接。 | “受限 Bash”可以代替系统 shell、PTY、native addon 或主机侧进程监管。 |
 

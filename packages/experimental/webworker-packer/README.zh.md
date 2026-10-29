@@ -27,6 +27,8 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 
 打包器在 [`src/repository.ts`](src/repository.ts) 中拥有内部 `dsh.configTrees` 声明、校验和源目录解析。该字段不属于公共插件 manifest API。
 
+`packVfsImage` 还会返回 `moduleRequests`：packer 在 sweep 镜像时交给 Worker resolver 处理的、可静态识别的请求。每条记录包含 importer、specifier、请求类别、解析结果，以及存在时的镜像目标路径。请求图以 Worker 装配入口和每个已物化 workspace package 的全部非通配符运行时导出为根；它是保守的打包闭包，不是 profile 实际启用的 Cordis 行或模块分支求值记录。
+
 打包是三层标准栈：
 
 1. **Roster**——随附 profile 模板的 bundle 和 app-boot `OPTIONAL_BUNDLES` 中的每个 bundle（各自按启动器的方式从 CLI manifest 解析），加上它们 patch 文件点名的每个包（含 insert 列表与分组行），再加上 CLI（命令行界面）在 `package.json` `dsh.configTrees` 里声明的每棵配置树的行，按 Node 式依赖闭包物化。外部 peer 边绝不会绑定到 worker，workspace peer 保留在链上。CLI manifest 本身单独进入镜像，位于 `node_modules/@deepseek-ai/dsh/package.json`，作为 worker 解析 bundle 的锚点；manifest 记录它的名称和 profile。
@@ -56,6 +58,7 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 <a id="known-limitations-and-deferred-work"></a>
 
 - **规则表依赖人工判断**（`rules.ts`：exclude glob、页面资产模式、入口种子），由 `tests/` 钉住；worker 需要触达的新资产类别应加表行，而不是改扫描器。
+- **请求图采用保守范围**：它包含每个已物化 workspace package 的全部运行时导出，即使合成 profile 并未启用该 package。图记录可识别的请求，不代表模块已求值或运行时可达；计算 specifier 和 loader 无法识别的路径不在图中。
 - **可达性只推断精确请求形式**——计算得到的 `import` 与 `require` 参数、保存下来的 `createRequire` 结果、经 CommonJS 获取的 `createRequire`，以及基准不是 `import.meta.url` 的调用只在运行时解析；若目标已被裁掉就会显式失败。只能通过这些形式触达的目标需要显式镜像入口种子。
 - **vendored 包源码（`src/*.ts`）被排除**——运行时无人解析它们；未来若有 worker 内源码巡检功能需要专门的 include 规则。
 - **打包器假定构建产物 `lib/` 是新鲜的**：它从不编译，工作区构建陈旧就会打包陈旧字节。先跑仓库构建。

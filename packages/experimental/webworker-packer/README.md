@@ -27,6 +27,8 @@ The public npm package exposes `packVfsImage` and `packVfsOverlay` through its l
 
 The packer owns the internal `dsh.configTrees` declaration, its validation, and source directory resolution in [`src/repository.ts`](src/repository.ts). This field is not part of the public plugin manifest API.
 
+`packVfsImage` also returns `moduleRequests`: the statically recognized requests the Worker resolver processes while sweeping the image. Each record names its importer, specifier, request kind, resolution, and image target when present. The request graph is rooted at the Worker assembly entries and every non-wildcard runtime export of each materialized workspace package; it is a conservative packaging closure, not a trace of the profile's enabled Cordis rows or evaluated module branches.
+
 The pack is a three-layer standard stack:
 
 1. **Roster** — the shipped profile template's bundles and every bundle in app-boot's `OPTIONAL_BUNDLES`, each resolved from the CLI manifest as the launcher resolves it, plus every package their patch files name (insert lists and grouped rows included), plus the rows of every config tree the CLI declares in its `package.json` `dsh.configTrees`, materialized as a Node-style dependency closure. External peer edges never bind the worker; workspace peers stay on the chain. The CLI manifest itself enters the image alone at `node_modules/@deepseek-ai/dsh/package.json`, as the worker's bundle resolution anchor; the manifest records its name and the profile.
@@ -59,6 +61,7 @@ None; this package neither assembles nor sends a provider request.
 - **Reachability infers only exact request forms** — computed `import` and `require` arguments, stored `createRequire` results, CommonJS-obtained `createRequire`, and bases other than `import.meta.url` resolve only at runtime and fail loud if the target was otherwise pruned; a target reachable only through those forms needs an explicit image entry seed.
 - **Vendored package sources (`src/*.ts`) are excluded** — nothing resolves them at runtime; a future in-worker source-inspection feature would need a dedicated include rule.
 - **The packer assumes built `lib/` artifacts are current**: it never compiles, so a stale workspace build packs stale bytes. Run the repository build first.
+- **The request graph is conservative**: it includes every materialized workspace package runtime export, even when the composed profile does not activate that package. It records recognized requests, not module evaluation or runtime reachability; computed specifiers and unrecognized loader paths remain outside the graph.
 - **The CLI requires its original repository location**: `dsh-pack-vfs-image` finds the checkout relative to its own installed file and reads the source CLI, configuration trees, and preview fixtures there. An npm installation supports the parameterized library API; the CLI and repository helpers require a complete, built DeepSeek Harness checkout.
 - **Preview Session inputs use raw JSONL** — `packPreviewFixture` rejects compressed and noncanonical Session generation filenames. Generic overlays remain byte-preserving.
 
