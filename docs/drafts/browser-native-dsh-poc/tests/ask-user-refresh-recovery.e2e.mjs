@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { assistantText, openPreview, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
+import { assistantText, openPreview, rememberSessionPrincipal, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -52,6 +52,7 @@ try {
     'Session creation for HITL refresh recovery',
   )
   sessionId = createRequest.body.sessionId
+  await rememberSessionPrincipal(page, origin, sessionId)
   const asked = await waitFor(async () => {
     const session = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
     const call = session.events?.find(event => event.type === 'tool/call' && event.data.name === 'ask_user_question')

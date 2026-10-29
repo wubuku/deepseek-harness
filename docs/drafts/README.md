@@ -107,6 +107,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 47. [Browser-Native 权限与审批生命周期验证](browser-native-dsh-poc/permission-approval-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/permission-approval-lifecycle-validation-progress.md)：Chrome Worker 复用正式权限预设、沙箱和审批服务，验证只读拒绝、工作区写入、审批拒绝、Full access 风险确认及 Session 权限事件；真实 LLM 仅做普通 smoke，`allowed-once`、取消/超时和强杀后专门恢复仍未验证。
 48. [Browser-Native Session 挂载与恢复验证](browser-native-dsh-poc/session-mount-lifecycle-validation-plan.md)及[进度](browser-native-dsh-poc/session-mount-lifecycle-validation-progress.md)：真实 Chrome Dedicated Worker 验证三个 Session 的 active/parked 投影、history-before-live、重复事件、owner 状态、Worker identity 重连和 dispose 后 unknown/late result；真实 LLM 仅复跑普通文件与刷新恢复，不把 PoC-local coordinator 写成正式多 Session UI 或后台 Agent。
 49. [Browser-Native Session projection 与写权观察验证](browser-native-dsh-poc/session-projection-authority-validation-plan.md)及[进度](browser-native-dsh-poc/session-projection-authority-validation-progress.md)：真实 Chrome Worker 验证 projection baseline、Session 过滤、A/B 切换、reseed、detach/re-attach，以及只读 observer 与同源 writer authority 的分离；真实 LLM 只做普通文件接线 smoke，不证明正式多 Session UI 或后台 Agent。
+50. [Browser-Native 审批完整性与 Worker 刷新恢复](browser-native-dsh-poc/approval-integrity-recovery-validation-plan.md)及[进度](browser-native-dsh-poc/approval-integrity-recovery-validation-progress.md)：Worker projection 只展示仍锚定未结算 `tool/call` 的 FIFO 审批，UI claim 明确不是 durable decision；真实 Chrome 验证正式审批拒绝、Session audit、刷新后的 `TOOL_OUTCOME_UNKNOWN`、无重发 LLM 和无文件副作用。`allowed-once` 仅验证 replay 语义，取消/超时/无 answerer 和跨设备授权仍未验证。
 
 ### 需要实现或审查代码时
 

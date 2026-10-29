@@ -75,6 +75,20 @@ export async function waitForPreview(page) {
   await page.locator('[data-composer-input][contenteditable="true"]').last().waitFor({ timeout: 30_000 })
 }
 
+/**
+ * Register the browser Session principal for direct Node-side Session reads.
+ * @param {import('playwright').Page} page - Page whose cookie jar owns the Session.
+ * @param {string} origin - Same-origin backend URL.
+ * @param {string} sessionId - Session id authorized by the cookie.
+ * @returns {Promise<void>} Resolves after the principal is captured.
+ */
+export async function rememberSessionPrincipal(page, origin, sessionId) {
+  const sessionCookie = (await page.context().cookies(`${origin}/api/browser-native/session/create`))
+    .find(cookie => cookie.name === 'dsh-browser-native-session-principal')
+  assert.ok(sessionCookie, 'browser identity must authorize Session API requests')
+  sessionPrincipalCookies.set(sessionId, `${sessionCookie.name}=${sessionCookie.value}`)
+}
+
 function eventText(event) {
   const content = event.data?.content ?? event.data?.message?.content
   if (typeof content === 'string') return content
@@ -142,10 +156,7 @@ export async function submitPrompt({ page, origin, requests, prompt, sessionId, 
   await send.click()
   const streamSamples = []
   sessionId ??= await waitFor(async () => requests.find(request => request.path.endsWith('/session/create'))?.body.sessionId, 'Session creation')
-  const sessionCookie = (await page.context().cookies(`${origin}/api/browser-native/session/create`))
-    .find(cookie => cookie.name === 'dsh-browser-native-session-principal')
-  assert.ok(sessionCookie, 'browser identity must authorize Session API requests')
-  sessionPrincipalCookies.set(sessionId, `${sessionCookie.name}=${sessionCookie.value}`)
+  await rememberSessionPrincipal(page, origin, sessionId)
   const submitted = await waitFor(async () => {
     const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
     const userIndex = [...(current.events ?? [])].findLastIndex(event => event.type === 'user/message'

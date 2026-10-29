@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { assistantText, openPreview, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
+import { assistantText, openPreview, rememberSessionPrincipal, sessionRequest, waitFor, waitForPreview } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightPath = process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright')
@@ -110,6 +110,7 @@ async function openScenario(marker) {
     () => requests.slice(createStart).find(request => request.path.endsWith('/session/create')),
     `Session creation for ${marker}`,
   )
+  await rememberSessionPrincipal(page, origin, created.body.sessionId)
   return { context, page, sessionId: created.body.sessionId }
 }
 

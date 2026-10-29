@@ -80,6 +80,10 @@ import {
   BrowserNativeSessionProjectionStore,
   type BrowserNativeSessionProjectionSource,
 } from './browser-native-session-projection.ts'
+import {
+  BrowserNativeApprovalProjection,
+  BrowserNativeApprovalProjectionError,
+} from './browser-native-approval-projection.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
@@ -200,7 +204,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -257,7 +261,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-outbox-probe') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
-  if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe') return true
+  if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
   if (data.action === 'wait-attachment-opfs-staging-write'
     || data.action === 'attachment-opfs-write-state'
     || data.action === 'release-attachment-opfs-write'
@@ -329,7 +333,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
@@ -405,6 +409,102 @@ function runSessionMountProbe(): Record<string, unknown> {
     waitingUnknown,
     mountCount: disposed.length,
     detachedCount: disposed.filter(snapshot => snapshot.view === 'detached').length,
+  }
+}
+
+function runApprovalProjectionProbe(): Record<string, unknown> {
+  const call = (seq: number, callId: string, name: string, argumentsText: string): SessionEvent<'tool/call'> => ({
+    seq: seq as SessionSeq,
+    time: seq,
+    type: 'tool/call',
+    data: { turn: 1, step: 1, callId: callId as ToolCallId, name, arguments: argumentsText },
+  })
+  const asked = (seq: number, requestId: string, callId: string, toolName: string): SessionEvent<'approval/asked'> => ({
+    seq: seq as SessionSeq,
+    time: seq,
+    type: 'approval/asked',
+    data: {
+      id: requestId as SessionEvent<'approval/asked'>['data']['id'],
+      callId: callId as ToolCallId,
+      toolName,
+      reason: 'Browser probe',
+    },
+  })
+  const decided = (seq: number, requestId: string, outcome: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'): SessionEvent<'approval/decided'> => ({
+    seq: seq as SessionSeq,
+    time: seq,
+    type: 'approval/decided',
+    data: { id: requestId as SessionEvent<'approval/decided'>['data']['id'], outcome },
+  })
+  const result = (seq: number, callId: string): SessionEvent<'tool/result'> => ({
+    seq: seq as SessionSeq,
+    time: seq,
+    type: 'tool/result',
+    surfaceOp: 'append',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'tool',
+        id: `approval-probe-result-${callId}`,
+        content: [{ type: 'text', text: 'done' }],
+        source: { kind: 'tool', callId: callId as ToolCallId },
+        toolCallId: callId as ToolCallId,
+        isError: false,
+      },
+    },
+  })
+
+  const projection = new BrowserNativeApprovalProjection('approval-probe', 64)
+  const first = projection.rebuild([
+    call(0, 'call-a', 'bash', `{"command":"${'x'.repeat(100)}"}`),
+    asked(1, 'request-a', 'call-a', 'bash'),
+    call(2, 'call-b', 'write', '{"file_path":"x.txt","content":"ok"}'),
+    asked(3, 'request-b', 'call-b', 'write'),
+  ])
+  const claim = projection.claim('request-a', 'allowed-once')
+  let duplicateClaimRejected = false
+  try { projection.claim('request-a', 'rejected') } catch (error) {
+    duplicateClaimRejected = error instanceof BrowserNativeApprovalProjectionError
+      && error.code === 'REQUEST_ALREADY_CLAIMED'
+  }
+  const replay = projection.rebuild([
+    call(0, 'call-a', 'bash', '{"command":"echo a"}'),
+    asked(1, 'request-a', 'call-a', 'bash'),
+    decided(2, 'request-a', 'allowed-once'),
+    result(3, 'call-a'),
+  ])
+  const invalid = projection.rebuild([
+    call(0, 'call-c', 'bash', '{}'),
+    asked(1, 'request-c', 'call-c', 'bash'),
+    asked(2, 'request-c', 'call-c', 'bash'),
+    asked(3, 'request-missing', 'missing', 'bash'),
+    result(4, 'call-c'),
+    asked(5, 'request-stale', 'call-c', 'bash'),
+    decided(6, 'request-missing', 'rejected'),
+    decided(7, 'request-c', 'rejected'),
+    call(8, 'call-d', 'bash', '{}'),
+    asked(9, 'request-d', 'call-d', 'bash'),
+    decided(10, 'request-d', 'rejected'),
+    decided(11, 'request-d', 'rejected'),
+  ])
+  return {
+    ok: first.pending.map(request => request.requestId).join(',') === 'request-a,request-b'
+      && claim.durable === false
+      && first.pending[0]?.argumentsTruncated === true
+      && duplicateClaimRejected
+      && replay.pending.length === 0
+      && replay.decisions[0]?.outcome === 'allowed-once'
+      && invalid.pending.length === 0
+      && invalid.diagnostics.map(item => item.code).join(',') === 'DUPLICATE_REQUEST,APPROVAL_CALL_UNBOUND,APPROVAL_CALL_SETTLED,DECISION_UNBOUND,DECISION_CALL_SETTLED,DECISION_DUPLICATE',
+    firstPending: first.pending.map(request => request.requestId),
+    firstSummaryTruncated: first.pending[0]?.argumentsTruncated === true,
+    claimIsDurable: claim.durable,
+    duplicateClaimRejected,
+    replayPending: replay.pending.map(request => request.requestId),
+    replayDecisions: replay.decisions,
+    invalidDiagnostics: invalid.diagnostics.map(item => item.code),
+    sessionId: first.sessionId,
   }
 }
 
@@ -1608,6 +1708,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'session-projection-probe') {
       workspaceTestResponse(request.requestId, { ok: true, sessionProjection: runSessionProjectionProbe() })
+      return
+    }
+    if (request.action === 'approval-projection-probe') {
+      workspaceTestResponse(request.requestId, { ok: true, approvalProjection: runApprovalProjectionProbe() })
       return
     }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')

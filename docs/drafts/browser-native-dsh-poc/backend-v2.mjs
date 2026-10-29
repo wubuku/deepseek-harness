@@ -2662,17 +2662,24 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
-  const permissionApprovalMarker = 'BROWSER_NATIVE_PERMISSION_APPROVAL_E2E'
-  if (hasUserMarker(messages, permissionApprovalMarker) && hasTool(tools, 'bash')) {
+  const permissionApprovalMarker = [
+    'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY_E2E',
+    'BROWSER_NATIVE_PERMISSION_APPROVAL_E2E',
+  ].find(marker => hasUserMarker(messages, marker))
+  if (permissionApprovalMarker !== undefined && hasTool(tools, 'bash')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
       && typeof message.content === 'string' && message.content.includes(permissionApprovalMarker))
     const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
     if (toolResults.length === 0) {
       await scriptedWorkspaceToolCall(response, {
-        id: 'browser-native-permission-approval-bash',
+        id: permissionApprovalMarker.endsWith('RECOVERY_E2E')
+          ? 'browser-native-permission-approval-recovery-bash'
+          : 'browser-native-permission-approval-bash',
         name: 'bash',
         arguments: {
-          command: "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK\\n' > approval-result.txt",
+          command: permissionApprovalMarker.endsWith('RECOVERY_E2E')
+            ? "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY_WRITE_OK\\n' > approval-recovery-result.txt"
+            : "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK\\n' > approval-result.txt",
           description: 'Write the approval lifecycle fixture in the Worker workspace.',
           sandbox_permissions: 'danger-full-access',
           justification: 'The permission lifecycle test requests one approved Worker workspace write.',
@@ -2680,9 +2687,12 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
       })
       return
     }
+    const resultMarker = permissionApprovalMarker.endsWith('RECOVERY_E2E')
+      ? 'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY'
+      : 'BROWSER_NATIVE_PERMISSION_APPROVAL'
     scriptedText(response, toolResultIsError(toolResults[0])
-      ? 'BROWSER_NATIVE_PERMISSION_APPROVAL_REJECTED'
-      : 'BROWSER_NATIVE_PERMISSION_APPROVAL_ALLOWED')
+      ? `${resultMarker}_REJECTED`
+      : `${resultMarker}_ALLOWED`)
     return
   }
 

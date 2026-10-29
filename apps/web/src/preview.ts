@@ -21,7 +21,8 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'skill-filesystem'
     || searchParams.get('browser-native-test') === 'permission-lifecycle'
     || searchParams.get('browser-native-test') === 'session-mount'
-    || searchParams.get('browser-native-test') === 'session-projection')
+    || searchParams.get('browser-native-test') === 'session-projection'
+    || searchParams.get('browser-native-test') === 'approval-integrity')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
@@ -31,7 +32,7 @@ const pageLifecycle = { unloading: false }
 let worker: Worker | undefined
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
   readonly controlInjection?: 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
     | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
   readonly stage?: 'before' | 'after'
@@ -86,6 +87,7 @@ interface BrowserNativeWorkspaceTestResponse {
   readonly controlInjection?: string
   readonly sessionMount?: Record<string, unknown>
   readonly sessionProjection?: Record<string, unknown>
+  readonly approvalProjection?: Record<string, unknown>
   readonly permission?: {
     readonly sessionId: string
     readonly currentPreset: string

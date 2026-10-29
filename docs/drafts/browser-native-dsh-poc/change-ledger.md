@@ -114,6 +114,24 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
+### BN-P2-063：Browser Worker 审批 projection 完整性与刷新恢复
+
+```text
+changeId: BN-P2-063
+upstreamBaseline: research branch after BN-P2-025; 2026-10-30; 主工作区起始干净；无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-approval-projection.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-approval-projection.spec.ts; docs/drafts/browser-native-dsh-poc/tests/approval-integrity-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/tests/ask-user-refresh-recovery.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/timed-hitl-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/approval-integrity-recovery-validation-plan.md; docs/drafts/browser-native-dsh-poc/approval-integrity-recovery-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: dsh-TUI 的审批实现强调请求必须绑定当前未结算 tool/call、一次性终态、迟到答案和无 answerer fail closed；Browser-Native PoC 之前只有正式审批拒绝和普通 HITL 刷新证据，没有独立验证 approval projection 是否会把历史文本、重复身份或刷新前的 UI claim 当成权限事实。
+existingExtensionPointsChecked: 复用正式 `dsh-user-approval` Session audit events、DSH tool/call/result、Worker test MessagePort、Preview URL allowlist、同源 Session backend 和既有 permission approval E2E；未修改正式 approval service、permission preset、Agent Loop、Session format 或根依赖。
+whyDraftOnlyWasInsufficient: 包级审批测试不能证明 projection 进入真实 Dedicated Worker，也不能证明真实 DSH 的审批拒绝、Worker refresh、Session repair 和 Workspace 副作用共同收束。真实模型不适合控制审批竞态，因此 projection 和 refresh fault 使用 scripted route，真实 LLM 只作为独立普通文件 smoke。
+behaviorChange: 新增 PoC-local `BrowserNativeApprovalProjection`，从同一 Session 的 tool/call、tool/result、approval/asked 和 approval/decided 重建 FIFO pending、有限参数摘要、durable decisions 和 diagnostics。没有未结算 call、重复 request/call、未知或已结算 call、tool mismatch、重复 decision 和非单调 seq 均 fail closed；`approval/decided` 晚于对应 tool/result 时不投影为有效决定。`claim()` 明确返回 `durable:false`，不写 Session、不调用权限服务、不授予工具。Preview 仅在 `browser-native-test=approval-integrity` 开放 Worker probe；scripted backend 增加独立 recovery marker 以验证审批等待中的刷新。
+directoryOutChangeReason: `apps/web/src/preview.ts` 位于 PoC 目录外，因为页面 preview 持有 URL allowlist、Worker test MessagePort 和响应类型；只增加显式测试接线，没有改变普通 preview 行为。`backend-v2.mjs` 只增加 deterministic E2E marker，不改变真实 provider 或正式 Agent Loop。
+consumersUpdated: approval projection、projection Vitest、Worker probe/request validation、Preview allowlist/response type、approval integrity Chrome E2E、scripted backend marker、PoC README、operational compatibility matrix、docs/drafts index、validation plan/progress 与本 ledger。
+tests: projection Vitest 4/4、PoC projection/session mount/session projection Vitest 13/13、正式 `dsh-user-approval` 与 user-question projection Vitest 48/48、backend-v2 Node tests 56/56、`pnpm exec tsc -p apps/web/tsconfig.json --noEmit`、`node --check` 和 preview build 均通过。Chrome 156.0.8078.48 E2E 通过：Worker probe 验证 FIFO、有限摘要、non-durable claim、durable `allowed-once` replay 和六类 invalid diagnostics（包括 tool/result 后的迟到决定）；正式 DSH approval rejected 路径产生一条 `approval/asked`、一条 `approval/decided(rejected)` 和错误 tool/result，Workspace 无文件；审批等待期间刷新结算为 `TOOL_OUTCOME_UNKNOWN`/`interrupted`，刷新前后 LLM request 数相同、审批卡为 0、无文件。页面 error、Worker error 和 cross-origin request 均为 0。既有 permission、ask-user refresh、timed HITL 和 Session projection Chrome 回归通过。真实 `gpt-5.6-sol` Chrome smoke 完成 `read → write → read` 与刷新恢复，59 events、`durableThroughSeq=58`、8/8 LLM HTTP 200、两个 Workspace commit HTTP 200；日志保留既有刷新 `ERR_ABORTED`、PoC API 404 和 compaction warning，不宣称全 console clean。
+syncReplaySteps: 上游同步后检查正式 approval event 字段、tool/result callId 关系、Worker request allowlist 和 Session repair 的 unknown outcome。运行 projection Vitest、preview build、approval integrity Chrome E2E、既有 permission/HITL/session projection 回归和真实 Chrome LLM smoke。不要把 UI claim 写成 durable approval，不要把 projection 的 replay 语义写成真实 Allow once E2E，不要把 Worker refresh unknown 写成后台 Agent 恢复。
+deleteCondition: 正式 Browser runtime 提供等价的 Session-scoped approval projection、一次性 answerer claim、durable audit replay 和 Worker refresh/late-answer 测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-026：Session projection 基线与写权观察分离
 
 ```text

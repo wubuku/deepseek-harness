@@ -1114,6 +1114,22 @@ env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u al
   DSH_POC_TURN_TIMEOUT_MS=600000 node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs
 ```
 
+## 审批完整性与 Worker 刷新恢复
+
+[审批完整性与恢复计划](approval-integrity-recovery-validation-plan.md)及[进度](approval-integrity-recovery-validation-progress.md)记录本批新增的 `BrowserNativeApprovalProjection`。它从同一 Session 的 durable `tool/call`、`tool/result`、`approval/asked` 和 `approval/decided` 事件重建 FIFO pending queue；没有未结算 tool call 锚点、重复身份、tool 名称不一致、已结算调用和迟到决定都 fail closed。`claim()` 只占用本地 UI 投影并返回 `durable:false`，不调用 `ctx.approval`，不追加事件，也不授予工具权限。正式 ApprovalService 仍是权限决定和 Session audit 的唯一来源。
+
+真实 Chrome E2E 通过 Worker probe 验证 FIFO、有限参数摘要、一次性 claim 和 durable replay；随后通过正式 DSH approval service 验证拒绝路径、Workspace 无副作用，以及审批等待期间刷新后 `TOOL_OUTCOME_UNKNOWN`、`interrupted` turn、无审批卡、无新 LLM 请求和无文件写入。`allowed-once` 在本批只证明 projection 以 durable `approval/decided` replay 为准，不宣称真实 Chrome 点击 Allow once 已通过。正式 approval event 不携带独立 agent id，因此 projection 的输入必须由调用方按 Session 正确隔离。
+
+本批真实 LLM smoke 使用 `gpt-5.6-sol` 完成普通 `read → write → read` 和刷新恢复：59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200、两个 Workspace commit HTTP 200。页面仍有既有刷新 `ERR_ABORTED`、PoC API 404 和 compaction capacity warning；这些不影响 smoke 的业务断言，也不应写成零告警证据。既有 permission、ask-user refresh、timed HITL 和 Session projection Chrome 回归均通过；其中两个手动读取 Session 的旧测试补登记了同源 principal cookie。
+
+复跑本批：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-approval-projection.spec.ts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-integrity-recovery.e2e.mjs
+```
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。
