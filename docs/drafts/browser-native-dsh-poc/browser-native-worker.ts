@@ -204,7 +204,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -261,6 +261,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-outbox-probe') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
   if (data.action === 'wait-attachment-opfs-staging-write'
     || data.action === 'attachment-opfs-write-state'
@@ -333,7 +334,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'cancel-session', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
@@ -1712,6 +1713,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'approval-projection-probe') {
       workspaceTestResponse(request.requestId, { ok: true, approvalProjection: runApprovalProjectionProbe() })
+      return
+    }
+    if (request.action === 'cancel-session') {
+      if (request.sessionId === undefined) throw new Error('browser-native cancel probe requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: permissionProbe.cancel(request.sessionId) })
       return
     }
     if (workspaceRuntime === undefined) throw new Error('browser-native workspace test: runtime is not ready')

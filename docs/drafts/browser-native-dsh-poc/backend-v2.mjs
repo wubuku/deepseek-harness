@@ -2696,6 +2696,50 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const approvalSettlementMarker = [
+    'BROWSER_NATIVE_APPROVAL_ALLOW_ONCE_E2E',
+    'BROWSER_NATIVE_APPROVAL_QUEUE_E2E',
+    'BROWSER_NATIVE_APPROVAL_CANCEL_E2E',
+  ].find(marker => latestUserText.includes(marker))
+  if (approvalSettlementMarker !== undefined && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(approvalSettlementMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const toolCall = (id, path, content, justification) => ({
+      id,
+      name: 'bash',
+      arguments: {
+        command: `printf '${content}\\n' > /dsh/home/workspace/${path}`,
+        description: 'Write one Browser-Native approval settlement fixture.',
+        sandbox_permissions: 'danger-full-access',
+        justification,
+      },
+    })
+    if (toolResults.length === 0) {
+      if (approvalSettlementMarker === 'BROWSER_NATIVE_APPROVAL_QUEUE_E2E') {
+        await scriptedWorkspaceToolCalls(response, [
+          toolCall('browser-native-approval-queue-first', 'approval-queue-first.txt', 'APPROVAL_QUEUE_FIRST_OK', 'FIFO_FIRST: approve this first queued operation.'),
+          toolCall('browser-native-approval-queue-second', 'approval-queue-second.txt', 'APPROVAL_QUEUE_SECOND_OK', 'FIFO_SECOND: reject this second queued operation.'),
+        ])
+      } else {
+        const cancel = approvalSettlementMarker === 'BROWSER_NATIVE_APPROVAL_CANCEL_E2E'
+        await scriptedWorkspaceToolCall(response, toolCall(
+          cancel ? 'browser-native-approval-cancel' : 'browser-native-approval-allow-once',
+          cancel ? 'approval-cancel-result.txt' : 'approval-allow-once-result.txt',
+          cancel ? 'APPROVAL_CANCEL_MUST_NOT_WRITE' : 'APPROVAL_ALLOW_ONCE_WRITE_OK',
+          cancel ? 'CANCEL_PENDING: stop this operation before approval.' : 'ALLOW_ONCE: approve this operation exactly once.',
+        ))
+      }
+      return
+    }
+    if (approvalSettlementMarker === 'BROWSER_NATIVE_APPROVAL_QUEUE_E2E' && toolResults.length !== 2) {
+      scriptedText(response, 'BROWSER_NATIVE_APPROVAL_QUEUE_UNEXPECTED_RESULT_COUNT')
+      return
+    }
+    scriptedText(response, `${approvalSettlementMarker}_${toolResults.some(toolResultIsError) ? 'SETTLED_WITH_ERROR' : 'SETTLED'}`)
+    return
+  }
+
   const handoffPrompt = messages.findLast(message => message.role === 'user'
     && typeof message.content === 'string'
     && (message.content.includes('BROWSER_NATIVE_WRITER_HANDOFF_FIRST_E2E')

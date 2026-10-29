@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-user-approval'
@@ -15,7 +16,7 @@ export interface BrowserNativePermissionSnapshot {
   readonly workspaceRoot: string
 }
 
-/** Static module plus the test-only read path shared with the Worker entry. */
+/** Static module plus permission-inspection and Agent-cancellation test operations. */
 export interface BrowserNativePermissionProbe {
   readonly factory: StaticModuleFactory
   /**
@@ -25,6 +26,21 @@ export interface BrowserNativePermissionProbe {
    * @throws when the probe is not mounted or the Session is not live.
    */
   readonly inspect: (sessionId: string) => BrowserNativePermissionSnapshot
+  /**
+   * Cancel one running Agent through its public runtime API.
+   * @param sessionId - Session identifier owned by the Agent.
+   * @returns Whether a running Agent received cancellation.
+   */
+  readonly cancel: (sessionId: string) => boolean
+}
+
+interface BrowserNativeCancelableAgent extends Agent {
+  readonly status: 'idle' | 'running'
+  cancel(cause: { readonly kind: 'user' }, options?: { readonly keepInbox?: boolean }): void
+}
+
+interface BrowserNativeAgentRegistry {
+  get(sessionId: SessionId): BrowserNativeCancelableAgent | undefined
 }
 
 function sessionFor(ctx: Context, sessionId: string): Session {
@@ -52,14 +68,24 @@ interface BrowserNativePermissionServices {
 }
 
 /**
- * Create a Worker-local probe for the formal permission services.
+ * Create a Worker-local probe for the formal permission services and live Agents.
  *
- * The probe is not a permission provider and exposes no model tool. It exists
- * only so Chrome tests can compare the service projection with visible effects.
- * @returns A memoized static module and its read-only inspection function.
+ * The probe is not a permission provider and exposes no model tool. Its
+ * inspection and cancellation methods are available only through the PoC test
+ * MessagePort.
+ * @returns A memoized static module and its test operations.
  */
 export function createBrowserNativePermissionProbe(): BrowserNativePermissionProbe {
   let activeContext: Context | undefined
+  const cancel = (sessionId: string): boolean => {
+    const ctx = activeContext
+    if (ctx === undefined) throw new Error('browser-native permission probe: service is not mounted')
+    const agents = ctx.get('agents') as BrowserNativeAgentRegistry
+    const agent = agents.get(sessionId as SessionId)
+    if (agent?.status !== 'running') return false
+    agent.cancel({ kind: 'user' }, { keepInbox: true })
+    return true
+  }
   const inspect = (sessionId: string): BrowserNativePermissionSnapshot => {
     const ctx = activeContext
     if (ctx === undefined) throw new Error('browser-native permission probe: service is not mounted')
@@ -89,5 +115,5 @@ export function createBrowserNativePermissionProbe(): BrowserNativePermissionPro
       }, 'browser-native permission probe')
     },
   }
-  return { factory: () => module, inspect }
+  return { factory: () => module, inspect, cancel }
 }

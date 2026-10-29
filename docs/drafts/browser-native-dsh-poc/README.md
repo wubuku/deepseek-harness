@@ -1118,7 +1118,7 @@ env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u al
 
 [审批完整性与恢复计划](approval-integrity-recovery-validation-plan.md)及[进度](approval-integrity-recovery-validation-progress.md)记录本批新增的 `BrowserNativeApprovalProjection`。它从同一 Session 的 durable `tool/call`、`tool/result`、`approval/asked` 和 `approval/decided` 事件重建 FIFO pending queue；没有未结算 tool call 锚点、重复身份、tool 名称不一致、已结算调用和迟到决定都 fail closed。`claim()` 只占用本地 UI 投影并返回 `durable:false`，不调用 `ctx.approval`，不追加事件，也不授予工具权限。正式 ApprovalService 仍是权限决定和 Session audit 的唯一来源。
 
-真实 Chrome E2E 通过 Worker probe 验证 FIFO、有限参数摘要、一次性 claim 和 durable replay；随后通过正式 DSH approval service 验证拒绝路径、Workspace 无副作用，以及审批等待期间刷新后 `TOOL_OUTCOME_UNKNOWN`、`interrupted` turn、无审批卡、无新 LLM 请求和无文件写入。`allowed-once` 在本批只证明 projection 以 durable `approval/decided` replay 为准，不宣称真实 Chrome 点击 Allow once 已通过。正式 approval event 不携带独立 agent id，因此 projection 的输入必须由调用方按 Session 正确隔离。
+真实 Chrome E2E 通过 Worker probe 验证 FIFO、有限参数摘要、一次性 claim 和 durable replay；正式 DSH approval service 另外验证拒绝路径、Workspace 无副作用，以及审批等待期间刷新后 `TOOL_OUTCOME_UNKNOWN`、`interrupted` turn、无审批卡、无新 LLM 请求和无文件写入。该 E2E 的 `allowed-once` 只证明 projection 按 durable `approval/decided` replay；真实 UI Allow once 和活动取消另见下方[审批授权与取消结算](#审批授权与取消结算)。正式 approval event 不携带独立 agent id，因此 projection 的输入必须由调用方按 Session 正确隔离。
 
 本批真实 LLM smoke 使用 `gpt-5.6-sol` 完成普通 `read → write → read` 和刷新恢复：59 个 Session events、`durableThroughSeq=58`、8/8 LLM HTTP 200、两个 Workspace commit HTTP 200。页面仍有既有刷新 `ERR_ABORTED`、PoC API 404 和 compaction capacity warning；这些不影响 smoke 的业务断言，也不应写成零告警证据。既有 permission、ask-user refresh、timed HITL 和 Session projection Chrome 回归均通过；其中两个手动读取 Session 的旧测试补登记了同源 principal cookie。
 
@@ -1127,6 +1127,22 @@ env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u al
 ```sh
 pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-approval-projection.spec.ts
 pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-integrity-recovery.e2e.mjs
+```
+
+## 审批授权与取消结算
+
+[审批生命周期计划](approval-settlement-lifecycle-validation-plan.md)及[进度](approval-settlement-lifecycle-validation-progress.md)覆盖正式 DSH ApprovalService 的 Allow once、副作用、同一模型响应中多个 exclusive bash 调用的串行审批、Worker 取消、late decision 和刷新 unknown。多调用验证只证明逐个 dispatch 与 request/call 身份对应，不代表同时 pending 的双审批 UI。
+
+取消 E2E 在审批卡可见时经 URL-gated Worker test MessagePort 调用公开 `Agent.cancel()`，用于验证 ApprovalService 的取消 audit、工具失败结算、无文件副作用和后续 turn 恢复。当前 PoC 审批卡没有 Stop 控件；该测试不证明用户可从正式 UI 取消活动 Agent。真实 LLM 完成三轮同 Session 记忆与 todo tool smoke，不承担审批触发或决策。
+
+复跑本批：
+
+```sh
+pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-approval-projection.spec.ts
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+pnpm exec tsc -p apps/web/tsconfig.json --noEmit --pretty false
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-settlement-lifecycle.e2e.mjs
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-integrity-recovery.e2e.mjs
 ```
 

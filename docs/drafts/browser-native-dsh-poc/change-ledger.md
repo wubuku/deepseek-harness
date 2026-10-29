@@ -114,6 +114,24 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
+### BN-P2-064：审批授权、串行调用与 Agent 取消结算
+
+```text
+changeId: BN-P2-064
+upstreamBaseline: research branch at batch start; 2026-10-30; 主工作区起始干净；无隔离 worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-permission-probe.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/approval-settlement-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/approval-settlement-lifecycle-validation-plan.md; docs/drafts/browser-native-dsh-poc/approval-settlement-lifecycle-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有 Browser-Native 证据覆盖审批拒绝、projection replay 和刷新 unknown，但没有验证正式 UI Allow once、副作用唯一性、同一模型响应多个受保护调用的调度顺序或活动审批期间 Agent cancel 与后续恢复。DSH-TUI ApprovalStore 的 FIFO、abort 与终态纪律提示需要核对 Browser Worker 的正式 DSH ApprovalService 是否保持相同结算语义。
+existingExtensionPointsChecked: 复用正式 DSH `ApprovalService`、页面 answerer、Session `approval/asked`/`approval/decided` 与 `tool/call`/`tool/result`、PoC scripted LLM 和 URL-gated Worker test MessagePort；未修改正式 ApprovalService、权限 preset、Agent Loop、Session format、默认 profile 或根依赖。
+whyDraftOnlyWasInsufficient: projection 单测与预置事件无法证明 Allow once 真正授权原始 tool call、文件副作用恰好一次、多个模型返回的工具调用如何被 DSH exclusive scheduler 顺序派发，或真实 Agent 取消如何与 approval audit/tool result 收束。真实 LLM 不负责触发审批；审批步骤使用 deterministic tool calls，另以真实模型验证普通 Browser Agent 路径。
+behaviorChange: scripted backend 增加 Allow-once、串行审批和取消标记，且只检查当前用户消息，避免历史 marker 误选旧场景。Preview 与 Worker 的测试通道增加 `cancel-session` action；permission probe 通过正式 `Agent.cancel({ kind: 'user' }, { keepInbox: true })` 取消当前 Session Agent。该 action 仅通过显式 Browser-Native test MessagePort 调用，不改变普通 preview 或正式 UI。Chrome E2E 验证正式 UI Allow once、两个 exclusive bash call 逐项允许/拒绝、活动审批取消后的 `cancelled` audit 和失败 tool result、无未授权文件，以及后续 turn 恢复。审批卡当前没有可见 Stop 控件，因此取消测试不代表 UI Stop 已实现；多 bash 测试不代表两个 request 同时 pending。
+directoryOutChangeReason: `apps/web/src/preview.ts` 持有 PoC 测试 URL allowlist、页面到 Worker 的 test MessagePort 和请求类型，因此只增加 `cancel-session` 测试动作；没有改动正式 Web UI。backend marker 和 Agent cancellation probe 均是 PoC E2E 接线，未改变真实模型凭据路径。
+consumersUpdated: Worker request validator/handler、Preview test request union、scripted backend scenario selection、approval lifecycle Chrome E2E、计划/进度、PoC README、compatibility matrix、drafts index 与本 ledger。
+tests: `node --check docs/drafts/browser-native-dsh-poc/tests/approval-settlement-lifecycle.e2e.mjs` passed; approval projection Vitest 4/4; `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 56/56; `pnpm exec tsc -p apps/web/tsconfig.json --noEmit --pretty false` passed; preview build passed with existing platform, tsdown deprecation and chunk-size warnings. Chrome 156.0.8078.48 `approval-settlement-lifecycle.e2e.mjs` passed: Allow once produced one approval decision, one successful tool result and one file, with two LLM requests; two exclusive calls settled as allowed-once then rejected, with only the first file; Agent cancel produced cancelled approval, failed tool result, aborted turn, no file, and a successful follow-up; total 8 scripted LLM requests, zero page errors, zero Worker errors and zero external requests. `approval-integrity-recovery.e2e.mjs` passed with `TOOL_OUTCOME_UNKNOWN`/`interrupted`, no approval card/file and no increase from five LLM requests. Real Chrome `gpt-5.6-sol` smoke passed three turns, same-Session memory recall, exactly one todo write, 41 Session events, `durableThroughSeq=40`, and 5/5 LLM HTTP 200; existing `/open-in-app/apps` returned 404 and is not represented as a clean-console run. Final `pnpm run test:docs` passed 21/21 and `pnpm run doc-sync` passed 43/43 after removing a prohibited short commit hash from the progress draft; targeted oxlint and `git diff --check` passed. Full `pnpm run lint` reported errors in three untouched files (`packages/core/tools/tests/json-schema.spec.ts` and `apps/web/src/browser-native-recovery.ts`), plus an unused suppression warning; these were not changed.
+syncReplaySteps: 上游更新后检查 DSH `Agent.cancel()` 与 ApprovalService abort settlement 是否变化、Worker test MessagePort allowlist、正式审批 event/call identity 和 bash exclusive scheduling。运行 approval projection Vitest、backend-v2 Node tests、Web typecheck、Preview build、审批生命周期与刷新恢复 Chrome E2E、真实 LLM 普通 smoke 及文档门禁。不得把 test MessagePort cancel 描述为用户可见 Stop；不得将串行审批称为同时 pending FIFO；真实模型 smoke 不证明模型自主选择审批或取消。
+deleteCondition: 正式 Browser client 提供经验证的 Agent Stop 与同 Session approval projection/cancel lifecycle，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-063：Browser Worker 审批 projection 完整性与刷新恢复
 
 ```text
