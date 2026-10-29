@@ -1369,3 +1369,21 @@ syncReplaySteps: 上游同步后检查 RemoteSessionPersistence receipt append/f
 deleteCondition: 正式 Browser Session/Workspace persistence 提供完整 operation receipt identity reconciliation、durable receipt recovery 和等价真实 Worker 故障测试；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-023：并行 Agent Loop、共享 Workspace 与 takeover fencing
+
+```text
+changeId: BN-P2-023
+upstreamBaseline: research branch at batch start; 2026-10-29; 工作区干净且只有主 worktree
+file: docs/drafts/browser-native-dsh-poc/concurrent-agent-execution-validation-plan.md; docs/drafts/browser-native-dsh-poc/concurrent-agent-execution-validation-progress.md; docs/drafts/browser-native-dsh-poc/tests/concurrent-agent-loops.e2e.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有验证覆盖双 backend/共享 authority 的 API 并发、双标签 claim 和单 Session Agent Loop，但没有同一真实 Chrome BrowserContext 中两个 DSH Worker/ctx.agentLoop 同时发起不同 Session 模型请求，并交叉验证 Workspace owner/observer 能力及 lease takeover 时在途文件工具。
+existingExtensionPointsChecked: 复用 PoC round-robin 同源代理、共享 authority token、scriptedLlmFault barrier、真实 Dedicated Worker/DSH Host、Workspace observer、OPFS chunk edit、writer lease 和 URL-gated Worker test port。未修改正式 packages、apps、Agent Loop、Session format 或根依赖。
+whyDraftOnlyWasInsufficient: Node 合同测试和已有单 Worker E2E 不能证明两个浏览器 Worker 的模型请求确实重叠、Session 不串线、隐藏工具被实际 Worker 拒绝，或长 edit 在 token takeover 后不会发布。真实模型非确定性不适合控制竞态窗口，因此用 scripted E2E 验证协议，真实模型只做独立工具烟测。
+behaviorChange: 新增综合 Chrome E2E，使用 route barrier 同时暂停两个不同 Session 的 DSH LLM 请求，并断言两请求分别由 backend A/B 处理；owner 可提交文件、observer 可读已提交文件但 schema 外 write 被拒。32 MiB OPFS edit 在 copy-prefix 暂停后从 fencing token 1 接管到 token 2；旧 Worker 在 VFS 发布前因 local writer invalidation 失败，无 Workspace receipt/commit，成功状态只由新 owner 提交。PoC scripted responder 将 `writer lease was released` 与 `local writer was invalidated` 都识别为明确 fencing 拒绝，不改变正式 DSH 行为。
+directoryOutChangeReason: 仅 docs/drafts/README.md 位于 PoC 目录外，用于登记计划与进度；没有修改共享应用、正式 package、其他 PoC 或根依赖。
+consumersUpdated: 综合 Chrome E2E、PoC scripted responder、validation plan/progress、PoC README、operational compatibility matrix、drafts index 与本 ledger。
+tests: node --check docs/drafts/browser-native-dsh-poc/tests/concurrent-agent-loops.e2e.mjs passed. `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/concurrent-agent-loops.e2e.mjs` passed in Chrome 156.0.8078.48: two Session requests overlapped and routed to different backends; observer hidden write was rejected; fencing token advanced 1→2; stale 32 MiB edit had an error result, zero receipt and no VFS publication; final Workspace revision was 3 with three unique successful commits; backend-local Session/Workspace counts were zero; no page errors or cross-origin requests. Real Chrome smoke using `gpt-5.6-sol` completed three turns, DSH `read → write → read`, refresh and same-Session/Workspace recovery with 58 events and durableThroughSeq=57. Session recorded chunked assistant output, but visible DOM capture sampled one update only; it is not evidence of satisfactory incremental UI rendering. The real smoke also logged compaction capacity warning and preview API 404s. Backend contract tests and documentation gates remain to be run before commit.
+syncReplaySteps: 上游同步后核对两个 backend 的 LLM state-authority 转发、Workspace observer roster、releaseWriter/local invalidation 和 chunk editor beforePublish lease check。运行本 E2E 与 backend-v2 contract tests；用 real Chrome runtime-validation smoke 单独核对真实工具调用与刷新恢复。若 Session stream 或 UI capture 逻辑改变，分别检查 persisted StreamChunk 与可见 DOM 更新数，不把其中一层代替另一层。复跑文档门禁和 change-scope 后再提交。
+deleteCondition: 正式 Browser-Native runtime 提供维护中的多 Worker Session 并发、共享 Workspace owner/observer、在途工具 takeover fencing 和等价浏览器故障测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

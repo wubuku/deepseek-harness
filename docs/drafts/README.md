@@ -100,6 +100,8 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 41. [Browser-Native 只读 range backing 规划](browser-native-dsh-poc/observer-range-backing-validation-plan.md)及[实施进度](browser-native-dsh-poc/observer-range-backing-validation-progress.md)：验证多观察者私有 OPFS、完整 hash、驻留预算、alias、强杀回收和完整 Host 的 read/grep/stale，不触碰 writer metadata。
 42. [Browser-Native 独立业务 API 幂等与未知副作用验证](browser-native-dsh-poc/external-business-idempotency-validation-plan.md)及[实施进度](browser-native-dsh-poc/external-business-idempotency-validation-progress.md)：独立 HTTP 业务服务持有 durable idempotency receipt，Chrome Worker/OPFS/IndexedDB 验证响应丢失、服务/backend 重启、查询不可用、并发重试和身份/payload 冲突；不把 PoC JSON store 外推为生产 exactly-once 或跨存储原子事务。
 
+43. [Browser-Native 并行 Agent Loop 与 Workspace writer fencing](browser-native-dsh-poc/concurrent-agent-execution-validation-plan.md)及[进度](browser-native-dsh-poc/concurrent-agent-execution-validation-progress.md)：真实 Chrome 双 Worker/DSH Host 在共享 authority 下并发运行独立 Session，验证双 backend LLM 路由、owner/observer 工具权限和 32 MiB 长 edit 的 lease 接管 fencing；真实 LLM 另验证普通文件工具与刷新恢复，未证明生产 HA、模型自主冲突协调或渐进 UI 流式效果。
+
 ### 需要实现或审查代码时
 
 优先阅读[实施方案](dsh-browser-native-agent-implementation-plan.md)，再读 [PoC 当前实现与限制](browser-native-dsh-poc/README.md)、[PoC v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和对应的实现、测试文件。研究报告解释为什么这样设计；v2 规划定义目标，代码和测试确定实际字段、行为和验证范围。[旧版实验协议](browser-native-dsh-poc/protocol.md)只用于追溯独立实验，不能作为 v2 的当前协议说明。

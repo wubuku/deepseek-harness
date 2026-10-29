@@ -989,6 +989,25 @@ node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs \
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/shared-authority-concurrency.e2e.mjs
 ```
 
+### 并行 Agent Loop 与 Workspace writer fencing
+
+[本批计划](concurrent-agent-execution-validation-plan.md)及[进度](concurrent-agent-execution-validation-progress.md)验证两个真实 DSH Worker/Host 同时驱动独立 Session、通过两个同源 backend 访问共享 authority，并共享一个只允许单写者的 Workspace。Chrome scripted E2E 用 route barrier 同时挂起两个不同 Session 的模型请求，分别由 backend A/B 处理；owner 的真实 DSH `write` 与 observer 的 `read` 成功，observer 的隐藏 `write` 被拒且不产生 commit。
+
+同一 E2E 将旧 owner 的 32 MiB OPFS `edit` 暂停在 `copy-prefix`，转移 lease token `1 → 2` 后让新 owner 改写同一路径。旧 Worker 仍在途时，本地 writer invalidation 在 VFS 发布前拒绝旧 edit；其 Session 保留错误结果但没有 Workspace receipt，最终 manifest 为 revision 3，三个成功 commit 均唯一。两个 backend 的本地 Session/Workspace store 为空。该结果不证明生产多实例 HA 或跨主机 fencing。
+
+真实 Chrome LLM smoke 使用 `gpt-5.6-sol` 完成 3 轮、普通文件 `read → write → read`、跨轮记忆及刷新后同 Session/Workspace 恢复；Session 为 58 events、`durableThroughSeq=57`。Session 记录多个 assistant 文本 chunk，但可见 DOM 只采到一次更新，不能据此确认渐进渲染体验。该 smoke 不证明真实模型自主协调多 Worker 或选择冲突处理。
+
+复跑本批：
+
+```sh
+node --check docs/drafts/browser-native-dsh-poc/tests/concurrent-agent-loops.e2e.mjs
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/concurrent-agent-loops.e2e.mjs
+env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u no_proxy -u NO_PROXY DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_LLM_TIMEOUT_MS=600000 DSH_POC_TURN_TIMEOUT_MS=900000 node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+真实模型凭据只由 Node backend 从本机 `docs/drafts/.env` 读取。Chrome smoke 另观察到 Worker compaction context capacity warning 和 preview API 404；这些诊断没有使该次 smoke 失败，但本批不验证 warning 的根因。自然 eviction、OS/浏览器进程崩溃、Safari/WebKit、生产共享数据库和后台 Agent 未验证。
+
 ## 历史协议实验：运行
 
 以下命令只运行旧版独立 HTML、PoC-local loop 和自定义事件协议，用于复现历史 transport/backend 实验，不是 v2 的启动或验收步骤。

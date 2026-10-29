@@ -2115,7 +2115,8 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     const resultText = typeof result === 'string' ? result
       : Array.isArray(result) ? result.filter(item => item?.type === 'text' && typeof item.text === 'string')
         .map(item => item.text).join('\n') : ''
-    scriptedText(response, toolResults.length === 2 && /writer lease.*released/i.test(resultText)
+    scriptedText(response, toolResults.length === 2
+      && /writer lease.*released|local writer was invalidated/i.test(resultText)
       ? 'BROWSER_NATIVE_WORKSPACE_LEASE_EDIT_FENCED'
       : 'BROWSER_NATIVE_WORKSPACE_LEASE_EDIT_UNEXPECTED_RESULT')
     return
