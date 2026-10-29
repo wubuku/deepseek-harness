@@ -467,6 +467,10 @@ async function storeAttachmentObject(
   onStage = () => {},
   onChunk = () => {},
 ) {
+  const assertRequestActive = () => {
+    if (!request.aborted) return
+    throw new Error('attachment upload request was aborted')
+  }
   const directoryPath = join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2))
   await mkdir(directoryPath, { recursive: true, mode: 0o700 })
   const target = attachmentPath(dataDir, workspaceId, hash)
@@ -481,7 +485,8 @@ async function storeAttachmentObject(
       }
       received += chunk.byteLength
       digest.update(chunk)
-      onChunk(chunk.byteLength)
+      await onChunk(chunk.byteLength, { workspaceId, hash })
+      assertRequestActive()
     }
     if (received !== existing || digest.digest('hex') !== hash) {
       throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
@@ -503,7 +508,8 @@ async function storeAttachmentObject(
         throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment exceeds the configured byte limit', 413)
       }
       digest.update(chunk)
-      onChunk(chunk.byteLength)
+      await onChunk(chunk.byteLength, { workspaceId, hash })
+      assertRequestActive()
       let offset = 0
       while (offset < chunk.byteLength) {
         const result = await handle.write(chunk, offset, chunk.byteLength - offset, bytes + offset)
@@ -515,11 +521,13 @@ async function storeAttachmentObject(
     if (digest.digest('hex') !== hash) {
       throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
     }
+    assertRequestActive()
     onStage('body-verified')
     await handle.chmod(0o400)
     await handle.sync()
     await handle.close()
     closed = true
+    assertRequestActive()
     try {
       await link(temporaryPath, target)
     } catch (error) {
@@ -543,6 +551,7 @@ async function storeAttachmentObject(
   } finally {
     if (!closed) await handle.close().catch(() => {})
     await rm(temporaryPath, { force: true })
+    if (request.aborted) onStage('upload-aborted')
   }
 }
 
@@ -3180,6 +3189,11 @@ export async function createBrowserNativeV2Server(options) {
             options.testHooks?.onAttachmentStage,
             options.testHooks?.onAttachmentChunk,
           )
+          await options.testHooks?.beforeAttachmentReceipt?.({ workspaceId, hash, name, stored })
+          if (response.destroyed) {
+            options.testHooks?.onAttachmentStage?.('response-abandoned')
+            return
+          }
           if (options.testHooks?.dropAttachmentUploadResponse?.({ workspaceId, hash, name, stored }) === true) {
             response.writeHead(200, { 'content-type': 'application/json', 'content-length': '256' })
             response.write('{"attachmentId":')

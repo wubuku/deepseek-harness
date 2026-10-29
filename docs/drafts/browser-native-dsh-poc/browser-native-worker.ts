@@ -92,6 +92,9 @@ let downloadPauseStage: DownloadPublicationStage | undefined
 let abortMetadataTransactionsRemaining = 0
 let quotaNextOpfsWrite = false
 let fileToolYieldDelayMs = 0
+let attachmentOpfsStageWaiter: string | undefined
+let attachmentOpfsWriteRelease: (() => void) | undefined
+let attachmentOpfsWriteOutcome: 'idle' | 'armed' | 'paused' | 'aborted' | 'released' | 'released-before-stage' = 'idle'
 const fileToolMetrics: BrowserNativeEditMetrics[] = []
 const fileToolStageWaiters = new Map<string, {
   readonly stage: BrowserNativeFileToolStage
@@ -188,7 +191,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write'
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -244,6 +247,9 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'session-outbox-probe') return true
+  if (data.action === 'wait-attachment-opfs-staging-write'
+    || data.action === 'attachment-opfs-write-state'
+    || data.action === 'release-attachment-opfs-write') return true
   if (data.action === 'cross-store-probe') {
     return (data.path === undefined || typeof data.path === 'string')
       && (data.content === undefined || typeof data.content === 'string')
@@ -312,6 +318,34 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
   return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+}
+
+async function pauseAttachmentOpfsStagingWrite(bytesWritten: number, signal?: AbortSignal): Promise<void> {
+  const requestId = attachmentOpfsStageWaiter
+  if (requestId === undefined) return
+  attachmentOpfsStageWaiter = undefined
+  attachmentOpfsWriteOutcome = 'paused'
+  workspaceTestResponse(requestId, { ok: true, stage: 'partial-opfs-staging-write', bytesWritten })
+  if (signal?.aborted) {
+    attachmentOpfsWriteOutcome = 'aborted'
+    throw signal.reason ?? new DOMException('Attachment upload was aborted', 'AbortError')
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const onAbort = () => {
+      cleanup()
+      attachmentOpfsWriteRelease = undefined
+      attachmentOpfsWriteOutcome = 'aborted'
+      reject(signal?.reason ?? new DOMException('Attachment upload was aborted', 'AbortError'))
+    }
+    attachmentOpfsWriteRelease = () => {
+      cleanup()
+      attachmentOpfsWriteRelease = undefined
+      attachmentOpfsWriteOutcome = 'released'
+      resolve()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 async function pauseLocalPersist(stage: 'before' | 'after'): Promise<void> {
@@ -1170,6 +1204,29 @@ async function runSessionOutboxMigrationProbe(sessionId: string, event: SessionE
 
 async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestRequest): Promise<void> {
   try {
+    if (request.action === 'wait-attachment-opfs-staging-write') {
+      if (attachmentOpfsStageWaiter !== undefined || attachmentOpfsWriteRelease !== undefined) {
+        throw new Error('browser-native attachment test: an OPFS write barrier is already active')
+      }
+      attachmentOpfsWriteOutcome = 'armed'
+      attachmentOpfsStageWaiter = request.requestId
+      return
+    }
+    if (request.action === 'attachment-opfs-write-state') {
+      workspaceTestResponse(request.requestId, { ok: true, outcome: attachmentOpfsWriteOutcome })
+      return
+    }
+    if (request.action === 'release-attachment-opfs-write') {
+      if (attachmentOpfsStageWaiter !== undefined) {
+        const waiter = attachmentOpfsStageWaiter
+        attachmentOpfsStageWaiter = undefined
+        attachmentOpfsWriteOutcome = 'released-before-stage'
+        workspaceTestResponse(waiter, { ok: false, outcome: attachmentOpfsWriteOutcome })
+      }
+      attachmentOpfsWriteRelease?.()
+      workspaceTestResponse(request.requestId, { ok: true, outcome: attachmentOpfsWriteOutcome })
+      return
+    }
     if (request.action === 'module-trace') {
       const moduleTrace = host?.modules?.requestTrace()
       if (moduleTrace === undefined) throw new Error('browser-native worker: module trace is disabled')
@@ -1937,7 +1994,14 @@ self.addEventListener('message', (event: MessageEvent) => {
     const created = createWorkerHost({
       staticModules: {
         ...nodeBuiltins,
-        ...createBrowserNativeStaticModules(workspace, sessionOutbox, capabilityPublication),
+        ...createBrowserNativeStaticModules(
+          workspace,
+          sessionOutbox,
+          capabilityPublication,
+          workspaceTestPort === undefined ? undefined : {
+            afterOpfsStagingWrite: (bytesWritten, signal) => pauseAttachmentOpfsStagingWrite(bytesWritten, signal),
+          },
+        ),
       },
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,

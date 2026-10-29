@@ -138,6 +138,8 @@ Chrome scripted E2E 通过 16 MiB 附件上传、真实 DSH `read`、删除 OPFS
 
 [附件提交与恢复验证](attachment-commit-recovery-validation-plan.md)和[实施进度](attachment-commit-recovery-validation-progress.md)记录了 composer 状态与 backend/Session 提交状态不一致时的故障恢复。Chrome scripted E2E 在 OPFS quota 拒绝后禁止发送，随后注入 backend 503、对象已发布但响应体被截断，以及 FileBlock append 已接受但响应丢失；同 hash 重试复用对象，Session readback 避免重复 append，最终只有一条 FileBlock、一条 prompt 和一次标准 `read`。该故障 E2E 使用 scripted LLM；真实 LLM smoke 单独验证正常的两轮附件读取与刷新补水，不代表真实模型路径触发了故障。
 
+[附件取消与发布竞态验证](attachment-cancellation-validation-plan.md)和[实施进度](attachment-cancellation-validation-progress.md)进一步覆盖用户在上传中移除文件。Chrome E2E 在 Worker 的 OPFS `WritableFileStream.write()` 成功后暂停，确认 `upload-*` 临时项存在；点击正式 composer 的 Remove 后，AbortSignal 使 writer abort，临时项清除且 backend 未收到 PUT。另两次取消分别发生在 backend 收到 body 但尚未发布对象时，以及对象已发布但 receipt 尚未返回时。发布前取消清除 `.part` 且没有远端对象；发布后取消不能撤销已发布对象，但 late response 不恢复 FileCard、不产生 Session FileBlock，用户可以继续提交纯文本。该对象是 orphan 风险；由于 FileBlock 没有独立 Workspace namespace，本 PoC 不按时间戳或局部 Session 视图实现 GC。
+
 在 preview 构建后复跑本批验收：
 
 ```sh
@@ -148,11 +150,12 @@ export DSH_POC_BROWSER=chrome
 export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
 node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/attachment-commit-recovery.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/attachment-cancellation.e2e.mjs
 DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 ```
 
-附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断与 Session append 响应丢失；自然 eviction、自然网络中断、OS/磁盘崩溃、上传期间移除 draft/取消竞态、多设备恢复和大附件真实 LLM 尚未验证。
+附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断、Session append 响应丢失，以及 OPFS staging 和 backend 对象发布前/后的 composer remove。自然 eviction、自然网络中断、OS/磁盘崩溃、多设备恢复和大附件真实 LLM 尚未验证；发布后取消留下的对象尚无安全 GC。
 
 ## 可写 chunk-backed 编辑验证
 

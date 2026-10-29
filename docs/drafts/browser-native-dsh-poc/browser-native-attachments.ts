@@ -53,6 +53,11 @@ export interface BrowserNativeAttachmentModule {
   ): Promise<void>
 }
 
+/** Optional Worker-only hooks for deterministic attachment lifecycle tests. */
+export interface BrowserNativeAttachmentTestHooks {
+  readonly afterOpfsStagingWrite?: (bytesWritten: number, signal?: AbortSignal) => Promise<void>
+}
+
 function loaderRequire(): (specifier: string) => unknown {
   return (requireActiveModuleLoader() as RuntimeLoader).requireFrom('/dsh')
 }
@@ -122,17 +127,22 @@ async function writeStreamToOpfs(
   file: FileSystemFileHandle,
   data: AsyncIterable<Uint8Array>,
   signal?: AbortSignal,
+  afterStagingWrite?: (signal?: AbortSignal) => Promise<void>,
 ): Promise<{ readonly hash: string; readonly bytes: number }> {
   const writer = await file.createWritable({ keepExistingData: false })
   const digest = new Sha256()
   let bytes = 0
+  let stagedBytes = 0
   try {
     for await (const chunk of data) {
       signal?.throwIfAborted()
       bytes = digestStreamChunk(digest, chunk, bytes)
       for (let offset = 0; offset < chunk.byteLength; offset += OPFS_WRITE_CHUNK_BYTES) {
         signal?.throwIfAborted()
-        await writer.write(chunk.subarray(offset, Math.min(offset + OPFS_WRITE_CHUNK_BYTES, chunk.byteLength)))
+        const part = chunk.subarray(offset, Math.min(offset + OPFS_WRITE_CHUNK_BYTES, chunk.byteLength))
+        await writer.write(part)
+        stagedBytes += part.byteLength
+        await afterStagingWrite?.(stagedBytes, signal)
       }
     }
     signal?.throwIfAborted()
@@ -216,7 +226,10 @@ function collectFileReferences(events: readonly import('@deepseek-ai/dsh-session
 }
 
 /** Build the Worker-only AttachmentStore provider and its Session history hydrator. */
-export function createBrowserNativeAttachmentModule(workspace: BrowserNativeWorkspaceRuntime): BrowserNativeAttachmentModule {
+export function createBrowserNativeAttachmentModule(
+  workspace: BrowserNativeWorkspaceRuntime,
+  testHooks: BrowserNativeAttachmentTestHooks = {},
+): BrowserNativeAttachmentModule {
   let module: unknown
   let hydrateSessionFiles: ((
     events: readonly import('@deepseek-ai/dsh-session').SessionEvent[],
@@ -275,7 +288,13 @@ export function createBrowserNativeAttachmentModule(workspace: BrowserNativeWork
         const displayName = fileLeafName(input.name)
         const directory = await opfsWorkspace(workspaceId)
         const temporary = await directory.directory.getFileHandle(`upload-${crypto.randomUUID()}`, { create: true })
-        const stored = await writeStreamToOpfs(directory.directory, temporary, input.data, input.signal)
+        const stored = await writeStreamToOpfs(
+          directory.directory,
+          temporary,
+          input.data,
+          input.signal,
+          testHooks.afterOpfsStagingWrite,
+        )
         const ref: FileAttachmentRef = {
           attachmentId: AttachmentId(`sha256:${stored.hash}`),
           name: displayName,

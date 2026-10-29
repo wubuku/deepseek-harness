@@ -29,6 +29,23 @@ deleteCondition: 正式 Browser-Native runtime 提供可持久恢复的附件提
 status: implemented-as-draft
 ```
 
+### BN-P2-060：composer 附件取消传播与不可逆发布竞态
+
+```text
+changeId: BN-P2-060
+upstreamBaseline: research synchronized with origin/research at batch start; 2026-10-29; DSH v0.2.1-rc.2; 工作区干净；仅主 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-attachments.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/attachment-cancellation.e2e.mjs; docs/drafts/browser-native-dsh-poc/attachment-cancellation-validation-plan.md; docs/drafts/browser-native-dsh-poc/attachment-cancellation-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 正式 composer 移除 draft 会 abort 当前上传，但尚无真实 Worker/backend 证据说明 body 中断会清理 staging，也未区分取消发生在对象发布前或发布后。发布前应无对象；发布后不能声称回滚，late receipt 也不能让已移除附件重新进入 UI 或 Session。
+existingExtensionPointsChecked: 复用 Conversation `releaseDraftAttachment()` 的 AbortController、`ctx.fileUpload.upload()` signal、Worker AttachmentStore OPFS writer/fetch signal、PoC backend 流式 attachment route、hard-link 发布点、正式 composer Remove 控件、Worker 测试端口和 Session 权威快照。故障屏障只由 Worker 测试端口或 backend constructor `testHooks` 注入，不增加生产请求参数。
+behaviorChange: backend 等待异步 chunk test hook 后重新检查 `IncomingMessage.aborted`；临时对象路径在请求取消时清理。hard-link 前再次检查 abort，阻止 body 完成但尚未发布时的已知取消继续提交。Worker AttachmentStore 在每次 OPFS staging write 成功后提供一个仅测试注入的 barrier；composer remove 触发 AbortSignal 后，现有 writer abort 路径清除 `upload-*` 临时项。新增仅测试构造器可注入的 receipt barrier；客户端关闭响应后 route 不尝试发送成功回执。Chrome E2E 分别在 OPFS staging write、backend body 接收和对象发布后 receipt barrier 移除正式 composer draft，核验两侧 staging 清理、发布后对象保留、late completion 不恢复 FileCard、Session 无 FileBlock/附件工具输入，以及三个纯文本 turn 可继续。
+directoryOutChangeReason: 运行时和验证只修改 `docs/drafts/browser-native-dsh-poc/`；唯一目录外改动是 `docs/drafts/README.md` 的研究索引。没有修改正式 Conversation/FileUpload/Attachment packages、Web 应用接线、Agent Loop、Session format、根依赖或 lockfile。
+consumersUpdated: PoC backend、Chrome composer E2E、附件取消计划/进度、PoC README、兼容矩阵、drafts 索引和本账本。
+tests: attachment backend tests 5/5；backend-v2 tests 56/56；preview build 和定向 Oxlint 通过。Chrome 156 scripted E2E 覆盖三个取消位置：OPFS staging write 成功后同时观察到同一上传的 `upload-*` 与 `.crswap` 两项，取消后 Worker 观察到 AbortSignal、两项清理且没有 backend PUT；backend 已收到 body 但对象未发布时 `.part` 和对象均不存在；对象发布后 receipt 前取消时完整对象保留且 response abandoned。三个显式 prompt marker 在同一 Session 各只出现一次；Session 没有 FileBlock 或 `read` tool call，late response 不恢复附件，pageErrors/跨源请求均为 0。Session 另含一条 harness runtime-context user event，不计为重复用户 prompt。真实 LLM 附件 smoke 在当前 checkout 连续两次以 `UPSTREAM_LLM_EMPTY` 结束 turn 1，未完成附件 `read` 或刷新恢复；模型名和 endpoint 与先前配置一致，凭据只确认存在，未读取或输出。文档门禁结果记录在进度文件。
+syncReplaySteps: 上游同步后核对 Conversation draft release 是否仍 abort active FileUpload、Worker transport 是否转发 AbortSignal、AttachmentStore OPFS writer abort 清理、Node request aborted/complete 语义、附件临时文件发布顺序和 response.destroyed 行为。重建 preview 后复跑 attachment/backend-v2 Node tests、Chrome attachment cancellation E2E、真实 LLM generic attachment smoke 与文档门禁。不能把发布后的远端对象写成可撤销，也不能在无 Session→Workspace→attachment 权威映射时按时间或孤立查询结果删除对象。
+deleteCondition: 正式 Browser-Native runtime 提供可审计的取消 receipt、附件引用账本和安全回收协议，并由正式 composer E2E 覆盖发布前后取消；或 Browser-Native DSH PoC 被移除。
+status: implemented-as-draft
+```
+
 ### BN-P2-058：正式 composer 通用文件附件的 OPFS、Session 与 backend 恢复
 
 ```text
