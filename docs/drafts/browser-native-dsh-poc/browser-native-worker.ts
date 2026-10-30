@@ -32,6 +32,8 @@ import { createBrowserNativeMultiAgentProbe } from './browser-native-multi-agent
 import type { BrowserNativeMultiAgentRuntime } from './browser-native-multi-agent-probe.ts'
 import { createBrowserNativeSessionOrchestrationProbe } from './browser-native-session-orchestration-probe.ts'
 import type { BrowserNativeSessionOrchestrationRuntime } from './browser-native-session-orchestration-probe.ts'
+import { createBrowserNativeSessionContinuityProbe } from './browser-native-session-continuity-probe.ts'
+import type { BrowserNativeSessionContinuityRuntime } from './browser-native-session-continuity-probe.ts'
 import { createBrowserNativeCpuContentionProbe } from './browser-native-cpu-contention-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -158,6 +160,29 @@ const sessionOrchestrationProbe = createBrowserNativeSessionOrchestrationProbe((
     installModelSelection: agentRuntime.installModelSelection,
   } satisfies BrowserNativeSessionOrchestrationRuntime
 })
+const sessionContinuityProbe = createBrowserNativeSessionContinuityProbe(() => {
+  const requireFrom = requireActiveModuleLoader().requireFrom('/dsh')
+  const sessionRuntime = requireFrom('@deepseek-ai/dsh-session') as {
+    SessionId(value: string): import('@deepseek-ai/dsh-session').SessionId
+    SessionSeq(value: number): import('@deepseek-ai/dsh-session').SessionSeq
+    SessionLogOffset(value: number): import('@deepseek-ai/dsh-session').SessionLogOffset
+    buildForkSeed(events: readonly import('@deepseek-ai/dsh-session').SessionEvent[], boundary: import('@deepseek-ai/dsh-session').SessionSeq): import('@deepseek-ai/dsh-session').SessionEvent[]
+  }
+  const llmRuntime = requireFrom('@deepseek-ai/dsh-llm') as {
+    createUserMessage(input: { readonly content: readonly { readonly type: 'text'; readonly text: string }[]; readonly source: { readonly kind: 'user' } }): import('@deepseek-ai/dsh-llm').UserMessage
+  }
+  const agentRuntime = requireFrom('@deepseek-ai/dsh-agent') as {
+    installModelSelection(agentCtx: import('@deepseek-ai/cordis').Context, selection: import('@deepseek-ai/dsh-agent').ModelSelectionRef): () => void
+  }
+  return {
+    sessionId: value => sessionRuntime.SessionId(value),
+    sessionSeq: value => sessionRuntime.SessionSeq(value),
+    sessionLogOffset: value => sessionRuntime.SessionLogOffset(value),
+    userMessage: value => llmRuntime.createUserMessage({ content: [{ type: 'text', text: value }], source: { kind: 'user' } }),
+    buildForkSeed: (events, boundary) => sessionRuntime.buildForkSeed(events, boundary),
+    installModelSelection: agentRuntime.installModelSelection,
+  } satisfies BrowserNativeSessionContinuityRuntime
+})
 const pending: unknown[] = []
 const sessionOutbox = new BrowserNativeSessionOutbox({
   abortNextAppend: () => {
@@ -240,9 +265,11 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly sessionId?: string
+  readonly childSessionId?: string
+  readonly boundary?: number
   readonly provider?: string
   readonly model?: string
   readonly prompt?: string
@@ -342,6 +369,30 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && typeof data.model === 'string' && data.model.length > 0 && data.model.length <= 128
   }
   if (data.action === 'session-orchestration-status' || data.action === 'session-orchestration-dispose') return true
+  if (data.action === 'session-continuity-start') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.prompt === 'string' && data.prompt.length > 0 && data.prompt.length <= 256
+      && (data.provider === undefined || typeof data.provider === 'string')
+      && (data.model === undefined || typeof data.model === 'string')
+  }
+  if (data.action === 'session-continuity-queue'
+    || data.action === 'session-continuity-followup') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.prompt === 'string' && data.prompt.length > 0 && data.prompt.length <= 256
+  }
+  if (data.action === 'session-continuity-cancel-keep-inbox') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  }
+  if (data.action === 'session-continuity-resume') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.prompt === 'string' && data.prompt.length > 0 && data.prompt.length <= 256
+  }
+  if (data.action === 'session-continuity-fork') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.childSessionId === 'string' && data.childSessionId.length > 0
+      && (data.boundary === undefined || (Number.isSafeInteger(data.boundary) && Number(data.boundary) >= 0))
+  }
+  if (data.action === 'session-continuity-status' || data.action === 'session-continuity-dispose') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
@@ -1850,6 +1901,58 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: await sessionOrchestrationProbe.dispose() })
       return
     }
+    if (request.action === 'session-continuity-start') {
+      if (request.sessionId === undefined || request.prompt === undefined) throw new Error('session continuity start requires Session id and prompt')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        sessionContinuity: await sessionContinuityProbe.start({
+          sessionId: request.sessionId,
+          prompt: request.prompt,
+          ...(request.provider === undefined ? {} : { provider: request.provider }),
+          ...(request.model === undefined ? {} : { model: request.model }),
+        }),
+      })
+      return
+    }
+    if (request.action === 'session-continuity-queue') {
+      if (request.sessionId === undefined || request.prompt === undefined) throw new Error('session continuity queue requires Session id and prompt')
+      workspaceTestResponse(request.requestId, { ok: true, sessionContinuity: sessionContinuityProbe.queueFollowup(request.sessionId, request.prompt) })
+      return
+    }
+    if (request.action === 'session-continuity-cancel-keep-inbox') {
+      if (request.sessionId === undefined) throw new Error('session continuity cancel requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: true, sessionContinuity: sessionContinuityProbe.cancelKeepInbox(request.sessionId) })
+      return
+    }
+    if (request.action === 'session-continuity-resume') {
+      if (request.sessionId === undefined || request.prompt === undefined) throw new Error('session continuity resume requires Session id and prompt')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        sessionContinuity: await sessionContinuityProbe.resume(request.sessionId, request.prompt),
+      })
+      return
+    }
+    if (request.action === 'session-continuity-fork') {
+      if (request.sessionId === undefined || request.childSessionId === undefined) throw new Error('session continuity fork requires parent and child Session ids')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        sessionContinuity: await sessionContinuityProbe.fork(request.sessionId, request.childSessionId, request.boundary),
+      })
+      return
+    }
+    if (request.action === 'session-continuity-followup') {
+      if (request.sessionId === undefined || request.prompt === undefined) throw new Error('session continuity follow-up requires Session id and prompt')
+      workspaceTestResponse(request.requestId, { ok: true, sessionContinuity: sessionContinuityProbe.followup(request.sessionId, request.prompt) })
+      return
+    }
+    if (request.action === 'session-continuity-status') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionContinuity: sessionContinuityProbe.status() })
+      return
+    }
+    if (request.action === 'session-continuity-dispose') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionContinuity: await sessionContinuityProbe.dispose() })
+      return
+    }
     if (request.action === 'session-projection-probe') {
       workspaceTestResponse(request.requestId, { ok: true, sessionProjection: runSessionProjectionProbe() })
       return
@@ -2435,6 +2538,7 @@ self.addEventListener('message', (event: MessageEvent) => {
         ...nodeBuiltins,
         '@deepseek-ai/dsh-browser-native-multi-agent-probe': () => multiAgentProbe.plugin,
         '@deepseek-ai/dsh-browser-native-session-orchestration-probe': () => sessionOrchestrationProbe.plugin,
+        '@deepseek-ai/dsh-browser-native-session-continuity-probe': () => sessionContinuityProbe.plugin,
         ...(workspaceTestPort === undefined ? {} : {
           '@deepseek-ai/dsh-browser-native-cpu-contention-probe': cpuContentionProbe.factory,
         }),

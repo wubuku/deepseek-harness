@@ -24,6 +24,15 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 [Session 编排验证计划](next-session-orchestration-validation-plan.md)及[进度](next-session-orchestration-validation-progress.md)在此基础上验证 `active`/`parked` 投影、单 Agent targeted stop、运行中 route switch 拒绝、idle 后 failure/recovery route 和 validation-only admission。Chrome 156 scripted barrier 已在一个 Dedicated Worker 中运行三个真实 DSH Agent 并通过上述控制；真实 `gpt-5.6-sol` smoke 只覆盖普通 `read → write → read` 与刷新恢复。四 Agent 上限不代表生产容量，scripted barrier 不证明真实模型多 Agent 并发，Dedicated Worker 也不是页面关闭后的后台 Agent。
 
+[Session 连续性验证计划](next-session-continuity-validation-plan.md)及[进度](next-session-continuity-validation-progress.md)继续验证运行中追加 `next-turn`、`cancel({ keepInbox: true })` 后显式继续、Worker 重建后的历史 model route，以及正式 DSH Session fork。Chrome 156 scripted barrier 证明 queued input 只消费一次、取消保留 queued message、resume 不回退 route、闭合 turn 和运行中 text open-tail fork 都不重复继承 prompt；open tool 的 `TOOL_OUTCOME_UNKNOWN` fork 语义仍未验证。真实 `gpt-5.6-sol` smoke 只回归普通文件与刷新续聊，不证明模型自主排队、route 选择或 fork。
+
+复跑 Session 连续性验收：
+
+```sh
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/browser-native-session-continuity.e2e.mjs
+```
+
 复跑单 Worker 并发验收：
 
 ```sh

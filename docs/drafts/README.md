@@ -114,6 +114,8 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 54. [Browser-Native 多 Session Worker 隔离验证](browser-native-dsh-poc/next-session-worker-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-worker-isolation-validation-progress.md)：Chrome 对比共享 Worker 与每 Session 一 Worker 的 CPU 阻塞和强制终止影响，并以 1/2/4 个页面 Worker 各三轮记录资源诊断；独立拓扑目前使用两个同源页面，不是单页 Worker pool，资源样本不能推导每 Worker heap 或生产容量。
 55. [Browser-Native Session 编排、route 切换与 admission 验证](browser-native-dsh-poc/next-session-orchestration-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-orchestration-validation-progress.md)：Chrome 156 在一个 Dedicated Worker 中运行三个真实 DSH Agent，验证 active/parked 投影、目标取消、运行中 route switch 拒绝、失败 route 后恢复和 validation-only admission；scripted barrier 不证明真实模型多 Agent 并发，真实 LLM 只回归普通文件与刷新恢复，四 Agent 上限不是生产容量。
 
+56. [Browser-Native Session 连续性验证](browser-native-dsh-poc/next-session-continuity-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-continuity-validation-progress.md)：Chrome 156 在真实 Dedicated Worker 中验证 busy Agent 的 durable next-turn、`keepInbox` 取消保留、resume 后 model route fidelity、闭合 turn fork 和运行中 text open-tail fork；真实 LLM 只回归普通文件/刷新路径，open tool unknown、Workspace fork、跨设备恢复和后台 Agent 仍未验证。
+
 ### 需要实现或审查代码时
 
 优先阅读[实施方案](dsh-browser-native-agent-implementation-plan.md)，再读 [PoC 当前实现与限制](browser-native-dsh-poc/README.md)、[PoC v2 规划](browser-native-dsh-poc/browser-native-dsh-plan-v2.md)和对应的实现、测试文件。研究报告解释为什么这样设计；v2 规划定义目标，代码和测试确定实际字段、行为和验证范围。[旧版实验协议](browser-native-dsh-poc/protocol.md)只用于追溯独立实验，不能作为 v2 的当前协议说明。

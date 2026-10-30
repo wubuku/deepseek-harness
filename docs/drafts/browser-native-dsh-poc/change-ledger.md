@@ -167,6 +167,24 @@ deleteCondition: 上游提供同等 opt-in Worker loader request/load tracing �
 status: implemented
 ```
 
+### BN-P2-067：运行中输入、Session route 恢复与 fork 连续性
+
+```text
+changeId: BN-P2-067
+upstreamBaseline: research branch; 2026-10-31; 上一批已推送；主工作区保留未跟踪的 `.archify/` WIP，不纳入本批
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/browser-native-session-continuity-probe.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-continuity-probe.js; docs/drafts/browser-native-dsh-poc/tests/browser-native-session-continuity.e2e.mjs; docs/drafts/browser-native-dsh-poc/next-session-continuity-validation-plan.md; docs/drafts/browser-native-dsh-poc/next-session-continuity-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已有验证覆盖单 Worker 多 Agent、parked/targeted stop 和 Session mount，但没有把运行中 next-turn、取消后保留用户意图、Worker resume 后 route fidelity 和正式 Session fork 放进一个真实 Worker/Session 连续性矩阵。缺少这些证据时，页面输入队列、刷新默认模型和 branch UI 都可能在不知情下成为第二事实源。
+existingExtensionPointsChecked: 复用正式 `AgentRegistry.create()`/`resume()`、`Agent.followup()`、`Agent.cancel({ keepInbox: true })`、Session `requestHeader()`、`buildForkSeed()`、`inheritedEventCount`、`parentSession`/`isSeeded` metadata、Browser Worker Host、同源 Session persistence、PoC scripted LLM barrier 和 URL-gated Worker test port。未修改 Agent Loop、Session format、正式 fork API、默认 profile 或根依赖。
+whyDraftOnlyWasInsufficient: Agent API 单测不能证明 queue/cancel/resume/fork 同时穿过真实 Dedicated Worker、Session backend 和模型请求；真实模型也不适合稳定制造 busy/cancel/fork 时序，因此用 scripted barrier 验证精确状态，真实 LLM 只做普通文件与刷新接线 smoke。
+behaviorChange: 新增 validation-only `browser-native-session-continuity-probe`，在 Worker 中管理 test Agent handles。Preview 只在 `browser-native-test=session-continuity` URL 下暴露 start/queue/cancel-keep-inbox/resume/fork/followup/status/dispose actions；修正 cancel action 的请求校验，使它不要求无意义的 prompt。busy input 进入正式 Agent inbox；resume 从 Session 最后 request header 恢复 provider/model；fork 使用正式 seed 构造并保留 parent lineage。闭合 turn 与运行中 text open-tail 均验证，不把 open tool unknown 写成已完成。
+directoryOutChangeReason: `apps/web/src/preview.ts` 是 preview URL allowlist、Worker test MessagePort 类型和页面响应通道所有者，必须登记显式 continuity action；`docs/drafts/README.md` 是研究草稿目录登记处。两处修改均为 opt-in 验证接线，没有改变默认 Web/Browser-Native 行为。
+consumersUpdated: continuity probe、Worker static module/profile insertion、preview allowlist、runtime roster、Chrome E2E、continuity plan/progress、PoC README、operational compatibility matrix、drafts index 与本 ledger。
+tests: `pnpm exec tsc -b tsconfig.client.json --pretty false` passed；现有 multi-agent probe Vitest 5/5 passed；preview build passed；Session continuity Chrome E2E 在 Chrome 156.0.8078.79 passed，9 个模型请求、闭合 parent event count 37、closed child 47、open child 28，page/worker errors 和跨源请求均为零。测试期间修正了四个验收缺陷：目标 user/message 缺失时 terminal helper 的假阳性、cancel action 错误要求 prompt、取消终态应为 `aborted`、fork read response 的 header/events 层级；这些修正没有放宽运行时断言。真实 `gpt-5.6-sol` Chrome smoke 完成普通 `read → write → read` 与刷新续接，57 Session events、durableThroughSeq 56、8/8 LLM HTTP 200；真实 smoke 仍有既有 preview API 404、刷新 abort 和 compaction capacity warning，未被描述为零告警。真实网络只到同源 backend，未见模型密钥。
+syncReplaySteps: 上游同步后核对 `Agent.followup` inbox claim、`cancel({ keepInbox })`、`AgentRegistry.resume` request header、Session fork seed/repair 和 preview test port validator。运行 continuity Chrome E2E、multi-agent probe Vitest、client TypeScript、preview build 和真实 `runtime-validation.e2e.mjs` smoke；不得把 scripted barrier 写成真实模型自主 queue/route/fork 证据。若正式 Session fork 或 branch API 出现，迁移 probe 并保留 open-tail unknown 的独立测试。
+deleteCondition: 正式 Browser-Native Session UI/Client service 提供等价 durable inbox、route resume、fork lineage、open-tail repair 和真实 Worker 生命周期测试，且本 E2E 已迁移；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-064：审批授权、串行调用与 Agent 取消结算
 
 ```text
