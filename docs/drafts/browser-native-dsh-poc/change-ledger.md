@@ -1615,3 +1615,21 @@ syncReplaySteps: 上游同步后先核对 `BrowserNativeSessionCursor` identity/
 deleteCondition: 正式 Session mount/client service 提供等价的多 Session 投影、事件 replay、owner fencing、unknown settlement 和真实浏览器生命周期测试；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-026：单 Worker 多 Session DSH Agent Loop 并行
+
+```text
+changeId: BN-P2-026
+upstreamBaseline: research branch; 2026-10-31; 主工作区，无隔离 worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/browser-native-multi-agent-probe.js; docs/drafts/browser-native-dsh-poc/browser-native-multi-agent-probe.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-multi-agent-probe.spec.ts; docs/drafts/browser-native-dsh-poc/tests/same-worker-multi-session.e2e.mjs; docs/drafts/browser-native-dsh-poc/same-worker-multi-session-validation-plan.md; docs/drafts/browser-native-dsh-poc/same-worker-multi-session-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已有真实并行 Agent Loop 验证使用两个页面与两个 Worker；Session mount probe 只验证投影生命周期。仍需验证同一 Cordis Host/`ctx.agents` 能否同时运行多个真实 DSH Loop，并隔离模型请求、Session event、取消和 Agent owner 生命周期。
+existingExtensionPointsChecked: 复用正式 `AgentRegistry.create()`、`Agent.followup()`、per-Agent `cancel()`/`dispose()`、Browser Worker Host、既有同源 scripted LLM fault hook 和 Worker test MessagePort。没有修改正式 DSH package、Agent Loop、Session format、默认 profile、根依赖或生产 Web UI。
+whyDraftOnlyWasInsufficient: API 类型和两个 Worker 的并发测试不能证明一个真实 Worker Host 中多个 Agent 同时处于运行态、backend 请求实际重叠、取消不会中断其他 Loop，或 Session event 不串线；这些需要真实 Chrome Dedicated Worker 与 DSH persistence 的组合验证。模型响应时序由 scripted barrier 确定控制，真实 LLM 单独做普通路径 smoke。
+behaviorChange: 仅增加 validation-only `browser-native-multi-agent-probe` 插件和 `browser-native-test=multi-agent` Worker test action。probe 经 `ctx.agents.create()` 建立 2–4 个不同 Session，并在所有 Agent 创建后提交各自 prompt；请求验证限制为本 PoC test port。`apps/web/src/preview.ts` 增加显式 URL allowlist 和请求类型，没有改变默认页面行为、profile 或用户可见 Session UI。
+directoryOutChangeReason: `apps/web/src/preview.ts` 是页面 test port 的 URL allowlist 与消息类型所有者，必须登记 `multi-agent` action 才能由 Chrome E2E 驱动 Worker；改动限于 opt-in test channel。`docs/drafts/README.md` 登记计划/进度入口；没有修改正式 packages、其他 PoC 或根依赖。
+consumersUpdated: Worker test port、临时 runtime validation profile、probe Vitest、同 Worker Chrome E2E、PoC README、operational compatibility matrix、drafts index、validation plan/progress 与本 ledger。
+tests: probe Vitest 3/3 通过；node --check 对两个 E2E/helper 脚本通过。Chrome `156.0.8078.79` scripted E2E 通过：一个 Dedicated Worker 中三个真实 DSH Agent Loop 的模型请求同时停在 backend barrier，取消 Session B 只关闭 B 的请求，A/C 完成；三个 Session 各记录唯一 prompt 一次，无跨 Session prompt；三个 handle 均 dispose，Worker 数 1，page/worker errors 和跨源请求均为 0。真实 Chrome `gpt-5.6-sol` smoke 完成普通 `read → write → read` 与 Session 刷新续接，57 events、durableThroughSeq 56、8/8 模型请求 HTTP 200；这是非 durable Workspace 模式，刷新后文件缺失是该配置的预期结果，不是文件持久化证据。真实 smoke 记录已知 compaction context-capacity warning、预览 API 404 和刷新时被中止的旧请求，未影响断言；浏览器网络未见模型凭据。实施期间 `pnpm run build` 9/9 gates 和 preview build 通过；`pnpm run test:docs` 21/21、`pnpm run doc-sync` 43/43、`git diff --check` 均通过。首次真实 smoke 因全局 build 替换 preview 产物、validation VFS fixture 缺失而未启动；重建 preview 后 smoke 通过。
+syncReplaySteps: 上游同步后确认 `AgentRegistry` 创建/销毁语义、Agent cancel 和 Worker probe API；复跑 probe Vitest、`same-worker-multi-session.e2e.mjs` Chrome scripted barrier、`runtime-validation.e2e.mjs` Chrome real LLM smoke、preview build 和文档门禁。真实模型 smoke 只证明普通工具与 Session 路径，不得记录为多 Agent 模型并发。检查默认 profile 未启用 probe，preview URL allowlist 仍只在显式测试参数下暴露 test port。
+deleteCondition: 正式 Browser Host/Session 服务提供等价的单 Worker 多 Agent 创建、取消隔离、Session event 隔离和生命周期验证；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

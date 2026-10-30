@@ -20,6 +20,21 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 [Session 挂载与恢复验证计划](session-mount-lifecycle-validation-plan.md)及[进度](session-mount-lifecycle-validation-progress.md)验证页面同时管理多个 Session 投影时的 `active`/`parked`、history-before-live、重复事件、Worker identity 重连、`occupied`/`busy`/`unavailable` 和 dispose 后 `unknown` 语义。真实 Chrome probe 只证明 PoC-local coordinator 在 Dedicated Worker 中执行这些状态规则；真实 LLM 只复跑普通文件与刷新恢复，不证明正式多 Session UI、页面关闭后的后台 Agent 或云端 handoff。
 
+[单 Worker 多 Session Agent Loop 验证计划](same-worker-multi-session-validation-plan.md)及[进度](same-worker-multi-session-validation-progress.md)则直接通过正式 `ctx.agents.create()` 在同一个真实 DSH Host Worker 中运行三个 Agent/Session。Chrome E2E 用 PoC backend 的确定性响应 hook 同时挂起三条真实 DSH Loop，不调用外部模型；测试证明请求可并行等待、取消只影响指定 Agent、Session prompt 不串线且 handles 全部释放。独立真实 LLM smoke 只回归普通文件工具和 Session 刷新续接，不把模型自主并发或刷新后的 Workspace 文件持久性作为结论。
+
+复跑单 Worker 并发验收：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/same-worker-multi-session.e2e.mjs
+DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
+```
+
+本批只证明一个 Worker Host 中三个 Agent Loop 的异步等待、取消隔离与 Session 隔离，不是并发容量基准。Worker 内 CPU 密集任务仍共享 JavaScript event loop；未验证真实 LLM 同时服务多个 Agent、更高并发数、调度公平性、容量上限或生产多 Session UI。
+
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
 旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。

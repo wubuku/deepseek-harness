@@ -27,6 +27,9 @@ import { isShellStartFrame } from '../../../packages/experimental/webworker-runt
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
 import { createBrowserNativeStaticModules, flushBrowserNativeSession } from './browser-native-providers.ts'
+import { requireActiveModuleLoader } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
+import { createBrowserNativeMultiAgentProbe } from './browser-native-multi-agent-probe.ts'
+import type { BrowserNativeMultiAgentRuntime } from './browser-native-multi-agent-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
@@ -122,6 +125,17 @@ let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
 let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
 const capabilityPublication = new BrowserNativeCapabilityPublication()
 const permissionProbe = createBrowserNativePermissionProbe()
+const multiAgentProbe = createBrowserNativeMultiAgentProbe(() => {
+  const requireFrom = requireActiveModuleLoader().requireFrom('/dsh')
+  const sessionRuntime = requireFrom('@deepseek-ai/dsh-session') as { SessionId(value: string): import('@deepseek-ai/dsh-session').SessionId }
+  const llmRuntime = requireFrom('@deepseek-ai/dsh-llm') as {
+    createUserMessage(input: { readonly content: readonly { readonly type: 'text'; readonly text: string }[]; readonly source: { readonly kind: 'user' } }): import('@deepseek-ai/dsh-llm').UserMessage
+  }
+  return {
+    sessionId: value => sessionRuntime.SessionId(value),
+    userMessage: value => llmRuntime.createUserMessage({ content: [{ type: 'text', text: value }], source: { kind: 'user' } }),
+  } satisfies BrowserNativeMultiAgentRuntime
+})
 const pending: unknown[] = []
 const sessionOutbox = new BrowserNativeSessionOutbox({
   abortNextAppend: () => {
@@ -204,7 +218,9 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly agents?: readonly { readonly sessionId: string; readonly prompt: string }[]
+  readonly sessionId?: string
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -260,6 +276,19 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
   if (data.action === 'session-outbox-probe') return true
+  if (data.action === 'multi-agent-start') {
+    return Array.isArray(data.agents) && data.agents.length >= 2 && data.agents.length <= 4
+      && data.agents.every(value => value !== null && typeof value === 'object' && !Array.isArray(value)
+        && Object.keys(value).length === 2
+        && typeof (value as Record<string, unknown>).sessionId === 'string'
+        && (value as Record<string, unknown>).sessionId.length > 0
+        && (value as Record<string, unknown>).sessionId.length <= 128
+        && typeof (value as Record<string, unknown>).prompt === 'string'
+        && (value as Record<string, unknown>).prompt.length > 0
+        && (value as Record<string, unknown>).prompt.length <= 256)
+  }
+  if (data.action === 'multi-agent-cancel') return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  if (data.action === 'multi-agent-status' || data.action === 'multi-agent-dispose') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
@@ -334,7 +363,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'cancel-session', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'multi-agent-status', 'multi-agent-dispose', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'cancel-session', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
 }
 
 function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
@@ -1707,6 +1736,24 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, sessionMount: runSessionMountProbe() })
       return
     }
+    if (request.action === 'multi-agent-start') {
+      if (request.agents === undefined) throw new Error('multi-Agent probe requires Session specifications')
+      workspaceTestResponse(request.requestId, { ok: true, multiAgent: await multiAgentProbe.start(request.agents) })
+      return
+    }
+    if (request.action === 'multi-agent-cancel') {
+      if (request.sessionId === undefined) throw new Error('multi-Agent cancel requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: true, multiAgent: multiAgentProbe.cancel(request.sessionId) })
+      return
+    }
+    if (request.action === 'multi-agent-status') {
+      workspaceTestResponse(request.requestId, { ok: true, multiAgent: multiAgentProbe.status() })
+      return
+    }
+    if (request.action === 'multi-agent-dispose') {
+      workspaceTestResponse(request.requestId, { ok: true, multiAgent: await multiAgentProbe.dispose() })
+      return
+    }
     if (request.action === 'session-projection-probe') {
       workspaceTestResponse(request.requestId, { ok: true, sessionProjection: runSessionProjectionProbe() })
       return
@@ -2289,6 +2336,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     const created = createWorkerHost({
       staticModules: {
         ...nodeBuiltins,
+        '@deepseek-ai/dsh-browser-native-multi-agent-probe': () => multiAgentProbe.plugin,
         ...createBrowserNativeStaticModules(
           workspace,
           sessionOutbox,
