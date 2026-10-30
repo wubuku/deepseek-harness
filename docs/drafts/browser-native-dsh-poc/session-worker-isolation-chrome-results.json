@@ -1,0 +1,941 @@
+{
+  "result": "passed",
+  "browser": "156.0.8078.79",
+  "scope": "shared-Worker versus one-Session-per-Worker blocking and termination isolation",
+  "sharedWorker": {
+    "workerCount": 1,
+    "sessions": [
+      {
+        "sessionId": "worker-isolation-shared-cpu-f7583a3f-73ca-4858-8495-dcc7def1580d",
+        "promptCount": 1,
+        "turnEndCount": 0,
+        "toolCallCount": 1
+      },
+      {
+        "sessionId": "worker-isolation-shared-peer-3683ebf0-aeba-4b25-99bb-ec9770a1d813",
+        "promptCount": 1,
+        "turnEndCount": 0,
+        "toolCallCount": 0
+      }
+    ],
+    "peerResponseReleasedAt": 1793387934203,
+    "cpuStartedAt": 1793387934118,
+    "consequence": "terminating the shared Host Worker left both Session turns without terminal events"
+  },
+  "isolatedWorkers": {
+    "browserContextCount": 1,
+    "pageCount": 2,
+    "workerCount": 2,
+    "cpuSessionId": "worker-isolation-isolated-cpu-ad095992-1a8c-40ae-8339-dd06b04882a4",
+    "cpuStartedAt": 1793387942689,
+    "peerSessionId": "worker-isolation-isolated-peer-13ab4813-c0f8-4d68-a593-1feadb840c11",
+    "peerTurnEndSeq": 18,
+    "sessions": [
+      {
+        "sessionId": "worker-isolation-isolated-cpu-ad095992-1a8c-40ae-8339-dd06b04882a4",
+        "promptCount": 1,
+        "turnEndCount": 0,
+        "toolCallCount": 1
+      },
+      {
+        "sessionId": "worker-isolation-isolated-peer-13ab4813-c0f8-4d68-a593-1feadb840c11",
+        "promptCount": 1,
+        "turnEndCount": 1,
+        "toolCallCount": 0
+      }
+    ],
+    "consequence": "terminating the CPU Host Worker left only its own Session incomplete; peer Host completed independently"
+  },
+  "topologyResourceSamples": [
+    {
+      "level": 1,
+      "repetition": 1,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 2658,
+      "turnElapsedMs": 103,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-1-1-0-34ce3ef6-a248-486f-abf4-58955ba7dcb9",
+          "startupMs": 2337,
+          "workerCount": 1,
+          "heapUsedBytes": 98497954,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 7,
+        "rendererProcessCount": 3,
+        "rssTotalKiB": 1563520,
+        "cpuTimeDeltaSeconds": 1.06852,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 0.871788,
+            "rssKiB": 273296
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.17420999999999986,
+            "rssKiB": 120976
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.021231,
+            "rssKiB": 87168
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0012910000000000005,
+            "rssKiB": 65632
+          },
+          {
+            "pid": 46024,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 181792
+          },
+          {
+            "pid": 46025,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 97600
+          },
+          {
+            "pid": 46026,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 737056
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 112238,
+        "cpuSystemMicros": 28613,
+        "rssBeforeBytes": 96256000,
+        "rssAfterBytes": 111656960,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 2,
+      "repetition": 1,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 8336,
+      "turnElapsedMs": 278,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-2-1-0-f6a576d2-9100-4b1b-ad04-a829e3fc2748",
+          "startupMs": 7508,
+          "workerCount": 1,
+          "heapUsedBytes": 93412406,
+          "eventCount": 18,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-2-1-1-ea109152-6a57-429c-9761-aed2cf1b7f24",
+          "startupMs": 2457,
+          "workerCount": 1,
+          "heapUsedBytes": 136159231,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 8,
+        "rendererProcessCount": 4,
+        "rssTotalKiB": 2560832,
+        "cpuTimeDeltaSeconds": 2.823008,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 2.3863570000000003,
+            "rssKiB": 241424
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.384846,
+            "rssKiB": 120624
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.048624,
+            "rssKiB": 86256
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0031809999999999963,
+            "rssKiB": 65456
+          },
+          {
+            "pid": 46102,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 147072
+          },
+          {
+            "pid": 46103,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 1061472
+          },
+          {
+            "pid": 46104,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 756880
+          },
+          {
+            "pid": 46105,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 81648
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 268383,
+        "cpuSystemMicros": 76751,
+        "rssBeforeBytes": 111673344,
+        "rssAfterBytes": 93929472,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 4,
+      "repetition": 1,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 16915,
+      "turnElapsedMs": 249,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-4-1-0-e8bbd228-045f-4e5b-b185-2b36de1becab",
+          "startupMs": 10801,
+          "workerCount": 1,
+          "heapUsedBytes": 93842928,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-1-1-e4ac82a6-5483-4024-938b-9ddc6b2d0bf4",
+          "startupMs": 14876,
+          "workerCount": 1,
+          "heapUsedBytes": 94545373,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-1-2-cdc31682-d6a0-4e19-94f8-fb85a40014f1",
+          "startupMs": 16043,
+          "workerCount": 1,
+          "heapUsedBytes": 93414341,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-1-3-c646a8af-03a9-4282-9ca7-b1362f81b481",
+          "startupMs": 3129,
+          "workerCount": 1,
+          "heapUsedBytes": 98743218,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 10,
+        "rendererProcessCount": 6,
+        "rssTotalKiB": 2140176,
+        "cpuTimeDeltaSeconds": 4.016631,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 2.8449740000000006,
+            "rssKiB": 214384
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 1.046932,
+            "rssKiB": 120384
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.11691399999999996,
+            "rssKiB": 86448
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0078110000000000054,
+            "rssKiB": 65264
+          },
+          {
+            "pid": 46377,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 115392
+          },
+          {
+            "pid": 46378,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 465648
+          },
+          {
+            "pid": 46379,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 225568
+          },
+          {
+            "pid": 46381,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 538464
+          },
+          {
+            "pid": 46382,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 230144
+          },
+          {
+            "pid": 46383,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 78480
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 552853,
+        "cpuSystemMicros": 176980,
+        "rssBeforeBytes": 95780864,
+        "rssAfterBytes": 89341952,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 1,
+      "repetition": 2,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 2676,
+      "turnElapsedMs": 103,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-1-2-0-530d2294-5bb0-4778-ade6-344eb0a2f281",
+          "startupMs": 2313,
+          "workerCount": 1,
+          "heapUsedBytes": 98509986,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 7,
+        "rendererProcessCount": 3,
+        "rssTotalKiB": 2015728,
+        "cpuTimeDeltaSeconds": 1.0742029999999991,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 0.8691219999999991,
+            "rssKiB": 272464
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.1803300000000001,
+            "rssKiB": 119744
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.023382000000000014,
+            "rssKiB": 87456
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0013689999999999952,
+            "rssKiB": 65680
+          },
+          {
+            "pid": 46647,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 190528
+          },
+          {
+            "pid": 46649,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 100480
+          },
+          {
+            "pid": 46650,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 1179376
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 145628,
+        "cpuSystemMicros": 34398,
+        "rssBeforeBytes": 90669056,
+        "rssAfterBytes": 108445696,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 2,
+      "repetition": 2,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 7185,
+      "turnElapsedMs": 316,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-2-2-0-ee6a3c00-51c4-4e6f-93df-7bfcd5ae9154",
+          "startupMs": 6587,
+          "workerCount": 1,
+          "heapUsedBytes": 115566442,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-2-2-1-f131cc5c-3eda-4a37-a004-33d4e964c571",
+          "startupMs": 2534,
+          "workerCount": 1,
+          "heapUsedBytes": 98784510,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 8,
+        "rendererProcessCount": 4,
+        "rssTotalKiB": 1924576,
+        "cpuTimeDeltaSeconds": 3.0730220000000004,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 2.6208240000000007,
+            "rssKiB": 269200
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.40438699999999983,
+            "rssKiB": 122000
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.04538500000000001,
+            "rssKiB": 86480
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0024259999999999976,
+            "rssKiB": 65200
+          },
+          {
+            "pid": 46726,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 139792
+          },
+          {
+            "pid": 46727,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 552896
+          },
+          {
+            "pid": 46728,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 608928
+          },
+          {
+            "pid": 46729,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 80080
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 203777,
+        "cpuSystemMicros": 60130,
+        "rssBeforeBytes": 108871680,
+        "rssAfterBytes": 97845248,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 4,
+      "repetition": 2,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 18114,
+      "turnElapsedMs": 252,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-4-2-0-d9dbe6e9-576f-4b1f-b573-b396bbc7e6a2",
+          "startupMs": 11895,
+          "workerCount": 1,
+          "heapUsedBytes": 83232152,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-2-1-3fc1e940-f07f-4c65-9649-442a366ee1b2",
+          "startupMs": 11236,
+          "workerCount": 1,
+          "heapUsedBytes": 83373077,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-2-2-c4ce1267-5b5d-42a3-b959-1685a92df7be",
+          "startupMs": 10851,
+          "workerCount": 1,
+          "heapUsedBytes": 83327753,
+          "eventCount": 18,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-2-3-eac0dc5e-70fd-46cc-ad96-e8476bc017d4",
+          "startupMs": 2922,
+          "workerCount": 1,
+          "heapUsedBytes": 96552235,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 10,
+        "rendererProcessCount": 6,
+        "rssTotalKiB": 2130816,
+        "cpuTimeDeltaSeconds": 3.8308640000000005,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 2.905806,
+            "rssKiB": 222352
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.8179070000000004,
+            "rssKiB": 121424
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.09886300000000003,
+            "rssKiB": 87392
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.008288000000000004,
+            "rssKiB": 65776
+          },
+          {
+            "pid": 46967,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 120704
+          },
+          {
+            "pid": 46968,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 477024
+          },
+          {
+            "pid": 46969,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 322640
+          },
+          {
+            "pid": 46970,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 402016
+          },
+          {
+            "pid": 46971,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 232912
+          },
+          {
+            "pid": 46972,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 78576
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 454103,
+        "cpuSystemMicros": 149365,
+        "rssBeforeBytes": 99516416,
+        "rssAfterBytes": 103022592,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 1,
+      "repetition": 3,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 2650,
+      "turnElapsedMs": 105,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-1-3-0-e98aa5d6-1feb-4841-a368-0b6af4b93a86",
+          "startupMs": 2324,
+          "workerCount": 1,
+          "heapUsedBytes": 78817984,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 7,
+        "rendererProcessCount": 3,
+        "rssTotalKiB": 1634352,
+        "cpuTimeDeltaSeconds": 0.9148209999999999,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 0.718674,
+            "rssKiB": 269744
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.17308099999999982,
+            "rssKiB": 120336
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.021729,
+            "rssKiB": 88016
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.001336999999999991,
+            "rssKiB": 66048
+          },
+          {
+            "pid": 47190,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 142512
+          },
+          {
+            "pid": 47191,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 81072
+          },
+          {
+            "pid": 47192,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 866624
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 108263,
+        "cpuSystemMicros": 32053,
+        "rssBeforeBytes": 106070016,
+        "rssAfterBytes": 109117440,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 2,
+      "repetition": 3,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 8784,
+      "turnElapsedMs": 417,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-2-3-0-07fbc7de-433b-4c3b-be59-895b4f53bd41",
+          "startupMs": 8056,
+          "workerCount": 1,
+          "heapUsedBytes": 82701423,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-2-3-1-b5a0a710-9ec9-4e29-a23b-1347ad13ef98",
+          "startupMs": 2582,
+          "workerCount": 1,
+          "heapUsedBytes": 99117811,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 8,
+        "rendererProcessCount": 4,
+        "rssTotalKiB": 2019648,
+        "cpuTimeDeltaSeconds": 3.8003790000000017,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 3.3017600000000016,
+            "rssKiB": 276736
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.445481,
+            "rssKiB": 122896
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.049514999999999976,
+            "rssKiB": 87264
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.0036230000000000012,
+            "rssKiB": 65888
+          },
+          {
+            "pid": 47419,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 119968
+          },
+          {
+            "pid": 47421,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 522224
+          },
+          {
+            "pid": 47422,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 748944
+          },
+          {
+            "pid": 47423,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 75728
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 201106,
+        "cpuSystemMicros": 61032,
+        "rssBeforeBytes": 109264896,
+        "rssAfterBytes": 100433920,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    },
+    {
+      "level": 4,
+      "repetition": 3,
+      "browserVersion": "156.0.8078.79",
+      "durationMs": 12006,
+      "turnElapsedMs": 231,
+      "workers": [
+        {
+          "sessionId": "worker-capacity-4-3-0-b8c0fbfd-18ca-478b-bebe-06600edaa1ef",
+          "startupMs": 11179,
+          "workerCount": 1,
+          "heapUsedBytes": 91928720,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-3-1-b9a0e0e3-740d-43c3-af35-20adedca94b5",
+          "startupMs": 9143,
+          "workerCount": 1,
+          "heapUsedBytes": 94516826,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-3-2-84e1b8d8-ea58-493e-868a-ce7a98682fe9",
+          "startupMs": 10720,
+          "workerCount": 1,
+          "heapUsedBytes": 93576357,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        },
+        {
+          "sessionId": "worker-capacity-4-3-3-b7523c6a-ddd2-473f-ad53-cd6f9639ee18",
+          "startupMs": 2530,
+          "workerCount": 1,
+          "heapUsedBytes": 136190047,
+          "eventCount": 19,
+          "promptCount": 1,
+          "terminalReason": "completed",
+          "agentLoopRequests": 1
+        }
+      ],
+      "chromeProcesses": {
+        "processCount": 10,
+        "rendererProcessCount": 6,
+        "rssTotalKiB": 2402672,
+        "cpuTimeDeltaSeconds": 3.188493999999998,
+        "processes": [
+          {
+            "pid": 45784,
+            "type": "browser",
+            "cpuTimeDeltaSeconds": 2.266766999999998,
+            "rssKiB": 247392
+          },
+          {
+            "pid": 45789,
+            "type": "GPU",
+            "cpuTimeDeltaSeconds": 0.8126740000000003,
+            "rssKiB": 118240
+          },
+          {
+            "pid": 45790,
+            "type": "network.mojom.NetworkService",
+            "cpuTimeDeltaSeconds": 0.10256200000000004,
+            "rssKiB": 87488
+          },
+          {
+            "pid": 45791,
+            "type": "storage.mojom.StorageService",
+            "cpuTimeDeltaSeconds": 0.006490999999999997,
+            "rssKiB": 65984
+          },
+          {
+            "pid": 47544,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 121248
+          },
+          {
+            "pid": 47545,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 416720
+          },
+          {
+            "pid": 47546,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 525248
+          },
+          {
+            "pid": 47547,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 507952
+          },
+          {
+            "pid": 47548,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 233936
+          },
+          {
+            "pid": 47549,
+            "type": "renderer",
+            "cpuTimeDeltaSeconds": null,
+            "rssKiB": 78464
+          }
+        ]
+      },
+      "nodeHarnessAndBackend": {
+        "cpuUserMicros": 395947,
+        "cpuSystemMicros": 131942,
+        "rssBeforeBytes": 102400000,
+        "rssAfterBytes": 111017984,
+        "note": "The backend and E2E harness share this Node process; these values are not isolated backend metrics."
+      }
+    }
+  ],
+  "totalAgentLoopRequests": 25,
+  "totalCapacityTurns": 21,
+  "totalCapacityRuns": 9,
+  "backendTopology": "One in-process PoC backend serves all pages; each page realm owns one DSH Host Dedicated Worker.",
+  "limitations": [
+    "The independent topology uses one same-origin page realm per Worker; the current app does not implement a single-page Worker supervisor or pool.",
+    "The CPU probe has no Workspace or external side effect; termination evidence does not prove arbitrary tool side effects are reversible.",
+    "A terminated Session retains an incomplete durable prefix; this test does not resume or synthesize a terminal event for that turn.",
+    "Chrome RSS combines page, Worker, browser and unrelated process costs; it is not per-Worker heap or a production capacity limit.",
+    "Scripted model responses validate Worker and Session scheduling, not real model concurrency or upstream latency."
+  ],
+  "pageErrors": [],
+  "workerErrors": [],
+  "externalRequests": []
+}

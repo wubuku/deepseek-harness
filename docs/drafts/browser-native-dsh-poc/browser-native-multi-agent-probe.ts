@@ -47,7 +47,7 @@ export interface BrowserNativeMultiAgentProbe {
   dispose(sessionIds?: readonly string[]): Promise<{ readonly disposedCount: number; readonly remainingCount: number }>
 }
 
-const MAX_PROBE_AGENTS = 4
+const MAX_PROBE_AGENTS = 8
 
 /** Create a validation-only controller for real AgentRegistry instances in one Worker Host. */
 export function createBrowserNativeMultiAgentProbe(
@@ -85,8 +85,8 @@ export function createBrowserNativeMultiAgentProbe(
       const currentRegistry = registry
       if (currentRegistry === undefined) throw new Error('multi-Agent probe plugin is not active')
       if (handles.size > 0) throw new Error('multi-Agent probe already owns live Agents')
-      if (specs.length < 2 || specs.length > MAX_PROBE_AGENTS) {
-        throw new Error(`multi-Agent probe accepts 2 to ${String(MAX_PROBE_AGENTS)} Agents`)
+      if (specs.length < 1 || specs.length > MAX_PROBE_AGENTS) {
+        throw new Error(`multi-Agent probe accepts 1 to ${String(MAX_PROBE_AGENTS)} Agents`)
       }
       const ids = specs.map(spec => spec.sessionId)
       if (new Set(ids).size !== ids.length) throw new Error('multi-Agent probe Session ids must be unique')

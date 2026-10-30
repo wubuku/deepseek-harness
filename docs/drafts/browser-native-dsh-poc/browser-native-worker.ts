@@ -282,7 +282,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-outbox-probe') return true
   if (data.action === 'multi-agent-start') {
-    return Array.isArray(data.agents) && data.agents.length >= 2 && data.agents.length <= 4
+    return Array.isArray(data.agents) && data.agents.length >= 1 && data.agents.length <= 8
       && data.agents.every(value => value !== null && typeof value === 'object' && !Array.isArray(value)
         && Object.keys(value).length === 2
         && typeof (value as Record<string, unknown>).sessionId === 'string'

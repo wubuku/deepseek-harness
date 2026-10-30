@@ -41,6 +41,22 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 复跑 scripted Chrome 验收需先运行 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，再执行 `node docs/drafts/browser-native-dsh-poc/tests/single-worker-cpu-contention.e2e.mjs`。probe 工具仅在显式 validation profile 可见，测试模型响应由 PoC backend barrier 驱动；它们不进入默认 profile，也不代表真实模型并发或任意工具可抢占。真实 LLM 仍单独用 `runtime-validation.e2e.mjs` 回归普通文件与刷新路径。同步代码无法接收 Worker cancel message；终止整个 Worker 会影响其所有 Session，Dedicated Worker 仍受页面生命周期约束。
 
+## Worker 拓扑的阻塞与终止隔离
+
+[多 Session Worker 隔离计划](next-session-worker-isolation-validation-plan.md)及[实测进度](next-session-worker-isolation-validation-progress.md)对比共享 Host Worker 与每个 Session 使用独立 Host Worker。Chrome 156 中，同一 Worker 的同步 CPU 工具会阻塞 peer Session；终止共享 Worker 后两个 Session 都保留未结束的持久化前缀。独立拓扑在同一 BrowserContext 的两个同源页面各运行一个 Worker：peer Session 可在另一 Worker 执行同步工具期间完成，终止忙碌 Worker 只留下它自己的未结算 tool call，另一 Session 正常完成；测试确认 prompt 未重复、没有伪造 tool result 或自动重放。
+
+本实验没有实现单页 Worker supervisor/pool：当前页面 realm 仍只连接一个 Host Worker。1/2/4 个页面/Worker 各重复三轮 scripted turn，共 21 个 turn；Chrome 进程 RSS 中位数约为 1.56/1.93/2.04 GiB，但包含页面、Worker、Chrome 公共进程和系统负载，启动与 RSS 样本波动明显，不能换算每 Worker heap 或生产并发上限。独立真实 LLM smoke 只回归普通文件读写与刷新续聊，不证明真实模型并发、活动 turn 恢复或任意工具副作用可回滚。
+
+复跑拓扑及资源诊断需先构建 preview，再执行：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
+  node docs/drafts/browser-native-dsh-poc/tests/session-worker-isolation.e2e.mjs
+```
+
+原始 Chrome 资源样本见[结果 JSON](session-worker-isolation-chrome-results.json)。
+
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
 旧实现验证了 Browser-native transport、Session durability、owner fencing、真实后端 LLM streaming、Tool bridge 和 Worker resume，但 Worker 使用目录内的 PoC-local loop adapter；它**没有**宣称现有 DSH `ctx.agentLoop` 已经在浏览器 Worker 中运行。旧版 [implementation-plan.md](implementation-plan.md)、[progress.md](progress.md) 和独立 HTML/loop 文件只用于追溯该协议实验，不能作为 v2 完成证明。

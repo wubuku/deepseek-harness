@@ -216,7 +216,14 @@ try {
       }, [channel.port2])
       window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
         const requestId = browserNativeTestUuid()
-        pending.set(requestId, resolve)
+        const timeout = window.setTimeout(() => {
+          pending.delete(requestId)
+          resolve({ ok: false, error: 'browser-native test request timed out' })
+        }, 30_000)
+        pending.set(requestId, (response) => {
+          window.clearTimeout(timeout)
+          resolve(response)
+        })
         currentWorker.postMessage({ type: 'browser-native-workspace-test-request', requestId, ...request })
       })
     }

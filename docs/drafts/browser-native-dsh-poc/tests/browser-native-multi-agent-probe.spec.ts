@@ -56,6 +56,21 @@ function fakeRuntime(failCreateSessionId?: string) {
 }
 
 describe('Browser-Native multi-Agent validation probe', () => {
+  it('starts and disposes a single Agent for one-Session Worker placement', async () => {
+    const fake = fakeRuntime()
+    fake.probe.plugin({ agents: fake.registry })
+
+    await expect(fake.probe.start([
+      { sessionId: 'single-session', prompt: 'single prompt' },
+    ])).resolves.toEqual({ sessionIds: ['single-session'], startedCount: 1 })
+    expect(fake.probe.status()).toEqual([
+      { sessionId: 'single-session', status: 'running', registered: true },
+    ])
+
+    await expect(fake.probe.dispose()).resolves.toEqual({ disposedCount: 1, remainingCount: 0 })
+    expect(fake.disposed).toEqual(['single-session'])
+  })
+
   it('starts distinct Agents in one registry and cancels only the selected Agent', async () => {
     const fake = fakeRuntime()
     const release = fake.probe.plugin({ agents: fake.registry })
@@ -97,6 +112,18 @@ describe('Browser-Native multi-Agent validation probe', () => {
       { sessionId: 'session-d', prompt: 'prompt-d' },
     ])).rejects.toThrow(/already owns live Agents/)
     await fake.probe.dispose()
+  })
+
+  it('rejects more Agents than the validation limit', async () => {
+    const fake = fakeRuntime()
+    fake.probe.plugin({ agents: fake.registry })
+    const specs = Array.from({ length: 9 }, (_, index) => ({
+      sessionId: `session-${String(index)}`,
+      prompt: `prompt-${String(index)}`,
+    }))
+
+    await expect(fake.probe.start(specs)).rejects.toThrow(/accepts 1 to 8 Agents/)
+    expect(fake.agents.size).toBe(0)
   })
 
   it('disposes every previously created Agent when a later Session creation fails', async () => {
