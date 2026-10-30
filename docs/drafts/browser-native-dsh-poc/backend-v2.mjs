@@ -1413,8 +1413,24 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     writeStreamError(response, fault.code ?? 'UPSTREAM_LLM_TRUNCATED', fault.message ?? 'scripted stream truncated during tool arguments')
     return
   }
+  if (fault?.kind === 'tool-call') {
+    await scriptedWorkspaceToolCall(response, fault.call)
+    return
+  }
+  if (fault?.kind === 'barrier-tool-call') {
+    await fault.release
+    fault.onReleased?.()
+    if (isClientClosed()) return
+    await scriptedWorkspaceToolCall(response, fault.call)
+    return
+  }
+  if (fault?.kind === 'text') {
+    scriptedText(response, fault.text ?? 'scripted response')
+    return
+  }
   if (fault?.kind === 'barrier-text') {
     await fault.release
+    fault.onReleased?.()
     if (isClientClosed()) return
     scriptedText(response, fault.text ?? 'released scripted response')
     return

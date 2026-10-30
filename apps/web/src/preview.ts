@@ -21,6 +21,7 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'skill-filesystem'
     || searchParams.get('browser-native-test') === 'permission-lifecycle'
     || searchParams.get('browser-native-test') === 'multi-agent'
+    || searchParams.get('browser-native-test') === 'cpu-contention'
     || searchParams.get('browser-native-test') === 'session-mount'
     || searchParams.get('browser-native-test') === 'session-projection'
     || searchParams.get('browser-native-test') === 'approval-integrity')
@@ -100,6 +101,20 @@ interface BrowserNativeWorkspaceTestResponse {
   }
 }
 
+interface BrowserNativeCpuContentionEvent {
+  readonly type: 'browser-native-cpu-contention-stage'
+  readonly stage: 'started' | 'completed' | 'cancelled'
+  readonly mode: 'blocking' | 'cooperative'
+  readonly sessionId: string
+  readonly callId: string
+  readonly at: number
+  readonly elapsedMs?: number
+}
+
+type BrowserNativeWorkspaceTestMessage =
+  | (BrowserNativeWorkspaceTestResponse & { readonly requestId: string })
+  | BrowserNativeCpuContentionEvent
+
 function browserNativeTestUuid(): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -164,6 +179,7 @@ declare global {
   interface Window {
     __DSH_BROWSER_NATIVE_WORKSPACE_TEST__?:
     (request: BrowserNativeWorkspaceTestRequest) => Promise<BrowserNativeWorkspaceTestResponse>
+    __DSH_BROWSER_NATIVE_CPU_CONTENTION_EVENT__?: (event: BrowserNativeCpuContentionEvent) => void
   }
 }
 
@@ -183,7 +199,12 @@ try {
     if (browserNativeWorkspaceTest || browserNativeRuntimeProbeTest) {
       const channel = new MessageChannel()
       const pending = new Map<string, (response: BrowserNativeWorkspaceTestResponse) => void>()
-      channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestResponse & { requestId: string }>) => {
+      channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestMessage>) => {
+        if ('type' in event.data && event.data.type === 'browser-native-cpu-contention-stage') {
+          window.__DSH_BROWSER_NATIVE_CPU_CONTENTION_EVENT__?.(event.data)
+          return
+        }
+        if (!('requestId' in event.data)) return
         pending.get(event.data.requestId)?.(event.data)
         pending.delete(event.data.requestId)
       })
@@ -191,6 +212,7 @@ try {
       currentWorker.postMessage({
         type: 'browser-native-workspace-test-init',
         skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
+        cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
       }, [channel.port2])
       window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
         const requestId = browserNativeTestUuid()

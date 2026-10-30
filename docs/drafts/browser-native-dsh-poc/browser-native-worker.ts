@@ -30,6 +30,7 @@ import { createBrowserNativeStaticModules, flushBrowserNativeSession } from './b
 import { requireActiveModuleLoader } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import { createBrowserNativeMultiAgentProbe } from './browser-native-multi-agent-probe.ts'
 import type { BrowserNativeMultiAgentRuntime } from './browser-native-multi-agent-probe.ts'
+import { createBrowserNativeCpuContentionProbe } from './browser-native-cpu-contention-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
@@ -125,6 +126,10 @@ let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
 let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
 const capabilityPublication = new BrowserNativeCapabilityPublication()
 const permissionProbe = createBrowserNativePermissionProbe()
+const cpuContentionProbe = createBrowserNativeCpuContentionProbe(event => {
+  if (workspaceTestPort === undefined) throw new Error('CPU contention probe requires the validation MessagePort')
+  workspaceTestPort.postMessage(event)
+})
 const multiAgentProbe = createBrowserNativeMultiAgentProbe(() => {
   const requireFrom = requireActiveModuleLoader().requireFrom('/dsh')
   const sessionRuntime = requireFrom('@deepseek-ai/dsh-session') as { SessionId(value: string): import('@deepseek-ai/dsh-session').SessionId }
@@ -2190,6 +2195,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     }
     downloadPauseStage = data.downloadPauseStage
     if (data.skillFilesystem === true) capabilityPublication.enableSkillFilesystemValidation()
+    if (data.cpuContention === true) capabilityPublication.enableCpuContentionValidation()
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()
@@ -2337,6 +2343,9 @@ self.addEventListener('message', (event: MessageEvent) => {
       staticModules: {
         ...nodeBuiltins,
         '@deepseek-ai/dsh-browser-native-multi-agent-probe': () => multiAgentProbe.plugin,
+        ...(workspaceTestPort === undefined ? {} : {
+          '@deepseek-ai/dsh-browser-native-cpu-contention-probe': cpuContentionProbe.factory,
+        }),
         ...createBrowserNativeStaticModules(
           workspace,
           sessionOutbox,

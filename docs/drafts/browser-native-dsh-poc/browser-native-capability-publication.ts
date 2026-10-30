@@ -16,6 +16,7 @@ const WORKSPACE_CAPABILITIES: readonly BrowserNativeCapabilityId[] = [
 
 const WORKSPACE_CAPABILITY_FAILURE = 'LOCAL_WORKSPACE_PERSISTENCE_UNCONFIRMED'
 const READ_ONLY_WORKSPACE_TOOLS = new Set(['read', 'grep', 'glob'])
+const CPU_CONTENTION_VALIDATION_TOOLS = ['browser_cpu_blocking_probe', 'browser_cpu_cooperative_probe']
 
 /** Own the live/degraded tool roster for one Dedicated Worker lifetime. */
 export class BrowserNativeCapabilityPublication {
@@ -23,6 +24,7 @@ export class BrowserNativeCapabilityPublication {
   private workspaceReadOnly = false
   private workspaceStale = false
   private skillFilesystemValidation = false
+  private cpuContentionValidation = false
   private readonly degraded = new Set<BrowserNativeCapabilityId>()
   private readonly listeners = new Set<() => void>()
 
@@ -66,10 +68,18 @@ export class BrowserNativeCapabilityPublication {
     this.notify()
   }
 
+  /** Publish CPU probe tools only in the dedicated contention validation profile. */
+  enableCpuContentionValidation(): void {
+    if (this.cpuContentionValidation) return
+    this.cpuContentionValidation = true
+    this.notify()
+  }
+
   /** Return the tools that are currently eligible for a DSH model request. */
   publishedToolNames(): ReadonlySet<string> {
     const names = publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST, this.capabilities()).map(tool => tool.name)
     if (this.skillFilesystemValidation) names.push('skill')
+    if (this.cpuContentionValidation) names.push(...CPU_CONTENTION_VALIDATION_TOOLS)
     if (this.workspaceStale || this.degraded.size > 0) {
       return new Set(names.filter(name => !this.isWorkspaceTool(name)))
     }

@@ -157,6 +157,24 @@ describe('browser-native capability preflight', () => {
     expect(() => assertBrowserNativeToolSchemas([{ name: 'todo_write' }], publication)).not.toThrow()
   })
 
+  it('publishes CPU contention probes only when the dedicated validation profile enables them', () => {
+    const publication = new BrowserNativeCapabilityPublication()
+    publication.activate()
+
+    expect(publication.isToolPublished('browser_cpu_blocking_probe')).toBe(false)
+    expect(() => assertBrowserNativeToolSchemas([{ name: 'browser_cpu_blocking_probe' }], publication))
+      .toThrow('not currently published')
+
+    publication.enableCpuContentionValidation()
+
+    expect(publication.isToolPublished('browser_cpu_blocking_probe')).toBe(true)
+    expect(publication.isToolPublished('browser_cpu_cooperative_probe')).toBe(true)
+    expect(() => assertBrowserNativeToolSchemas([
+      { name: 'browser_cpu_blocking_probe' },
+      { name: 'browser_cpu_cooperative_probe' },
+    ], publication)).not.toThrow()
+  })
+
   it('keeps pre-activation Workspace degradation latched when startup probes later pass', () => {
     const publication = new BrowserNativeCapabilityPublication()
     publication.degradeWorkspace()

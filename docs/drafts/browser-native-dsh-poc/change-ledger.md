@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-061：单 Worker CPU 阻塞与 cooperative yield
+
+```text
+changeId: BN-P2-061
+upstreamBaseline: 当前 research checkout；DSH v0.2.1-rc.2 已合入历史；2026-10-31；仅主 worktree；开始时存在本批外 `.archify/` WIP，本批未修改或暂存。
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-capability-publication.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/browser-native-cpu-contention-probe.js; docs/drafts/browser-native-dsh-poc/browser-native-cpu-contention-probe.ts; docs/drafts/browser-native-dsh-poc/browser-native-cpu-contention.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-capabilities.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-cpu-contention-probe.spec.ts; docs/drafts/browser-native-dsh-poc/tests/single-worker-cpu-contention.e2e.mjs; docs/drafts/browser-native-dsh-poc/single-worker-cpu-contention-validation-plan.md; docs/drafts/browser-native-dsh-poc/single-worker-cpu-contention-validation-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 上一批证明同一 Worker 可并行等待多个 Agent 的模型请求，但没有测同步 CPU JavaScript 对其他 Session 和 cancel message 的阻塞范围；需要验证 cooperative yield 是否足以恢复 peer Session 推进与取消响应。
+existingExtensionPointsChecked: 复用 `ctx.agents.create()`、正式 ToolExecution `AbortSignal`、现有 Worker 测试 MessagePort、validation-only profile 和 backend scripted LLM fault hook；未改 Agent Loop、Session event format、默认 profile 或生产工具。
+behaviorChange: 增加 20–2000 ms 有界同步与分片 CPU validation tools；只有 `browser-native-test=cpu-contention` 的显式 profile 才发布 tool schema。backend barrier fault 支持测试进程内 `onReleased` 回调以记录服务端实际释放时间；Worker probe event 经现有测试 MessagePort 返回，不进入正式 Host wire tunnel。Chrome E2E 证明同步工作期间 backend 已释放 peer response、peer Session 和取消消息仍等待 Worker event loop；cooperative slices 允许 peer turn 和取消检查点先完成。
+directoryOutChangeReason: Preview query 接线仅用于既有 PoC validation test port 启动本批 validation-only 工具；默认 Web UI、默认 Browser profile 和正式 Worker protocol 不变。其余代码与测试在 PoC 目录。本批未修改正式 packages、Session schema、依赖或 lockfile。
+consumersUpdated: Preview validation bootstrap、Worker publication roster、backend scripted barrier、PoC 单测与 Chrome E2E、PoC README、兼容矩阵、drafts 索引、计划/进度和本账本。
+tests: focused Vitest 2 files/12 tests passed；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` passed；Chrome 156 `single-worker-cpu-contention.e2e.mjs` passed with one Worker, 1900 ms blocking probe, backend peer response release about 1816 ms before CPU end, delayed cancel handling, 112 main-thread animation frames, cooperative peer completion and cancellation observed around 195 ms, one matching DSH tool/call and tool/result per probe, no pageerror or external request. `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 56/56 passed. Real Chrome `runtime-validation.e2e.mjs` with `gpt-5.6-sol` passed ordinary `read → write → read` and refresh recovery: 59 Session events, durableThroughSeq 58, 8 LLM HTTP 200, 2 Workspace commits HTTP 200, same-origin model route. Test output also contains refresh aborts, unimplemented preview API 404s, and four existing Agent disposal listener warnings; those are not represented as zero-warning evidence. Documentation gates pending until final review.
+syncReplaySteps: After upstream sync inspect preview test bootstrap and Worker MessagePort contracts; verify validation tools remain absent from the default roster; rerun focused Vitest, preview build, backend-v2 tests, Chrome CPU contention E2E, real Chrome LLM runtime smoke, and documentation gates. Keep the scripted barrier result separate from real-model smoke; do not claim preemption, capacity, production scheduling, or post-page-close execution.
+deleteCondition: Remove this validation profile, test tools and event tracing after maintained Worker scheduling/CPU admission behavior and equivalent Chrome concurrency tests cover peer progress, cancellation, Session settlement, and worker-wide termination recovery; or remove the Browser-Native DSH PoC.
+status: implemented-as-draft
+```
+
 ### BN-P2-059：composer 附件提交状态与故障恢复
 
 ```text

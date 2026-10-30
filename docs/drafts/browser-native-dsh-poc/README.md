@@ -33,7 +33,13 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/runtime-validation.e2e.mjs
 ```
 
-本批只证明一个 Worker Host 中三个 Agent Loop 的异步等待、取消隔离与 Session 隔离，不是并发容量基准。Worker 内 CPU 密集任务仍共享 JavaScript event loop；未验证真实 LLM 同时服务多个 Agent、更高并发数、调度公平性、容量上限或生产多 Session UI。
+该批只证明一个 Worker Host 中三个 Agent Loop 的异步等待、取消隔离与 Session 隔离，不是并发容量基准。单 Worker 内 CPU 密集任务仍共享 JavaScript event loop；同步阻塞与 cooperative yield 结果见下节。真实 LLM 同时服务多个 Agent、更高并发数、容量上限或生产多 Session UI 尚未验证。
+
+## 单 Worker CPU 阻塞与协作式让出
+
+[验证计划](single-worker-cpu-contention-validation-plan.md)与[实测进度](single-worker-cpu-contention-validation-progress.md)比较真实 DSH Agent Loop 在同一 Chrome Dedicated Worker 中执行有界同步 CPU 工具和分片 cooperative 工具的时序。同步工具运行 1900 ms 时，PoC backend 已释放 peer Session 的模型响应且主线程动画继续，但 Worker 直到同步工具返回才处理该响应与取消消息；匹配的 DSH `tool/call` 和 `tool/result` 各记录一次。分片工具每 8 ms 让出 Worker task 并检查 `AbortSignal`，使 peer Session 在该工具结束前完成；取消在下一个 cooperative 检查点被观察，本次 Chrome 计时约 12 ms。
+
+复跑 scripted Chrome 验收需先运行 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，再执行 `node docs/drafts/browser-native-dsh-poc/tests/single-worker-cpu-contention.e2e.mjs`。probe 工具仅在显式 validation profile 可见，测试模型响应由 PoC backend barrier 驱动；它们不进入默认 profile，也不代表真实模型并发或任意工具可抢占。真实 LLM 仍单独用 `runtime-validation.e2e.mjs` 回归普通文件与刷新路径。同步代码无法接收 Worker cancel message；终止整个 Worker 会影响其所有 Session，Dedicated Worker 仍受页面生命周期约束。
 
 需要进行真实浏览器验收时，使用两个 PoC 共用的[手动验收说明](manual-acceptance.md)；不要把旧版 `run.mjs` 或 `public/worker.js` 当作 v2 的启动入口。
 
