@@ -6,7 +6,7 @@ description: "记录单个 Browser-Native DSH Worker 中同步 CPU 阻塞、协�
 
 ## 当前状态
 
-状态：scripted Chrome 验证、真实 LLM 普通路径 smoke、代码构建、定向测试和可归因的文档检查完成；准备提交和推送。目标分支为 `research` 主工作区，仅验证 Chrome，不创建隔离 worktree。工作区有本批以外的 `.archify/` WIP，本批不会暂存或修改它。
+状态：本批 scripted Chrome 验证、真实 LLM 普通路径 smoke、代码构建、定向测试和可归因的文档检查完成；提交 `a300154b1a3f7844c392d1ba8f80f29db9da817d` 已推送至 `origin/research`。目标分支为 `research` 主工作区，仅验证 Chrome，没有创建隔离 worktree。工作区保留本批以外的 `.archify/` WIP，未暂存或修改。
 
 ## 里程碑
 
@@ -17,7 +17,7 @@ description: "记录单个 Browser-Native DSH Worker 中同步 CPU 阻塞、协�
 | M2：Chrome 同步阻塞 E2E | `complete` | Chrome 156 单 Worker/Host 内真实 DSH Agent Loop 运行 1900 ms 同步 probe；peer backend 响应在 probe 结束前约 1810 ms 释放但 peer Session 尚无 terminal event；取消消息在工具返回后才处理；页面动画帧仍推进。tool/call 与 tool/result 各一条。 | cooperative 对照。 |
 | M3：Chrome cooperative-yield E2E | `complete` | 同一 Worker 的 peer Agent 在 205 ms cooperative probe 完成前结束；CPU Agent 在取消发送后约 12 ms 的本次 Chrome 计时中观察到取消，并以 `aborted` 结束；两 Session 输入和工具调用身份分离。 | 真实模型普通路径 smoke。 |
 | M4：真实 LLM smoke | `complete` | Chrome + `gpt-5.6-sol` 完成 `read → write → read`、刷新后同 Session 恢复；59 个 Session events、`durableThroughSeq=58`、8/8 模型 HTTP 200、2 次 Workspace commit 200。 | 文档门禁。 |
-| M5：文档、提交与推送 | `in progress` | README、兼容矩阵、drafts 索引和 change ledger 已更新；`pnpm run build` 9/9、Web TypeScript、Preview build、markdown wrap/link、doc-typecheck 均通过。`pnpm run doc-sync` 42/43 通过；唯一失败的 repository-reference gate 扫描到本批外 `.archify/` WIP 内 5 处 commit-hash，未触碰该目录。提交与推送尚未执行。 | 复核 outgoing diff，仅暂存本批路径，提交并推送 `research`。 |
+| M5：文档、提交与推送 | `complete with unrelated repository-reference failure` | README、兼容矩阵、drafts 索引和 change ledger 已更新；`pnpm run build` 9/9、Web TypeScript、Preview build、markdown wrap/link、doc-typecheck、pre-commit hooks 和 pre-push typecheck 均通过。`pnpm run doc-sync` 42/43 通过；唯一失败的 repository-reference gate 扫描到本批外 `.archify/` WIP 内 5 处 commit-hash，未触碰该目录。提交 `a300154b1a3f7844c392d1ba8f80f29db9da817d` 已推送，且 `HEAD` 与 `origin/research` 相同。 | 本批结束并暂停。 |
 
 ## 基线与结论
 
@@ -37,6 +37,7 @@ description: "记录单个 Browser-Native DSH Worker 中同步 CPU 阻塞、协�
 | 2026-10-31 | `pnpm --filter @deepseek-ai/dsh-web-frontend exec tsc --noEmit -p tsconfig.json`；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`；`pnpm run build` | Web TypeScript 通过；Preview build 通过；仓库 build 的 9 个 gate 全部通过。构建输出保留平台选择、tsdown 弃用和大 chunk warnings。 | 运行文档门禁。 |
 | 2026-10-31 | `pnpm run verify-md-wrap`；`pnpm run verify-md-links`；`pnpm run doc-typecheck` | 分别检查 2267 个 Markdown 文件、2230 个 Markdown 文件和 100 个代码块；均通过。 | 记录 doc-sync 的单项外部 WIP 失败并提交。 |
 | 2026-10-31 | `pnpm run doc-sync` | 42/43 gate 通过。唯一失败 `verify-repository-references` 在本批外未跟踪 `.archify/architecture-dsh-memory-20261031-012757/` 中报告 5 处 commit-hash；其余 markdown、doc-typecheck、文档构建、目录索引、翻译配对和其他文档 gate 通过。本批未修改或暂存 `.archify/`。 | 保留外部 WIP 原状，完成本批提交与推送。 |
+| 2026-10-31 | `git commit -m "test(browser): validate same-worker CPU contention"`；`git push origin research`；`git fetch origin research && git rev-parse HEAD origin/research` | 提交 hook 的 staged lint、whitespace 和 vendor manifest guard 通过；pre-push typecheck 5/5 通过；提交 `a300154b1a3f7844c392d1ba8f80f29db9da817d` 已推送，远端与本地 SHA 相同。仅本批 17 个路径进入提交，`.archify/` 保持未跟踪且未改动。 | 本批完成。 |
 
 ## 已知限制
 
