@@ -22,6 +22,8 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 [单 Worker 多 Session Agent Loop 验证计划](same-worker-multi-session-validation-plan.md)及[进度](same-worker-multi-session-validation-progress.md)则直接通过正式 `ctx.agents.create()` 在同一个真实 DSH Host Worker 中运行三个 Agent/Session。Chrome E2E 用 PoC backend 的确定性响应 hook 同时挂起三条真实 DSH Loop，不调用外部模型；测试证明请求可并行等待、取消只影响指定 Agent、Session prompt 不串线且 handles 全部释放。独立真实 LLM smoke 只回归普通文件工具和 Session 刷新续接，不把模型自主并发或刷新后的 Workspace 文件持久性作为结论。
 
+[Session 编排验证计划](next-session-orchestration-validation-plan.md)及[进度](next-session-orchestration-validation-progress.md)在此基础上验证 `active`/`parked` 投影、单 Agent targeted stop、运行中 route switch 拒绝、idle 后 failure/recovery route 和 validation-only admission。Chrome 156 scripted barrier 已在一个 Dedicated Worker 中运行三个真实 DSH Agent 并通过上述控制；真实 `gpt-5.6-sol` smoke 只覆盖普通 `read → write → read` 与刷新恢复。四 Agent 上限不代表生产容量，scripted barrier 不证明真实模型多 Agent 并发，Dedicated Worker 也不是页面关闭后的后台 Agent。
+
 复跑单 Worker 并发验收：
 
 ```sh

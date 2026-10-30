@@ -112,6 +112,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 52. [Browser-Native 单 Worker 多 Session Agent Loop 验证](browser-native-dsh-poc/same-worker-multi-session-validation-plan.md)及[进度](browser-native-dsh-poc/same-worker-multi-session-validation-progress.md)：Chrome 中一个 Dedicated Worker/Host 同时运行三个真实 DSH Agent Loop，验证并发模型等待、单 Agent 取消、Session 输入隔离和 dispose；真实 LLM 仅回归普通文件/Session 刷新路径，不代表真实模型多 Agent 并发、CPU 并行或容量上限。
 53. [Browser-Native 单 Worker CPU 阻塞与协作式让出](browser-native-dsh-poc/single-worker-cpu-contention-validation-plan.md)及[进度](browser-native-dsh-poc/single-worker-cpu-contention-validation-progress.md)：Chrome 156 真实 Worker/DSH Agent Loop 对比同步 CPU 工具阻塞和 cooperative yield，记录 peer Session 响应、取消消息与主线程帧；scripted barrier 提供确定性并发时序，真实 LLM 只回归普通文件/刷新路径，不代表任意工具可抢占、性能 SLA 或容量结论。
 54. [Browser-Native 多 Session Worker 隔离验证](browser-native-dsh-poc/next-session-worker-isolation-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-worker-isolation-validation-progress.md)：Chrome 对比共享 Worker 与每 Session 一 Worker 的 CPU 阻塞和强制终止影响，并以 1/2/4 个页面 Worker 各三轮记录资源诊断；独立拓扑目前使用两个同源页面，不是单页 Worker pool，资源样本不能推导每 Worker heap 或生产容量。
+55. [Browser-Native Session 编排、route 切换与 admission 验证](browser-native-dsh-poc/next-session-orchestration-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-orchestration-validation-progress.md)：Chrome 156 在一个 Dedicated Worker 中运行三个真实 DSH Agent，验证 active/parked 投影、目标取消、运行中 route switch 拒绝、失败 route 后恢复和 validation-only admission；scripted barrier 不证明真实模型多 Agent 并发，真实 LLM 只回归普通文件与刷新恢复，四 Agent 上限不是生产容量。
 
 ### 需要实现或审查代码时
 

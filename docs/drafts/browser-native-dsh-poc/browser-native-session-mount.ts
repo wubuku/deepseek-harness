@@ -228,11 +228,10 @@ export class BrowserNativeSessionMountCoordinator {
     return mountSnapshot(target)
   }
 
-  /** Begin an execution only from the active Session and current owner. */
+  /** Begin an execution for any available owned Session, regardless of its visible view. */
   beginExecution(sessionId: string, executionId: string, state: 'running' | 'waiting' = 'running'): BrowserNativeSessionMountSnapshot {
     const target = this.record(sessionId)
     this.assertActivatable(target)
-    if (target.view !== 'active') throw new BrowserNativeSessionMountError('SESSION_MOUNT_NOT_ACTIVE', `Session "${sessionId}" is not active`)
     assertIdentifier(executionId, 'executionId')
     if (target.execution !== undefined && ['running', 'waiting'].includes(target.execution.state)) {
       throw new BrowserNativeSessionMountError('SESSION_EXECUTION_ACTIVE', `Session "${sessionId}" already has an active execution`)

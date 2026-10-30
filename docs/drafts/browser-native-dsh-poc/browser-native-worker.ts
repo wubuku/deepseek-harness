@@ -30,6 +30,8 @@ import { createBrowserNativeStaticModules, flushBrowserNativeSession } from './b
 import { requireActiveModuleLoader } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import { createBrowserNativeMultiAgentProbe } from './browser-native-multi-agent-probe.ts'
 import type { BrowserNativeMultiAgentRuntime } from './browser-native-multi-agent-probe.ts'
+import { createBrowserNativeSessionOrchestrationProbe } from './browser-native-session-orchestration-probe.ts'
+import type { BrowserNativeSessionOrchestrationRuntime } from './browser-native-session-orchestration-probe.ts'
 import { createBrowserNativeCpuContentionProbe } from './browser-native-cpu-contention-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -141,6 +143,21 @@ const multiAgentProbe = createBrowserNativeMultiAgentProbe(() => {
     userMessage: value => llmRuntime.createUserMessage({ content: [{ type: 'text', text: value }], source: { kind: 'user' } }),
   } satisfies BrowserNativeMultiAgentRuntime
 })
+const sessionOrchestrationProbe = createBrowserNativeSessionOrchestrationProbe(() => {
+  const requireFrom = requireActiveModuleLoader().requireFrom('/dsh')
+  const sessionRuntime = requireFrom('@deepseek-ai/dsh-session') as { SessionId(value: string): import('@deepseek-ai/dsh-session').SessionId }
+  const llmRuntime = requireFrom('@deepseek-ai/dsh-llm') as {
+    createUserMessage(input: { readonly content: readonly { readonly type: 'text'; readonly text: string }[]; readonly source: { readonly kind: 'user' } }): import('@deepseek-ai/dsh-llm').UserMessage
+  }
+  const agentRuntime = requireFrom('@deepseek-ai/dsh-agent') as {
+    installModelSelection(agentCtx: import('@deepseek-ai/cordis').Context, selection: import('@deepseek-ai/dsh-agent').ModelSelectionRef): () => void
+  }
+  return {
+    sessionId: value => sessionRuntime.SessionId(value),
+    userMessage: value => llmRuntime.createUserMessage({ content: [{ type: 'text', text: value }], source: { kind: 'user' } }),
+    installModelSelection: agentRuntime.installModelSelection,
+  } satisfies BrowserNativeSessionOrchestrationRuntime
+})
 const pending: unknown[] = []
 const sessionOutbox = new BrowserNativeSessionOutbox({
   abortNextAppend: () => {
@@ -223,9 +240,12 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
-  readonly agents?: readonly { readonly sessionId: string; readonly prompt: string }[]
+  readonly action: 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly sessionId?: string
+  readonly provider?: string
+  readonly model?: string
+  readonly prompt?: string
   readonly controlInjection?: BrowserNativeControlTestInjection
   readonly stage?: 'before' | 'after'
   readonly path?: string
@@ -294,6 +314,34 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'multi-agent-cancel') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'multi-agent-status' || data.action === 'multi-agent-dispose') return true
+  if (data.action === 'session-orchestration-start') {
+    return Array.isArray(data.agents) && data.agents.length >= 1 && data.agents.length <= 8
+      && data.agents.every(value => value !== null && typeof value === 'object' && !Array.isArray(value)
+        && (Object.keys(value).length === 2 || Object.keys(value).length === 3 || Object.keys(value).length === 4)
+        && typeof (value as Record<string, unknown>).sessionId === 'string'
+        && (value as Record<string, unknown>).sessionId.length > 0
+        && (value as Record<string, unknown>).sessionId.length <= 128
+        && typeof (value as Record<string, unknown>).prompt === 'string'
+        && (value as Record<string, unknown>).prompt.length > 0
+        && (value as Record<string, unknown>).prompt.length <= 256
+        && ((value as Record<string, unknown>).provider === undefined || typeof (value as Record<string, unknown>).provider === 'string')
+        && ((value as Record<string, unknown>).model === undefined || typeof (value as Record<string, unknown>).model === 'string'))
+  }
+  if (data.action === 'session-orchestration-activate'
+    || data.action === 'session-orchestration-park'
+    || data.action === 'session-orchestration-cancel') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  }
+  if (data.action === 'session-orchestration-followup') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.prompt === 'string' && data.prompt.length > 0 && data.prompt.length <= 256
+  }
+  if (data.action === 'session-orchestration-switch-route') {
+    return typeof data.sessionId === 'string' && data.sessionId.length > 0
+      && typeof data.provider === 'string' && data.provider.length > 0 && data.provider.length <= 128
+      && typeof data.model === 'string' && data.model.length > 0 && data.model.length <= 128
+  }
+  if (data.action === 'session-orchestration-status' || data.action === 'session-orchestration-dispose') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
@@ -1759,6 +1807,49 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, multiAgent: await multiAgentProbe.dispose() })
       return
     }
+    if (request.action === 'session-orchestration-start') {
+      if (request.agents === undefined) throw new Error('session orchestration requires Session specifications')
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: await sessionOrchestrationProbe.start(request.agents) })
+      return
+    }
+    if (request.action === 'session-orchestration-activate') {
+      if (request.sessionId === undefined) throw new Error('session orchestration activate requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: sessionOrchestrationProbe.activate(request.sessionId) })
+      return
+    }
+    if (request.action === 'session-orchestration-park') {
+      if (request.sessionId === undefined) throw new Error('session orchestration park requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: sessionOrchestrationProbe.park(request.sessionId) })
+      return
+    }
+    if (request.action === 'session-orchestration-cancel') {
+      if (request.sessionId === undefined) throw new Error('session orchestration cancel requires a Session id')
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: sessionOrchestrationProbe.cancel(request.sessionId) })
+      return
+    }
+    if (request.action === 'session-orchestration-followup') {
+      if (request.sessionId === undefined || request.prompt === undefined) throw new Error('session orchestration followup requires a Session id and prompt')
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: sessionOrchestrationProbe.followup(request.sessionId, request.prompt) })
+      return
+    }
+    if (request.action === 'session-orchestration-switch-route') {
+      if (request.sessionId === undefined || request.provider === undefined || request.model === undefined) {
+        throw new Error('session orchestration route switch requires Session, provider, and model')
+      }
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        sessionOrchestration: sessionOrchestrationProbe.switchRoute(request.sessionId, { provider: request.provider, model: request.model }),
+      })
+      return
+    }
+    if (request.action === 'session-orchestration-status') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: sessionOrchestrationProbe.status() })
+      return
+    }
+    if (request.action === 'session-orchestration-dispose') {
+      workspaceTestResponse(request.requestId, { ok: true, sessionOrchestration: await sessionOrchestrationProbe.dispose() })
+      return
+    }
     if (request.action === 'session-projection-probe') {
       workspaceTestResponse(request.requestId, { ok: true, sessionProjection: runSessionProjectionProbe() })
       return
@@ -2343,6 +2434,7 @@ self.addEventListener('message', (event: MessageEvent) => {
       staticModules: {
         ...nodeBuiltins,
         '@deepseek-ai/dsh-browser-native-multi-agent-probe': () => multiAgentProbe.plugin,
+        '@deepseek-ai/dsh-browser-native-session-orchestration-probe': () => sessionOrchestrationProbe.plugin,
         ...(workspaceTestPort === undefined ? {} : {
           '@deepseek-ai/dsh-browser-native-cpu-contention-probe': cpuContentionProbe.factory,
         }),

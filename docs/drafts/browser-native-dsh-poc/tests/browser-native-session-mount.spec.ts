@@ -37,6 +37,15 @@ describe('Browser-Native Session mount coordinator', () => {
     expect(mounts.acceptLive('session-b', identity('session-b'), event(1, 'b-live'))).toBe('accepted')
   })
 
+  it('starts a parked owned Session without changing the visible projection', () => {
+    const mounts = coordinator()
+    mounts.activate('session-a')
+    const parked = mounts.beginExecution('session-b', 'turn-b')
+
+    expect(parked).toMatchObject({ sessionId: 'session-b', view: 'parked', execution: { state: 'running' } })
+    expect(mounts.snapshots().find(snapshot => snapshot.sessionId === 'session-a')).toMatchObject({ view: 'active' })
+  })
+
   it('keeps history-before-live and duplicate replay rules per Session', () => {
     const mounts = new BrowserNativeSessionMountCoordinator()
     mounts.mount({ sessionId: 'session-a', identity: identity('session-a'), ownerId: 'page-1' })

@@ -415,7 +415,7 @@ try {
   }
   const durable = await waitFor(async () => {
     const snapshot = JSON.parse(await readFile(join(dataDir, 'sessions', `${first.sessionId}.json`), 'utf8'))
-    return snapshot.durableThroughSeq === session.events.length - 1 ? snapshot : undefined
+    return snapshot.durableThroughSeq === snapshot.events.length - 1 ? snapshot : undefined
   }, 'the final Session event to reach durable storage', 30_000)
   assert.equal(durable.durableThroughSeq, durable.events.length - 1)
   const chunkObjectIo = app.workspaces.chunkObjects?.getMetrics()
