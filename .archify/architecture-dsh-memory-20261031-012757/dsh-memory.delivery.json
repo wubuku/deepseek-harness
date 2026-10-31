@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "72625490-7d83-410c-ac9c-5ae994481193",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/.archify/architecture-dsh-memory-20261031-012757/candidate.json",
+  "output": "/Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/.archify/architecture-dsh-memory-20261031-012757/dsh-memory.html",
+  "specification": {
+    "sha256": "009812ef9d578289f6d9bef2ce9f758cb0d01f3503ba6a3b8d26aac003f68486",
+    "bytes": 12594
+  },
+  "artifact": {
+    "sha256": "0611f487e24c7d259cb7c3c0b2ad33875cbb140ec96fd3cfdb8e5225fc27a8fe",
+    "bytes": 773943
+  }
+}

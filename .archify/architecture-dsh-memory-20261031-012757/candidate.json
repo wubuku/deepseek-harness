@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DSH 默认模式的记忆机制",
+    "subtitle": "事件日志是事实，surface 是投影，预算治理发生在四个不同触发点",
+    "locale": "zh-CN",
+    "output": ".archify/architecture-dsh-memory-20261031-012757/dsh-memory.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/wubuku/deepseek-harness.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "56ae053a763bf282bce93ff3067b0f15df99db97"
+    }
+  },
+  "components": [
+    {
+      "id": "turn",
+      "type": "external",
+      "icon": "person",
+      "label": "Agent turn 与工具结果",
+      "sublabel": "用户输入 · 工具返回",
+      "pos": [
+        300,
+        60
+      ],
+      "size": [
+        340,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/core/agent-loop/src/agent.ts",
+          "line": 305,
+          "end_line": 318
+        },
+        {
+          "path": "packages/core/agent-loop/src/agent.ts",
+          "line": 423,
+          "end_line": 435
+        },
+        {
+          "path": "packages/core/agent-loop/src/agent.ts",
+          "line": 347,
+          "end_line": 350
+        }
+      ]
+    },
+    {
+      "id": "log",
+      "type": "database",
+      "icon": "database",
+      "label": "Session 事件日志",
+      "sublabel": "只追加 · 一事件一条",
+      "tag": "唯一事实源",
+      "pos": [
+        300,
+        200
+      ],
+      "size": [
+        340,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/core/session/src/index.ts",
+          "line": 798
+        }
+      ]
+    },
+    {
+      "id": "surface",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "surface 当前历史",
+      "sublabel": "位置化节点 · replace 遮蔽区间",
+      "tag": "replace 只改投影",
+      "pos": [
+        300,
+        340
+      ],
+      "size": [
+        340,
+        260
+      ],
+      "sources": [
+        {
+          "path": "packages/core/session/src/surface.ts",
+          "line": 234,
+          "end_line": 252
+        },
+        {
+          "path": "packages/core/session/src/surface.ts",
+          "line": 414,
+          "end_line": 465
+        }
+      ]
+    },
+    {
+      "id": "request",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "请求装配",
+      "sublabel": "messages + header + tools",
+      "tag": "每步全量派生",
+      "pos": [
+        300,
+        660
+      ],
+      "size": [
+        340,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/core/agent-loop/src/agent.ts",
+          "line": 615,
+          "end_line": 704
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "type": "cloud",
+      "icon": "cloud",
+      "label": "provider / model 路由",
+      "sublabel": "contextWindow · maxTokens",
+      "pos": [
+        300,
+        800
+      ],
+      "size": [
+        340,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/llm/llm-pi-ai/src/catalog.ts",
+          "line": 926,
+          "end_line": 935
+        }
+      ]
+    },
+    {
+      "id": "disk",
+      "type": "database",
+      "icon": "database",
+      "label": "session.v4.jsonl.zstd",
+      "sublabel": "默认 zstd 的磁盘日志",
+      "pos": [
+        30,
+        200
+      ],
+      "size": [
+        200,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/session/session-persistence-jsonl/src/index.ts",
+          "line": 69
+        },
+        {
+          "path": "packages/session/session-persistence-jsonl/src/format.ts",
+          "line": 34,
+          "end_line": 59
+        },
+        {
+          "path": "packages/session/session-persistence-jsonl/src/index.ts",
+          "line": 1411,
+          "end_line": 1415
+        }
+      ]
+    },
+    {
+      "id": "spill",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "工具结果溢出",
+      "sublabel": "估算超过 12500 token 时尝试外置",
+      "tag": "接受结果时",
+      "pos": [
+        740,
+        60
+      ],
+      "size": [
+        320,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/spill/spill-policy/src/index.ts",
+          "line": 90,
+          "end_line": 120
+        },
+        {
+          "path": "packages/spill/spill-policy/src/index.ts",
+          "line": 133,
+          "end_line": 148
+        },
+        {
+          "path": "packages/bundle/base/cordis.patch.yml",
+          "line": 414,
+          "end_line": 417
+        }
+      ]
+    },
+    {
+      "id": "compress",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "会话压缩",
+      "sublabel": "阈值 80% · 保留 16%",
+      "tag": "压力 / 溢出 / 手动",
+      "pos": [
+        740,
+        300
+      ],
+      "size": [
+        320,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/compaction/compaction-basic/src/config.ts",
+          "line": 19,
+          "end_line": 79
+        },
+        {
+          "path": "packages/compaction/compaction-basic/src/index.ts",
+          "line": 190,
+          "end_line": 234
+        },
+        {
+          "path": "packages/compaction/command-compact/src/index.ts",
+          "line": 58,
+          "end_line": 68
+        }
+      ]
+    },
+    {
+      "id": "prune",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "工具结果剪裁",
+      "sublabel": "8192 / 4096 / 1024 字符",
+      "tag": "压缩调用后",
+      "pos": [
+        740,
+        420
+      ],
+      "size": [
+        320,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/compaction/compaction-tool-result-pruner/src/index.ts",
+          "line": 77,
+          "end_line": 120
+        },
+        {
+          "path": "packages/bundle/base/cordis.patch.yml",
+          "line": 423,
+          "end_line": 430
+        }
+      ]
+    },
+    {
+      "id": "offload",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "图片卸载",
+      "sublabel": "换成占位文本再重发",
+      "tag": "provider 报错",
+      "pos": [
+        740,
+        540
+      ],
+      "size": [
+        320,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/compaction/compaction-image-offload/src/index.ts",
+          "line": 25,
+          "end_line": 40
+        },
+        {
+          "path": "packages/bundle/base/cordis.patch.yml",
+          "line": 432,
+          "end_line": 435
+        }
+      ]
+    },
+    {
+      "id": "inject",
+      "type": "backend",
+      "icon": "neutral",
+      "label": "旁路输入",
+      "sublabel": "技能 · AGENTS.md · 运行时上下文",
+      "tag": "各自有界",
+      "pos": [
+        30,
+        660
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "packages/skill/tool-skill/src/index.ts",
+          "line": 215,
+          "end_line": 252
+        },
+        {
+          "path": "packages/core/agent-loop/src/runtime-context.ts",
+          "line": 146,
+          "end_line": 163
+        },
+        {
+          "path": "packages/context/agent-instructions/src/index.ts",
+          "line": 182,
+          "end_line": 204
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "turn-log",
+      "from": "turn",
+      "to": "log",
+      "label": "追加事件",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "turn-spill",
+      "from": "turn",
+      "to": "spill",
+      "label": "工具结果",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "spill-log",
+      "from": "spill",
+      "to": "log",
+      "label": "受限结果入日志",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "route": "orthogonal-v",
+      "via": [
+        [
+          900,
+          244
+        ]
+      ],
+      "labelAt": [
+        800,
+        232
+      ]
+    },
+    {
+      "id": "log-surface",
+      "from": "log",
+      "to": "surface",
+      "label": "折叠为节点",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "surface-request",
+      "from": "surface",
+      "to": "request",
+      "label": "全量派生，无窗口",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "request-model",
+      "from": "request",
+      "to": "model",
+      "label": "发送请求",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "log-disk",
+      "from": "log",
+      "to": "disk",
+      "label": "落盘",
+      "fromSide": "left",
+      "toSide": "right",
+      "route": "straight",
+      "labelAt": [
+        265,
+        232
+      ]
+    },
+    {
+      "id": "compress-surface",
+      "from": "compress",
+      "to": "surface",
+      "label": "摘要替换",
+      "route": "auto"
+    },
+    {
+      "id": "prune-surface",
+      "from": "prune",
+      "to": "surface",
+      "label": "剪裁替换",
+      "route": "auto"
+    },
+    {
+      "id": "offload-surface",
+      "from": "offload",
+      "to": "surface",
+      "label": "投影占位",
+      "route": "auto"
+    },
+    {
+      "id": "compress-prune",
+      "from": "compress",
+      "to": "prune",
+      "label": "先剪裁",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        946,
+        402
+      ]
+    },
+    {
+      "id": "inject-log",
+      "from": "inject",
+      "to": "log",
+      "label": "追加 user/message",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "route": "orthogonal-v",
+      "via": [
+        [
+          160,
+          780
+        ],
+        [
+          270,
+          780
+        ],
+        [
+          270,
+          244
+        ]
+      ]
+    },
+    {
+      "id": "model-offload",
+      "from": "model",
+      "to": "offload",
+      "label": "报错触发",
+      "route": "orthogonal-v",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          1100,
+          844
+        ],
+        [
+          1100,
+          584
+        ]
+      ],
+      "labelAt": [
+        980,
+        856
+      ]
+    },
+    {
+      "id": "disk-restore-log",
+      "from": "disk",
+      "to": "log",
+      "label": "恢复事件",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "route": "orthogonal-v",
+      "via": [
+        [
+          130,
+          160
+        ],
+        [
+          470,
+          160
+        ]
+      ],
+      "labelAt": [
+        300,
+        162
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "事实只有一份",
+      "items": [
+        "事件追加后不可就地改写；surface 是从日志折叠出来的当前历史",
+        "replace 遮蔽一段区间，旧事件仍在日志里，回放可以还原",
+        "模型可见必须能由日志重建，但审计事件不进模型历史"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "没有滑动窗口",
+      "items": [
+        "deriveMessages() 遍历当前 surface 的全部节点，没有最近 N 轮或 offset/limit",
+        "上下文变小只来自显式 replace、内容投影或有界输入",
+        "provider 仍可能先报超窗，再由 overflow 恢复路径处理"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "四个阀门，触发点不同",
+      "items": [
+        "溢出：工具结果估算超过 12500 token 时尝试外置；保存失败会保留原内容",
+        "剪裁：只在压缩已被调用后运行，按字符预算替换",
+        "图片卸载：provider 报错后换占位并重发一次请求",
+        "压缩：压力阈值、溢出或手动触发；它会发起独立的摘要调用"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "相邻机制不是记忆",
+      "items": [
+        "技能目录只有名称和描述；正文通过 skill 工具结果或显式 invocation 注入",
+        "AGENTS.md 是有字节预算的 user message，不是隐式系统提示",
+        "运行时上下文是快照；会话引用是只读有界快照",
+        "子 Agent 有自己的 Session，不与父会话共享 surface"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "占用是估算",
+      "items": [
+        "token meter 优先用 provider usage 锚点，否则按字符密度估算",
+        "百分比是压力趋势，不是精确余量"
+      ]
+    }
+  ]
+}
