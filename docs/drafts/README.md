@@ -332,7 +332,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 | 文档 | 角色 | 适合什么时候读 |
 |---|---|---|
 | [dsh-developer-reading-guide.md](dsh-developer-reading-guide.md) | DSH 代码库阅读路线和架构定位 | 新开发者需要从架构、包边界和入口开始阅读代码时。 |
-| [dsh-superagent-prototype-research.md](dsh-superagent-prototype-research.md) | DeepSeek Super-agent 文章与公开 `dsh-superagent` 原型的实现差异及 DSH 参考价值 | 需要区分文章提出的内部设计、公开原型已有机制和 DSH 的可复用扩展点时。 |
+| [dsh-superagent-prototype-research.md](dsh-superagent-prototype-research.md) | Super-agent 的团队协作定位、组织责任与技术职责、原型实现及 DSH 参考价值 | 需要区分个人多任务与团队协作、评价团队收益，并核对原文设计和原型实现时。 |
 | [dsh-herdr-agent-management-research.md](dsh-herdr-agent-management-research.md) | DSH Agent 与 Herdr 状态观察、reporter 和恢复 | 需要把 Agent 状态接入外部终端管理或 watchdog 时。 |
 | [dsh-agent-collaboration-research.md](dsh-agent-collaboration-research.md) | DSH agent 之间的协作形态、跨进程边界与协议选型 | 需要让多个 agent 互相通信、共享任务状态，或评估 ACP／A2A 时。 |
 | [dsh-research-branch-push-memo.md](dsh-research-branch-push-memo.md) | 研究分支提交、推送和文档登记流程 | 需要把新的研究草稿安全存档到当前研究分支时。 |
