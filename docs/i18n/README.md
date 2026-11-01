@@ -62,6 +62,7 @@ Generated English sources omit the language switcher that ordinary authored sour
 - [review-ownership/README.md](../../.github/review-ownership/README.md) — repository-internal approval policy maintained in English only.
 - `docs/drafts/copilotkit-browser-native-dsh-poc/` — an explicitly Chinese-only experimental PoC; its source and evidence are maintained together in that directory.
 - `docs/drafts/saas-agentic-ui-comparison-poc/` — the Chinese-only three-route SaaS comparison experiment, including its implementation and acceptance records.
+- `docs/drafts/dsh-superagent-prototype-research.md` and `docs/drafts/reference-materials/` — a Chinese-only research draft and its archived source article.
 - `.agents/notes/archived/` — frozen historical triplets. [`verify-archived-agent-notes`](../../scripts/verify-archived-agent-notes.ts) validates their completeness and content seals; translation maintenance must never rewrite them.
 
 **Universal requirement**: every current or future document in scope must merge as a complete bilingual pair. [scripts/translation-pairing.manifest.json](../../scripts/translation-pairing.manifest.json) contains only explicit exclusions; there is no per-file rollout list, date cutoff, or README-specific policy class.
