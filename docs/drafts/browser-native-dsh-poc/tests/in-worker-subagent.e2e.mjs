@@ -141,6 +141,9 @@ try {
     && !promptTexts(request.body).some(text => text.includes('Background subagent')))
   assert.equal(childLlm.length, 1)
   assert.equal(promptTexts(childLlm[0].body).some(text => text.includes(CHILD_PROMPT)), true)
+  const childTools = (childLlm[0].body.tools ?? []).map(tool => tool.function?.name)
+  assert.equal(childTools.includes('write') && childTools.includes('read') && childTools.includes('subagent'), true,
+    `child must inherit the published tool registry, got ${JSON.stringify(childTools)}`)
   assert.equal(parentLlm.length, 2)
   assert.equal(parentLlm.some(request => promptTexts(request.body).some(text => text.includes(CHILD_PROMPT))), false,
     'the parent must not observe the child prompt')
