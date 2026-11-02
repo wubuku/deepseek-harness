@@ -23,6 +23,7 @@ const PROTOCOL_VERSION = 1
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
+const DEFAULT_ATTACHMENT_GC_MIN_AGE_MS = 5 * 60 * 1000
 const MAX_EVENTS = 100_000
 const MAX_SESSION_READ_EVENTS = 2_048
 const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
@@ -450,6 +451,39 @@ function attachmentPath(dataDir, workspaceId, hash) {
   return join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2), hash)
 }
 
+const ATTACHMENT_HASH_PATTERN = /^sha256:([a-f0-9]{64})$/
+
+function referencedAttachmentHashes(sessions) {
+  const referenced = new Set()
+  for (const session of sessions) {
+    for (const event of session.events) {
+      if (event?.type !== 'user/message' || !Array.isArray(event.data?.content)) continue
+      for (const block of event.data.content) {
+        if (block?.type !== 'file') continue
+        const match = ATTACHMENT_HASH_PATTERN.exec(String(block.attachment?.attachmentId))
+        if (match?.[1] !== undefined) referenced.add(match[1])
+      }
+    }
+  }
+  return referenced
+}
+
+async function listAttachmentObjects(dataDir, workspaceId) {
+  const root = join(dataDir, 'attachments-v1', workspaceId)
+  const objects = []
+  for (const prefix of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (!prefix.isDirectory() || !/^[a-f0-9]{2}$/.test(prefix.name)) continue
+    const directory = join(root, prefix.name)
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isFile() || !/^[a-f0-9]{64}$/.test(entry.name)) continue
+      const info = await stat(join(directory, entry.name)).catch(() => undefined)
+      if (info === undefined || !info.isFile()) continue
+      objects.push({ hash: entry.name, path: join(directory, entry.name), modifiedAt: info.mtimeMs })
+    }
+  }
+  return objects
+}
+
 async function verifyAttachmentObject(path, hash) {
   const info = await stat(path).catch(() => undefined)
   if (info === undefined || !info.isFile() || info.size > MAX_ATTACHMENT_BYTES) return undefined
@@ -466,6 +500,7 @@ async function storeAttachmentObject(
   maximumBytes = MAX_ATTACHMENT_BYTES,
   onStage = () => {},
   onChunk = () => {},
+  publish = async operation => await operation(),
 ) {
   const assertRequestActive = () => {
     if (!request.aborted) return
@@ -491,6 +526,11 @@ async function storeAttachmentObject(
     if (received !== existing || digest.digest('hex') !== hash) {
       throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
     }
+    await publish(async () => {
+      if (await verifyAttachmentObject(target, hash) !== existing) {
+        throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'attachment object was collected during the upload; retry the upload', 409)
+      }
+    })
     onStage('object-reused')
     return { bytes: existing, reused: true }
   }
@@ -528,15 +568,17 @@ async function storeAttachmentObject(
     await handle.close()
     closed = true
     assertRequestActive()
-    try {
-      await link(temporaryPath, target)
-    } catch (error) {
-      if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
-      const committedBytes = await verifyAttachmentObject(target, hash)
-      if (committedBytes !== bytes) throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
-      reused = true
-    }
-    onStage('object-published')
+    await publish(async () => {
+      try {
+        await link(temporaryPath, target)
+      } catch (error) {
+        if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
+        const committedBytes = await verifyAttachmentObject(target, hash)
+        if (committedBytes !== bytes) throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
+        reused = true
+      }
+      onStage('object-published')
+    })
     const directory = await open(directoryPath, 'r')
     try {
       await directory.sync()
@@ -3234,6 +3276,85 @@ export async function createBrowserNativeV2Server(options) {
   if (!Number.isSafeInteger(attachmentMaxBytes) || attachmentMaxBytes < 1 || attachmentMaxBytes > MAX_ATTACHMENT_BYTES) {
     throw new TypeError(`attachmentMaxBytes must be an integer from 1 through ${String(MAX_ATTACHMENT_BYTES)}`)
   }
+  const attachmentGcMinAgeMs = options.attachmentGcMinAgeMs === undefined
+    ? DEFAULT_ATTACHMENT_GC_MIN_AGE_MS : options.attachmentGcMinAgeMs
+  if (!Number.isSafeInteger(attachmentGcMinAgeMs) || attachmentGcMinAgeMs < 0) {
+    throw new TypeError('attachmentGcMinAgeMs must be a non-negative safe integer')
+  }
+  const attachmentGcInstance = randomUUID()
+  const attachmentGenerations = new Map()
+  const attachmentLocks = new Map()
+  const attachmentGenerationFor = workspaceId => attachmentGenerations.get(workspaceId) ?? 0
+  const bumpAttachmentGeneration = workspaceId => {
+    attachmentGenerations.set(workspaceId, attachmentGenerationFor(workspaceId) + 1)
+  }
+  const withAttachmentLock = async (workspaceId, operation) => {
+    const previous = attachmentLocks.get(workspaceId) ?? Promise.resolve()
+    let release
+    const current = new Promise(resolveRelease => { release = resolveRelease })
+    attachmentLocks.set(workspaceId, current)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (attachmentLocks.get(workspaceId) === current) attachmentLocks.delete(workspaceId)
+    }
+  }
+  const attachmentGcToken = workspaceId => `${attachmentGcInstance}:${String(attachmentGenerationFor(workspaceId))}`
+  const parseAttachmentGcToken = token => {
+    const match = /^([0-9a-f-]{36}):([0-9]{1,16})$/.exec(token)
+    if (match === null) return undefined
+    const generation = Number(match[2])
+    return Number.isSafeInteger(generation) ? { instance: match[1], generation } : undefined
+  }
+  const publishAttachment = async (workspaceId, operation) => await withAttachmentLock(workspaceId, async () => {
+    const result = await operation()
+    bumpAttachmentGeneration(workspaceId)
+    return result
+  })
+  const staleAttachmentGc = workspaceId => ({
+    token: attachmentGcToken(workspaceId),
+    generation: attachmentGenerationFor(workspaceId),
+    scanned: 0,
+    kept: 0,
+    deleted: [],
+    skipped: 'scan-stale',
+    failures: [],
+  })
+  const collectAttachments = async (workspaceId, expectedGeneration, sessions) => {
+    const referenced = referencedAttachmentHashes(sessions)
+    const objects = await listAttachmentObjects(options.dataDir, workspaceId)
+    const now = Date.now()
+    const candidates = objects.filter(object => !referenced.has(object.hash)
+      && now - object.modifiedAt >= attachmentGcMinAgeMs)
+    const deleted = []
+    const failures = []
+    let skipped
+    await withAttachmentLock(workspaceId, async () => {
+      if (attachmentGenerationFor(workspaceId) !== expectedGeneration) {
+        skipped = 'scan-stale'
+        return
+      }
+      for (const candidate of candidates) {
+        try {
+          await rm(candidate.path, { force: true })
+          deleted.push(candidate.hash)
+        } catch (error) {
+          failures.push({ hash: candidate.hash, code: typeof error?.code === 'string' ? error.code : 'DELETE_FAILED' })
+        }
+      }
+    })
+    return {
+      token: attachmentGcToken(workspaceId),
+      generation: attachmentGenerationFor(workspaceId),
+      scanned: objects.length,
+      kept: objects.length - deleted.length,
+      deleted,
+      ...(skipped === undefined ? {} : { skipped }),
+      failures,
+    }
+  }
   if (workspaceDownloadTimeoutMs > 2_147_483_647) {
     throw new TypeError('workspaceDownloadTimeoutMs exceeds the Node timer limit')
   }
@@ -3322,6 +3443,7 @@ export async function createBrowserNativeV2Server(options) {
             attachmentMaxBytes,
             options.testHooks?.onAttachmentStage,
             options.testHooks?.onAttachmentChunk,
+            operation => publishAttachment(workspaceId, operation),
           )
           await options.testHooks?.beforeAttachmentReceipt?.({ workspaceId, hash, name, stored })
           if (response.destroyed) {
@@ -3345,6 +3467,32 @@ export async function createBrowserNativeV2Server(options) {
           return
         }
         await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/attachments/gc-token') {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, workspaceId)
+        sendJson(response, 200, {
+          token: attachmentGcToken(workspaceId),
+          generation: attachmentGenerationFor(workspaceId),
+        })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/attachments/gc') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const workspaceId = boundedString(body.workspaceId, 'workspaceId', MAX_CHECKPOINT_ID_LENGTH)
+        const token = boundedString(body.token, 'token', MAX_HANDOFF_ID_LENGTH)
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, workspaceId)
+        const issued = parseAttachmentGcToken(token)
+        if (issued === undefined || issued.instance !== attachmentGcInstance
+          || issued.generation !== attachmentGenerationFor(workspaceId)) {
+          sendJson(response, 200, staleAttachmentGc(workspaceId))
+          return
+        }
+        sendJson(response, 200, await collectAttachments(workspaceId, issued.generation, store.sessions.values()))
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/upload-capabilities') {
