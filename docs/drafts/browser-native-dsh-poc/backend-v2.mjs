@@ -2736,8 +2736,8 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
         name: 'bash',
         arguments: {
           command: permissionApprovalMarker.endsWith('RECOVERY_E2E')
-            ? "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY_WRITE_OK\\n' > approval-recovery-result.txt"
-            : "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK\\n' > approval-result.txt",
+            ? "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY_WRITE_OK\\n' > /dsh/home/workspace/approval-recovery-result.txt"
+            : "printf 'BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK\\n' > /dsh/home/workspace/approval-result.txt",
           description: 'Write the approval lifecycle fixture in the Worker workspace.',
           sandbox_permissions: 'danger-full-access',
           justification: 'The permission lifecycle test requests one approved Worker workspace write.',

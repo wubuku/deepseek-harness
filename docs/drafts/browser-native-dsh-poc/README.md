@@ -1273,7 +1273,9 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 [跨标签审批计划](cross-tab-approval-validation-plan.md)与[进度](cross-tab-approval-validation-progress.md)确定审批决策权只属于持有 Session recovery lock 的拥有者标签；并发标签必须失败关闭且不显示可操作卡片；拥有者退出后，待决审批结算一次为 `TOOL_OUTCOME_UNKNOWN`，不重问也不重放。双页 E2E 用 `window.open` 克隆标签验证并发阶段 0 后端请求与 0 卡片、拥有者拒绝触发 1 asked / 1 decided / 1 结果、关闭拥有者后接管得到未知结果且计数不变、后续 prompt 正常完成。
 
-未提供实时只读观察者标签；若未来开放观察者审批，必须先有 durable 的原子 claim。Workspace lease 同时开启的交接、真实模型审批、跨设备接管和 Safari 未验证。
+[lease 与审批组合验证](cross-tab-lease-approval-validation.md)同时开启 `browser-native-workspace-lease=1`：并发前台标签不持有 writer token，后台 owner 保持 `active` 且续租，获批工具在 owner 的 writer lease 下写入并推进 Workspace revision；owner 关闭后接管标签取得新 fencing token，待决审批仍只结算一次且不改写 Workspace。
+
+未提供实时只读观察者标签；若未来开放观察者审批，必须先有 durable 的原子 claim。真实模型审批、observer 写工具审批、lease TTL 与待决审批重叠、跨设备接管和 Safari 未验证。
 
 ## 附件 GC 与增量 hydrate
 
