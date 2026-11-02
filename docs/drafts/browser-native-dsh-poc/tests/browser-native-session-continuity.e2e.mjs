@@ -19,6 +19,9 @@ const barriers = new Map([
   ['BROWSER_NATIVE_CONTINUITY_B_FIRST', Promise.withResolvers()],
   ['BROWSER_NATIVE_CONTINUITY_OPEN_FIRST', Promise.withResolvers()],
 ])
+const TOOL_PROMPT = 'BROWSER_NATIVE_CONTINUITY_TOOL_FIRST'
+const TOOL_CALL_ID = 'continuity-tool-hold'
+const TOOL_HOLD_MS = 8_000
 const requests = []
 const pageErrors = []
 const workerErrors = []
@@ -76,6 +79,15 @@ try {
     testHooks: {
       scriptedLlmFault: body => {
         const prompt = latestPrompt(body)
+        if (prompt === TOOL_PROMPT) {
+          const promptIndex = body.messages.findLastIndex(message => message.role === 'user'
+            && typeof message.content === 'string' && message.content.includes(TOOL_PROMPT))
+          const toolResults = promptIndex < 0 ? [] : body.messages.slice(promptIndex + 1).filter(message => message.role === 'tool')
+          if (toolResults.length === 0) {
+            return { kind: 'tool-call', call: { id: TOOL_CALL_ID, name: 'browser_fork_hold_probe', arguments: { durationMs: TOOL_HOLD_MS } } }
+          }
+          return { kind: 'text', text: `${TOOL_PROMPT}_DONE` }
+        }
         const barrier = barriers.get(prompt)
         if (barrier !== undefined) return { kind: 'barrier-text', release: barrier.promise, text: `${prompt}_DONE` }
         return { kind: 'text', text: `${prompt}_DONE` }
@@ -86,7 +98,12 @@ try {
   browser = await chromium.launch({ headless: true, channel: browserName })
   page = await browser.newPage({ locale: 'en-US', timezoneId: 'Asia/Shanghai' })
   page.on('pageerror', error => pageErrors.push(error.message))
-  page.on('worker', worker => worker.on('pageerror', error => workerErrors.push(error.message)))
+  page.on('worker', worker => {
+    worker.on('pageerror', error => workerErrors.push(error.message))
+    worker.on('console', message => {
+      if (message.type() === 'error') workerErrors.push(message.text())
+    })
+  })
   page.on('request', request => {
     if (new URL(request.url()).origin !== origin) externalRequests.push(request.url())
     if (!request.url().endsWith('/api/browser-native/llm')) return
@@ -189,8 +206,54 @@ try {
   assert.equal(requests.filter(request => request.sessionId === 'continuity-open' && request.prompt === 'BROWSER_NATIVE_CONTINUITY_OPEN_FIRST').length, 1)
   assert.equal(requests.filter(request => request.sessionId === 'continuity-open-child' && request.prompt === 'BROWSER_NATIVE_CONTINUITY_OPEN_FIRST').length, 0)
 
+  const toolStarted = await workerRequest({ action: 'session-continuity-start', sessionId: 'continuity-tool', prompt: TOOL_PROMPT })
+  assert.equal(toolStarted.ok, true, JSON.stringify(toolStarted))
+  await rememberSessionPrincipal(page, origin, 'continuity-tool')
+  await waitFor(() => requests.filter(request => request.sessionId === 'continuity-tool').length === 1, 'hold-tool model request')
+  const openCall = await waitFor(async () => {
+    const session = await readSession('continuity-tool')
+    return session.events.find(event => event.type === 'tool/call' && event.data.callId === TOOL_CALL_ID)
+  }, 'hold tool call to be recorded', 30_000)
+  const parentCountAtToolCut = (await readSession('continuity-tool')).events.length
+  const toolForked = await workerRequest({
+    action: 'session-continuity-fork',
+    sessionId: 'continuity-tool',
+    childSessionId: 'continuity-tool-child',
+    boundary: openCall.seq,
+  })
+  assert.equal(toolForked.ok, true, JSON.stringify(toolForked))
+  assert.equal(toolForked.sessionContinuity.boundary, openCall.seq)
+  assert.deepEqual(toolForked.sessionContinuity.openToolResults, [{
+    callId: TOOL_CALL_ID,
+    code: 'TOOL_OUTCOME_UNKNOWN',
+    sourceEventSeqs: [openCall.seq],
+  }])
+  await rememberSessionPrincipal(page, origin, 'continuity-tool-child')
+  assert.equal((await readSession('continuity-tool')).events.length, parentCountAtToolCut, 'fork must not append to the parent log')
+  const toolChildFollowup = await workerRequest({ action: 'session-continuity-followup', sessionId: 'continuity-tool-child', prompt: 'BROWSER_NATIVE_CONTINUITY_TOOL_CHILD' })
+  assert.equal(toolChildFollowup.ok, true, JSON.stringify(toolChildFollowup))
+  const toolChildDone = await terminalFor('continuity-tool-child', 'BROWSER_NATIVE_CONTINUITY_TOOL_CHILD', 'completed')
+  const toolChildCalls = toolChildDone.session.events.filter(event => event.type === 'tool/call' && event.data.callId === TOOL_CALL_ID)
+  const toolChildResults = toolChildDone.session.events.filter(event => event.type === 'tool/result' && event.data.message.toolCallId === TOOL_CALL_ID)
+  assert.equal(toolChildCalls.length, 1, 'child must inherit exactly one tool call and must not re-execute it')
+  assert.equal(toolChildCalls[0].seq, openCall.seq)
+  assert.equal(toolChildResults.length, 1)
+  assert.deepEqual(toolChildResults[0].data.error, { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' })
+  assert.equal(toolChildDone.session.events.some(event => event.type === 'turn/end' && event.data.reason.kind === 'forked'), true)
+  assert.equal(requests.filter(request => request.sessionId === 'continuity-tool-child').length, 1)
+  assert.equal(requests.filter(request => request.sessionId === 'continuity-tool-child' && request.prompt === TOOL_PROMPT).length, 0)
+
+  const toolParentDone = await terminalFor('continuity-tool', TOOL_PROMPT, 'completed')
+  const toolParentCalls = toolParentDone.session.events.filter(event => event.type === 'tool/call' && event.data.callId === TOOL_CALL_ID)
+  const toolParentResults = toolParentDone.session.events.filter(event => event.type === 'tool/result' && event.data.message.toolCallId === TOOL_CALL_ID)
+  assert.equal(toolParentCalls.length, 1, 'parent must execute the held tool exactly once')
+  assert.equal(toolParentResults.length, 1)
+  assert.equal(toolParentResults[0].data.error, undefined)
+  assert.equal(toolParentDone.session.events.filter(event => event.type === 'user/message' && eventText(event) === TOOL_PROMPT).length, 1)
+  assert.equal(requests.filter(request => request.sessionId === 'continuity-tool').length, 2)
+
   const disposed = await workerRequest({ action: 'session-continuity-dispose' })
-  assert.deepEqual(disposed.sessionContinuity, { disposedCount: 5, remainingCount: 0 })
+  assert.deepEqual(disposed.sessionContinuity, { disposedCount: 7, remainingCount: 0 })
   assert.deepEqual(pageErrors, [])
   assert.deepEqual(workerErrors, [])
   assert.deepEqual(externalRequests, [])
@@ -203,10 +266,32 @@ try {
     parentEventCount,
     childEventCount: childDone.session.events.length,
     openChildEventCount: openChildDone.session.events.length,
+    openToolCut: {
+      boundary: openCall.seq,
+      seededCode: toolForked.sessionContinuity.openToolResults[0].code,
+      childEventCount: toolChildDone.session.events.length,
+      parentEventCount: toolParentDone.session.events.length,
+      parentModelRequestCount: requests.filter(request => request.sessionId === 'continuity-tool').length,
+    },
     pageErrors,
     workerErrors,
     externalRequests,
   })}\n`)
+} catch (error) {
+  const sessions = await Promise.all(['continuity-a', 'continuity-b', 'continuity-open'].map(async sessionId => {
+    try {
+      const session = await readSession(sessionId)
+      return {
+        sessionId,
+        eventTypes: session.events.map(event => event.type),
+        failure: session.events.filter(event => ['step/end', 'turn/end', 'assistant/attempt'].includes(event.type)).map(event => ({ type: event.type, data: event.data })),
+      }
+    } catch (readError) {
+      return { sessionId, readError: String(readError) }
+    }
+  }))
+  process.stderr.write(`${JSON.stringify({ result: 'failed', error: String(error), requests, sessions, pageErrors, workerErrors, externalRequests })}\n`)
+  throw error
 } finally {
   for (const barrier of barriers.values()) barrier.resolve()
   await page?.close().catch(() => {})

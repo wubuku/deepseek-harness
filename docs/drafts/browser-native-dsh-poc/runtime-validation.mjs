@@ -95,7 +95,7 @@ export async function createRuntimeValidationDist({
       await writeFile(join(home, 'browser-validation', 'large.txt'), largeFile)
     }
     const archive = join(temporary, 'overlay.tar.gz')
-    await execFileAsync('tar', ['-czf', archive, '-C', imageRoot, 'home'])
+    await execFileAsync('tar', ['--format=ustar', '--no-xattrs', '-czf', archive, '-C', imageRoot, 'home'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
     const dataUrl = `data:application/gzip;base64,${(await readFile(archive)).toString('base64')}`
     await mkdir(join(outputRoot, 'preview'), { recursive: true })
     for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {

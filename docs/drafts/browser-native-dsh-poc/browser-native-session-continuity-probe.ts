@@ -13,6 +13,7 @@ import type {
   SessionLogOffset,
   SessionSeq,
 } from '@deepseek-ai/dsh-session'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 interface ContinuityAgent extends Agent {
   readonly status: 'idle' | 'running'
@@ -42,6 +43,66 @@ interface ContinuityRegistry {
 
 interface ContinuityContext {
   readonly agents: ContinuityRegistry
+  readonly tools: { register(tool: ToolDefinition): () => void }
+}
+
+const MAX_HOLD_MS = 60_000
+
+interface HoldResult {
+  readonly heldMs: number
+  readonly released: boolean
+}
+
+/** Validation-only tool that stays in flight long enough for a fork to cut over the open call. */
+const forkHoldTool: ToolDefinition = {
+  name: 'browser_fork_hold_probe',
+  description: 'Validation-only tool that remains in flight for a bounded time so a fork can cut over an open tool call.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      durationMs: { type: 'integer', description: `Hold duration in milliseconds, from 20 to ${MAX_HOLD_MS}.` },
+    },
+    required: ['durationMs'],
+  },
+  output: {
+    schema: {
+      type: 'object' as const,
+      additionalProperties: false,
+      properties: {
+        heldMs: { type: 'integer' as const },
+        released: { type: 'boolean' as const },
+      },
+      required: ['heldMs', 'released'],
+    },
+    render: (_args: unknown, value: HoldResult) => [{ type: 'text' as const, text: JSON.stringify(value) }],
+  },
+  async execute(value, execution) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('hold probe arguments must be an object')
+    const record = value as Record<string, unknown>
+    if (Object.keys(record).some(key => key !== 'durationMs')) throw new TypeError('hold probe arguments contain an unknown field')
+    if (!Number.isSafeInteger(record.durationMs) || Number(record.durationMs) < 20 || Number(record.durationMs) > MAX_HOLD_MS) {
+      throw new RangeError(`durationMs must be an integer between 20 and ${MAX_HOLD_MS}`)
+    }
+    const durationMs = Number(record.durationMs)
+    const startedAt = Date.now()
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        clearTimeout(timer)
+        execution.signal?.removeEventListener('abort', onAbort)
+      }
+      const onAbort = (): void => {
+        cleanup()
+        reject(new Error('hold probe aborted'))
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        resolve()
+      }, durationMs)
+      execution.signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    return { heldMs: Date.now() - startedAt, released: true }
+  },
 }
 
 export interface BrowserNativeSessionContinuityRuntime {
@@ -54,7 +115,7 @@ export interface BrowserNativeSessionContinuityRuntime {
 }
 
 export interface BrowserNativeSessionContinuityProbe {
-  readonly plugin: ((context: ContinuityContext) => () => Promise<void>) & { readonly inject: readonly ['agents'] }
+  readonly plugin: ((context: ContinuityContext) => () => Promise<void>) & { readonly inject: readonly ['agents', 'tools'] }
   start(options: { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }): Promise<{
     readonly sessionId: string
     readonly route: ModelSelection
@@ -68,6 +129,11 @@ export interface BrowserNativeSessionContinuityProbe {
     readonly boundary: number
     readonly inheritedEventCount: number
     readonly seedLength: number
+    readonly openToolResults: readonly {
+      readonly callId: string
+      readonly code: string
+      readonly sourceEventSeqs: readonly number[]
+    }[]
   }>
   followup(sessionId: string, prompt: string): { readonly sessionId: string; readonly nextTurnCount: number }
   status(): readonly {
@@ -113,11 +179,12 @@ export function createBrowserNativeSessionContinuityProbe(
 
   const plugin = Object.assign((context: ContinuityContext) => {
     registry = context.agents
+    context.effect(() => context.tools.register(forkHoldTool), 'browser-native fork cut probe tool')
     return async () => {
       await dispose()
       registry = undefined
     }
-  }, { inject: ['agents'] as const })
+  }, { inject: ['agents', 'tools'] as const })
 
   const runtimeFor = (): BrowserNativeSessionContinuityRuntime => resolveRuntime()
   const currentRegistry = (): ContinuityRegistry => {
@@ -218,12 +285,23 @@ export function createBrowserNativeSessionContinuityProbe(
       })
       handles.set(childSessionId, child)
       parents.set(childSessionId, sessionId)
+      const openToolResults = seed.flatMap(event => {
+        if (event.type !== 'tool/result') return []
+        const error = event.data.error
+        if (error === undefined) return []
+        return [{
+          callId: String(event.data.message.toolCallId),
+          code: String(error.code ?? error.name),
+          sourceEventSeqs: (event.sourceEventSeqs ?? []).map(value => Number(value)),
+        }]
+      })
       return {
         parentSessionId: sessionId,
         childSessionId,
         boundary: selectedBoundary,
         inheritedEventCount,
         seedLength: seed.length,
+        openToolResults,
       }
     },
     followup(sessionId, prompt) {

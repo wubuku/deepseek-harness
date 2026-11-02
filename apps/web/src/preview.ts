@@ -220,6 +220,7 @@ try {
         type: 'browser-native-workspace-test-init',
         skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
         cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
+        forkCut: searchParams.get('browser-native-test') === 'session-continuity',
       }, [channel.port2])
       window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
         const requestId = browserNativeTestUuid()

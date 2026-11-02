@@ -2390,6 +2390,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     downloadPauseStage = data.downloadPauseStage
     if (data.skillFilesystem === true) capabilityPublication.enableSkillFilesystemValidation()
     if (data.cpuContention === true) capabilityPublication.enableCpuContentionValidation()
+    if (data.forkCut === true) capabilityPublication.enableForkCutValidation()
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()

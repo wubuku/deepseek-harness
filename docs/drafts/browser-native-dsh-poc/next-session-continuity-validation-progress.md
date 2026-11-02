@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 运行中输入、取消保留、Session
 
 ## 当前状态
 
-状态：M0-M4 完成。Chrome 156 的 scripted E2E 通过运行中追加输入、`keepInbox` 取消保留、Worker 内恢复历史 model route、闭合 turn fork 和运行中 text open-tail fork。真实 LLM 只完成普通文件与刷新 smoke，不把 scripted probe 写成真实模型自主排队、route 选择或 fork 能力。
+状态：M0-M5 完成。Chrome 156 的 scripted E2E 通过运行中追加输入、`keepInbox` 取消保留、Worker 内恢复历史 model route、闭合 turn fork、运行中 text open-tail fork 和 open tool-cut fork。真实 LLM 只完成普通文件与刷新 smoke，不把 scripted probe 写成真实模型自主排队、route 选择或 fork 能力。
 
 ## 实际证据
 
@@ -16,7 +16,8 @@ description: "记录 Browser-Native DSH 运行中输入、取消保留、Session
 | `cancel({ keepInbox: true })` | B 在首轮请求保持在途时追加 queued 输入；取消终态记录为 `aborted`，queued message 保留；显式 wake 后 queued 与 wake 各运行一次，没有在取消期间产生 queued 模型请求。 |
 | Worker resume route | A 首轮使用 `browser-native-route-a`；释放旧 Agent 后通过正式 `ctx.agents.resume()` 恢复，下一次请求仍使用 `browser-native-route-a`，没有回退到页面默认 route。 |
 | closed-turn fork | A 的 child 使用正式 `buildForkSeed` 与 `ctx.agents.create()`；parent event 数保持 37，child header 含 `parentSession=continuity-a`、`isSeeded=true`，child 独立完成 follow-up。 |
-| open text-tail fork | `continuity-open` 在模型请求保持在途时创建 child；child 记录 forked closer，继承 prompt 不触发 child 模型请求；释放 parent 后 parent 正常完成，child 随后可继续。open tool unknown 分支未在本批验证。 |
+| open text-tail fork | `continuity-open` 在模型请求保持在途时创建 child；child 记录 forked closer，继承 prompt 不触发 child 模型请求；释放 parent 后 parent 正常完成，child 随后可继续。 |
+| open tool-cut fork | `continuity-tool` 的 scripted 模型发出 `browser_fork_hold_probe` 后，Session 出现 `tool/call` 时以该 seq（16）为边界 fork。child seed 合成 `ToolOutcomeUnknownError`（`code=TOOL_OUTCOME_UNKNOWN`，`sourceEventSeqs=[16]`），以 `forked` 关闭 step/turn；child 只继承一个 `tool/call` 且无第二份执行，继承 prompt 未触发 child 模型请求；parent 的工具执行与 `tool/result` 各一次，turn `completed`。 |
 
 ## Chrome E2E
 
@@ -26,7 +27,7 @@ description: "记录 Browser-Native DSH 运行中输入、取消保留、Session
 DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/browser-native-session-continuity.e2e.mjs
 ```
 
-Chrome `156.0.8078.79` 通过，输出 9 个模型请求、parent event count 37、closed child event count 47、open child event count 28；页面错误、Worker 错误和跨源请求均为 0。请求列表确认没有重复执行 queued prompt，也没有向 open child 重发继承的 open-tail prompt。
+Chrome `156.0.8078.79` 通过，输出 12 个模型请求、parent event count 37、closed child event count 47、open child event count 28、open tool cut 的 child/parent event count 30/24；页面错误、Worker 错误和跨源请求均为 0。请求列表确认没有重复执行 queued prompt，也没有向 open child 或 tool-cut child 重发继承的 open-tail prompt；`continuity-tool` 只有首次和工具结算后各一次请求。
 
 ## 真实 LLM smoke
 
@@ -44,4 +45,4 @@ env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy -u ALL_PROXY -u al
 
 ## 限制与后续
 
-本批没有验证 open tool 在 fork cut 上的 `TOOL_OUTCOME_UNKNOWN` 修复，也没有验证 Workspace bytes 的 fork snapshot/branch merge、页面关闭后的后台执行、跨设备恢复、生产多实例 backend、自然 eviction、OS/磁盘崩溃、Safari 或真实模型自主 fork/排队。`ctx.agents.resume()` 的 route 恢复只证明 route 已写入 Session request header；全局 model preference、provider catalog 和配额策略仍未验证。
+本批没有验证 Workspace bytes 的 fork snapshot/branch merge、页面关闭后的后台执行、跨设备恢复、生产多实例 backend、自然 eviction、OS/磁盘崩溃、Safari 或真实模型自主 fork/排队。`ctx.agents.resume()` 的 route 恢复只证明 route 已写入 Session request header；全局 model preference、provider catalog 和配额策略仍未验证。open tool-cut 的结论依赖 validation-only `browser_fork_hold_probe` 与 scripted 模型，不代表任意真实工具（例如网络请求）在切点上的副作用可回滚；child 继承的是合成失败结果，真实模型对它的后续处理也未验证。
