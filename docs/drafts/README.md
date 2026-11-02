@@ -116,6 +116,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 
 56. [Browser-Native Session 连续性验证](browser-native-dsh-poc/next-session-continuity-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-continuity-validation-progress.md)：Chrome 156 在真实 Dedicated Worker 中验证 busy Agent 的 durable next-turn、`keepInbox` 取消保留、resume 后 model route fidelity、闭合 turn fork 和运行中 text open-tail fork；真实 LLM 只回归普通文件/刷新路径，open tool unknown、Workspace fork、跨设备恢复和后台 Agent 仍未验证。
 57. [Browser-Native 父 Session 停止的取消传播](browser-native-dsh-poc/subagent-stop-propagation-validation-plan.md)及[进度](browser-native-dsh-poc/subagent-stop-propagation-validation-progress.md)：定义顶层用户 Stop 递归取消活动子 Agent、子 Session 保留、结算通知只入 inbox 不唤醒的语义；Worker 内 `spawn` subagent E2E 与真实 LLM 流式/`bash sleep` 工具执行中断均通过，定向 child interrupt 保持不传播。
+58. [Browser-Native 跨标签审批归属](browser-native-dsh-poc/cross-tab-approval-validation-plan.md)及[进度](browser-native-dsh-poc/cross-tab-approval-validation-progress.md)：确定审批决策权属于 Session 拥有者标签；并发标签失败关闭且 0 后端请求、0 卡片；拥有者退出后待决审批只结算一次 `TOOL_OUTCOME_UNKNOWN`，不重问、不重放，恢复后新 turn 正常完成。
 
 ### 需要实现或审查代码时
 
