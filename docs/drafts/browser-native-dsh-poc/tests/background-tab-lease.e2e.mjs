@@ -226,7 +226,7 @@ try {
       visibilityStates,
       attempts: ['second Playwright page in the same window', 'Target.activateTarget via bringToFront', 'Browser.setWindowBounds minimized', 'fullscreen control window'],
       reproducibleCommand: 'DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/background-tab-lease.e2e.mjs',
-      note: 'Chrome 156 and bundled Chromium 147 both report every page as visible in this automation session, including after minimize and fullscreen attempts; no hidden-tab timer throttling can be produced. CDP Page.setWebLifecycleState freeze remains the only lease-renewal evidence and it is not natural throttling.',
+      note: 'Chrome 156 and bundled Chromium 147 both report every page as visible in this automation session, including after minimize and fullscreen attempts; no hidden-tab timer throttling can be produced. [cdp-freeze-capability](cdp-freeze-capability.md) records that CDP cannot emulate hidden or frozen pages here either, so no lease-renewal proxy substitutes for natural throttling.',
     })}\n`)
   } else {
     process.stderr.write(`${JSON.stringify({

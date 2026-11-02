@@ -98,6 +98,8 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 
 失败即停分支：若 throttle 未触发（Chrome 版本策略变化），只记录“本环境未复现”，不把结果写成通过。
 
+结果：自然节流仍 `blocked`，自动化 Chrome 始终把页面报告为 `visible`。替代路径同样不可用：[CDP 页面隐藏/冻结能力结论](cdp-freeze-capability.md)记录 `Emulation.setPageVisibilityOverride` 不存在、`Page.setWebLifecycleState('frozen')` 不改变可见性也不停 Worker lease 心跳、虚拟时间暂停只控制时钟。A 因此没有可复现的后台节流证据，不能作为产品结论。
+
 ### B：open tool cut 上的 fork 结算
 
 假设：`buildForkSeed` 在 cut 于在途 tool call 时，为 step 合成 `TOOL_OUTCOME_UNKNOWN` 的 `tool/result`，以 `forked` 关闭 step/turn；父 Agent 继续只执行一次该工具。

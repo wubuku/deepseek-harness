@@ -118,6 +118,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 57. [Browser-Native 父 Session 停止的取消传播](browser-native-dsh-poc/subagent-stop-propagation-validation-plan.md)及[进度](browser-native-dsh-poc/subagent-stop-propagation-validation-progress.md)：定义顶层用户 Stop 递归取消活动子 Agent、子 Session 保留、结算通知只入 inbox 不唤醒的语义；Worker 内 `spawn` subagent E2E 与真实 LLM 流式/`bash sleep` 工具执行中断均通过，定向 child interrupt 保持不传播。
 58. [Browser-Native 跨标签审批归属](browser-native-dsh-poc/cross-tab-approval-validation-plan.md)及[进度](browser-native-dsh-poc/cross-tab-approval-validation-progress.md)：确定审批决策权属于 Session 拥有者标签；并发标签失败关闭且 0 后端请求、0 卡片；拥有者退出后待决审批只结算一次 `TOOL_OUTCOME_UNKNOWN`，不重问、不重放，恢复后新 turn 正常完成。
 59. [Browser-Native 附件安全 GC 与增量 hydrate](browser-native-dsh-poc/attachment-gc-validation-plan.md)及[进度](browser-native-dsh-poc/attachment-gc-validation-progress.md)：确定 durable Session `FileBlock` 是唯一引用权威、孤儿需过宽限期、上传代守卫扫描窗口；backend 合同测试与 Chrome E2E 证明在用附件不被删除、孤儿被回收、`scan-stale` 与复用保护生效，重复 hydrate 复用校验结果。
+60. [Browser-Native CDP 页面隐藏/冻结能力](browser-native-dsh-poc/cdp-freeze-capability.md)：Chrome 156 自动化会话无法用 `setPageVisibilityOverride`、`setWebLifecycleState` 或虚拟时间暂停制造 hidden/frozen 页面；`Page.setWebLifecycleState('frozen')` 只是 no-op，Worker lease 继续续租，因此不能替代后台标签自然节流的证据。
 
 ### 需要实现或审查代码时
 
