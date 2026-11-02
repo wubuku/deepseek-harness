@@ -3107,11 +3107,16 @@ async function realLlm(response, request, config, body) {
         const providerIndex = providerCall.index ?? 0
         let toolCall = toolCalls.get(providerIndex)
         if (toolCall === undefined) {
-          toolCall = { index: nextIndex++, id: providerCall.id ?? randomUUID(), name: '', arguments: '' }
+          toolCall = {
+            index: nextIndex++,
+            id: typeof providerCall.id === 'string' && providerCall.id.length > 0 ? providerCall.id : randomUUID(),
+            name: '',
+            arguments: '',
+          }
           toolCalls.set(providerIndex, toolCall)
           writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: toolCall.index, blockType: 'tool-call' } })
         }
-        if (providerCall.id !== undefined) toolCall.id = providerCall.id
+        if (typeof providerCall.id === 'string' && providerCall.id.length > 0) toolCall.id = providerCall.id
         toolCall.name += providerCall.function?.name ?? ''
         if (providerCall.function?.arguments) {
           toolCall.arguments += providerCall.function.arguments

@@ -2838,6 +2838,15 @@ describe('browser-native DSH v2 backend', () => {
         response.end(['data: [DONE]', ''].join('\n'))
         return
       }
+      if (JSON.stringify(requestBody.messages).includes('NULL_TOOL_ID_CONTRACT_PROMPT')) {
+        const records = [
+          { choices: [{ delta: { tool_calls: [{ index: 0, id: 'contract-call', function: { name: 'todo_write', arguments: '{"todos":[' } }] } }] },
+          { choices: [{ delta: { tool_calls: [{ index: 0, id: null, function: { arguments: ']}' } }] } }] },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        ]
+        response.end(`${records.map(record => `data: ${JSON.stringify(record)}\n\n`).join('')}data: [DONE]\n\n`)
+        return
+      }
       if (JSON.stringify(requestBody.messages).includes('DONE_WITH_CONTENT_CONTRACT_PROMPT')) {
         response.end([
           'data: {"choices":[{"delta":{"content":"DONE_WITH_CONTENT_OK"}}]}',
@@ -2919,6 +2928,22 @@ describe('browser-native DSH v2 backend', () => {
       assert.equal(doneWithContentItems.at(-1).chunk.type, 'finish')
       assert.equal(doneWithContentItems.at(-1).chunk.reason.kind, 'stop')
       assert.match(doneWithContentItems.map(item => item.chunk?.block?.text ?? item.chunk?.text ?? '').join(''), /DONE_WITH_CONTENT_OK/)
+
+      const nullIdResponse = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-null-tool-id', {
+          messages: [{ role: 'user', content: 'NULL_TOOL_ID_CONTRACT_PROMPT' }],
+        })),
+      })
+      const nullIdItems = await readNdjson(nullIdResponse)
+      assert.equal(nullIdItems.some(item => item.kind === 'error'), false)
+      const toolDeltas = nullIdItems.filter(item => item.chunk?.type === 'tool-call-delta')
+      assert.equal(toolDeltas.length, 2)
+      assert.deepEqual(toolDeltas.map(item => item.chunk.id), ['contract-call', 'contract-call'])
+      const toolBlock = nullIdItems.find(item => item.chunk?.type === 'block-end' && item.chunk.block?.type === 'tool-call')
+      assert.equal(toolBlock.chunk.block.id, 'contract-call')
+      assert.equal(toolBlock.chunk.block.arguments, '{"todos":[]}')
     } finally {
       await close(upstream)
     }
