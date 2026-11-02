@@ -72,6 +72,7 @@ import SubagentManager from './manager.ts'
 import { listChildren as listSubagentChildren, listDescendants as listSubagentDescendants } from './list-children.ts'
 import type { SubagentDescendantListEntry } from './list-children.ts'
 import { installSubagentArchiveAdmission } from './archive-admission.ts'
+import { installSubagentStopPropagation } from './stop-propagation.ts'
 import type { SubagentCatalogEntry } from './projection-types.ts'
 import { subagentIdentityProjectionDefinition, subagentTimingProjectionDefinition } from './projection.ts'
 import { subagentCatalogProjectionDefinition } from './catalog.ts'
@@ -231,7 +232,12 @@ export class SubagentRuntime extends TypertRemoteService {
     })
     // Archive admission: this runtime is the owner that knows which live
     // children descend from a Session and how a parent stops them.
-    ctx.inject(['agents'], (agentsCtx: Context) => { installSubagentArchiveAdmission(agentsCtx) })
+    ctx.inject(['agents'], (agentsCtx: Context) => {
+      installSubagentArchiveAdmission(agentsCtx)
+      installSubagentStopPropagation(agentsCtx, (rootId) => {
+        this.manager?.stopDescendants(rootId)
+      })
+    })
   }
 
   /**

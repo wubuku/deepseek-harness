@@ -71,6 +71,12 @@ interface ActivationBase {
    * not exist, so its teardown owes the parent no settlement account.
    */
   announced: boolean
+  /**
+   * Whether a live ancestor's stop cancelled this Activation. A stop the user
+   * asked for must not be undone by the settlement notice it causes, so the
+   * notice is recorded without waking the stopped ancestor.
+   */
+  stoppedByAncestor: boolean
 }
 
 /** Resources retained only for the selected execution kind. */

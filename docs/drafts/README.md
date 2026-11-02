@@ -115,6 +115,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 55. [Browser-Native Session 编排、route 切换与 admission 验证](browser-native-dsh-poc/next-session-orchestration-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-orchestration-validation-progress.md)：Chrome 156 在一个 Dedicated Worker 中运行三个真实 DSH Agent，验证 active/parked 投影、目标取消、运行中 route switch 拒绝、失败 route 后恢复和 validation-only admission；scripted barrier 不证明真实模型多 Agent 并发，真实 LLM 只回归普通文件与刷新恢复，四 Agent 上限不是生产容量。
 
 56. [Browser-Native Session 连续性验证](browser-native-dsh-poc/next-session-continuity-validation-plan.md)及[进度](browser-native-dsh-poc/next-session-continuity-validation-progress.md)：Chrome 156 在真实 Dedicated Worker 中验证 busy Agent 的 durable next-turn、`keepInbox` 取消保留、resume 后 model route fidelity、闭合 turn fork 和运行中 text open-tail fork；真实 LLM 只回归普通文件/刷新路径，open tool unknown、Workspace fork、跨设备恢复和后台 Agent 仍未验证。
+57. [Browser-Native 父 Session 停止的取消传播](browser-native-dsh-poc/subagent-stop-propagation-validation-plan.md)及[进度](browser-native-dsh-poc/subagent-stop-propagation-validation-progress.md)：定义顶层用户 Stop 递归取消活动子 Agent、子 Session 保留、结算通知只入 inbox 不唤醒的语义；Worker 内 `spawn` subagent E2E 与真实 LLM 流式/`bash sleep` 工具执行中断均通过，定向 child interrupt 保持不传播。
 
 ### 需要实现或审查代码时
 

@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-user-approval'
@@ -14,6 +15,12 @@ export interface BrowserNativePermissionSnapshot {
   readonly approvalPolicy: 'ask' | 'never'
   readonly availablePresets: readonly string[]
   readonly workspaceRoot: string
+}
+
+/** Text queued for one live Agent, read without starting a turn. */
+export interface BrowserNativeAgentInboxSnapshot {
+  readonly nextTurn: readonly string[]
+  readonly nextStep: readonly string[]
 }
 
 /** Static module plus permission-inspection and Agent-cancellation test operations. */
@@ -32,6 +39,13 @@ export interface BrowserNativePermissionProbe {
    * @returns Whether a running Agent received cancellation.
    */
   readonly cancel: (sessionId: string) => boolean
+  /**
+   * Read the pending input queues of one live Agent without waking it.
+   * @param sessionId - Session identifier owned by the Agent.
+   * @returns Text of each queued message per queue.
+   * @throws when the probe is not mounted or the Agent is not live.
+   */
+  readonly inbox: (sessionId: string) => BrowserNativeAgentInboxSnapshot
 }
 
 interface BrowserNativeCancelableAgent extends Agent {
@@ -48,6 +62,22 @@ function sessionFor(ctx: Context, sessionId: string): Session {
   const session = sessions.list().find(candidate => String(candidate.id) === sessionId)
   if (session === undefined) throw new Error(`browser-native permission probe: Session "${sessionId}" is not live`)
   return session
+}
+
+function mountedContext(activeContext: Context | undefined): Context {
+  if (activeContext === undefined) throw new Error('browser-native permission probe: service is not mounted')
+  return activeContext
+}
+
+function agentFor(ctx: Context, sessionId: string): BrowserNativeCancelableAgent {
+  const agents = ctx.get('agents') as BrowserNativeAgentRegistry
+  const agent = agents.get(sessionId as SessionId)
+  if (agent === undefined) throw new Error(`browser-native permission probe: Agent for Session "${sessionId}" is not live`)
+  return agent
+}
+
+function messageText(message: UserMessage): string {
+  return message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
 
 interface BrowserNativePermissionServices {
@@ -78,17 +108,21 @@ interface BrowserNativePermissionServices {
 export function createBrowserNativePermissionProbe(): BrowserNativePermissionProbe {
   let activeContext: Context | undefined
   const cancel = (sessionId: string): boolean => {
-    const ctx = activeContext
-    if (ctx === undefined) throw new Error('browser-native permission probe: service is not mounted')
-    const agents = ctx.get('agents') as BrowserNativeAgentRegistry
-    const agent = agents.get(sessionId as SessionId)
-    if (agent?.status !== 'running') return false
+    const ctx = mountedContext(activeContext)
+    const agent = agentFor(ctx, sessionId)
+    if (agent.status !== 'running') return false
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return true
   }
+  const inbox = (sessionId: string): BrowserNativeAgentInboxSnapshot => {
+    const agent = agentFor(mountedContext(activeContext), sessionId)
+    return {
+      nextTurn: agent.inbox.nextTurn.map(messageText),
+      nextStep: agent.inbox.nextStep.map(messageText),
+    }
+  }
   const inspect = (sessionId: string): BrowserNativePermissionSnapshot => {
-    const ctx = activeContext
-    if (ctx === undefined) throw new Error('browser-native permission probe: service is not mounted')
+    const ctx = mountedContext(activeContext)
     const session = sessionFor(ctx, sessionId)
     const services = {
       permissionPresets: ctx.get('permissionPresets'),
@@ -115,5 +149,5 @@ export function createBrowserNativePermissionProbe(): BrowserNativePermissionPro
       }, 'browser-native permission probe')
     },
   }
-  return { factory: () => module, inspect, cancel }
+  return { factory: () => module, inspect, cancel, inbox }
 }

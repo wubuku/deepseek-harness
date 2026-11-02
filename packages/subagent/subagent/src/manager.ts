@@ -228,6 +228,37 @@ export class SubagentManager {
   }
 
   /**
+   * Cancel every live descendant Activation of one stopped Agent without
+   * tearing its Sessions down. A user stop is a stop of the whole delegated
+   * work tree: the descendants keep their continuable Sessions, but no
+   * descendant may keep running, start queued work, or wake the stopped
+   * ancestor with its settlement notice.
+   * @param rootId - durable id of the Agent whose turn the user stopped.
+   */
+  stopDescendants(rootId: SessionId): void {
+    const root = this.ctx.agents.get(rootId)
+    if (root === undefined) return
+    for (const materialization of this.materializations) {
+      if (materialization.lineage.includes(root)) materialization.controller.abort({ kind: 'parent' })
+    }
+    for (const activation of this.resident.values()) {
+      if (!activation.ancestry.has(root) || activation.closing !== undefined) continue
+      if (activation.kind === 'local') {
+        // Only a running child holds a turn to abort; its queued input is
+        // discarded so the abort cannot be followed by another turn.
+        if (activation.handle.agent.status === 'idle') continue
+        activation.stoppedByAncestor = true
+        activation.handle.agent.cancel({ kind: 'parent' })
+        continue
+      }
+      activation.stoppedByAncestor = true
+      activation.controller.abort({ kind: 'parent' })
+      // The settlement observer reports teardown failures.
+      void this.dispose(activation).catch(() => undefined)
+    }
+  }
+
+  /**
    * Close admission, await every already-admitted materialization through
    * publication or rollback, then dispose the stable live Activation graph
    * child-first.
@@ -938,6 +969,7 @@ export class SubagentManager {
       ownedChildren: new Set(),
       observer,
       announced: false,
+      stoppedByAncestor: false,
     }
     void activation.result.promise.catch(() => undefined)
     this.resident.set(childId, activation)
@@ -1193,6 +1225,12 @@ export class SubagentManager {
         activation.childId, terminal, activationAgent(activation) !== undefined,
       )
       if (this.closingTeardownFor(parent) !== undefined) {
+        parent.inject(message)
+        return
+      }
+      if (activation.stoppedByAncestor) {
+        // Recording the notice without waking keeps the user's stop final:
+        // the next turn reads it, but no turn opens because of it.
         parent.inject(message)
         return
       }

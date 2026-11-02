@@ -86,6 +86,13 @@ export async function createRuntimeValidationDist({
           name: '@deepseek-ai/dsh-tool-subagent',
           config: { provider: 'spawn', agentPreset: 'standard', maxDepth: 1 },
         })
+        // The stop scenario drives the public Agent cancellation path.
+        const insertion = entries.find(entry => Array.isArray(entry?.insert))
+        if (insertion === undefined) throw new Error('validation profile has no root plugin insertion')
+        insertion.insert.push({
+          id: 'browser-native-permission-probe',
+          name: './browser-native-permission-probe.js',
+        })
       }
       profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
     }

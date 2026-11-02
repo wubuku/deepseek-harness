@@ -1259,6 +1259,12 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 本批真实 LLM 冒烟使用 `.env` 的 `OPENAI_*` 端点（`OPENAI_NEXT_GPT_*` 当次返回 403 quota），完成 3 turns、4 次 HTTP 200、流式文本与 `todo_write`。冒烟还修复了 OpenAI-compatible 代理对 tool-call delta `id: null` 的兼容缺陷，合同测试见 [backend-v2.test.mjs](tests/backend-v2.test.mjs)。
 
+## 取消传播：父 Session 停止与子 Agent
+
+[语义决策与验证计划](subagent-stop-propagation-validation-plan.md)及[实施进度](subagent-stop-propagation-validation-progress.md)确定：用户停止顶层 Session 时必须递归取消其活动子 Agent，子 Agent 的 Session 保留为可继续，其结算通知只入父 Agent inbox 而不唤醒已停止的 turn；定向中断单个 child 不传播到其后代，非用户原因的结束也不传播。
+
+实现位于 `packages/subagent/subagent/src`：`stopDescendants()` 沿 `ancestry` 取消 local/durable Activation，`stoppedByAncestor` 抑制 settlement 唤醒，监听挂在 `ctx.root` 并只接受顶层 `turn/end: aborted/user`。Chrome E2E 用 `spawn` subagent 的双 barrier 证明 parent `aborted/user`、child `aborted/parent`、停止后无新模型请求、通知在下一轮输入前回放；真实模型另在流式文本和 `bash sleep` 执行中 Stop，均只结算一个 `aborted` turn，cut 工具记录 `Error: tool call aborted`，后续 turn 不重放命令。跨标签 Stop、进程外 provider、页面关闭后的后台 Agent、Safari 和 OS crash 未验证。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

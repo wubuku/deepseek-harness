@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
-import { assistantText, openPreview, sendTurn, sessionRequest, submitPrompt, waitFor } from './runtime-test-support.mjs'
+import { assistantText, openPreview, rememberSessionPrincipal, sendTurn, sessionRequest, submitPrompt, waitFor } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightModule = process.env.DSH_POC_PLAYWRIGHT_MODULE
@@ -101,6 +101,7 @@ try {
   await page.locator('[data-composer-input][contenteditable="true"]').last().fill(stopPrompt)
   await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click()
   const sessionId = await waitFor(async () => requests.find(request => request.path.endsWith('/session/create'))?.body.sessionId, 'Session creation')
+  await rememberSessionPrincipal(page, origin, sessionId)
   const inFlight = await waitFor(async () => requests.find(request => request.path.endsWith('/llm') && request.request.failure() === null), 'in-flight real LLM request', 60_000)
   const stopButton = page.getByRole('button', { name: /^(Stop generating|停止生成)$/ }).last()
   await stopButton.waitFor({ state: 'visible', timeout: 30_000 })
