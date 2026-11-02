@@ -1253,6 +1253,12 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 该测试使用真实 Chromium、真实 backend、真实上游模型请求和真实 Session 持久化；它不 mock LLM response。测试输出只报告 mode、provider、model、event types 和 durable sequence，不打印凭据或完整 prompt。
 
+## 下一批结果：后台标签、open tool fork 与 Worker 内 subagent
+
+[候选盘点与选取](next-batch-inventory-and-selection.md)记录三项验证的假设、判定与淘汰理由。B（open tool cut fork）在 Chrome 156 成立：child seed 合成 `TOOL_OUTCOME_UNKNOWN`、只继承一个 call 且不重放，parent 正常完成。C（Worker 内进程内 subagent）成立但只限单层 `spawn`：Worker 从 VFS image 加载 `dsh-subagent` 包，scripted 模型触发 `subagent` 后 child Session 建立并独立运行，parent 收到 `Background subagent <childId>` 通知后继续；深度拒绝、取消、fork/进程外 provider 与真实模型自主委托未验证。A（后台标签自然节流）被环境阻塞：headed Chrome 自动化中所有页面始终报告 `visible`，无法进入 intensive throttling，[harness](tests/background-tab-lease.e2e.mjs) 以 `blocked` 退出。
+
+本批真实 LLM 冒烟使用 `.env` 的 `OPENAI_*` 端点（`OPENAI_NEXT_GPT_*` 当次返回 403 quota），完成 3 turns、4 次 HTTP 200、流式文本与 `todo_write`。冒烟还修复了 OpenAI-compatible 代理对 tool-call delta `id: null` 的兼容缺陷，合同测试见 [backend-v2.test.mjs](tests/backend-v2.test.mjs)。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

@@ -14,49 +14,49 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 
 | 结论 | 证据 |
 | --- | --- |
-| 真实 DSH Host 与 `ctx.agentLoop` 在 Dedicated Worker 中运行，模型凭据只留在同源 backend | [README.md](README.md#L9)、[兼容矩阵](operational-compatibility-matrix.md#L27) |
-| Session transport、outbox、receipt 恢复与 writer fencing 可承受响应丢失、IDB abort 与 Worker 终止 | [矩阵 Session persistence 行](operational-compatibility-matrix.md#L41) |
-| 一个 Worker 可同时运行三个真实 Agent Loop；取消、prompt 与 Session event 按 Session 隔离 | [矩阵 Session 编排行](operational-compatibility-matrix.md#L44)、[README.md](README.md#L47) |
-| `next-turn` 排队只消费一次、`cancel({ keepInbox: true })` 保留 queued message、`resume()` 从 request header 恢复 route | [连续性进度](next-session-continuity-validation-progress.md#L9) |
-| closed turn 与运行中 text open-tail 的 `buildForkSeed` fork 都不重发继承 prompt | [连续性进度](next-session-continuity-validation-progress.md#L18)、[README.md](README.md#L27) |
-| 同 Worker 的同步 CPU 工具阻塞 peer Session；独立 Worker 拓扑下 peer 可继续 | [矩阵 Worker 隔离行](operational-compatibility-matrix.md#L47) |
-| 审批授权、串行多调用、Stop 取消结算、Worker 强杀后 `TOOL_OUTCOME_UNKNOWN` 结算均有 Chrome 证据 | [矩阵审批行](operational-compatibility-matrix.md#L29)、[矩阵工具取消行](operational-compatibility-matrix.md#L37) |
-| Workspace lease 冲突、observer 只读、edit/lease 竞态与过期 writer fencing 已闭环 | [矩阵共享 Workspace 行](operational-compatibility-matrix.md#L58)、[lease/edit 行](operational-compatibility-matrix.md#L60) |
-| pagehide 本地屏障在离开页面时先 flush 本地 snapshot/blob | [矩阵 pagehide 行](operational-compatibility-matrix.md#L62) |
-| 附件上传、补水、取消与 Worker 强杀恢复闭环 | [矩阵附件行](operational-compatibility-matrix.md#L40) |
-| 真实模型 `gpt-5.6-sol` 在 Chrome 中完成 `read → write → read` 与刷新续聊 | [矩阵 Session persistence 行](operational-compatibility-matrix.md#L41) |
+| 真实 DSH Host 与 `ctx.agentLoop` 在 Dedicated Worker 中运行，模型凭据只留在同源 backend | [README.md](README.md) L9、[兼容矩阵](operational-compatibility-matrix.md) L27 |
+| Session transport、outbox、receipt 恢复与 writer fencing 可承受响应丢失、IDB abort 与 Worker 终止 | [矩阵 Session persistence 行](operational-compatibility-matrix.md) L41 |
+| 一个 Worker 可同时运行三个真实 Agent Loop；取消、prompt 与 Session event 按 Session 隔离 | [矩阵 Session 编排行](operational-compatibility-matrix.md) L44、[README.md](README.md) L47 |
+| `next-turn` 排队只消费一次、`cancel({ keepInbox: true })` 保留 queued message、`resume()` 从 request header 恢复 route | [连续性进度](next-session-continuity-validation-progress.md) L9 |
+| closed turn 与运行中 text open-tail 的 `buildForkSeed` fork 都不重发继承 prompt | [连续性进度](next-session-continuity-validation-progress.md) L18、[README.md](README.md) L27 |
+| 同 Worker 的同步 CPU 工具阻塞 peer Session；独立 Worker 拓扑下 peer 可继续 | [矩阵 Worker 隔离行](operational-compatibility-matrix.md) L47 |
+| 审批授权、串行多调用、Stop 取消结算、Worker 强杀后 `TOOL_OUTCOME_UNKNOWN` 结算均有 Chrome 证据 | [矩阵审批行](operational-compatibility-matrix.md) L29、[矩阵工具取消行](operational-compatibility-matrix.md) L37 |
+| Workspace lease 冲突、observer 只读、edit/lease 竞态与过期 writer fencing 已闭环 | [矩阵共享 Workspace 行](operational-compatibility-matrix.md) L58、[lease/edit 行](operational-compatibility-matrix.md) L60 |
+| pagehide 本地屏障在离开页面时先 flush 本地 snapshot/blob | [矩阵 pagehide 行](operational-compatibility-matrix.md) L62 |
+| 附件上传、补水、取消与 Worker 强杀恢复闭环 | [矩阵附件行](operational-compatibility-matrix.md) L40 |
+| 真实模型 `gpt-5.6-sol` 在 Chrome 中完成 `read → write → read` 与刷新续聊 | [矩阵 Session persistence 行](operational-compatibility-matrix.md) L41 |
 
 ### 未验证（缺口）
 
 | 缺口 | 证据 |
 | --- | --- |
-| open tool cut 上的 fork 是否合成 `TOOL_OUTCOME_UNKNOWN` 且不重放 | [README.md](README.md#L27)、[连续性进度](next-session-continuity-validation-progress.md#L19) |
-| 后台标签自然节流（非 CDP freeze）下 Dedicated Worker 的 lease 续租与在途 turn | [README.md](README.md#L862)、[矩阵生命周期行](operational-compatibility-matrix.md#L34) |
-| 页面关闭后的后台 Agent；`parked` 不等于后台运行 | [矩阵 pagehide 行](operational-compatibility-matrix.md#L62)、[矩阵 mount 行](operational-compatibility-matrix.md#L42) |
-| 单页 Worker supervisor/pool；当前页面 realm 只连一个 Host Worker | [矩阵 Worker 隔离行](operational-compatibility-matrix.md#L47) |
-| BFCache back/forward 连续性（`no-store` 与 JS 网络请求导致未命中） | [README.md](README.md#L881)、[矩阵生命周期行](operational-compatibility-matrix.md#L34) |
-| Safari/WebKit 行为（按计划暂停） | [README.md](README.md#L673) |
-| Worker 内进程内 subagent 委托（package 可能拉入 Node-only 依赖） | [README.md](README.md#L47)、[兼容矩阵](operational-compatibility-matrix.md) |
-| HITL 跨标签/跨设备投递 | [矩阵控制通道行](operational-compatibility-matrix.md#L32) |
-| `web_search`/`web_fetch`（profile 明确不提供） | [矩阵](operational-compatibility-matrix.md#L18)、[README.md](README.md#L9) |
-| 真实模型自主多 Agent、route 选择、fork、权限选择 | [README.md](README.md#L47)、[连续性计划](next-session-continuity-validation-plan.md#L22) |
-| 生产多实例 backend、跨主机 HA、exactly-once | [README.md](README.md#L1112)、[矩阵多实例行](operational-compatibility-matrix.md#L51) |
-| 自然 eviction、OS/磁盘/浏览器进程崩溃 | [README.md](README.md#L525)、[README.md](README.md#L823) |
-| 首次 hydrate 的完整临时副本（内容 hash 需要整读） | [README.md](README.md#L716) |
-| 54 条 unresolved builtin 请求的运行覆盖 | [README.md](README.md#L450) |
-| Windows 强杀脚本不可用（依赖 POSIX `ps`/`SIGKILL`） | [README.md](README.md#L503) |
+| open tool cut 上的 fork 是否合成 `TOOL_OUTCOME_UNKNOWN` 且不重放 | [README.md](README.md) L27、[连续性进度](next-session-continuity-validation-progress.md) L19 |
+| 后台标签自然节流（非 CDP freeze）下 Dedicated Worker 的 lease 续租与在途 turn | [README.md](README.md) L862、[矩阵生命周期行](operational-compatibility-matrix.md) L34 |
+| 页面关闭后的后台 Agent；`parked` 不等于后台运行 | [矩阵 pagehide 行](operational-compatibility-matrix.md) L62、[矩阵 mount 行](operational-compatibility-matrix.md) L42 |
+| 单页 Worker supervisor/pool；当前页面 realm 只连一个 Host Worker | [矩阵 Worker 隔离行](operational-compatibility-matrix.md) L47 |
+| BFCache back/forward 连续性（`no-store` 与 JS 网络请求导致未命中） | [README.md](README.md) L881、[矩阵生命周期行](operational-compatibility-matrix.md) L34 |
+| Safari/WebKit 行为（按计划暂停） | [README.md](README.md) L673 |
+| Worker 内进程内 subagent 委托（package 可能拉入 Node-only 依赖） | [README.md](README.md) L47、[兼容矩阵](operational-compatibility-matrix.md) |
+| HITL 跨标签/跨设备投递 | [矩阵控制通道行](operational-compatibility-matrix.md) L32 |
+| `web_search`/`web_fetch`（profile 明确不提供） | [矩阵](operational-compatibility-matrix.md) L18、[README.md](README.md) L9 |
+| 真实模型自主多 Agent、route 选择、fork、权限选择 | [README.md](README.md) L47、[连续性计划](next-session-continuity-validation-plan.md) L22 |
+| 生产多实例 backend、跨主机 HA、exactly-once | [README.md](README.md) L1112、[矩阵多实例行](operational-compatibility-matrix.md) L51 |
+| 自然 eviction、OS/磁盘/浏览器进程崩溃 | [README.md](README.md) L525、[README.md](README.md) L823 |
+| 首次 hydrate 的完整临时副本（内容 hash 需要整读） | [README.md](README.md) L716 |
+| 54 条 unresolved builtin 请求的运行覆盖 | [README.md](README.md) L450 |
+| Windows 强杀脚本不可用（依赖 POSIX `ps`/`SIGKILL`） | [README.md](README.md) L503 |
 
 ### 已知坑（已记录，不应重复踩）
 
 | 坑 | 证据 |
 | --- | --- |
-| DSH Session/Workspace/业务 API 没有跨存储原子事务；未知结果只能查询原 operation，禁止自动重放 | [README.md](README.md#L484)、[README.md](README.md#L978) |
-| 恢复包上限 64 MiB，超限拒绝且不截断 | [矩阵生命周期行](operational-compatibility-matrix.md#L34) |
-| Session 单 Session 8,192 events/16 MiB、profile 32,768 events/64 MiB 预算 | [矩阵 Session persistence 行](operational-compatibility-matrix.md#L41) |
-| `pagehide.persisted` 只以合成事件验证；真实页面卸载与晚到 callback 的调度竞争未测 | [README.md](README.md#L862) |
+| DSH Session/Workspace/业务 API 没有跨存储原子事务；未知结果只能查询原 operation，禁止自动重放 | [README.md](README.md) L484、[README.md](README.md) L978 |
+| 恢复包上限 64 MiB，超限拒绝且不截断 | [矩阵生命周期行](operational-compatibility-matrix.md) L34 |
+| Session 单 Session 8,192 events/16 MiB、profile 32,768 events/64 MiB 预算 | [矩阵 Session persistence 行](operational-compatibility-matrix.md) L41 |
+| `pagehide.persisted` 只以合成事件验证；真实页面卸载与晚到 callback 的调度竞争未测 | [README.md](README.md) L862 |
 | Playwright 默认参数会关闭后台节流，本地验证后台标签必须显式移除这些 flag | [tests/session-worker-isolation.e2e.mjs](tests/session-worker-isolation.e2e.mjs) |
-| 能力探测失败只回滚已发布 schema，不回滚已进入 VFS 的 mutation | [矩阵能力发布行](operational-compatibility-matrix.md#L27) |
-| PoC principal 不是身份认证，不抵御同源恶意脚本 | [矩阵 principal 行](operational-compatibility-matrix.md#L48) |
+| 能力探测失败只回滚已发布 schema，不回滚已进入 VFS 的 mutation | [矩阵能力发布行](operational-compatibility-matrix.md) L27 |
+| PoC principal 不是身份认证，不抵御同源恶意脚本 | [矩阵 principal 行](operational-compatibility-matrix.md) L48 |
 
 ## 候选池（21 项）
 
@@ -91,22 +91,31 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 ### A：后台标签自然节流下的 lease 与在途 turn
 
 假设：页面不可见时 Dedicated Worker 的定时器仍按 lease/3 续租；Chrome 进入 intensive throttling 后仍能维持 lease 与 turn。
+
 最小实验：headed Chrome（移除 `--disable-background-timer-throttling` 等默认参数），`ownerLeaseMs` 收缩到便于观测的量级，两个同源标签，第二个标签持有焦点，跨过 Chrome 的 5 分钟 intensive throttling 窗口后检查续租间隔、Workspace append 与 turn 终态。
+
 判定：续租间隔始终小于 lease 且 append 无 fencing 失败 → 成立；出现续租间隔超过 lease 或 fencing 拒绝 → 不成立，并记录对“后台标签算后台 Agent”的产品结论的影响。
+
 失败即停分支：若 throttle 未触发（Chrome 版本策略变化），只记录“本环境未复现”，不把结果写成通过。
 
 ### B：open tool cut 上的 fork 结算
 
 假设：`buildForkSeed` 在 cut 于在途 tool call 时，为 step 合成 `TOOL_OUTCOME_UNKNOWN` 的 `tool/result`，以 `forked` 关闭 step/turn；父 Agent 继续只执行一次该工具。
+
 最小实验：新增 validation-only 长时工具，scripted LLM 先发该工具调用，Session 出现 `tool/call` 后立即 fork，随后放行工具。
+
 判定：child seed 中出现 `error.code === TOOL_OUTCOME_UNKNOWN` 且 `sourceEventSeqs` 指向该 call；child 不触发继承 prompt 的模型请求；工具执行计数为 1；parent 正常完成一次。
+
 失败即停分支：若 child 出现重复执行或缺少合成结果，记为产品级缺陷并给出最小复现。
 
 ### C：Worker 内进程内 subagent 委托
 
 假设：`packages/subagent/*` 能在 Dedicated Worker 模块图中加载，`ctx.agents` 与工具可见性支撑子 Agent 创建与完成。
+
 最小实验：在 continuity roster 上追加 subagent 包与最小配置，脚本化模型触发 `subagent` 工具调用。
+
 判定：child Session 建立、完成通知回传、深度与取消受控 → 成立；任一环节需要 Node-only 依赖 → 记录为不可行并给出具体缺失模块。
+
 失败即停分支：包加载失败即停止，不伪造替代实现。
 
 ## 淘汰理由（摘要）
@@ -119,3 +128,26 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 - A 的 lease 值通过既有测试钩子 `ownerLeaseMs` 收缩，而不是改默认常量，避免把验证便利写成产品默认。
 - B 新增 validation-only 工具而不是复用 `browser_cpu_*` probe，因为 CPU probe 的语义是 CPU 占用，复用它会把“在途工具”与“CPU 阻塞”混为一谈。
 - C 只尝试现有包与最小配置；若加载失败即记录可行性结论，不做 shim 替代。
+- A 的自动化不足以制造真实的页面不可见状态后，保留 harness 但把结论标为 blocked，而不是改写成 scripted 通过；App 可见性探针（`bringToFront`、最小化、全屏、`window.open`、bundled Chromium）都返回 `visible`，说明这是自动化环境限制而非产品结论。
+
+## 本批执行结果
+
+### B：open tool cut 的 fork 结算
+
+结论：成立。Chrome 156 中 `continuity-tool` 在 `tool/call` seq 16 处切分，child seed 合成 `ToolOutcomeUnknownError`（`code=TOOL_OUTCOME_UNKNOWN`、`sourceEventSeqs=[16]`）并以 `forked` 关闭 step/turn；child 只继承一个 call、没有第二次执行，也未向 child 重发继承 prompt；parent 的工具执行与 `tool/result` 各一次并以 `completed` 结束。证据见[连续性进度](next-session-continuity-validation-progress.md) L20与[兼容矩阵](operational-compatibility-matrix.md) L45。
+
+### A：后台标签自然节流下的 lease 与在途 turn
+
+结论：blocked（环境限制，不是产品失败）。[后台标签 E2E](tests/background-tab-lease.e2e.mjs)以 headed Chrome 启动并显式移除 Playwright 的后台节流抑制参数，使用默认 30 秒 lease 与 380 秒观察窗口；但自动化会话中同一窗口的所有页面都报告 `visible`，`bringToFront`、最小化、全屏、`window.open` 与 bundled Chromium 均无法让目标页进入 hidden 状态，因此观察不到 Chrome 的 intensive throttling。harness 保留并以 `{result:'blocked'}` 退出，不写通过；复跑命令记录在脚本头部与输出中。页面可见性、自然后台冻结与后台 Agent 结论仍未验证。
+
+### C：Worker 内进程内 subagent 委托
+
+结论：成立（单层 `spawn`）。[subagent E2E](tests/in-worker-subagent.e2e.mjs)在 continuity roster 上只追加预设 `tool-subagent`（`provider: spawn`、`agentPreset: standard`、`maxDepth: 1`），真实 Worker 从 VFS image 加载 `dsh-subagent`、`dsh-subagent-spawn-in-process` 与 `dsh-tool-subagent`，无需 Node-only shim。scripted 模型触发 `subagent` 工具后：child Session 建立并收到自己的 prompt（不含 parent prompt）；child 只有 1 个模型请求；parent 收到 tool result 后继续（2 个模型请求）；child 完成后 parent Session 增加 `subagent-settled` 用户消息（`Background subagent <childId>`，parent 26→31 events）；页面错误、Worker 错误与跨源请求均为 0。深度超过 1、取消、fork provider、进程外 provider、真实模型自主委托与跨标签控制未验证。
+
+### 真实 LLM 冒烟与代理兼容性
+
+`docs/drafts/.env` 的 `OPENAI_NEXT_GPT_*` 上游在本次运行返回 `403 insufficient_quota`（最小探测与两次完整 smoke 一致）；改用同一 `.env` 的 `OPENAI_*` OpenAI-compatible 端点在进程环境内注入（不复制凭据文件、不打印密钥）后，[默认 Web UI E2E](tests/browser-native-v2.e2e.mjs)通过：3 turns、4 个 LLM HTTP 200、流式文本分段与 `todo_write` 持久化均正常。
+
+真实流式 smoke 还暴露出一个代理兼容性缺陷：部分 provider 在后续 tool-call delta 中发送 `id: null`，原适配器把 `null` 覆盖到本地 tool-call id，触发 DSH 侧 `tool-call-delta id must be a string`。现只在 provider 提供非空字符串时才更新 id，否则沿用本地生成的 id；[backend 合同测试](tests/backend-v2.test.mjs)新增 `NULL_TOOL_ID_CONTRACT_PROMPT` fake upstream 场景，断言两个 delta 与最终 block 都使用同一个字符串 id。这是 provider 差异修复，不改变 DSH wire 协议。
+
+冒烟限制：使用 `DSH_POC_ENV_FILE=/dev/null` 以满足测试入口要求，因此脚本内置的“浏览器请求不含 env 凭据”扫描在该次运行中没有真实密钥可扫描；凭据只存在于 Node backend 进程环境，浏览器访问仍是同源 `/api/browser-native/*`，但该次运行不能作为密钥泄漏扫描的正面证据。
