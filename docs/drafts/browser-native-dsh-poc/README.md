@@ -1271,6 +1271,12 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 未提供实时只读观察者标签；若未来开放观察者审批，必须先有 durable 的原子 claim。Workspace lease 同时开启的交接、真实模型审批、跨设备接管和 Safari 未验证。
 
+## 附件 GC 与增量 hydrate
+
+[生命周期与验证计划](attachment-gc-validation-plan.md)与[实施进度](attachment-gc-validation-progress.md)确定：只有 durable Session 的 `FileBlock` 算引用；无引用对象必须超过宽限期才可删除；每次成功上传（含复用）递增 workspace 上传代，GC token 在删除前重校验代失配即整体跳过。backend 提供 `gc-token` 与两阶段 `gc`，测试覆盖在用保留、孤儿删除、`scan-stale`、复用保护和重启后 token 失效。
+
+Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydrate 命中缓存时只比较这两个值。Chrome E2E 证明 GC 后在用附件仍可下载且内容一致、孤儿 404；同一 Worker 连续 hydrate 均为缓存命中；清空 OPFS 后重新挂载仍会下载并校验对象。定时 GC、跨实例 fencing、容量配额、Session 删除保留策略和 Safari OPFS 行为未验证。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
