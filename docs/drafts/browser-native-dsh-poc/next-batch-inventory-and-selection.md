@@ -151,3 +151,11 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 真实流式 smoke 还暴露出一个代理兼容性缺陷：部分 provider 在后续 tool-call delta 中发送 `id: null`，原适配器把 `null` 覆盖到本地 tool-call id，触发 DSH 侧 `tool-call-delta id must be a string`。现只在 provider 提供非空字符串时才更新 id，否则沿用本地生成的 id；[backend 合同测试](tests/backend-v2.test.mjs)新增 `NULL_TOOL_ID_CONTRACT_PROMPT` fake upstream 场景，断言两个 delta 与最终 block 都使用同一个字符串 id。这是 provider 差异修复，不改变 DSH wire 协议。
 
 冒烟限制：使用 `DSH_POC_ENV_FILE=/dev/null` 以满足测试入口要求，因此脚本内置的“浏览器请求不含 env 凭据”扫描在该次运行中没有真实密钥可扫描；凭据只存在于 Node backend 进程环境，浏览器访问仍是同源 `/api/browser-native/*`，但该次运行不能作为密钥泄漏扫描的正面证据。
+
+## 后续候选与暂不推进的理由
+
+- **subagent 取消传播**：`subagent` 工具在 activation 建立后立即返回，父 turn 在 child 运行时通常已经结束；“停止父 Session 是否应取消 child”属于产品语义决策，不是现有代码可直接观察的行为。需要先定义停止范围（当前 turn、整个 Session、全部后代），再补 harness，本批不预设结论。
+- **附件安全 GC（候选 18）**：需要先定义引用扫描范围与删除时机（Session、草稿、导出、进行中 turn），是新的存储生命周期设计，而不是一次验证；在错误设计下会删除仍被引用的 blob。
+- **首次 hydrate 峰值副本（候选 12）**：需要新增增量内容 hash 实现，属于性能特性开发；没有实现时只能重复记录同一内存快照。
+- **HITL 跨标签投递（候选 7）**：需要两页同时持有同一 Session 的审批 harness，并先确认 principal 与 lease 的预期行为；本批没有足够证据判定它是缺陷还是已由现有 owner 校验覆盖。
+- 其余候选（Worker supervisor/pool、web capability seam、Durable Worker、Windows、Safari、多实例 HA、跨设备、54 条 builtin 覆盖）分别依赖新的产品组件或当前不可用的平台环境，保持原候选池的“大/暂停”结论。
