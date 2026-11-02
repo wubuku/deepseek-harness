@@ -24,6 +24,7 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'cpu-contention'
     || searchParams.get('browser-native-test') === 'session-orchestration'
     || searchParams.get('browser-native-test') === 'session-continuity'
+    || searchParams.get('browser-native-test') === 'subagent'
     || searchParams.get('browser-native-test') === 'session-mount'
     || searchParams.get('browser-native-test') === 'session-projection'
     || searchParams.get('browser-native-test') === 'approval-integrity')
@@ -221,6 +222,7 @@ try {
         skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
         cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
         forkCut: searchParams.get('browser-native-test') === 'session-continuity',
+        subagent: searchParams.get('browser-native-test') === 'subagent',
       }, [channel.port2])
       window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
         const requestId = browserNativeTestUuid()

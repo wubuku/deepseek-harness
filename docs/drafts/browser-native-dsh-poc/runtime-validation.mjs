@@ -11,14 +11,14 @@ const here = new URL('.', import.meta.url)
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
   distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout,
 } = {}) {
-  if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity'].includes(roster)) {
-    throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, or browser-session-continuity')
+  if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent'].includes(roster)) {
+    throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, or browser-subagent')
   }
   if (!Number.isSafeInteger(largeFileChars) || largeFileChars < 0 || largeFileChars > 1_000_000) {
     throw new Error('largeFileChars must be an integer between 0 and 1000000')
@@ -34,11 +34,11 @@ export async function createRuntimeValidationDist({
     const outputRoot = join(temporary, 'dist')
     const home = join(imageRoot, 'home')
     await mkdir(join(home, 'browser-validation'), { recursive: true })
-    const patch = roster === 'browser' || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity'
+    const patch = roster === 'browser' || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent'
       ? 'runtime-validation.cordis.patch.yml'
       : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
-    if (timedQuestionTimeout !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity') {
+    if (timedQuestionTimeout !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent') {
       const entries = load(profilePatch)
       if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
       if (timedQuestionTimeout !== undefined) {
@@ -77,6 +77,15 @@ export async function createRuntimeValidationDist({
             name: './browser-native-cpu-contention-probe.js',
           })
         }
+      }
+      if (roster === 'browser-subagent') {
+        const preset = entries.find(entry => entry?.id === 'preset-standard')
+        if (preset === undefined) throw new Error('validation profile has no preset-standard entry')
+        preset.config.plugins.push({
+          id: 'tool-subagent',
+          name: '@deepseek-ai/dsh-tool-subagent',
+          config: { provider: 'spawn', agentPreset: 'standard', maxDepth: 1 },
+        })
       }
       profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
     }

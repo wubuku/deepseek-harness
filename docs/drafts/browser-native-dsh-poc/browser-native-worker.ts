@@ -2391,6 +2391,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (data.skillFilesystem === true) capabilityPublication.enableSkillFilesystemValidation()
     if (data.cpuContention === true) capabilityPublication.enableCpuContentionValidation()
     if (data.forkCut === true) capabilityPublication.enableForkCutValidation()
+    if (data.subagent === true) capabilityPublication.enableSubagentValidation()
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()
