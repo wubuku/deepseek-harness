@@ -36,6 +36,7 @@ import { createBrowserNativeSessionContinuityProbe } from './browser-native-sess
 import type { BrowserNativeSessionContinuityRuntime } from './browser-native-session-continuity-probe.ts'
 import { createBrowserNativeCpuContentionProbe } from './browser-native-cpu-contention-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import {
@@ -115,6 +116,8 @@ let attachmentOpfsStageWaiter: string | undefined
 let attachmentOpfsWriteRelease: (() => void) | undefined
 let attachmentOpfsWriteOutcome: 'idle' | 'armed' | 'paused' | 'aborted' | 'released' | 'released-before-stage' = 'idle'
 let reconcileAttachmentTemporaryFilesForTest: (() => Promise<void>) | undefined
+let attachmentSessionHydrateForTest: ((events: readonly SessionEvent[]) => Promise<void>) | undefined
+const attachmentVerifyEvents: { readonly hash: string; readonly mode: 'full' | 'cached' }[] = []
 const fileToolMetrics: BrowserNativeEditMetrics[] = []
 const fileToolStageWaiters = new Map<string, {
   readonly stage: BrowserNativeFileToolStage
@@ -265,7 +268,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly sessionId?: string
   readonly childSessionId?: string
@@ -281,6 +284,7 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly content?: string
   readonly base64?: string
   readonly byteLength?: number
+  readonly attachmentId?: string
   readonly byteValue?: number
   readonly lineBytes?: number
   readonly markerLine?: number
@@ -400,6 +404,11 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
     || data.action === 'attachment-opfs-write-state'
     || data.action === 'release-attachment-opfs-write'
     || data.action === 'reconcile-attachment-staging') return true
+  if (data.action === 'attachment-verify-state') return true
+  if (data.action === 'attachment-hydrate-probe') {
+    return typeof data.attachmentId === 'string' && /^sha256:[a-f0-9]{64}$/.test(data.attachmentId)
+      && Number.isSafeInteger(data.byteLength) && Number(data.byteLength) >= 0
+  }
   if (data.action === 'cross-store-probe') {
     return (data.path === undefined || typeof data.path === 'string')
       && (data.content === undefined || typeof data.content === 'string')
@@ -1633,6 +1642,35 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true })
       return
     }
+    if (request.action === 'attachment-verify-state') {
+      workspaceTestResponse(request.requestId, { ok: true, verifications: attachmentVerifyEvents })
+      return
+    }
+    if (request.action === 'attachment-hydrate-probe') {
+      if (attachmentSessionHydrateForTest === undefined) {
+        throw new Error('browser-native attachment test: attachment module is unavailable')
+      }
+      const attachment: FileAttachmentRef = {
+        attachmentId: request.attachmentId as FileAttachmentRef['attachmentId'],
+        name: 'attachment-hydrate-probe.bin',
+        bytes: Number(request.byteLength),
+      }
+      const event = {
+        seq: 0 as SessionSeq,
+        time: 0,
+        type: 'user/message',
+        data: { content: [{ type: 'file', attachment }] },
+      } satisfies SessionEvent<'user/message'>
+      const hash = String(request.attachmentId).slice('sha256:'.length)
+      const observed = attachmentVerifyEvents.length
+      await attachmentSessionHydrateForTest([event])
+      await attachmentSessionHydrateForTest([event])
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        verifications: attachmentVerifyEvents.slice(observed).filter(entry => entry.hash === hash),
+      })
+      return
+    }
     if (request.action === 'module-trace') {
       const moduleTrace = host?.modules?.requestTrace()
       if (moduleTrace === undefined) throw new Error('browser-native worker: module trace is disabled')
@@ -2555,7 +2593,11 @@ self.addEventListener('message', (event: MessageEvent) => {
           capabilityPublication,
           workspaceTestPort === undefined ? undefined : {
             afterOpfsStagingWrite: (bytesWritten, signal) => pauseAttachmentOpfsStagingWrite(bytesWritten, signal),
-            onModuleReady: module => { reconcileAttachmentTemporaryFilesForTest = module.reconcileTemporaryFiles },
+            onAttachmentVerify: (hash, mode) => { attachmentVerifyEvents.push({ hash, mode }) },
+            onModuleReady: module => {
+              reconcileAttachmentTemporaryFilesForTest = module.reconcileTemporaryFiles
+              attachmentSessionHydrateForTest = module.ensureSessionFiles
+            },
           },
           permissionProbe,
         ),

@@ -60,6 +60,8 @@ export interface BrowserNativeAttachmentModule {
 /** Optional Worker-only hooks for deterministic attachment lifecycle tests. */
 export interface BrowserNativeAttachmentTestHooks {
   readonly afterOpfsStagingWrite?: (bytesWritten: number, signal?: AbortSignal) => Promise<void>
+  /** Report whether an object verification re-read the file or matched the verification cache. */
+  readonly onAttachmentVerify?: (hash: string, mode: 'full' | 'cached') => void
   /** Expose module lifecycle probes only when the Worker test port is enabled. */
   readonly onModuleReady?: (module: BrowserNativeAttachmentModule) => void
 }
@@ -261,6 +263,7 @@ export function createBrowserNativeAttachmentModule(
     const { AttachmentStore, AttachmentError, AttachmentId } = runtimeAttachments()
     const filesByWorkspace = new Map<string, OpfsWorkspaceDirectory>()
     const backings = new Map<string, SharedOpfsBacking>()
+    const verifiedObjects = new Map<string, { readonly bytes: number; readonly lastModified: number }>()
     const seededPaths = new Set<string>()
     const vfs = workspace.vfs
     if (!(vfs instanceof MemoryVfs)) throw new Error('browser-native attachments: Worker VFS runtime identity differs')
@@ -378,6 +381,22 @@ export function createBrowserNativeAttachmentModule(
       }
     }
 
+    async function verifyObject(file: File, hash: string, bytes: number, signal?: AbortSignal): Promise<void> {
+      const cached = verifiedObjects.get(hash)
+      if (cached !== undefined && cached.bytes === bytes && file.size === bytes && file.lastModified === cached.lastModified) {
+        testHooks.onAttachmentVerify?.(hash, 'cached')
+        return
+      }
+      try {
+        await verifyFile(file, hash, bytes, signal)
+      } catch (error) {
+        verifiedObjects.delete(hash)
+        throw error
+      }
+      verifiedObjects.set(hash, { bytes, lastModified: file.lastModified })
+      testHooks.onAttachmentVerify?.(hash, 'full')
+    }
+
     async function ensureAttachmentFile(ref: FileAttachmentRef, signal?: AbortSignal): Promise<void> {
       signal?.throwIfAborted()
       const hash = assertFileReference(ref)
@@ -385,7 +404,7 @@ export function createBrowserNativeAttachmentModule(
       let object: FileSystemFileHandle
       try {
         object = await directory.directory.getFileHandle(hash)
-        await verifyFile(await object.getFile(), hash, ref.bytes, signal)
+        await verifyObject(await object.getFile(), hash, ref.bytes, signal)
       } catch {
         signal?.throwIfAborted()
         await downloadObject(workspaceIdOf(workspace), directory, ref, hash, signal)
@@ -458,7 +477,7 @@ export function createBrowserNativeAttachmentModule(
       let target: FileSystemFileHandle
       try {
         target = await directory.directory.getFileHandle(hash)
-        await verifyFile(await target.getFile(), hash, bytes)
+        await verifyObject(await target.getFile(), hash, bytes)
         await directory.directory.removeEntry(temporary.name)
         return target
       } catch {
@@ -483,7 +502,7 @@ export function createBrowserNativeAttachmentModule(
         reader.releaseLock()
       }
       await directory.directory.removeEntry(temporary.name)
-      await verifyFile(await target.getFile(), hash, bytes)
+      await verifyObject(await target.getFile(), hash, bytes)
       return target
     }
 
