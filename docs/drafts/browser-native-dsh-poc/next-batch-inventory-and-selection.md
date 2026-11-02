@@ -142,7 +142,7 @@ description: "盘点 Browser-Native DSH PoC 的已验证结论、未验证缺口
 
 ### C：Worker 内进程内 subagent 委托
 
-结论：成立（单层 `spawn`）。[subagent E2E](tests/in-worker-subagent.e2e.mjs)在 continuity roster 上只追加预设 `tool-subagent`（`provider: spawn`、`agentPreset: standard`、`maxDepth: 1`），真实 Worker 从 VFS image 加载 `dsh-subagent`、`dsh-subagent-spawn-in-process` 与 `dsh-tool-subagent`，无需 Node-only shim。scripted 模型触发 `subagent` 工具后：child Session 建立并收到自己的 prompt（不含 parent prompt）；child 只有 1 个模型请求；parent 收到 tool result 后继续（2 个模型请求）；child 完成后 parent Session 增加 `subagent-settled` 用户消息（`Background subagent <childId>`，parent 26→31 events）；页面错误、Worker 错误与跨源请求均为 0。深度超过 1、取消、fork provider、进程外 provider、真实模型自主委托与跨标签控制未验证。
+结论：成立（单层 `spawn`）。[subagent E2E](tests/in-worker-subagent.e2e.mjs)在 continuity roster 上只追加预设 `tool-subagent`（`provider: spawn`、`agentPreset: standard`、`maxDepth: 1`），真实 Worker 从 VFS image 加载 `dsh-subagent`、`dsh-subagent-spawn-in-process` 与 `dsh-tool-subagent`，无需 Node-only shim。scripted 模型触发 `subagent` 工具后：child Session 建立并收到自己的 prompt（不含 parent prompt）；child 只有 1 个模型请求；parent 收到 tool result 后继续（2 个模型请求）；child 完成后 parent Session 增加 `subagent-settled` 用户消息（`Background subagent <childId>` 且携带 child 最终答复），该通知触发的 parent 模型请求也包含最终答复；页面错误、Worker 错误与跨源请求均为 0。追加的 `maxDepth: 1` 探针中，child 再次调用 `subagent` 得到 `subagent depth 2 exceeds maxDepth 1` 错误结果，未创建第三个 Session，嵌套 prompt 从未到达模型，child 在拒绝后继续一次模型请求并正常完成；同一测试连续两次通过。取消传播、fork provider、进程外 provider、真实模型自主委托与跨标签控制仍未验证。
 
 ### 真实 LLM 冒烟与代理兼容性
 

@@ -1255,7 +1255,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 ## 下一批结果：后台标签、open tool fork 与 Worker 内 subagent
 
-[候选盘点与选取](next-batch-inventory-and-selection.md)记录三项验证的假设、判定与淘汰理由。B（open tool cut fork）在 Chrome 156 成立：child seed 合成 `TOOL_OUTCOME_UNKNOWN`、只继承一个 call 且不重放，parent 正常完成。C（Worker 内进程内 subagent）成立但只限单层 `spawn`：Worker 从 VFS image 加载 `dsh-subagent` 包，scripted 模型触发 `subagent` 后 child Session 建立并独立运行，parent 收到 `Background subagent <childId>` 通知后继续；深度拒绝、取消、fork/进程外 provider 与真实模型自主委托未验证。A（后台标签自然节流）被环境阻塞：headed Chrome 自动化中所有页面始终报告 `visible`，无法进入 intensive throttling，[harness](tests/background-tab-lease.e2e.mjs) 以 `blocked` 退出。
+[候选盘点与选取](next-batch-inventory-and-selection.md)记录三项验证的假设、判定与淘汰理由。B（open tool cut fork）在 Chrome 156 成立：child seed 合成 `TOOL_OUTCOME_UNKNOWN`、只继承一个 call 且不重放，parent 正常完成。C（Worker 内进程内 subagent）成立但只限单层 `spawn`：Worker 从 VFS image 加载 `dsh-subagent` 包，scripted 模型触发 `subagent` 后 child Session 建立并独立运行，parent 收到携带 child 最终答复的 `Background subagent <childId>` 通知后继续；`maxDepth: 1` 探针证明嵌套委托以 `subagent depth 2 exceeds maxDepth 1` 被拒绝、不创建第三个 Session、嵌套 prompt 不到达模型。取消、fork/进程外 provider 与真实模型自主委托未验证。A（后台标签自然节流）被环境阻塞：headed Chrome 自动化中所有页面始终报告 `visible`，无法进入 intensive throttling，[harness](tests/background-tab-lease.e2e.mjs) 以 `blocked` 退出。
 
 本批真实 LLM 冒烟使用 `.env` 的 `OPENAI_*` 端点（`OPENAI_NEXT_GPT_*` 当次返回 403 quota），完成 3 turns、4 次 HTTP 200、流式文本与 `todo_write`。冒烟还修复了 OpenAI-compatible 代理对 tool-call delta `id: null` 的兼容缺陷，合同测试见 [backend-v2.test.mjs](tests/backend-v2.test.mjs)。
 
