@@ -1401,6 +1401,12 @@ OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL�
 
 内存上限只有部分 API：Android 仿真报告 `jsHeapSizeLimit` 约 3.76 GB、`deviceMemory` 32、存储 quota 约 4.1 GB；iOS 没有 `deviceMemory`、`performance.memory` 或 `measureUserAgentSpecificMemory`，只能读到约 1 GB 存储 quota。仿真运行桌面引擎，不能替代真机；iOS 的替代路径（模拟器/真机 WebDriver、异步 OPFS、IDB 兜底、服务端 host）与取舍记在文档中。
 
+## 冷启动预热
+
+[冷启动预热](cold-start-prewarm.md)验证“先起 Worker”能否缩短 2.3 秒首启动。阶段拆解先定位成本：`bootStart` → `sourceChosen` 约 0.2 ms，→ `workerProbed` 约 105 ms，→ `hostConnected` 约 545 ms，→ `synced` 约 2,230 ms，约 1.67 秒发生在 host 连接之后。预热 Worker 的中位数是 2,176 ms，只比基线快 54 ms（噪声级）；在 1.5 秒模拟选择停顿下反而慢 113 ms。原因是 `chooseWorkerHostSource` 在 0.1–0.7 ms 返回，可重叠窗口只有约 13 ms。
+
+boot payload 预取同样无效：静态资源统一 `cache-control: no-store`，9.8 MB 的 `vfs-image.tar.gz` 由 Worker 通过自己的 tunnel 读取，页面 `fetch` 无法填充共享缓存。结论是不默认启用预热；优化目标应是 `hostConnected` 之后的客户端装配与 Workspace 同步。
+
 ## 刷新与 Worker 崩溃时的在途 turn
 
 [语义决策与证据](reload-crash-recovery-validation.md)定义：刷新会恢复 Session 与页面，但不会继续在途 turn；`agentLoop.resume` 在挂载时追加 `interruptedTurnClosers`，开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放。刷新在 2083 ms 内完成接管与结算（TTL 5000 ms），fencing token 1→2；Session event 从 26 变为 30，只增加三个 closer 和一个 `session/end-seed`，持久化前缀逐项不变，结算期间 0 次模型请求、延迟写入不落地、Workspace revision 不变。

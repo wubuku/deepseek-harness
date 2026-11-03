@@ -34,7 +34,20 @@ const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || reques
   ? requestedProbeFault
   : undefined
 const pageLifecycle = { unloading: false }
+const browserNativePrewarm = browserNative && searchParams.get('browser-native-prewarm') === '1'
+const browserNativeBootTimings = searchParams.get('browser-native-boot-timings') === '1'
+const bootMarks: Record<string, number> = {}
 let worker: Worker | undefined
+
+/**
+ * Record a page-relative boot phase for the cold-start harness.
+ * @param name - Phase name read from `__DSH_BROWSER_NATIVE_BOOT_TIMINGS__`.
+ */
+function markBoot(name: string): void {
+  if (!browserNativeBootTimings) return
+  bootMarks[name] = performance.now()
+  window.__DSH_BROWSER_NATIVE_BOOT_TIMINGS__ = { ...bootMarks }
+}
 
 interface BrowserNativeWorkspaceTestRequest {
   readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
@@ -188,6 +201,7 @@ declare global {
     __DSH_BROWSER_NATIVE_WORKSPACE_TEST__?:
     (request: BrowserNativeWorkspaceTestRequest) => Promise<BrowserNativeWorkspaceTestResponse>
     __DSH_BROWSER_NATIVE_CPU_CONTENTION_EVENT__?: (event: BrowserNativeCpuContentionEvent) => void
+    __DSH_BROWSER_NATIVE_BOOT_TIMINGS__?: Record<string, number>
   }
 }
 
@@ -199,54 +213,85 @@ if (browserNative) {
   })
 }
 const image = `preview/${IMAGE_FILE_NAME}`
+
+/**
+ * Create the Host Worker and send the initialisation frames that do not depend
+ * on the chosen workspace source.
+ * @returns The spawned Host Worker, also stored for pagehide teardown.
+ */
+function spawnBrowserNativeWorker(): Worker {
+  const currentWorker = new DshWorker({ name: 'dsh-host' })
+  worker = currentWorker
+  markBoot('workerSpawned')
+  if (browserNativeWorkspaceTest || browserNativeRuntimeProbeTest) {
+    const channel = new MessageChannel()
+    const pending = new Map<string, (response: BrowserNativeWorkspaceTestResponse) => void>()
+    channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestMessage>) => {
+      if ('type' in event.data && event.data.type === 'browser-native-cpu-contention-stage') {
+        window.__DSH_BROWSER_NATIVE_CPU_CONTENTION_EVENT__?.(event.data)
+        return
+      }
+      if (!('requestId' in event.data)) return
+      pending.get(event.data.requestId)?.(event.data)
+      pending.delete(event.data.requestId)
+    })
+    channel.port1.start()
+    currentWorker.postMessage({
+      type: 'browser-native-workspace-test-init',
+      skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
+      cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
+      forkCut: searchParams.get('browser-native-test') === 'session-continuity',
+      subagent: searchParams.get('browser-native-test') === 'subagent',
+    }, [channel.port2])
+    window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
+      const requestId = browserNativeTestUuid()
+      const timeout = window.setTimeout(() => {
+        pending.delete(requestId)
+        resolve({ ok: false, error: 'browser-native test request timed out' })
+      }, 30_000)
+      pending.set(requestId, (response) => {
+        window.clearTimeout(timeout)
+        resolve(response)
+      })
+      currentWorker.postMessage({ type: 'browser-native-workspace-test-request', requestId, ...request })
+    })
+  }
+  if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
+  if (browserNativeWorkspaceLease) currentWorker.postMessage({ type: 'browser-native-workspace-lease-init' })
+  return currentWorker
+}
+
+/**
+ * Spawn the Worker and run the runtime probe while the workspace chooser is open.
+ * The probe only depends on the durable flag, not on the chosen source.
+ * @returns The probed Host Worker.
+ */
+async function prepareBrowserNativeWorker(): Promise<Worker> {
+  const currentWorker = spawnBrowserNativeWorker()
+  await probeBrowserNativeWorker(currentWorker)
+  markBoot('workerProbed')
+  return currentWorker
+}
+
+markBoot('bootStart')
 try {
+  const prepared = browserNativePrewarm ? prepareBrowserNativeWorker() : undefined
+  void prepared?.catch(() => {})
   const source = await chooseWorkerHostSource({ image })
+  markBoot('sourceChosen')
   if (!browserNative || !pageLifecycle.unloading) {
-    const currentWorker = new DshWorker({ name: 'dsh-host' })
-    worker = currentWorker
-    if (browserNativeWorkspaceTest || browserNativeRuntimeProbeTest) {
-      const channel = new MessageChannel()
-      const pending = new Map<string, (response: BrowserNativeWorkspaceTestResponse) => void>()
-      channel.port1.addEventListener('message', (event: MessageEvent<BrowserNativeWorkspaceTestMessage>) => {
-        if ('type' in event.data && event.data.type === 'browser-native-cpu-contention-stage') {
-          window.__DSH_BROWSER_NATIVE_CPU_CONTENTION_EVENT__?.(event.data)
-          return
-        }
-        if (!('requestId' in event.data)) return
-        pending.get(event.data.requestId)?.(event.data)
-        pending.delete(event.data.requestId)
-      })
-      channel.port1.start()
-      currentWorker.postMessage({
-        type: 'browser-native-workspace-test-init',
-        skillFilesystem: searchParams.get('browser-native-test') === 'skill-filesystem',
-        cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
-        forkCut: searchParams.get('browser-native-test') === 'session-continuity',
-        subagent: searchParams.get('browser-native-test') === 'subagent',
-      }, [channel.port2])
-      window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
-        const requestId = browserNativeTestUuid()
-        const timeout = window.setTimeout(() => {
-          pending.delete(requestId)
-          resolve({ ok: false, error: 'browser-native test request timed out' })
-        }, 30_000)
-        pending.set(requestId, (response) => {
-          window.clearTimeout(timeout)
-          resolve(response)
-        })
-        currentWorker.postMessage({ type: 'browser-native-workspace-test-request', requestId, ...request })
-      })
-    }
-    if (browserNativeDurable) currentWorker.postMessage({ type: 'browser-native-durable-workspace-init' })
-    if (browserNativeWorkspaceLease) currentWorker.postMessage({ type: 'browser-native-workspace-lease-init' })
+    const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
     if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
-    if (browserNative) await probeBrowserNativeWorker(currentWorker)
+    if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker)
+    if (browserNative && prepared === undefined) markBoot('workerProbed')
+    markBoot('hostConnectStart')
     await connectWorkerHost(currentWorker, {
       image,
       overlays: browserNative
         ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]
         : source.overlays,
     })
+    markBoot('hostConnected')
   }
 } catch (error) {
   worker?.terminate()
