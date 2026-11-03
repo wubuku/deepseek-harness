@@ -75,6 +75,14 @@ const CONFIG_ROUTE = '/api/browser-native/config'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
+
+/**
+ * Failure code for a browser-to-backend response stream that rejects while the
+ * provider request is still streaming. The message records the exact stream
+ * position so an interrupted turn stays diagnosable instead of collapsing into
+ * the generic `UNKNOWN` network-error bucket.
+ */
+export const BROWSER_NATIVE_STREAM_INTERRUPTED = 'BROWSER_NATIVE_STREAM_INTERRUPTED'
 const activeSessionOwners = new Map<string, { readonly ownerToken: string; readonly ownerEpoch: number }>()
 const activeSessionFlushers = new Map<string, () => Promise<{
   readonly ownerEpoch: number
@@ -147,6 +155,7 @@ interface RuntimePersistenceModule {
 interface RuntimeLlmModule {
   readonly LlmAdapter: typeof import('@deepseek-ai/dsh-llm').LlmAdapter
   readonly LlmError: typeof import('@deepseek-ai/dsh-llm').LlmError
+  readonly ProviderRequestId: typeof import('@deepseek-ai/dsh-llm').ProviderRequestId
 }
 
 interface RuntimeFsModule {
@@ -1132,12 +1141,13 @@ function createRemoteLlmAdapterClass(
     }
 
     override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+      const request = requestId()
       const response = await fetch(LLM_ROUTE, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-browser-native-protocol': String(PROTOCOL_VERSION) },
       body: JSON.stringify({
         protocolVersion: PROTOCOL_VERSION,
-        requestId: requestId(),
+        requestId: request,
         sessionId: options.sessionId,
         ...(options.sessionId === undefined || activeSessionOwners.get(options.sessionId) === undefined ? {} : {
           ownerToken: activeSessionOwners.get(options.sessionId)!.ownerToken,
@@ -1166,6 +1176,12 @@ function createRemoteLlmAdapterClass(
       const decoder = new TextDecoder()
       const toolArgumentEncoder = new TextEncoder()
       let toolArgumentBytes = 0
+      let streamedChunks = 0
+      let streamedTextCharacters = 0
+      const countChunk = (chunk: StreamChunk): void => {
+        streamedChunks += 1
+        if (chunk.type === 'text-delta') streamedTextCharacters += chunk.text.length
+      }
       const checkToolArgumentLimit = async (argumentsDelta: string): Promise<void> => {
         toolArgumentBytes += toolArgumentEncoder.encode(argumentsDelta).byteLength
         if (toolArgumentBytes > MAX_TOOL_ARGUMENT_BYTES) {
@@ -1179,7 +1195,21 @@ function createRemoteLlmAdapterClass(
       }
       let buffer = ''
       while (true) {
-        const part = await reader.read()
+        let part: ReadableStreamReadResult<Uint8Array>
+        try {
+          part = await reader.read()
+        } catch (thrown) {
+          if (options.signal?.aborted) throw thrown
+          const { LlmError, ProviderRequestId } = runtimeLlm()
+          // The response body rejecting is a lost browser-to-backend connection, not an upstream
+          // provider failure: report the exact stream position so the failed turn stays diagnosable.
+          throw new LlmError(
+            `browser-native LLM stream interrupted after ${String(streamedChunks)} chunk(s) `
+            + `(${String(streamedTextCharacters)} text character(s), ${String(toolArgumentBytes)} tool-argument byte(s))`,
+            BROWSER_NATIVE_STREAM_INTERRUPTED,
+            { cause: thrown, requestId: ProviderRequestId(request) },
+          )
+        }
         buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
         let newline = buffer.indexOf('\n')
         while (newline >= 0) {
@@ -1193,6 +1223,7 @@ function createRemoteLlmAdapterClass(
             }
             if (item.kind === 'chunk' && item.chunk !== undefined) {
               if (item.chunk.type === 'tool-call-delta') await checkToolArgumentLimit(item.chunk.argumentsDelta)
+              countChunk(item.chunk)
               yield item.chunk
             }
           }
@@ -1205,6 +1236,7 @@ function createRemoteLlmAdapterClass(
         const item = JSON.parse(tail) as LlmStreamResponse
         if (item.kind === 'chunk' && item.chunk !== undefined) {
           if (item.chunk.type === 'tool-call-delta') await checkToolArgumentLimit(item.chunk.argumentsDelta)
+          countChunk(item.chunk)
           yield item.chunk
         }
       }

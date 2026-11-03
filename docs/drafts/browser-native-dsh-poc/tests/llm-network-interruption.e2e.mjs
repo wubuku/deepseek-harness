@@ -326,10 +326,21 @@ try {
   }
   const offlineSession = await readSession(sessionId)
   const offlineEvents = eventsForTurn(offlineSession, offlineTerminal.data.turn)
+  const offlineAttempts = offlineEvents.filter(event => event.type === 'assistant/attempt')
+  const offlineFailure = offlineTerminal.data.reason.error
   assert.notEqual(offlineTerminal.data.reason.kind, 'completed')
   assert.equal(userMessageCount(offlineSession, OFFLINE_PROMPT), 1)
   assert.equal(offlineEvents.some(event => event.type === 'assistant/message'), false)
-  assert.ok(offlineEvents.filter(event => event.type === 'assistant/attempt').length >= 1)
+  assert.ok(offlineAttempts.length >= 1)
+  assert.equal(offlineFailure?.code, 'BROWSER_NATIVE_STREAM_INTERRUPTED',
+    'an interrupted browser-to-backend stream must carry a typed failure code instead of UNKNOWN')
+  assert.match(offlineFailure?.message ?? '',
+    /^browser-native LLM stream interrupted after \d+ chunk\(s\) \(\d+ text character\(s\), \d+ tool-argument byte\(s\)\)$/,
+    'the failure must record the exact stream position')
+  assert.equal(offlineFailure?.requestId, requests.find(request => request.path.endsWith('/llm')
+    && isTurnRequest(request.body ?? {}) && currentTurnText(request.body ?? {}).trim() === OFFLINE_PROMPT.trim())?.body?.requestId,
+    'the failure must retain the opaque request id of the interrupted request')
+  assert.ok(attemptText(offlineAttempts.at(-1)).length > 0, 'an interrupted stream must retain the text prefix it received')
   assert.equal(requestCount(requests, OFFLINE_PROMPT), 1, 'reconnect must not replay the interrupted model request')
   assert.equal(retryEventCount(offlineSession), 0)
   assert.equal(upstream.state.clientAborts >= 1, true, 'the backend must abort the upstream request when its client disappears')
@@ -395,6 +406,10 @@ try {
     clientOffline: {
       turn: offlineTerminal.data.turn,
       reason: offlineTerminal.data.reason,
+      failureCode: offlineFailure?.code,
+      failureMessage: offlineFailure?.message,
+      failureRequestId: offlineFailure?.requestId,
+      attemptText: attemptText(offlineAttempts.at(-1)),
       recovery,
       upstreamRequests: requestCount(requests, OFFLINE_PROMPT),
       retryEvents: retryEventCount(offlineSession),

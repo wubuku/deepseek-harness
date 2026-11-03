@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-070：浏览器到 backend 断流的强类型诊断
+
+```text
+changeId: BN-P2-070
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/tests/llm-network-interruption.e2e.mjs; docs/drafts/browser-native-dsh-poc/llm-network-interruption.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: [模型流断开与重连](llm-network-interruption.md)把浏览器 response body 的读取拒绝原样抛出，`normalizeLlmFailure` 只能归为 `UNKNOWN`/`network error`，失败 turn 丢失断开位置、已交付 delta 与请求 id；断流是真实且可复现的失败面，不应与未知错误混在一起。
+existingExtensionPointsChecked: 复用 PoC `LlmAdapter.stream()`、`LlmError` 与 `LlmFailure.requestId` 通道；只改 adapter 断流包装和 E2E 断言。未改 DSH Agent Loop、Session format、LLM provider 合同、Web profile 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 原记录已把该分类缺口记为决策，但只有代码改动才能让 turn 的 error reason 携带类型与位置；合同断言必须落在同一个真实 TCP 断连场景。
+behaviorChange: 浏览器到 backend 的 response body 读取在先交付部分 delta 后被拒绝时，adapter 抛出 `BROWSER_NATIVE_STREAM_INTERRUPTED`，正文包含已交付 chunk 数、文本字符数、工具参数字节数，`requestId` 复用该请求的 opaque id，`cause` 保留原始拒绝；调用方 abort 仍原样抛出。已交付 `text-delta` 继续进入 attempt stream，失败 turn 保留前缀。
+consumersUpdated: `llm-network-interruption.e2e.mjs` 新增 code/正文/requestId/部分 delta 断言与输出字段；专题文档、PoC README、matrix、drafts index 和本账本同步。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/llm-network-interruption.e2e.mjs` 通过：`code=BROWSER_NATIVE_STREAM_INTERRUPTED`、`message=browser-native LLM stream interrupted after 9 chunk(s) (8 text character(s), 0 tool-argument byte(s))`、`requestId` 与 `/llm` 请求体一致、`attemptText="OFFLINE-"`、43 事件、0 页面错误、0 跨源请求；上游 1 次请求、0 retry，续跑 `completed`。`pnpm run build:artifacts` 7/7、`pnpm run build:check` 2/2、`build:preview` 通过。真实 `LongCat-2.5` 短约束 prompt smoke：`completed`、1 次 turn 模型请求、HTTP 200 NDJSON、返回 marker。
+syncReplaySteps: 若上游 LLM adapter 或 `LlmError` 选项变化，重跑上述 E2E 与真实冒烟；若 DSH 核心新增网络失败分类，优先复用该分类并删除此 PoC 专用 code。
+deleteCondition: DSH 核心 provider/stream 层提供等价的断流位置与 request id 诊断并由 PoC 直接消费后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-069：流式追加的尾部落地测量修复
 
 ```text

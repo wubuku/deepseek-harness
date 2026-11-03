@@ -1347,9 +1347,9 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 ## 模型流断开与重连
 
-[模型流断开与重连](llm-network-interruption.md)在真实 Chrome 中分别切断上游 SSE 与浏览器到 backend 的 4 条 TCP 连接。上游在流出 4 个字符后断开时，turn 以 `UPSTREAM_LLM_STREAM_FAILED` 收束并保留文本前缀 `CUT`，无 `assistant/message`；浏览器连接在流出 8 个字符时整体断开后，turn 以 `network error` 收束，无需刷新即恢复。两类中断各只产生 1 次上游请求、0 个 retry 事件，续跑 turn 均完成；Session 43 个事件、四个 prompt 各 1 条，刷新前后 durable 事件前缀一致。
+[模型流断开与重连](llm-network-interruption.md)在真实 Chrome 中分别切断上游 SSE 与浏览器到 backend 的 4 条 TCP 连接。上游在流出 4 个字符后断开时，turn 以 `UPSTREAM_LLM_STREAM_FAILED` 收束并保留文本前缀 `CUT`，无 `assistant/message`；浏览器连接在流出 8 个字符时整体断开后，turn 以强类型 `BROWSER_NATIVE_STREAM_INTERRUPTED` 收束，正文记录 9 个 chunk、8 个文本字符与 0 个工具参数字节的位置，保留 request id 与文本前缀 `OFFLINE-`，无需刷新即恢复。两类中断各只产生 1 次上游请求、0 个 retry 事件，续跑 turn 均完成；Session 43 个事件、四个 prompt 各 1 条，刷新前后 durable 事件前缀一致。
 
-配置的真实 provider 本轮返回 HTTP 403 `用户 [4912] 配额不足`，因此上游改用本地 OpenAI-compatible SSE，按相同 chunk 协议逐字流出；浏览器断连是真实 TCP 事件。真实模型的 token 计量与费用未验证，且 fetch 拒绝仍归类为 `UNKNOWN`，恢复配额后应重跑同一 harness。新增合同测试锁定“上游流出部分内容后断连必须以 `UPSTREAM_LLM_STREAM_FAILED` 收束且不产生 `finish`”，`backend-v2.test.mjs` 58/58 通过。
+默认 provider 本轮仍返回 HTTP 403 `用户 [4912] 配额不足`，因此上游切断场景继续使用本地 OpenAI-compatible SSE，按相同 chunk 协议逐字流出；浏览器断连是真实 TCP 事件。断流诊断修复另用 `LongCat-2.5` 端点完成真实流式冒烟：turn `completed`、1 次 turn 模型请求、`/llm` HTTP 200 NDJSON、返回约定 marker。真实模型的 token 计量与费用未验证；自动续流与断点重放未实现，恢复配额后应重跑同一 harness。
 
 ## 凭据隔离与服务端代理原型
 
