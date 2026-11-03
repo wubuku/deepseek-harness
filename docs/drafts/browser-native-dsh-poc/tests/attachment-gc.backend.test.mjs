@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -141,6 +141,16 @@ async function gc(origin, identity, token) {
   return body
 }
 
+async function waitFor(condition, description, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = await condition()
+    if (value !== undefined) return value
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 10))
+  }
+  throw new Error(`timed out waiting for ${description}`)
+}
+
 afterEach(async () => {
   for (const app of liveApps) {
     await app.close()
@@ -152,10 +162,84 @@ afterEach(async () => {
   }
 })
 
+describe('browser-native scheduled attachment GC', () => {
+  it('sweeps on an injected clock without waiting for the grace period and fences a second instance', async () => {
+    const dataDir = await temporaryDirectory()
+    let now = Date.now()
+    const first = await start({
+      dataDir,
+      port: 0,
+      llmMode: 'scripted',
+      attachmentGcMinAgeMs: 60_000,
+      attachmentGcSweepIntervalMs: 10,
+      testHooks: { attachmentGcNow: () => now },
+    })
+    const origin = first.origin
+    const identity = await identityFor(origin)
+
+    const inUseBytes = Buffer.from('attachment referenced by a durable Session\n')
+    const inUse = await upload(origin, identity, inUseBytes, 'in-use.txt')
+    await createSessionWithAttachment(origin, identity, 'scheduled-gc-session', inUse)
+    const orphanBytes = Buffer.from('orphan before the injected clock advances\n')
+    const orphan = await upload(origin, identity, orphanBytes, 'orphan.txt')
+
+    const early = await first.app.sweepAttachments()
+    assert.deepEqual(early.workspaces.find(workspace => workspace.workspaceId === identity.workspaceId).deleted, [],
+      'an object younger than the grace period must survive a scheduled sweep')
+
+    now += 120_000
+    const swept = await first.app.sweepAttachments()
+    const sweptWorkspace = swept.workspaces.find(workspace => workspace.workspaceId === identity.workspaceId)
+    assert.deepEqual(sweptWorkspace.deleted, [orphan.hash])
+    assert.equal(sweptWorkspace.kept, 1)
+    assert.equal((await download(origin, identity, inUse.hash)).status, 200)
+    assert.equal((await download(origin, identity, orphan.hash)).status, 404)
+
+    const lateBytes = Buffer.from('orphan swept by the interval timer\n')
+    const late = await upload(origin, identity, lateBytes, 'late-orphan.txt')
+    now += 120_000
+    await waitFor(async () => {
+      try {
+        await access(join(dataDir, 'attachments-v1', identity.workspaceId, late.hash.slice(0, 2), late.hash))
+        return undefined
+      } catch (error) {
+        if (error?.code === 'ENOENT') return true
+        throw error
+      }
+    }, 'the interval-triggered sweep to remove the aged orphan')
+    assert.equal((await download(origin, identity, inUse.hash)).status, 200,
+      'the interval sweep must keep the referenced object')
+
+    await assert.rejects(createBrowserNativeV2Server({
+      dataDir,
+      port: 0,
+      llmMode: 'scripted',
+      attachmentGcMinAgeMs: 60_000,
+      attachmentGcSweepIntervalMs: 10,
+      testHooks: { attachmentGcNow: () => now },
+    }), error => {
+      assert.equal(error.code, 'BACKEND_ALREADY_RUNNING', 'a scheduled sweeper must not run in a second live instance')
+      return true
+    })
+    assert.equal((await download(origin, identity, inUse.hash)).status, 200)
+
+    process.stdout.write(`${JSON.stringify({
+      result: 'passed',
+      scope: 'scheduled-attachment-gc-with-injected-clock',
+      skippedYoungOrphan: early.workspaces.find(workspace => workspace.workspaceId === identity.workspaceId).deleted.length === 0,
+      deletedAfterClockAdvance: sweptWorkspace.deleted,
+      keptAfterClockAdvance: sweptWorkspace.kept,
+      intervalSweptOrphan: true,
+      inUseBytesIntact: true,
+      secondInstanceRejected: 'BACKEND_ALREADY_RUNNING',
+    })}\n`)
+  })
+})
+
 describe('browser-native attachment GC', () => {
   it('keeps referenced objects, removes orphans, and rejects stale generations', async () => {
     const dataDir = await temporaryDirectory()
-    const first = await start({ dataDir, port: 0, llmMode: 'scripted', attachmentGcMinAgeMs: 0 })
+    const first = await start({ dataDir, port: 0, llmMode: 'scripted', attachmentGcMinAgeMs: 0, attachmentGcSweepIntervalMs: 0 })
     const origin = first.origin
     const identity = await identityFor(origin)
 
@@ -205,7 +289,7 @@ describe('browser-native attachment GC', () => {
 
     await first.app.close()
     liveApps.delete(first.app)
-    const restarted = await start({ dataDir, port: 0, llmMode: 'scripted', attachmentGcMinAgeMs: 0 })
+    const restarted = await start({ dataDir, port: 0, llmMode: 'scripted', attachmentGcMinAgeMs: 0, attachmentGcSweepIntervalMs: 0 })
     const afterRestart = await gc(restarted.origin, identity, finalPass.token)
     assert.equal(afterRestart.skipped, 'scan-stale')
     assert.equal((await download(restarted.origin, identity, inUse.hash)).status, 200)

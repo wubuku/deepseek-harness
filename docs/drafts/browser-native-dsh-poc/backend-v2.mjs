@@ -24,6 +24,7 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 const DEFAULT_ATTACHMENT_GC_MIN_AGE_MS = 5 * 60 * 1000
+const DEFAULT_ATTACHMENT_GC_SWEEP_MS = 5 * 60 * 1000
 const MAX_EVENTS = 100_000
 const MAX_SESSION_READ_EVENTS = 2_048
 const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
@@ -466,6 +467,13 @@ function referencedAttachmentHashes(sessions) {
     }
   }
   return referenced
+}
+
+async function listAttachmentWorkspaces(dataDir) {
+  const root = join(dataDir, 'attachments-v1')
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  return entries.filter(entry => entry.isDirectory() && entry.name.length > 0 && entry.name.length <= 200)
+    .map(entry => entry.name)
 }
 
 async function listAttachmentObjects(dataDir, workspaceId) {
@@ -3302,6 +3310,12 @@ export async function createBrowserNativeV2Server(options) {
   if (!Number.isSafeInteger(attachmentGcMinAgeMs) || attachmentGcMinAgeMs < 0) {
     throw new TypeError('attachmentGcMinAgeMs must be a non-negative safe integer')
   }
+  const attachmentGcSweepIntervalMs = options.attachmentGcSweepIntervalMs === undefined
+    ? DEFAULT_ATTACHMENT_GC_SWEEP_MS : options.attachmentGcSweepIntervalMs
+  if (!Number.isSafeInteger(attachmentGcSweepIntervalMs) || attachmentGcSweepIntervalMs < 0) {
+    throw new TypeError('attachmentGcSweepIntervalMs must be a non-negative safe integer')
+  }
+  const attachmentGcNow = options.testHooks?.attachmentGcNow ?? Date.now
   const attachmentGcInstance = randomUUID()
   const attachmentGenerations = new Map()
   const attachmentLocks = new Map()
@@ -3346,7 +3360,7 @@ export async function createBrowserNativeV2Server(options) {
   const collectAttachments = async (workspaceId, expectedGeneration, sessions) => {
     const referenced = referencedAttachmentHashes(sessions)
     const objects = await listAttachmentObjects(options.dataDir, workspaceId)
-    const now = Date.now()
+    const now = attachmentGcNow()
     const candidates = objects.filter(object => !referenced.has(object.hash)
       && now - object.modifiedAt >= attachmentGcMinAgeMs)
     const deleted = []
@@ -3404,6 +3418,31 @@ export async function createBrowserNativeV2Server(options) {
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
   await crossStoreLedger.load()
+  const sweepAttachments = async () => {
+    const workspaces = []
+    for (const workspaceId of await listAttachmentWorkspaces(options.dataDir)) {
+      try {
+        workspaces.push({
+          workspaceId,
+          ...await collectAttachments(workspaceId, attachmentGenerationFor(workspaceId), store.sessions.values()),
+        })
+      } catch (error) {
+        workspaces.push({
+          workspaceId,
+          generation: attachmentGenerationFor(workspaceId),
+          scanned: 0,
+          kept: 0,
+          deleted: [],
+          failures: [{ code: typeof error?.code === 'string' ? error.code : 'SWEEP_FAILED', message: error instanceof Error ? error.message : String(error) }],
+        })
+      }
+    }
+    return { sweptAt: attachmentGcNow(), workspaces }
+  }
+  const attachmentGcSweepTimer = attachmentGcSweepIntervalMs === 0 ? undefined : setInterval(() => {
+    void sweepAttachments().catch(() => {})
+  }, attachmentGcSweepIntervalMs)
+  attachmentGcSweepTimer?.unref()
   const businessServiceOrigin = options.businessServiceOrigin === undefined
     ? undefined
     : new URL(options.businessServiceOrigin).origin
@@ -3884,6 +3923,7 @@ export async function createBrowserNativeV2Server(options) {
     workspaces,
     crossStoreLedger,
     llm,
+    sweepAttachments,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {
         await releaseDataDirLock().catch(() => {})
@@ -3898,6 +3938,7 @@ export async function createBrowserNativeV2Server(options) {
     }),
     close: async () => {
       try {
+        if (attachmentGcSweepTimer !== undefined) clearInterval(attachmentGcSweepTimer)
         for (const controller of workspaceDownloads.values()) controller.abort()
         await new Promise((resolveClose, reject) => {
           server.closeAllConnections()

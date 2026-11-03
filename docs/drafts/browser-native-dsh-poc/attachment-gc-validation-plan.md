@@ -48,7 +48,15 @@ description: "规划 Browser-Native DSH 附件对象的安全回收与 Worker �
 
 ## 非目标与证据边界
 
-不实现定时 GC、跨实例/跨主机 fencing、对象版本历史、按 workspace 的容量配额、S3 对象删除、被删除 Session 的历史保留策略，也不证明 `lastModified` 在所有浏览器实现中严格单调。GC 仍是显式触发的单进程能力；生产系统需要独立的对象保留策略与跨实例协调。
+不实现真正的跨实例共享存储 GC、分布式 generation fencing、跨主机协调、对象版本历史、按 workspace 的容量配额、S3 对象删除、被删除 Session 的历史保留策略，也不证明 `lastModified` 在所有浏览器实现中严格单调。GC 由单进程 backend 的显式两阶段调用或定时 sweep 触发；生产系统需要独立的对象保留策略与跨实例协调。
+
+## 定时与跨实例 fence（补充）
+
+- 定时 sweep 每 `attachmentGcSweepIntervalMs` 运行一次，默认 5 分钟，设为 0 关闭；timer `unref()` 且 `close()` 清除。
+- sweep 枚举 `attachments-v1` 下的 workspace 目录，对每个 workspace 沿用同一宽限期、durable Session 引用扫描和 generation 守卫；扫描期间有上传则返回 `scan-stale` 并保留对象。
+- 测试通过 `testHooks.attachmentGcNow` 注入 GC 时钟，只影响宽限期判断，不改变 Session/Workspace lease 的真实时钟。
+- 跨实例由 dataDir 锁 fence：第二个存活实例在启动时返回 `BACKEND_ALREADY_RUNNING`，因此不能并发运行 sweeper；重启后旧 GC token 失配且不删除对象。
+- 验收：`node --test docs/drafts/browser-native-dsh-poc/tests/attachment-gc.backend.test.mjs` 覆盖年轻孤儿保留、注入时钟后删除、10 ms interval 触发删除、在用对象保留和第二实例拒绝。
 
 ## 实施顺序
 

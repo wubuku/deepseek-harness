@@ -41,6 +41,7 @@ try {
     distRoot: image.distRoot,
     llmMode: 'scripted',
     attachmentGcMinAgeMs: 0,
+    attachmentGcSweepIntervalMs: 0,
   })
   const origin = await app.listen(0)
   browser = await chromium.launch({ headless: true, channel: process.env.DSH_POC_BROWSER ?? 'chrome' })

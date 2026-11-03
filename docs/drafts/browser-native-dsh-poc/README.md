@@ -1287,7 +1287,9 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 [生命周期与验证计划](attachment-gc-validation-plan.md)与[实施进度](attachment-gc-validation-progress.md)确定：只有 durable Session 的 `FileBlock` 算引用；无引用对象必须超过宽限期才可删除；每次成功上传（含复用）递增 workspace 上传代，GC token 在删除前重校验代失配即整体跳过。backend 提供 `gc-token` 与两阶段 `gc`，测试覆盖在用保留、孤儿删除、`scan-stale`、复用保护和重启后 token 失效。
 
-Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydrate 命中缓存时只比较这两个值。Chrome E2E 证明 GC 后在用附件仍可下载且内容一致、孤儿 404；同一 Worker 连续 hydrate 均为缓存命中；清空 OPFS 后重新挂载仍会下载并校验对象。定时 GC、跨实例 fencing、容量配额、Session 删除保留策略和 Safari OPFS 行为未验证。
+定时 sweep 每 `attachmentGcSweepIntervalMs`（默认 5 分钟，0 关闭）枚举 `attachments-v1` 下的 workspace，沿用同一宽限期与代守卫；测试通过 `testHooks.attachmentGcNow` 注入时钟，在不等待 5 分钟的情况下证明年轻孤儿保留、超期孤儿删除、在用对象保留，并由 10 ms interval 触发同一闭环。第二实例因 dataDir 锁返回 `BACKEND_ALREADY_RUNNING`，sweeper 不能跨实例并发。
+
+Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydrate 命中缓存时只比较这两个值。Chrome E2E 证明 GC 后在用附件仍可下载且内容一致、孤儿 404；同一 Worker 连续 hydrate 均为缓存命中；清空 OPFS 后重新挂载仍会下载并校验对象。真正的跨实例共享存储 GC、分布式 fencing、容量配额、Session 删除保留策略和 Safari OPFS 行为未验证。
 
 ## Scope
 
