@@ -68,7 +68,12 @@ try {
     if (url.pathname.startsWith('/api/browser-native/')) {
       let body
       try { body = request.postDataJSON() } catch {}
-      backendRequests.push({ path: url.pathname, method: request.method(), body })
+      backendRequests.push({
+        path: url.pathname,
+        method: request.method(),
+        body,
+        bodyBytes: request.postDataBuffer()?.byteLength ?? 0,
+      })
     }
   })
 
@@ -81,10 +86,13 @@ try {
     return { identity, manifest: await response.json() }
   })
 
+  const chunkedUpload = content.byteLength >= 8 * 1024 * 1024
   const uploadResponse = page.waitForResponse(response => {
     const url = new URL(response.url())
-    return url.pathname.startsWith('/api/browser-native/workspace/attachments/')
-      && response.request().method() === 'PUT'
+    if (!url.pathname.startsWith('/api/browser-native/workspace/attachments/')) return false
+    return chunkedUpload
+      ? url.pathname.endsWith('/commit') && response.request().method() === 'POST'
+      : url.pathname.endsWith(`/${hash}`) && response.request().method() === 'PUT'
   }, { timeout: 20_000 })
   await page.locator('input[type="file"]').last().setInputFiles({
     name: 'attachment-fixture.txt',
@@ -111,11 +119,24 @@ try {
   assert.equal(uploadReceipt.attachmentId, `sha256:${hash}`)
   assert.equal(uploadReceipt.name, 'attachment-fixture.txt')
   assert.equal(uploadReceipt.bytes, content.byteLength)
-  assert.equal(attachmentUploadChunks.reduce((total, chunk) => total + chunk, 0), content.byteLength)
-  if (content.byteLength > 1024 * 1024) {
-    assert.ok(attachmentUploadChunks.length > 1, 'large attachments must reach the backend as multiple streamed chunks')
+  if (chunkedUpload) {
+    const chunkRequests = backendRequests.filter(request => request.method === 'PUT'
+      && /\/uploads\/[0-9a-f-]{36}\/chunks\//i.test(request.path))
+    assert.equal(chunkRequests.length, Math.ceil(content.byteLength / (4 * 1024 * 1024)),
+      'a large attachment must arrive as one request per 4 MiB chunk')
+    assert.ok(Math.max(...chunkRequests.map(request => request.bodyBytes)) <= 4 * 1024 * 1024,
+      'attachment upload chunks must remain bounded')
+    assert.equal(chunkRequests.reduce((total, request) => total + request.bodyBytes, 0), content.byteLength)
+    const statuses = browserResponses.filter(response => response.url.includes('/uploads/'))
+      .map(response => response.status)
+    assert.ok(statuses.every(status => status === 200), `chunked upload responses must all succeed: ${JSON.stringify(statuses)}`)
+    assert.ok(browserRequests.some(request => request.method === 'POST'
+      && new URL(request.url).pathname.endsWith('/uploads')),
+    'the client must open an upload session before sending chunks')
+  } else {
+    assert.equal(attachmentUploadChunks.reduce((total, chunk) => total + chunk, 0), content.byteLength)
+    assert.ok(Math.max(...attachmentUploadChunks) <= 1024 * 1024, 'attachment upload chunks must remain bounded')
   }
-  assert.ok(Math.max(...attachmentUploadChunks) <= 1024 * 1024, 'attachment upload chunks must remain bounded')
   await page.getByText('attachment-fixture.txt', { exact: false }).last().waitFor({ timeout: 20_000 })
 
   const prompt = mode === 'scripted'
@@ -230,7 +251,11 @@ try {
     attachmentBytes: content.byteLength,
     attachmentSha256: hash,
     uploadChunkCount: attachmentUploadChunks.length,
-    maxUploadChunkBytes: Math.max(...attachmentUploadChunks),
+    maxUploadChunkBytes: attachmentUploadChunks.length === 0 ? null : Math.max(...attachmentUploadChunks),
+    chunkedUpload: {
+      used: chunkedUpload,
+      chunkRequestCount: chunkedUpload ? Math.ceil(content.byteLength / (4 * 1024 * 1024)) : 0,
+    },
     fileBlockCount: first.session.events.filter(event => event.type === 'user/message'
       && event.data.content?.some(block => block.type === 'file')).length,
     readCallIds: [firstRead.data.callId, secondRead.data.callId],

@@ -29,6 +29,9 @@ const SESSION_FORMAT_VERSION = 4
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
+const MAX_ATTACHMENT_CHUNK_BYTES = 16 * 1024 * 1024
+const ATTACHMENT_UPLOAD_TTL_MS = 60 * 60 * 1000
+const ATTACHMENT_UPLOAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DEFAULT_ATTACHMENT_GC_MIN_AGE_MS = 5 * 60 * 1000
 const DEFAULT_ATTACHMENT_GC_SWEEP_MS = 5 * 60 * 1000
 const MAX_EVENTS = 100_000
@@ -507,6 +510,18 @@ function attachmentPath(dataDir, workspaceId, hash) {
   return join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2), hash)
 }
 
+function attachmentUploadRoot(dataDir, workspaceId) {
+  return join(dataDir, 'attachment-uploads-v1', workspaceId)
+}
+
+function attachmentUploadPartPath(dataDir, workspaceId, uploadId) {
+  return join(attachmentUploadRoot(dataDir, workspaceId), `${uploadId}.part`)
+}
+
+function attachmentUploadMetaPath(dataDir, workspaceId, uploadId) {
+  return join(attachmentUploadRoot(dataDir, workspaceId), `${uploadId}.json`)
+}
+
 const ATTACHMENT_HASH_PATTERN = /^sha256:([a-f0-9]{64})$/
 
 function referencedAttachmentHashes(sessions) {
@@ -794,6 +809,248 @@ async function storeAttachmentObject(
     await rm(temporaryPath, { force: true })
     if (request.aborted) onStage('upload-aborted')
   }
+}
+
+/**
+ * Start a chunked attachment upload and create its staging files.
+ *
+ * The caller declares the final byte length so each appended chunk can be
+ * checked against it. Staging lives under `attachment-uploads-v1`; only
+ * `commitAttachmentUpload` moves bytes into the content-addressed store.
+ * @param {string} dataDir - Backend data directory.
+ * @param {string} workspaceId - Workspace that will own the attachment.
+ * @param {string} hash - Expected SHA-256 hex digest of the whole object.
+ * @param {string} name - Display name stored in the upload receipt.
+ * @param {number} bytes - Exact byte length the client will upload.
+ * @param {number} maximumBytes - Configured attachment byte ceiling.
+ * @returns {Promise<{uploadId: string, chunkBytes: number}>} Upload identifier and the largest accepted chunk.
+ */
+async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, maximumBytes) {
+  if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > maximumBytes) {
+    throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment must declare a byte length from 0 through ${String(maximumBytes)}`, 413)
+  }
+  const directoryPath = attachmentUploadRoot(dataDir, workspaceId)
+  await mkdir(directoryPath, { recursive: true, mode: 0o700 })
+  const uploadId = randomUUID()
+  const partPath = attachmentUploadPartPath(dataDir, workspaceId, uploadId)
+  const metaPath = attachmentUploadMetaPath(dataDir, workspaceId, uploadId)
+  const handle = await open(partPath, 'wx', 0o600)
+  await handle.close()
+  try {
+    await writeFile(metaPath, JSON.stringify({
+      version: 1,
+      uploadId,
+      workspaceId,
+      hash,
+      name,
+      bytes,
+      createdAt: Date.now(),
+    }), { mode: 0o600, flag: 'wx' })
+  } catch (error) {
+    await rm(partPath, { force: true }).catch(() => {})
+    throw error
+  }
+  return { uploadId, chunkBytes: MAX_ATTACHMENT_CHUNK_BYTES }
+}
+
+/**
+ * Read and validate staging metadata for one chunked upload.
+ * @param {string} dataDir - Backend data directory.
+ * @param {string} workspaceId - Workspace owning the upload.
+ * @param {string} uploadId - Upload identifier from the begin response.
+ * @returns {Promise<{uploadId: string, hash: string, name: string, bytes: number}>} Validated staging metadata.
+ */
+async function readAttachmentUploadMeta(dataDir, workspaceId, uploadId) {
+  let text
+  try {
+    text = await readFile(attachmentUploadMetaPath(dataDir, workspaceId, uploadId), 'utf8')
+  } catch (error) {
+    if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') throw error
+    throw new BackendError('ATTACHMENT_UPLOAD_NOT_FOUND', 'chunked attachment upload does not exist or already settled', 404)
+  }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new BackendError('ATTACHMENT_UPLOAD_CORRUPT', 'chunked attachment upload metadata is unreadable', 500)
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)
+    || value.version !== 1 || value.uploadId !== uploadId || value.workspaceId !== workspaceId
+    || typeof value.hash !== 'string' || !/^[a-f0-9]{64}$/.test(value.hash)
+    || typeof value.name !== 'string' || value.name.length === 0
+    || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || value.bytes > MAX_ATTACHMENT_BYTES) {
+    throw new BackendError('ATTACHMENT_UPLOAD_CORRUPT', 'chunked attachment upload metadata is invalid', 500)
+  }
+  return value
+}
+
+/**
+ * Append one chunk to a staged upload.
+ *
+ * The staged part file's size is the authoritative received offset, so a
+ * retried or reordered chunk is rejected instead of silently overwriting.
+ * @param {string} dataDir - Backend data directory.
+ * @param {string} workspaceId - Workspace owning the upload.
+ * @param {string} uploadId - Upload identifier from the begin response.
+ * @param {string} hash - Content address named by the request path.
+ * @param {number} offset - Declared byte offset where this chunk starts.
+ * @param {Buffer} body - Chunk bytes.
+ * @param {number} maximumBytes - Configured attachment byte ceiling.
+ * @returns {Promise<{uploadId: string, offset: number, received: number, bytes: number}>} Progress after the append.
+ */
+async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash, offset, body, maximumBytes) {
+  if (!(body instanceof Buffer) || body.byteLength > MAX_ATTACHMENT_CHUNK_BYTES) {
+    throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment chunks must not exceed ${String(MAX_ATTACHMENT_CHUNK_BYTES)} bytes`, 413)
+  }
+  const meta = await readAttachmentUploadMeta(dataDir, workspaceId, uploadId)
+  if (meta.hash !== hash) throw new BackendError('ATTACHMENT_UPLOAD_HASH_MISMATCH', 'upload staging does not belong to this attachment hash', 409)
+  const partPath = attachmentUploadPartPath(dataDir, workspaceId, uploadId)
+  const info = await stat(partPath).catch(() => undefined)
+  if (info === undefined || !info.isFile()) {
+    throw new BackendError('ATTACHMENT_UPLOAD_NOT_FOUND', 'chunked attachment upload has no staging file', 404)
+  }
+  if (offset !== info.size) {
+    throw new BackendError('ATTACHMENT_UPLOAD_OFFSET_MISMATCH',
+      `chunk offset ${String(offset)} does not continue the staged upload at ${String(info.size)}`, 409)
+  }
+  if (Math.min(meta.bytes, maximumBytes) < offset + body.byteLength) {
+    throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment chunk exceeds the declared attachment length', 413)
+  }
+  if (body.byteLength > 0) {
+    const handle = await open(partPath, 'r+')
+    try {
+      let written = 0
+      while (written < body.byteLength) {
+        const result = await handle.write(body, written, body.byteLength - written, offset + written)
+        if (result.bytesWritten < 1) throw new Error('attachment upload chunk wrote zero bytes')
+        written += result.bytesWritten
+      }
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  }
+  const received = offset + body.byteLength
+  return { uploadId, offset, received, bytes: meta.bytes }
+}
+
+/**
+ * Verify a complete staged upload, then publish it into the content-addressed store.
+ *
+ * A digest mismatch removes staging because it cannot become the requested
+ * object. A verified object already present at the target path is reused.
+ * @param {string} dataDir - Backend data directory.
+ * @param {string} workspaceId - Workspace that owns the attachment.
+ * @param {string} uploadId - Upload identifier from the begin response.
+ * @param {string} hash - Content address named by the request path.
+ * @param {(operation: () => Promise<void>) => Promise<void>} publish - Publishes atomically under the attachment lock.
+ * @returns {Promise<{bytes: number, reused: boolean}>} Committed size and whether an existing object served the receipt.
+ */
+async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publish) {
+  const meta = await readAttachmentUploadMeta(dataDir, workspaceId, uploadId)
+  if (meta.hash !== hash) throw new BackendError('ATTACHMENT_UPLOAD_HASH_MISMATCH', 'upload staging does not belong to this attachment hash', 409)
+  const partPath = attachmentUploadPartPath(dataDir, workspaceId, uploadId)
+  const metaPath = attachmentUploadMetaPath(dataDir, workspaceId, uploadId)
+  const info = await stat(partPath).catch(() => undefined)
+  if (info === undefined || !info.isFile()) {
+    await rm(metaPath, { force: true }).catch(() => {})
+    throw new BackendError('ATTACHMENT_UPLOAD_NOT_FOUND', 'chunked attachment upload has no staging file', 404)
+  }
+  if (info.size !== meta.bytes) {
+    throw new BackendError('ATTACHMENT_UPLOAD_INCOMPLETE',
+      `staged upload holds ${String(info.size)} of ${String(meta.bytes)} declared bytes`, 409)
+  }
+  const digest = createHash('sha256')
+  for await (const chunk of createReadStream(partPath)) digest.update(chunk)
+  if (digest.digest('hex') !== meta.hash) {
+    await rm(partPath, { force: true }).catch(() => {})
+    await rm(metaPath, { force: true }).catch(() => {})
+    throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'staged bytes do not match the requested SHA-256 digest', 400)
+  }
+  const directoryPath = join(dataDir, 'attachments-v1', workspaceId, meta.hash.slice(0, 2))
+  await mkdir(directoryPath, { recursive: true, mode: 0o700 })
+  const target = attachmentPath(dataDir, workspaceId, meta.hash)
+  let reused = false
+  await publish(async () => {
+    try {
+      await link(partPath, target)
+    } catch (error) {
+      if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
+      if (await verifyAttachmentObject(target, meta.hash) !== meta.bytes) {
+        throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
+      }
+      reused = true
+    }
+  })
+  const directory = await open(directoryPath, 'r')
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+  await rm(partPath, { force: true }).catch(() => {})
+  await rm(metaPath, { force: true }).catch(() => {})
+  return { bytes: meta.bytes, reused }
+}
+
+/**
+ * Discard staging for a chunked upload without touching committed objects.
+ * @param {string} dataDir - Backend data directory.
+ * @param {string} workspaceId - Workspace owning the upload.
+ * @param {string} uploadId - Upload identifier from the begin response.
+ * @returns {Promise<{uploadId: string, removed: number}>} How many staging files were deleted.
+ */
+async function abortAttachmentUpload(dataDir, workspaceId, uploadId) {
+  let removed = 0
+  for (const path of [
+    attachmentUploadPartPath(dataDir, workspaceId, uploadId),
+    attachmentUploadMetaPath(dataDir, workspaceId, uploadId),
+  ]) {
+    const info = await stat(path).catch(() => undefined)
+    if (info === undefined) continue
+    await rm(path, { force: true })
+    removed += 1
+  }
+  return { uploadId, removed }
+}
+
+/**
+ * Delete staging files older than the upload TTL.
+ *
+ * Only `attachment-uploads-v1` is scanned; committed objects under
+ * `attachments-v1` are never candidates.
+ * @param {string} dataDir - Backend data directory.
+ * @param {number} ttlMs - Age after which abandoned staging is removed.
+ * @param {number} [now] - Clock reading used for the age comparison.
+ * @returns {Promise<{scanned: number, deleted: object[], failures: object[]}>} Sweep evidence.
+ */
+async function sweepAttachmentUploads(dataDir, ttlMs, now = Date.now()) {
+  const root = join(dataDir, 'attachment-uploads-v1')
+  const result = { scanned: 0, deleted: [], failures: [] }
+  for (const workspaceEntry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (!workspaceEntry.isDirectory()) continue
+    const workspaceId = workspaceEntry.name
+    const directory = join(root, workspaceId)
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isFile() || !/^[0-9a-f-]{36}\.(?:part|json)$/i.test(entry.name)) continue
+      const path = join(directory, entry.name)
+      const info = await stat(path).catch(() => undefined)
+      if (info === undefined) continue
+      result.scanned += 1
+      if (now - info.mtimeMs < ttlMs) continue
+      try {
+        await rm(path, { force: true })
+        result.deleted.push({ workspaceId, name: entry.name })
+      } catch (error) {
+        result.failures.push({
+          workspaceId,
+          name: entry.name,
+          code: typeof error?.code === 'string' ? error.code : 'DELETE_FAILED',
+        })
+      }
+    }
+  }
+  return result
 }
 
 async function streamAttachmentObject(request, response, dataDir, workspaceId, hash) {
@@ -4155,19 +4412,21 @@ export async function createBrowserNativeV2Server(options) {
   const bumpAttachmentGeneration = workspaceId => {
     attachmentGenerations.set(workspaceId, attachmentGenerationFor(workspaceId) + 1)
   }
-  const withAttachmentLock = async (workspaceId, operation) => {
-    const previous = attachmentLocks.get(workspaceId) ?? Promise.resolve()
+  const attachmentUploadLocks = new Map()
+  const withKeyedLock = async (locks, key, operation) => {
+    const previous = locks.get(key) ?? Promise.resolve()
     let release
     const current = new Promise(resolveRelease => { release = resolveRelease })
-    attachmentLocks.set(workspaceId, current)
+    locks.set(key, current)
     await previous
     try {
       return await operation()
     } finally {
       release()
-      if (attachmentLocks.get(workspaceId) === current) attachmentLocks.delete(workspaceId)
+      if (locks.get(key) === current) locks.delete(key)
     }
   }
+  const withAttachmentLock = async (workspaceId, operation) => await withKeyedLock(attachmentLocks, workspaceId, operation)
   const attachmentGcToken = workspaceId => `${attachmentGcInstance}:${String(attachmentGenerationFor(workspaceId))}`
   const parseAttachmentGcToken = token => {
     const match = /^([0-9a-f-]{36}):([0-9]{1,16})$/.exec(token)
@@ -4269,8 +4528,9 @@ export async function createBrowserNativeV2Server(options) {
         })
       }
     }
-    return { sweptAt: attachmentGcNow(), workspaces }
+    return { sweptAt: attachmentGcNow(), workspaces, uploads: await sweepAttachmentUploads(options.dataDir, ATTACHMENT_UPLOAD_TTL_MS, attachmentGcNow()) }
   }
+  await sweepAttachmentUploads(options.dataDir, ATTACHMENT_UPLOAD_TTL_MS)
   const attachmentGcSweepTimer = attachmentGcSweepIntervalMs === 0 ? undefined : setInterval(() => {
     void sweepAttachments().catch(() => {})
   }, attachmentGcSweepIntervalMs)
@@ -4668,6 +4928,78 @@ export async function createBrowserNativeV2Server(options) {
         }
         await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash)
         return
+      }
+      const attachmentUploadBegin = url.pathname.match(/^\/api\/browser-native\/workspace\/attachments\/([a-f0-9]{64})\/uploads$/)
+      if (request.method === 'POST' && attachmentUploadBegin !== null) {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, workspaceId)
+        const hash = attachmentUploadBegin[1]
+        const name = attachmentName(url.searchParams.get('name') ?? undefined)
+        const body = await readBody(request)
+        if (!Number.isSafeInteger(body.bytes)) {
+          throw new BackendError('INVALID_REQUEST', 'chunked attachment uploads require an integer bytes field')
+        }
+        sendJson(response, 200, { name, ...await beginAttachmentUpload(
+          options.dataDir, workspaceId, hash, name, body.bytes, attachmentMaxBytes,
+        ) })
+        return
+      }
+      const attachmentUploadOperation = url.pathname.match(
+        /^\/api\/browser-native\/workspace\/attachments\/([a-f0-9]{64})\/uploads\/([0-9a-f-]{36})(?:\/(chunks\/([0-9]+)|commit))?$/i)
+      if (attachmentUploadOperation !== null) {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const principalId = workspaces.principalFromRequest(request)
+        workspaces.requireWorkspace(principalId, workspaceId)
+        const [, hash, uploadId, action, offsetText] = attachmentUploadOperation
+        if (!ATTACHMENT_UPLOAD_ID_PATTERN.test(uploadId)) throw new BackendError('INVALID_REQUEST', 'upload id is invalid')
+        if (action !== undefined && action.startsWith('chunks/')) {
+          if (request.method !== 'PUT') throw new BackendError('NOT_FOUND', 'route not found', 404)
+          if (request.headers['content-type'] !== 'application/octet-stream') {
+            throw new BackendError('INVALID_REQUEST', 'attachment chunks require application/octet-stream')
+          }
+          let body
+          try {
+            body = await readRawBody(request, MAX_ATTACHMENT_CHUNK_BYTES)
+          } catch (error) {
+            if (typeof error?.code !== 'string' || error.code !== 'REQUEST_TOO_LARGE') throw error
+            throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment chunks must not exceed ${String(MAX_ATTACHMENT_CHUNK_BYTES)} bytes`, 413)
+          }
+          const offset = Number(offsetText)
+          if (!Number.isSafeInteger(offset) || offset < 0) throw new BackendError('INVALID_REQUEST', 'chunk offset is invalid')
+          const appended = await withKeyedLock(attachmentUploadLocks, uploadId, async () =>
+            await appendAttachmentUploadChunk(options.dataDir, workspaceId, uploadId, hash, offset, body, attachmentMaxBytes))
+          await options.testHooks?.onAttachmentUploadChunk?.({
+            workspaceId, hash, uploadId, offset, received: appended.received,
+          })
+          sendJson(response, 200, appended)
+          return
+        }
+        if (action === 'commit') {
+          if (request.method !== 'POST') throw new BackendError('NOT_FOUND', 'route not found', 404)
+          await readBody(request)
+          const committed = await withKeyedLock(attachmentUploadLocks, uploadId, async () => {
+            const meta = await readAttachmentUploadMeta(options.dataDir, workspaceId, uploadId)
+            return {
+              meta,
+              stored: await commitAttachmentUpload(options.dataDir, workspaceId, uploadId, hash,
+                operation => publishAttachment(workspaceId, operation)),
+            }
+          })
+          sendJson(response, 200, {
+            attachmentId: `sha256:${committed.meta.hash}`,
+            name: committed.meta.name,
+            bytes: committed.stored.bytes,
+            reused: committed.stored.reused,
+          })
+          return
+        }
+        if (request.method === 'DELETE') {
+          sendJson(response, 200, await withKeyedLock(attachmentUploadLocks, uploadId, async () =>
+            await abortAttachmentUpload(options.dataDir, workspaceId, uploadId)))
+          return
+        }
+        throw new BackendError('NOT_FOUND', 'route not found', 404)
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/attachments/gc-token') {
         const workspaceId = url.searchParams.get('workspaceId')

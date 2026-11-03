@@ -12,6 +12,8 @@ import { Sha256 } from './browser-native-sha256.ts'
 const OPFS_DIRECTORY = 'dsh-browser-native-attachments-v1'
 const MAX_FILE_BYTES = 64 * 1024 * 1024
 const OPFS_WRITE_CHUNK_BYTES = 64 * 1024
+const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024
+const ATTACHMENT_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 const ATTACHMENT_API = '/api/browser-native/workspace/attachments'
 const FILE_ID_PATTERN = /^sha256:([a-f0-9]{64})$/
 const TEMPORARY_FILE_PATTERN = /^(upload|download)-([0-9a-f-]{36})(?:\.crswap)?$/iu
@@ -31,6 +33,17 @@ interface FileRefUploadResponse {
   readonly attachmentId?: unknown
   readonly name?: unknown
   readonly bytes?: unknown
+  readonly error?: { readonly message?: unknown; readonly code?: unknown }
+}
+
+interface ChunkedUploadBeginResponse {
+  readonly uploadId?: unknown
+  readonly chunkBytes?: unknown
+  readonly error?: { readonly message?: unknown; readonly code?: unknown }
+}
+
+interface ChunkedUploadChunkResponse {
+  readonly received?: unknown
   readonly error?: { readonly message?: unknown; readonly code?: unknown }
 }
 
@@ -512,20 +525,93 @@ export function createBrowserNativeAttachmentModule(
       ref: FileAttachmentRef,
       signal?: AbortSignal,
     ): Promise<void> {
-      const url = new URL(`${ATTACHMENT_API}/${assertFileReference(ref)}`, globalThis.location.origin)
+      const hash = assertFileReference(ref)
+      const object = await file.getFile()
+      if (object.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+        await uploadObjectInChunks(workspaceId, object, ref, hash, signal)
+        return
+      }
+      const url = new URL(`${ATTACHMENT_API}/${hash}`, globalThis.location.origin)
       url.searchParams.set('workspaceId', workspaceId)
       url.searchParams.set('name', ref.name)
       const response = await fetch(url, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/octet-stream' },
-        body: await file.getFile(),
+        body: object,
         ...(signal === undefined ? {} : { signal }),
       })
       const value = await response.json() as FileRefUploadResponse
       if (!response.ok) throw new Error(readResponseError(value, `attachment upload failed with HTTP ${String(response.status)}`))
       if (value.attachmentId !== ref.attachmentId || value.name !== ref.name || value.bytes !== ref.bytes) {
         throw new Error('browser-native attachments: backend upload receipt differs from the local file')
+      }
+    }
+
+    /**
+     * Upload a large object in bounded chunks and discard staging when it fails.
+     *
+     * Each chunk reports its received offset, so a lost or reordered chunk
+     * surfaces as an error instead of a corrupt object. Aborting the caller's
+     * signal also removes server-side staging.
+     */
+    async function uploadObjectInChunks(
+      workspaceId: string,
+      object: File,
+      ref: FileAttachmentRef,
+      hash: string,
+      signal?: AbortSignal,
+    ): Promise<void> {
+      const beginUrl = new URL(`${ATTACHMENT_API}/${hash}/uploads`, globalThis.location.origin)
+      beginUrl.searchParams.set('workspaceId', workspaceId)
+      beginUrl.searchParams.set('name', ref.name)
+      const begun = await fetch(beginUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bytes: ref.bytes }),
+        ...(signal === undefined ? {} : { signal }),
+      })
+      const beginValue = await begun.json() as ChunkedUploadBeginResponse
+      if (!begun.ok) throw new Error(readResponseError(beginValue, `attachment upload begin failed with HTTP ${String(begun.status)}`))
+      if (typeof beginValue.uploadId !== 'string') throw new Error('browser-native attachments: backend did not return an upload id')
+      const uploadUrl = new URL(`${ATTACHMENT_API}/${hash}/uploads/${beginValue.uploadId}`, globalThis.location.origin)
+      uploadUrl.searchParams.set('workspaceId', workspaceId)
+      const operationUrl = (suffix: string) => new URL(`${uploadUrl.pathname}${suffix}${uploadUrl.search}`, uploadUrl.origin)
+      const chunkBytes = Number.isSafeInteger(beginValue.chunkBytes) && Number(beginValue.chunkBytes) > 0
+        ? Math.min(Number(beginValue.chunkBytes), ATTACHMENT_UPLOAD_CHUNK_BYTES)
+        : ATTACHMENT_UPLOAD_CHUNK_BYTES
+      try {
+        for (let offset = 0; offset < ref.bytes; offset += chunkBytes) {
+          signal?.throwIfAborted()
+          const end = Math.min(offset + chunkBytes, ref.bytes)
+          const response = await fetch(operationUrl(`/chunks/${String(offset)}`), {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: await object.slice(offset, end).arrayBuffer(),
+            ...(signal === undefined ? {} : { signal }),
+          })
+          const value = await response.json() as ChunkedUploadChunkResponse
+          if (!response.ok) throw new Error(readResponseError(value, `attachment chunk failed with HTTP ${String(response.status)}`))
+          if (value.received !== end) throw new Error('browser-native attachments: backend chunk receipt differs from the sent offset')
+        }
+        signal?.throwIfAborted()
+        const committed = await fetch(operationUrl('/commit'), {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+          ...(signal === undefined ? {} : { signal }),
+        })
+        const receipt = await committed.json() as FileRefUploadResponse
+        if (!committed.ok) throw new Error(readResponseError(receipt, `attachment upload commit failed with HTTP ${String(committed.status)}`))
+        if (receipt.attachmentId !== ref.attachmentId || receipt.name !== ref.name || receipt.bytes !== ref.bytes) {
+          throw new Error('browser-native attachments: backend upload receipt differs from the local file')
+        }
+      } catch (error) {
+        await fetch(operationUrl(''), { method: 'DELETE', credentials: 'same-origin', keepalive: true }).catch(() => {})
+        throw error
       }
     }
 

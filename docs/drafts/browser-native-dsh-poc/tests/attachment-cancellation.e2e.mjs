@@ -15,9 +15,13 @@ const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdi
 const beforeName = 'cancel-before-publish.txt'
 const afterName = 'cancel-after-publish.txt'
 const stagedName = 'cancel-during-opfs-staging.txt'
+const chunkedName = 'cancel-during-upload-chunk.txt'
 const stagedBytes = Buffer.alloc(1024 * 1024, 0x71)
+const chunkedBytes = Buffer.alloc(16 * 1024 * 1024, 0x63)
+chunkedBytes.write('CHUNKED_CANCEL_FIXTURE\n')
 const beforeBytes = Buffer.alloc(1024 * 1024, 0x62)
 const afterBytes = Buffer.from('published before receipt; removal cannot undo this object\n')
+const chunkedHash = createHash('sha256').update(chunkedBytes).digest('hex')
 const beforeHash = createHash('sha256').update(beforeBytes).digest('hex')
 const afterHash = createHash('sha256').update(afterBytes).digest('hex')
 const deferred = () => {
@@ -27,6 +31,7 @@ const deferred = () => {
 }
 const releaseBeforeBody = deferred()
 const releaseReceipt = deferred()
+const releaseChunk = deferred()
 const pageErrors = []
 const browserRequests = []
 const apiRequests = []
@@ -40,6 +45,8 @@ let beforeBodyPaused = false
 let beforeBodyReached = false
 let beforeBodyClean = false
 let receiptGateReached = false
+let chunkGateReached = false
+let chunkGateOffset
 let responseWasAbandoned = false
 let app
 let image
@@ -108,6 +115,12 @@ try {
         if (hash !== afterHash) return
         receiptGateReached = true
         await releaseReceipt.promise
+      },
+      onAttachmentUploadChunk: async ({ hash, offset }) => {
+        if (hash !== chunkedHash || chunkGateReached) return
+        chunkGateReached = true
+        chunkGateOffset = offset
+        await releaseChunk.promise
       },
     },
   })
@@ -225,6 +238,30 @@ try {
     && event.data.content?.some(block => block.type === 'text'
       && block.text.includes('BROWSER_NATIVE_CANCEL_BEFORE_PUBLISH'))).length, 1)
 
+  const chunkFailure = page.waitForEvent('requestfailed',
+    request => new URL(request.url()).pathname.includes('/uploads/'), { timeout: 30_000 })
+  await page.locator('input[type="file"]').last().setInputFiles({
+    name: chunkedName,
+    mimeType: 'text/plain',
+    buffer: chunkedBytes,
+  })
+  await waitFor(async () => chunkGateReached, 'backend receives the first chunk of a chunked upload')
+  assert.equal(chunkGateOffset, 0)
+  progress('backend chunk barrier reached')
+  await page.getByRole('button', { name: `Remove file ${chunkedName}` }).click()
+  await page.getByText(chunkedName, { exact: true }).waitFor({ state: 'detached' })
+  releaseChunk.resolve()
+  await chunkFailure
+  await waitFor(async () => (await listFiles(join(dataDir, 'attachment-uploads-v1'))).length === 0,
+    'cancelled chunked upload removes server-side staging')
+  await waitFor(async () => browserRequests.some(request => request.method === 'DELETE'
+    && request.url.includes('/uploads/')), 'the client aborts its chunked upload session')
+  assert.ok(!(await listFiles(join(dataDir, 'attachments-v1'))).some(path => path.endsWith(chunkedHash)),
+    'a cancelled chunked upload must not publish an object')
+  assert.equal(await page.getByText(chunkedName, { exact: true }).count(), 0,
+    'a late chunk failure must not restore a removed draft')
+  progress('backend chunked cancellation settled')
+
   const afterFailure = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname.includes('/workspace/attachments/'), { timeout: 30_000 })
   await page.locator('input[type="file"]').last().setInputFiles({
     name: afterName,
@@ -271,8 +308,8 @@ try {
       && block.text.includes('BROWSER_NATIVE_CANCEL_DURING_OPFS'))).length, 1)
   assert.equal(second.session.events.filter(event => event.type === 'tool/call'
     && event.data.name === 'read').length, 0, 'cancelled draft bytes must not become an Agent tool input')
-  assert.equal(attachmentRequests.length, 2)
-  assert.equal(requestFailures.length, 2)
+  assert.equal(attachmentRequests.length, 3)
+  assert.equal(requestFailures.length, 3)
   assert.deepEqual(pageErrors, [])
   assert.deepEqual(browserRequests.filter(request => new URL(request.url).origin !== origin), [])
 
@@ -287,6 +324,7 @@ try {
     sessionId,
     promptEvents: second.session.events.filter(event => event.type === 'user/message').length,
     opfsStagingCancellation: 'aborted; temporary OPFS entry removed; no backend PUT started',
+    chunkedUploadCancellation: `chunk at offset ${String(chunkGateOffset)} withheld; staging deleted; no object published`,
     opfsTemporaryEntriesAtPause: stagedOpfsFiles.map(file => file.name),
     verifiedPromptMarkers: ['BROWSER_NATIVE_CANCEL_DURING_OPFS', 'BROWSER_NATIVE_CANCEL_BEFORE_PUBLISH', 'BROWSER_NATIVE_CANCEL_AFTER_PUBLISH'],
     userMessages: second.session.events.filter(event => event.type === 'user/message')
@@ -301,6 +339,7 @@ try {
   progress('releasing barriers and disposing test resources')
   releaseBeforeBody.resolve()
   releaseReceipt.resolve()
+  releaseChunk.resolve()
   await page?.evaluate(async () => await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({
     action: 'release-attachment-opfs-write',
   })).catch(() => {})

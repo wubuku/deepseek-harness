@@ -192,11 +192,14 @@ Chrome scripted E2E 通过 16 MiB 附件上传、真实 DSH `read`、删除 OPFS
 
 [附件 Worker 强制终止恢复验证](attachment-worker-crash-recovery-validation-plan.md)和[实施进度](attachment-worker-crash-recovery-validation-progress.md)覆盖与 AbortSignal 不同的 Worker 消失路径。Chrome 156 在 A 标签页持有 OPFS staging 锁和 Workspace writer lease 时由 B 标签页扫描；B 的只读上传被拒绝，活动 `upload-*`/`.crswap` 不被删除，终止 A 后新 Worker 只回收可取得锁的孤儿 staging。backend 收到部分 body 后终止会清理 `.part`，对象已发布而 receipt 返回时终止则保留完整对象；用户重新选择相同内容后通过 hash `reused` 恢复。该路径不自动补交 prompt 或 FileBlock，不实现附件引用账本和远端 GC。
 
+[大附件分片上传与取消](chunked-attachment-upload.md)为 8 MiB 及以上文件增加 begin/chunk/commit/abort：staging 落在 `attachment-uploads-v1`，commit 校验整文件 SHA-256 后以 `link` 发布，显式取消与摘要失败只删除 staging，启动与定时 sweep 回收超过 1 小时 TTL 的残留。Chrome scripted E2E 的 16 MiB 上传走 4 个 4 MiB 分片请求，取消测试在第 0 片后暂停并确认 staging 清空、没有对象发布；单次 `PUT` 的小文件与既有取消路径不变。
+
 在 preview 构建后复跑本批验收：
 
 ```sh
 pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 node --test docs/drafts/browser-native-dsh-poc/tests/attachment-backend.test.mjs
+node --test docs/drafts/browser-native-dsh-poc/tests/attachment-chunked-upload.test.mjs
 node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 export DSH_POC_BROWSER=chrome
 export DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js
@@ -208,7 +211,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 ```
 
-附件大小上限为 PoC 64 MiB，图片附件不支持。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断、Session append 响应丢失，以及 OPFS staging 和 backend 对象发布前/后的 composer remove。自然 eviction、自然网络中断、OS/磁盘崩溃、多设备恢复和大附件真实 LLM 尚未验证；发布后取消留下的对象尚无安全 GC。
+附件大小上限为 PoC 64 MiB，图片附件不支持；8 MiB 以上走分片上传，但没有刷新后续传、分片独立摘要、配额账本或多实例并发验证。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断、Session append 响应丢失，以及 OPFS staging 和 backend 对象发布前/后的 composer remove。自然 eviction、自然网络中断、OS/磁盘崩溃、多设备恢复和大附件真实 LLM 尚未验证；发布后取消留下的对象尚无安全 GC。
 
 ## 可写 chunk-backed 编辑验证
 
