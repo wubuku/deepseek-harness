@@ -17,6 +17,7 @@ import { pipeline } from 'node:stream/promises'
 import { WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_CONTENT_LAYOUT, WorkspaceError, WorkspaceStore } from './workspace-v2.mjs'
 import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
 import { CrossStoreLedgerError, CrossStoreOperationLedger } from './cross-store-operation-ledger.mjs'
+import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -816,6 +817,7 @@ async function queryExternalBusiness(origin, operationId, principalId) {
 
 function sendError(response, error) {
   const detail = error instanceof BackendError || error instanceof WorkspaceError || error instanceof CrossStoreLedgerError
+    || error instanceof EgressError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -3610,6 +3612,7 @@ export async function createBrowserNativeV2Server(options) {
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
   const workspaceDownloads = new Map()
   const responseHeaders = options.responseHeaders ?? {}
+  const egress = options.egress === undefined ? undefined : createEgressPolicy(options.egress)
   if (responseHeaders === null || typeof responseHeaders !== 'object' || Array.isArray(responseHeaders)) {
     throw new TypeError('responseHeaders must be an object')
   }
@@ -4075,6 +4078,13 @@ export async function createBrowserNativeV2Server(options) {
         } else {
           await realLlm(response, request, llm, body)
         }
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/egress/fetch') {
+        if (egress === undefined) throw new BackendError('NOT_FOUND', 'route not found', 404)
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await egress.proxy(body))
         return
       }
       if (request.method === 'GET') {

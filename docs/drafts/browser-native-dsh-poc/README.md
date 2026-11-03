@@ -1345,6 +1345,14 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 配置的真实 provider 本轮返回 HTTP 403 `用户 [4912] 配额不足`，因此上游改用本地 OpenAI-compatible SSE，按相同 chunk 协议逐字流出；浏览器断连是真实 TCP 事件。真实模型的 token 计量与费用未验证，且 fetch 拒绝仍归类为 `UNKNOWN`，恢复配额后应重跑同一 harness。新增合同测试锁定“上游流出部分内容后断连必须以 `UPSTREAM_LLM_STREAM_FAILED` 收束且不产生 `finish`”，`backend-v2.test.mjs` 58/58 通过。
 
+## 凭据隔离与服务端代理原型
+
+[凭据隔离与服务端代理原型](credential-isolation-proxy.md)把“浏览器不是凭据边界”的结论落成一个最小实现：页面 CSP 为 `connect-src 'self' data:`，Worker 的所有外联只能经过同源 backend 的 `POST /api/browser-native/egress/fetch`；backend 按 origin 白名单放行，通过校验后才注入 `authorization`，并拒绝浏览器自带凭据头、非 http(s) scheme、重定向跟随，同时对上游响应做 `[REDACTED]` 脱敏和 `set-cookie` 剥离。
+
+Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返回 `EGRESS_HOST_NOT_ALLOWED` 且服务端 0 请求；Worker 注入 `authorization` 返回 `EGRESS_FORBIDDEN_HEADER`；302 作为数据返回、未跟随；上游回显凭据只得到占位符；Worker 直接 fetch 被 CSP 拦截、上游 0 请求；脚本 turn 仍完成且 Session/页面文本无凭据。密钥仍只存在于 backend 进程，白名单按 origin 而非路径或用户能力授权。
+
+复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs`；合同测试见 `tests/backend-v2.test.mjs`。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

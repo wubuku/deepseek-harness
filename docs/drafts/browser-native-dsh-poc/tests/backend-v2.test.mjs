@@ -3226,4 +3226,108 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(reclaimed.response.ok, true, JSON.stringify(reclaimed.value))
     assert.equal(reclaimed.value.fencingToken, first.value.fencingToken + 1)
   })
+
+  it('serves egress only for allowlisted origins and never returns the credential', async () => {
+    const blockedRecords = []
+    const blocked = createServer((request, response) => {
+      blockedRecords.push({ path: request.url, authorization: request.headers.authorization ?? null })
+      response.writeHead(200, { 'content-type': 'text/plain' })
+      response.end('non-allowlisted-ok')
+    })
+    const blockedOrigin = await listen(blocked)
+    const allowlistedRecords = []
+    const allowlisted = createServer((request, response) => {
+      allowlistedRecords.push({ path: request.url, authorization: request.headers.authorization ?? null })
+      if (request.url === '/echo') {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ received: request.headers.authorization ?? null }))
+        return
+      }
+      if (request.url === '/leak') {
+        response.writeHead(200, { 'content-type': 'text/plain', 'set-cookie': 'upstream=session; Path=/' })
+        response.end(`upstream echoed ${String(request.headers.authorization)}`)
+        return
+      }
+      if (request.url === '/redirect') {
+        response.writeHead(302, { location: `${blockedOrigin}/target` })
+        response.end()
+        return
+      }
+      response.writeHead(404, { 'content-type': 'text/plain' })
+      response.end('missing')
+    })
+    const allowlistedOrigin = await listen(allowlisted)
+    const secret = 'Bearer egress-contract-secret'
+    try {
+      const dataDir = await temporaryDirectory()
+      const { origin } = await start({
+        dataDir,
+        llmMode: 'scripted',
+        egress: { allow: [{ origin: allowlistedOrigin, credential: { header: 'authorization', value: secret } }] },
+      })
+      const postEgress = async (requestId, body) => {
+        const response = await fetch(`${origin}/api/browser-native/egress/fetch`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(envelope(requestId, body)),
+        })
+        const text = await response.text()
+        return { status: response.status, text, value: JSON.parse(text) }
+      }
+
+      const allowed = await postEgress('egress-allowed', { url: `${allowlistedOrigin}/echo` })
+      assert.equal(allowed.status, 200, allowed.text)
+      assert.equal(allowed.value.credentialInjected, true)
+      assert.equal(allowlistedRecords[0].authorization, secret)
+      assert.equal(allowed.text.includes('egress-contract-secret'), false,
+        'the proxy response must not echo the injected credential')
+      assert.deepEqual(JSON.parse(allowed.value.body), { received: '[REDACTED]' })
+
+      const blockedHost = await postEgress('egress-blocked', { url: `${blockedOrigin}/target` })
+      assert.equal(blockedHost.status, 403)
+      assert.equal(blockedHost.value.error.code, 'EGRESS_HOST_NOT_ALLOWED')
+      assert.equal(blockedHost.text.includes('egress-contract-secret'), false)
+      assert.deepEqual(blockedRecords, [], 'a refused host must never receive the request')
+
+      const beforeInjection = allowlistedRecords.length
+      const injected = await postEgress('egress-injected', {
+        url: `${allowlistedOrigin}/echo`,
+        headers: { authorization: 'Bearer worker-supplied' },
+      })
+      assert.equal(injected.status, 400)
+      assert.equal(injected.value.error.code, 'EGRESS_FORBIDDEN_HEADER')
+      assert.equal(allowlistedRecords.length, beforeInjection, 'a rejected header must not reach upstream')
+
+      const scheme = await postEgress('egress-scheme', { url: 'file:///etc/passwd' })
+      assert.equal(scheme.status, 400)
+      assert.equal(scheme.value.error.code, 'EGRESS_SCHEME_REJECTED')
+
+      const redirect = await postEgress('egress-redirect', { url: `${allowlistedOrigin}/redirect` })
+      assert.equal(redirect.status, 200, redirect.text)
+      assert.equal(redirect.value.status, 302)
+      assert.equal(redirect.value.redirect, true)
+      assert.deepEqual(blockedRecords, [], 'a redirect must not be followed to a non-allowlisted host')
+
+      const leak = await postEgress('egress-leak', { url: `${allowlistedOrigin}/leak` })
+      assert.equal(leak.status, 200, leak.text)
+      assert.equal(leak.text.includes('egress-contract-secret'), false,
+        'an allowlisted upstream must not be able to void the credential through the response')
+      assert.match(leak.value.body, /\[REDACTED\]/)
+      assert.equal(leak.value.headers['set-cookie'], undefined, 'upstream cookie headers must be stripped')
+    } finally {
+      await close(blocked)
+      await close(allowlisted)
+    }
+  })
+
+  it('does not serve the egress route without an egress policy', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const response = await fetch(`${origin}/api/browser-native/egress/fetch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope('egress-unconfigured', { url: 'http://127.0.0.1:1/x' })),
+    })
+    assert.equal(response.status, 404)
+  })
 })
