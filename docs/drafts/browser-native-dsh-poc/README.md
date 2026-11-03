@@ -1269,6 +1269,8 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 实现位于 `packages/subagent/subagent/src`：`stopDescendants()` 沿 `ancestry` 取消 local/durable Activation，`stoppedByAncestor` 抑制 settlement 唤醒，监听挂在 `ctx.root` 并只接受顶层 `turn/end: aborted/user`。Chrome E2E 用 `spawn` subagent 的双 barrier 证明 parent `aborted/user`、child `aborted/parent`、停止后无新模型请求、通知在下一轮输入前回放；真实模型另在流式文本和 `bash sleep` 执行中 Stop，均只结算一个 `aborted` turn，cut 工具记录 `Error: tool call aborted`，后续 turn 不重放命令。跨标签 Stop、进程外 provider、Safari 和 OS crash 未验证；页面关闭时的执行去向见[标签页关闭语义](tab-close-background-agent-semantics.md)。
 
+[真实模型自主委托组合验证](real-subagent-cancel-validation.md)进一步用非 scripted 的真实模型 `LongCat-2.5` 证明：模型从 prompt 自主调用 `subagent`，父子模型流同时进行时停止父 Session，得到 parent `aborted/user`、child `aborted/parent`、停止后 2 秒内请求数不变、无第三个 Session，结算通知在恢复 prompt 前回放；主 GPT 组因配额耗尽未参与。
+
 ## 跨标签审批归属
 
 [跨标签审批计划](cross-tab-approval-validation-plan.md)与[进度](cross-tab-approval-validation-progress.md)确定审批决策权只属于持有 Session recovery lock 的拥有者标签；并发标签必须失败关闭且不显示可操作卡片；拥有者退出后，待决审批结算一次为 `TOOL_OUTCOME_UNKNOWN`，不重问也不重放。双页 E2E 用 `window.open` 克隆标签验证并发阶段 0 后端请求与 0 卡片、拥有者拒绝触发 1 asked / 1 decided / 1 结果、关闭拥有者后接管得到未知结果且计数不变、后续 prompt 正常完成。
