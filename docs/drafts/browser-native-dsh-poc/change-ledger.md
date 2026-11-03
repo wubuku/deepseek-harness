@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-073：跨 principal 拒绝审计
+
+```text
+changeId: BN-P2-073
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/principal-isolation.test.mjs; docs/drafts/browser-native-dsh-poc/principal-scoped-session-isolation-progress.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: principal 隔离已有授权判定，但没有可判定、可关联的拒绝证据；跨 principal 的 Workspace、Session、附件与 lease 越权只能从响应码推断，无法回答“哪个 principal 在何时访问了哪个资源、为什么被拒”。
+existingExtensionPointsChecked: 复用 backend 单一 request handler 的 `catch`、`BackendError`/`WorkspaceError` 的 `code`/`status`、既有 cookie 解析位置与 audit sink 模式；未改 principal 判定、Session format、Workspace 协议、Worker 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 拒绝证据必须在每次拒绝发生时生成，文档无法替代运行时记录。
+behaviorChange: 新增 `app.accessAudit(limit)` 与可选 `accessAuditSink`。401/403，以及携带 principal cookie 的 404，记录 method、route、resource、resourceId（仅 workspaceId）、principalDigest（SHA-256 前 16 位）、code、status、at；保留最近 200 条，不记录原始 principal id、cookie、owner/writer token、附件字节或凭据。允许的授权请求不写入拒绝审计。
+consumersUpdated: 新增 `tests/principal-isolation.test.mjs` 合同用例；`backend-v2.test.mjs`、`local-request-guard.test.mjs` 复跑；进度文档、matrix、drafts index 与本账本同步。`principal-scoped-session-isolation.e2e.mjs` 的既有失败在改动前即可复现，按 BN-P2-038 的 fail-closed 行为记录为缺口，未修改测试。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/principal-isolation.test.mjs docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs` 70/70。隔离用例观察：B 读 A 的 manifest 403 `WORKSPACE_FORBIDDEN`、读 A 的附件 403 `WORKSPACE_FORBIDDEN`、用 B 的 workspaceId 找 A 的哈希 404 `ATTACHMENT_NOT_FOUND`、读/写 A 的 Session 404 `SESSION_NOT_FOUND`、A 的 Session 不在 B catalog、租 A 的 Workspace 403 `WORKSPACE_FORBIDDEN`；B 的拒绝审计 ≥5 条、字段匹配、A 的授权请求不在拒绝审计、sink 与审计条数一致、序列化不含原始 principal/token/附件内容。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 若上游 backend 授权错误码或 audit 约定变化，重跑上述合同测试；若 DSH 核心提供 durable audit sink，优先复用并删除 PoC 内存审计。
+deleteCondition: DSH 核心或部署侧提供持久、可关联的访问拒绝审计并由 PoC 直接消费后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-072：回环后端请求准入与凭据位置
 
 ```text

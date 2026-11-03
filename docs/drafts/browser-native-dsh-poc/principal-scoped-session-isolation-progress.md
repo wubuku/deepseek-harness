@@ -43,6 +43,26 @@ description: "记录 Browser-Native DSH PoC Session principal 授权与同源浏
 | `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` | 47/47 通过 |
 | E2E/helper `node --check` | principal isolation、execution handoff 与 runtime test support 均通过 |
 
+## 本批（2026-11-03）：跨 principal 隔离与拒绝审计
+
+同一 backend、同一浏览器 profile 的两个 principal cookie 在 HTTP 合同层接受复验，并把每次拒绝写成可关联的审计记录。
+
+| 表面 | 跨 principal 请求 | 结果 |
+|---|---|---|
+| Workspace | B cookie 读 A 的 `manifest` | 403 `WORKSPACE_FORBIDDEN`，响应不含 A 的 workspaceId |
+| 附件 | B cookie 读 A 的附件哈希 | 403 `WORKSPACE_FORBIDDEN`，不返回字节 |
+| 附件 | B cookie 用 B 的 workspaceId 找 A 的哈希 | 404 `ATTACHMENT_NOT_FOUND` |
+| Session | B session cookie 读 A 的 Session | 404 `SESSION_NOT_FOUND` |
+| Session | B session cookie + A 的 owner token 追加 A 的 Session | 404 `SESSION_NOT_FOUND` |
+| Catalog | B session cookie 列出 Session | 200，列表不含 A 的 Session |
+| Lease | B cookie 对 A 的 Workspace 申请 writer lease | 403 `WORKSPACE_FORBIDDEN` |
+
+审计记录由 `backend-v2.mjs` 的 `accessAudit()` 返回，只记录 401/403 与带 principal cookie 的 404。字段：`at`、`method`、`route`、`resource`、`resourceId`（仅 `workspaceId` 查询参数）、`principalDigest`（principal cookie 的 SHA-256 前 16 位）、`code`、`status`。默认保留 200 条，可注入 `accessAuditSink`。记录不含原始 principal id、cookie、owner token、writer token、附件字节或凭据。
+
+`node --test tests/principal-isolation.test.mjs tests/backend-v2.test.mjs tests/local-request-guard.test.mjs`：70/70 通过。隔离用例断言 B 的拒绝至少 5 条、首条 manifest 拒绝为 `{code:'WORKSPACE_FORBIDDEN', status:403, resource:'workspace', resourceId:A.workspaceId}`、Session 读为 `{code:'SESSION_NOT_FOUND', status:404, resource:'session'}`，A 的授权请求不出现在拒绝审计，审计与 sink 条数一致，序列化后不含任何原始 principal、owner token 或附件内容。
+
+已知缺口：`principal-scoped-session-isolation.e2e.mjs` 在 A 关闭、仅清 cookie 后打开 B 时仍按 BN-P2-038 fail closed（`identity-missing`），因为 A 的 IndexedDB/OPFS 缓存仍在而 B 尚无 cookie。该失败在应用本批改动前即可复现，与请求准入和审计无关；现有 Chrome M3 记录因此不再与 BN-P2-038 后的行为一致。要恢复该 E2E，需要在 sign-out 时清除前一个 principal 的 Workspace 缓存，或重写为“登出即清理”的产品流程；本批未改动该测试。同 profile 两 principal 的服务端隔离已由上述合同测试覆盖。
+
 ## 风险与下一步
 
 - Session identity 复用 PoC principal，不代表真实登录；自动签发身份不能抵御身份签发端滥用、XSS、同源恶意脚本或 Cookie 窃取。

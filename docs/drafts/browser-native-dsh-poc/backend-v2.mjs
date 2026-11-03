@@ -41,6 +41,7 @@ const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|api[-_]?key|access[-_]?key)/i
 const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
+const ACCESS_AUDIT_LIMIT = 200
 
 class BackendError extends Error {
   constructor(code, message, status = 400, retryAfterMs) {
@@ -819,6 +820,24 @@ async function queryExternalBusiness(origin, operationId, principalId) {
       typeof error?.message === 'string' ? error.message : 'external business status query failed', response.status)
   }
   return value
+}
+
+function requestCookie(header, name) {
+  if (typeof header !== 'string') return undefined
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator < 0) continue
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim()
+  }
+  return undefined
+}
+
+function auditResourceFor(pathname) {
+  if (pathname.startsWith('/api/browser-native/workspace/')) return 'workspace'
+  if (pathname.startsWith('/api/browser-native/session/')) return 'session'
+  if (pathname.startsWith('/api/browser-native/llm')) return 'llm'
+  if (pathname.startsWith('/api/browser-native/egress/')) return 'egress'
+  return 'api'
 }
 
 /**
@@ -3752,10 +3771,46 @@ export async function createBrowserNativeV2Server(options) {
       throw new TypeError('responseHeaders must map non-empty header names to string values')
     }
   }
+  if (options.accessAuditSink !== undefined && typeof options.accessAuditSink !== 'function') {
+    throw new TypeError('accessAuditSink must be a function')
+  }
+  const accessAuditEntries = []
+  const recordAccessDenial = (url, request, error) => {
+    const status = typeof error.status === 'number' ? error.status : 500
+    const principal = requestCookie(request.headers.cookie, 'dsh-browser-native-principal')
+      ?? requestCookie(request.headers.cookie, 'dsh-browser-native-session-principal')
+    if (!(status === 401 || status === 403 || (status === 404 && principal !== undefined))) return
+    const entry = {
+      at: Date.now(),
+      method: request.method,
+      route: url.pathname,
+      resource: auditResourceFor(url.pathname),
+      resourceId: url.searchParams.get('workspaceId') ?? null,
+      principalDigest: principal === undefined ? null
+        : createHash('sha256').update(principal).digest('hex').slice(0, 16),
+      code: typeof error.code === 'string' ? error.code : 'UNKNOWN',
+      status,
+    }
+    accessAuditEntries.push(entry)
+    if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) accessAuditEntries.shift()
+    try {
+      options.accessAuditSink?.(structuredClone(entry))
+    } catch {} // A failing sink must not change the denial the client already received.
+  }
+  /**
+   * Read denial evidence for unauthorized or cross-principal requests.
+   * @param {number} [limit] - Number of newest entries to return, at most 200.
+   * @returns {object[]} Entries with route, resource, principal digest, code, and status.
+   */
+  const accessAudit = limit => {
+    boundedInteger(limit ?? ACCESS_AUDIT_LIMIT, 'accessAudit limit', ACCESS_AUDIT_LIMIT)
+    return accessAuditEntries.slice(-(limit ?? ACCESS_AUDIT_LIMIT)).map(clone)
+  }
   const server = createServer(async (request, response) => {
+    let url
     for (const [name, value] of Object.entries(responseHeaders)) response.setHeader(name, value)
     try {
-      const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
+      url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
       assertLocalRequest(request, url, internalStateRequest)
@@ -4232,6 +4287,7 @@ export async function createBrowserNativeV2Server(options) {
       }
       throw new BackendError('NOT_FOUND', 'route not found', 404)
     } catch (error) {
+      if (url !== undefined) recordAccessDenial(url, request, error)
       if (!response.headersSent && !response.destroyed) sendError(response, error)
       else response.destroy()
     }
@@ -4243,6 +4299,7 @@ export async function createBrowserNativeV2Server(options) {
     crossStoreLedger,
     llm,
     egress,
+    accessAudit,
     sweepAttachments,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {
