@@ -1407,6 +1407,12 @@ OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL�
 
 boot payload 预取同样无效：静态资源统一 `cache-control: no-store`，9.8 MB 的 `vfs-image.tar.gz` 由 Worker 通过自己的 tunnel 读取，页面 `fetch` 无法填充共享缓存。结论是不默认启用预热；优化目标应是 `hostConnected` 之后的客户端装配与 Workspace 同步。
 
+## Session 导出与导入
+
+[导出/导入](session-export-import.md)定义可移植包 `dsh-session-bundle` v1：携带 `sessionFormatVersion: 4`、Session 头与事件、`durableThroughSeq`，以及被事件引用的 content-addressed 附件（base64 + sha256 + 字节数）。导入先做完整纯校验再落盘：版本不匹配、事件序号断档、事件无类型、附件缺失、摘要或字节数不符、id 冲突全部拒绝，并且被拒 id 不出现在 `session/list`、源 Session 不被修改。
+
+8 个坏数据用例分别得到 `UNSUPPORTED_BUNDLE_VERSION`(409)、`SESSION_FORMAT_UNSUPPORTED`(422)、`INVALID_BUNDLE`(400)、`ATTACHMENT_MISSING`/`ATTACHMENT_DIGEST_MISMATCH`/`ATTACHMENT_SIZE_MISMATCH`/`SESSION_ALREADY_EXISTS`(409)。合法包以新 id 导入后事件与附件读回一致，附件对象幂等复用。包体受 8 MB 请求上限约束，只适合小附件。
+
 ## 刷新与 Worker 崩溃时的在途 turn
 
 [语义决策与证据](reload-crash-recovery-validation.md)定义：刷新会恢复 Session 与页面，但不会继续在途 turn；`agentLoop.resume` 在挂载时追加 `interruptedTurnClosers`，开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放。刷新在 2083 ms 内完成接管与结算（TTL 5000 ms），fencing token 1→2；Session event 从 26 变为 30，只增加三个 closer 和一个 `session/end-seed`，持久化前缀逐项不变，结算期间 0 次模型请求、延迟写入不落地、Workspace revision 不变。

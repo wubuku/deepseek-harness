@@ -524,6 +524,142 @@ function referencedAttachmentHashes(sessions) {
   return referenced
 }
 
+const SESSION_BUNDLE_FORMAT = 'dsh-session-bundle'
+const SESSION_BUNDLE_VERSION = 1
+
+/**
+ * Build a refusal for a portable Session bundle that cannot be interpreted.
+ * @param message - Actionable reason shown to the caller.
+ * @returns {BackendError} Client-facing validation error.
+ */
+function invalidBundle(message) {
+  return new BackendError('INVALID_BUNDLE', message)
+}
+
+/**
+ * Map attachment references in a Session log to their sha256 digests.
+ * @param events - Session events in stored order.
+ * @returns {Map<string, {attachmentId: string, name: string | undefined}>} References keyed by hex digest.
+ */
+function bundleAttachmentReferences(events) {
+  const references = new Map()
+  for (const event of events) {
+    if (event?.type !== 'user/message' || !Array.isArray(event.data?.content)) continue
+    for (const block of event.data.content) {
+      if (block?.type !== 'file') continue
+      const attachmentId = String(block.attachment?.attachmentId)
+      const match = ATTACHMENT_HASH_PATTERN.exec(attachmentId)
+      if (match?.[1] === undefined) throw invalidBundle('a Session attachment reference is not a sha256 digest')
+      if (!references.has(match[1])) {
+        references.set(match[1], {
+          attachmentId,
+          name: typeof block.attachment?.name === 'string' ? block.attachment.name : undefined,
+        })
+      }
+    }
+  }
+  return references
+}
+
+/**
+ * Decode one bundled attachment and verify its declared size and digest.
+ * @param entry - Bundle attachment entry with base64 payload.
+ * @returns {{hash: string, attachmentId: string, name: string | undefined, bytes: number, data: Buffer}} Verified attachment.
+ */
+function decodeBundleAttachment(entry) {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw invalidBundle('an attachment entry must be an object')
+  const match = ATTACHMENT_HASH_PATTERN.exec(String(entry.attachmentId))
+  if (match?.[1] === undefined) throw invalidBundle('attachmentId must be a sha256 digest')
+  if (typeof entry.data !== 'string' || entry.data.length === 0) throw invalidBundle('attachment data must be non-empty base64')
+  const data = Buffer.from(entry.data, 'base64')
+  if (data.toString('base64') !== entry.data) throw invalidBundle('attachment data is not canonical base64')
+  if (!Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes !== data.byteLength) {
+    throw new BackendError('ATTACHMENT_SIZE_MISMATCH', `attachment ${match[1]} declares ${String(entry.bytes)} bytes but carries ${String(data.byteLength)}`, 409)
+  }
+  if (createHash('sha256').update(data).digest('hex') !== match[1]) {
+    throw new BackendError('ATTACHMENT_DIGEST_MISMATCH', `attachment ${match[1]} does not match its sha256 digest`, 409)
+  }
+  return {
+    hash: match[1],
+    attachmentId: String(entry.attachmentId),
+    name: typeof entry.name === 'string' ? entry.name : undefined,
+    bytes: data.byteLength,
+    data,
+  }
+}
+
+/**
+ * Validate a portable Session bundle without touching the store or disk.
+ *
+ * Rejection is the contract: an unsupported version, a non-contiguous
+ * sequence, a missing attachment or a digest mismatch must fail the import
+ * rather than produce a session that reads back differently.
+ * @param bundle - Parsed JSON request body.
+ * @returns {{header: object, inheritedEventCount: number, events: object[], durableThroughSeq: number, attachments: object[], attachmentCount: number}} Normalized bundle.
+ */
+function assertSessionBundle(bundle) {
+  if (bundle === null || typeof bundle !== 'object' || Array.isArray(bundle)) throw invalidBundle('bundle must be an object')
+  if (bundle.format !== SESSION_BUNDLE_FORMAT) throw invalidBundle(`bundle format must be ${SESSION_BUNDLE_FORMAT}`)
+  if (!Number.isSafeInteger(bundle.formatVersion)) throw invalidBundle('bundle formatVersion must be an integer')
+  if (bundle.formatVersion !== SESSION_BUNDLE_VERSION) {
+    throw new BackendError(
+      'UNSUPPORTED_BUNDLE_VERSION',
+      `bundle format v${String(bundle.formatVersion)} is not supported; this build reads v${String(SESSION_BUNDLE_VERSION)}`,
+      409,
+    )
+  }
+  const session = bundle.session
+  if (session === null || typeof session !== 'object' || Array.isArray(session)) throw invalidBundle('session must be an object')
+  if (typeof session.id !== 'string' || !/^[A-Za-z0-9._-]+$/.test(session.id) || session.id.length === 0 || session.id.length > 200) {
+    throw invalidBundle('session id is invalid')
+  }
+  const header = session.header
+  if (header === null || typeof header !== 'object' || Array.isArray(header)) throw invalidBundle('session header must be an object')
+  if (header.id !== session.id) throw invalidBundle('session header id does not match the bundle session id')
+  if (header.version !== SESSION_FORMAT_VERSION) throw unsupportedSessionFormat(session.id, header.version)
+  const inheritedEventCount = session.inheritedEventCount ?? 0
+  if (!Number.isSafeInteger(inheritedEventCount) || inheritedEventCount < 0) throw invalidBundle('inheritedEventCount must be a non-negative integer')
+  if (!Array.isArray(session.events)) throw invalidBundle('session events must be an array')
+  if (session.events.length > MAX_EVENTS) {
+    throw new BackendError('REQUEST_TOO_LARGE', `a Session bundle may carry at most ${String(MAX_EVENTS)} events`, 413)
+  }
+  for (const [index, event] of session.events.entries()) {
+    if (event === null || typeof event !== 'object' || Array.isArray(event)) throw invalidBundle(`event ${String(index)} must be an object`)
+    if (event.seq !== index) throw invalidBundle(`event ${String(index)} has seq ${String(event.seq)}; sequences must be contiguous from 0`)
+    if (typeof event.type !== 'string' || event.type.length === 0 || event.type.length > 200) throw invalidBundle(`event ${String(index)} has no type`)
+    if (event.data === undefined) throw invalidBundle(`event ${String(index)} has no data`)
+  }
+  const references = bundleAttachmentReferences(session.events)
+  const entries = bundle.attachments ?? []
+  if (!Array.isArray(entries)) throw invalidBundle('attachments must be an array')
+  const decoded = new Map()
+  for (const entry of entries) {
+    const attachment = decodeBundleAttachment(entry)
+    const previous = decoded.get(attachment.hash)
+    if (previous !== undefined && !previous.data.equals(attachment.data)) {
+      throw new BackendError('ATTACHMENT_DIGEST_MISMATCH', `attachment ${attachment.hash} appears twice with different data`, 409)
+    }
+    decoded.set(attachment.hash, attachment)
+  }
+  for (const [hash, reference] of references) {
+    if (!decoded.has(hash)) {
+      throw new BackendError('ATTACHMENT_MISSING', `Session references attachment ${reference.attachmentId} but the bundle does not carry it`, 409)
+    }
+  }
+  const durableThroughSeq = session.durableThroughSeq ?? session.events.length - 1
+  if (!Number.isSafeInteger(durableThroughSeq) || durableThroughSeq < -1 || durableThroughSeq >= session.events.length) {
+    throw invalidBundle('durableThroughSeq is outside the event range')
+  }
+  return {
+    header,
+    inheritedEventCount,
+    events: session.events,
+    durableThroughSeq,
+    attachments: [...decoded.values()],
+    attachmentCount: references.size,
+  }
+}
+
 async function listAttachmentWorkspaces(dataDir) {
   const root = join(dataDir, 'attachments-v1')
   const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
@@ -4040,6 +4176,93 @@ export async function createBrowserNativeV2Server(options) {
     journalPath: join(options.dataDir, 'durable-runs.json'),
   })
   const durableRecovery = await durableHost.recover()
+
+  /**
+   * Serialize a Session and the attachments its log references from one Workspace.
+   * @param session - Stored Session record.
+   * @param workspaceId - Workspace that owns the attachment objects.
+   * @returns {Promise<object>} Portable bundle ready to send as JSON.
+   */
+  const buildSessionBundle = async (session, workspaceId) => {
+    const references = bundleAttachmentReferences(session.events)
+    const attachments = []
+    for (const [hash, reference] of references) {
+      const path = attachmentPath(options.dataDir, workspaceId, hash)
+      const bytes = await verifyAttachmentObject(path, hash)
+      if (bytes === undefined) {
+        throw new BackendError('ATTACHMENT_MISSING', `Session references attachment ${reference.attachmentId} but the Workspace does not store it`, 409)
+      }
+      attachments.push({
+        attachmentId: reference.attachmentId,
+        ...(reference.name === undefined ? {} : { name: reference.name }),
+        bytes,
+        data: (await readFile(path)).toString('base64'),
+      })
+    }
+    return {
+      format: SESSION_BUNDLE_FORMAT,
+      formatVersion: SESSION_BUNDLE_VERSION,
+      sessionFormatVersion: SESSION_FORMAT_VERSION,
+      exportedAt: new Date().toISOString(),
+      workspaceId,
+      session: {
+        id: session.id,
+        header: session.header,
+        inheritedEventCount: session.inheritedEventCount,
+        events: session.events,
+        durableThroughSeq: session.durableThroughSeq,
+      },
+      attachments,
+    }
+  }
+
+  const writeBundleAttachment = async (workspaceId, attachment) => await publishAttachment(workspaceId, async () => {
+    const directoryPath = join(options.dataDir, 'attachments-v1', workspaceId, attachment.hash.slice(0, 2))
+    await mkdir(directoryPath, { recursive: true, mode: 0o700 })
+    const target = attachmentPath(options.dataDir, workspaceId, attachment.hash)
+    if (await verifyAttachmentObject(target, attachment.hash) !== undefined) return
+    const temporary = `${target}.${randomUUID()}.tmp`
+    await writeFile(temporary, attachment.data, { mode: 0o600 })
+    await rename(temporary, target)
+  })
+
+  /**
+   * Validate a bundle, then create the Session and publish its attachments.
+   *
+   * Validation completes before any write. A duplicate id or a failed flush
+   * removes the in-memory Session, so a rejected import leaves no partial
+   * Session; content-addressed attachments may remain for later garbage
+   * collection because they are unreferenced.
+   * @param bundle - Untrusted request payload.
+   * @param workspaceId - Target Workspace that receives attachments.
+   * @param principalId - Principal recorded as the Session owner.
+   * @returns {Promise<object>} Session response with import counts.
+   */
+  const importSessionBundle = async (bundle, workspaceId, principalId) => {
+    const validated = assertSessionBundle(bundle)
+    return await store.exclusive(validated.header.id, async () => {
+      admission?.mountSession(validated.header.id)
+      let session
+      try {
+        session = store.create(validated.header.id, validated.header, validated.inheritedEventCount, principalId)
+        for (const attachment of validated.attachments) await writeBundleAttachment(workspaceId, attachment)
+        session.events.push(...validated.events)
+        session.durableThroughSeq = validated.durableThroughSeq
+        const durabilityReceipt = await store.flush(session)
+        return sessionResponse(session, {
+          imported: true,
+          eventCount: session.events.length,
+          attachmentCount: validated.attachmentCount,
+          durabilityReceipt,
+        })
+      } catch (error) {
+        if (session !== undefined) store.sessions.delete(session.id)
+        admission?.releaseMount(validated.header.id)
+        throw error
+      }
+    })
+  }
+
   const server = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs }, async (request, response) => {
     let url
     activeRequests += 1
@@ -4528,6 +4751,18 @@ export async function createBrowserNativeV2Server(options) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        if (operation === 'export' || operation === 'import') {
+          const workspaceId = boundedString(body.workspaceId, 'workspaceId', MAX_CHECKPOINT_ID_LENGTH)
+          workspaces.requireWorkspace(workspaces.principalFromRequest(request), workspaceId)
+          if (operation === 'export') {
+            const session = store.getForPrincipal(assertSessionId(body.sessionId), principalId)
+            const bundle = await store.exclusive(session.id, async () => await buildSessionBundle(session, workspaceId))
+            sendJson(response, 200, bundle)
+            return
+          }
+          sendJson(response, 200, await importSessionBundle(body.bundle, workspaceId, principalId))
+          return
+        }
         if (operation === 'handoff' && body.checkpoint !== null && typeof body.checkpoint === 'object'
           && Object.hasOwn(body.checkpoint, 'durableThroughSeq')) {
           const checkpoint = body.checkpoint
