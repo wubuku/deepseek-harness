@@ -29,14 +29,14 @@ function findPluginEntry(value, id) {
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number, memoryIsolation?: boolean}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap; memoryIsolation adds the Session memory tool that only the memory validation publishes.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent' | 'browser-tool-policy' | 'browser-budget' | 'browser-session-query', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number, memoryIsolation?: boolean}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap; memoryIsolation adds the Session memory tool that only the memory validation publishes.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
   distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens, memoryIsolation = false,
 } = {}) {
-  if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent', 'browser-tool-policy', 'browser-budget'].includes(roster)) {
-    throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, browser-subagent, browser-tool-policy, or browser-budget')
+  if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent', 'browser-tool-policy', 'browser-budget', 'browser-session-query'].includes(roster)) {
+    throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, browser-subagent, browser-tool-policy, browser-budget, or browser-session-query')
   }
   if (!Number.isSafeInteger(largeFileChars) || largeFileChars < 0 || largeFileChars > 1_000_000) {
     throw new Error('largeFileChars must be an integer between 0 and 1000000')
@@ -61,11 +61,11 @@ export async function createRuntimeValidationDist({
     const outputRoot = join(temporary, 'dist')
     const home = join(imageRoot, 'home')
     await mkdir(join(home, 'browser-validation'), { recursive: true })
-    const patch = roster === 'browser' || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget'
+    const patch = roster === 'browser' || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget' || roster === 'browser-session-query'
       ? 'runtime-validation.cordis.patch.yml'
       : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
-    if (memoryIsolation || timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget') {
+    if (memoryIsolation || timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget' || roster === 'browser-session-query') {
       const entries = load(profilePatch)
       if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
       if (memoryIsolation) {
@@ -133,6 +133,20 @@ export async function createRuntimeValidationDist({
           config: { tenantId: 'poc-tenant', sessionLimit: 10_000, tenantLimit: 20_000 },
         })
       }
+      if (roster === 'browser-session-query') {
+        const insertion = entries.find(entry => Array.isArray(entry?.insert))
+        if (insertion === undefined) throw new Error('validation profile has no root plugin insertion')
+        insertion.insert.push({
+          id: 'browser-native-session-query',
+          name: './browser-native-session-query.js',
+        })
+        // The Web deployment disables full-text search; this validation image
+        // opens the in-memory index on the first search to measure it.
+        entries.push({
+          id: 'session-query-sqlite',
+          config: { path: ':memory:', openAt: 'first-search' },
+        })
+      }
       if (roster === 'browser-tool-policy') {
         const insertion = entries.find(entry => Array.isArray(entry?.insert))
         if (insertion === undefined) throw new Error('validation profile has no root plugin insertion')
@@ -164,7 +178,7 @@ export async function createRuntimeValidationDist({
       profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
     }
     await writeFile(join(home, 'cordis.patch.yml'), profilePatch)
-    for (const file of ['browser-native-session-persistence.js', 'browser-native-attachments.js', 'browser-native-permission-probe.js', 'browser-native-tool-policy.js', 'browser-native-token-budget.js', 'browser-native-llm.js', 'browser-native-multi-agent-probe.js', 'browser-native-cpu-contention-probe.js', 'browser-native-session-orchestration-probe.js', 'browser-native-session-continuity-probe.js']) {
+    for (const file of ['browser-native-session-persistence.js', 'browser-native-attachments.js', 'browser-native-permission-probe.js', 'browser-native-tool-policy.js', 'browser-native-token-budget.js', 'browser-native-session-query.js', 'browser-native-llm.js', 'browser-native-multi-agent-probe.js', 'browser-native-cpu-contention-probe.js', 'browser-native-session-orchestration-probe.js', 'browser-native-session-continuity-probe.js']) {
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
     // Preset plugins resolve relative entry names against the profile directory.

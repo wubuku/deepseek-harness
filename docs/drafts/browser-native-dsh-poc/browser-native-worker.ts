@@ -89,6 +89,8 @@ import { createBrowserNativeToolPolicy } from './browser-native-tool-policy.ts'
 import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
 import { createBrowserNativeTokenBudget } from './browser-native-token-budget.ts'
 import type { BrowserNativeTokenBudgetProbe } from './browser-native-token-budget.ts'
+import { createBrowserNativeSessionQuery } from './browser-native-session-query.ts'
+import type { BrowserNativeSessionQueryProbe } from './browser-native-session-query.ts'
 import type { BrowserNativeMemoryProbe } from './browser-native-memory.ts'
 import { BrowserNativeSessionMountCoordinator } from './browser-native-session-mount.ts'
 import type { BrowserNativeExecutionIdentity, BrowserNativeSessionEvent } from './browser-native-session-adapter.ts'
@@ -142,6 +144,7 @@ const capabilityPublication = new BrowserNativeCapabilityPublication()
 const permissionProbe = createBrowserNativePermissionProbe()
 const toolPolicyProbeForTest: BrowserNativeToolPolicyProbe = createBrowserNativeToolPolicy()
 const tokenBudgetProbe: BrowserNativeTokenBudgetProbe = createBrowserNativeTokenBudget()
+const sessionQueryProbe: BrowserNativeSessionQueryProbe = createBrowserNativeSessionQuery()
 let memoryProbeForTest: BrowserNativeMemoryProbe | undefined
 const cpuContentionProbe = createBrowserNativeCpuContentionProbe(event => {
   if (workspaceTestPort === undefined) throw new Error('CPU contention probe requires the validation MessagePort')
@@ -278,7 +281,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'tool-policy-state' | 'tool-policy-set' | 'tool-policy-rogue-allow' | 'budget-state' | 'budget-set' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'tool-policy-state' | 'tool-policy-set' | 'tool-policy-rogue-allow' | 'budget-state' | 'budget-set' | 'session-query-probe' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly urls?: Readonly<Record<string, string>>
   readonly targets?: BrowserNativeEgressTargets
@@ -287,6 +290,9 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly headerSessionId?: string
   readonly toolPolicy?: { readonly tools?: Readonly<Record<string, string>>; readonly default?: string }
   readonly budgetLimits?: { readonly sessionLimit?: number; readonly tenantLimit?: number }
+  readonly query?: string
+  readonly cwd?: string
+  readonly limit?: number
   readonly iterations?: number
   readonly boundary?: number
   readonly provider?: string
@@ -430,6 +436,12 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
         name.length > 0 && typeof action === 'string' && ['allow', 'ask', 'deny'].includes(action))) return false
     }
     return data.toolPolicy.default === undefined || ['allow', 'ask', 'deny'].includes(data.toolPolicy.default)
+  }
+  if (data.action === 'session-query-probe') {
+    return typeof data.query === 'string' && data.query.length > 0 && data.query.length <= 200
+      && (data.cwd === undefined || (typeof data.cwd === 'string' && data.cwd.length > 0 && data.cwd.length <= 256))
+      && (data.sessionId === undefined || (typeof data.sessionId === 'string' && data.sessionId.length > 0))
+      && (data.limit === undefined || (Number.isSafeInteger(data.limit) && Number(data.limit) > 0 && Number(data.limit) <= 100))
   }
   if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
@@ -1801,6 +1813,20 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         return
       }
     }
+    if (request.action === 'session-query-probe') {
+      if (workspaceTestPort === undefined) throw new Error('browser-native session query test: the validation MessagePort is disabled')
+      if (request.query === undefined) throw new Error('browser-native session query test: query is required')
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        sessionQuery: await sessionQueryProbe.run({
+          query: request.query,
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+          ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+          ...(request.limit === undefined ? {} : { limit: request.limit }),
+        }),
+      })
+      return
+    }
     if (request.action.startsWith('memory-')) {
       const probe = memoryProbeForTest
       if (probe === undefined) throw new Error('browser-native memory probe: the validation MessagePort is disabled')
@@ -2745,6 +2771,7 @@ self.addEventListener('message', (event: MessageEvent) => {
           },
           workspaceTestPort === undefined ? undefined : toolPolicyProbeForTest,
           tokenBudgetProbe,
+          workspaceTestPort === undefined ? undefined : sessionQueryProbe,
         ),
       },
       staticModulePrefixes: REPLACED_PREFIXES,

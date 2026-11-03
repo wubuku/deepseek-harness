@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-093：会话检索规模验证、列表翻页修复与 preview test flag
+
+```text
+changeId: BN-P2-093
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-session-query.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-query.js; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/session-query-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-query-browser-scale.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 需要验证浏览器 Worker 内 session-query 在 100+ Session 规模下列表/过滤/全文检索的正确性与时延，并给出可接受上限；同时 100+ 语料会暴露持久化 list 的分页截断。
+existingExtensionPointsChecked: 复用 Web profile 已挂载的 `@deepseek-ai/dsh-session-query` SQLite 引擎、`ctx.inject(['sessionQuery'])`、`SessionPersistence.list` 的 `hasMore`/`nextCursor`、Worker validation MessagePort、`runtime-validation` 的 profile patch 覆盖；没有修改 packages/、Agent Loop 或 Session format。
+whyDraftOnlyWasInsufficient: 120 Session 语料只能由真实 persisted 后端和真实 Worker 列表/检索证明；Worker 是否具备 SQLite 索引能力只能由运行期 `node:sqlite.DatabaseSync` 探测证明。
+behaviorChange: 新增 validation-only `browser-native-session-query` 探针插件与 `browser-session-query` roster；roster 将 `session-query-sqlite` 覆盖为 `path: ':memory:'`、`openAt: 'first-search'` 以便尝试真实索引。探针测量 list/filter/search/searchEvents；索引打开失败时退化为逐 Session 线性扫描并上报 `searchBackend`/`searchError`。`browser-native-providers.ts` 的持久化 `list()` 按 `hasMore` 翻页至结束。`apps/web/src/preview.ts` 增加 `browser-native-test=session-query` 以启用 validation MessagePort（目录外接线）。
+consumersUpdated: Worker static module map、runtime validation shim 拷贝、PoC README、drafts index 109 与本 ledger；正式 profile 与发布名单未注册，正式 Web 部署仍 `openAt: never`。
+test: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-query-scale.e2e.mjs` 通过：语料 121（120 种子 + preview）；cwd 过滤 60/60 精确；全文检索 60/60 唯一命中，单 Session 1 条；时延 list 3.2 ms、filter 2.6 ms、线性全文 255.8 ms、单 Session 1.9 ms，均在 2s/2s/20s/2s 上限内；`searchBackend=linear-fallback`，索引错误为 Worker 无 `node:sqlite.DatabaseSync`；pageerror 为 0。`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过。
+syncReplaySteps: 上游同步后核对 session-query 公开方法、`SessionPersistence.list` 分页字段与 Web profile 的 `openAt` 默认值；复跑 preview build 与 session query scale E2E。
+deleteCondition: 正式产品提供 Worker 内可用检索后端或明确服务端检索依赖，且列表分页与 test flag 不再需要 PoC 专用接线；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-092：验证 roster 的 Session/租户 token 预算与 provider 用量对照
 
 ```text

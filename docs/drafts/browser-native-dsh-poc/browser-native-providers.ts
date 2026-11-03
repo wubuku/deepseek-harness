@@ -73,6 +73,7 @@ import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
 import type { BrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
 import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
 import type { BrowserNativeTokenBudgetProbe } from './browser-native-token-budget.ts'
+import type { BrowserNativeSessionQueryProbe } from './browser-native-session-query.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -1053,8 +1054,14 @@ function createRemoteSessionPersistenceClass(
     }
 
     async list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]> {
-      const response = await sessionRequest('list', {}, options?.signal)
-      return required(response.snapshots, 'snapshots')
+      const snapshots: SessionPersistenceSnapshot[] = []
+      let cursor: string | undefined
+      do {
+        const response = await sessionRequest('list', cursor === undefined ? {} : { cursor }, options?.signal)
+        snapshots.push(...required(response.snapshots, 'snapshots'))
+        cursor = response.hasMore === true && typeof response.nextCursor === 'string' ? response.nextCursor : undefined
+      } while (cursor !== undefined)
+      return snapshots
     }
   }
 }
@@ -1376,6 +1383,7 @@ export function createBrowserNativeStaticModules(
   memoryTestHooks?: BrowserNativeMemoryTestHooks,
   toolPolicy?: BrowserNativeToolPolicyProbe,
   tokenBudget?: BrowserNativeTokenBudgetProbe,
+  sessionQuery?: BrowserNativeSessionQueryProbe,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
   attachmentTestHooks?.onModuleReady?.(attachments)
@@ -1395,6 +1403,9 @@ export function createBrowserNativeStaticModules(
     }),
     ...(tokenBudget === undefined ? {} : {
       '@deepseek-ai/dsh-browser-native-token-budget': tokenBudget.factory,
+    }),
+    ...(sessionQuery === undefined ? {} : {
+      '@deepseek-ai/dsh-browser-native-session-query': sessionQuery.factory,
     }),
   }
 }

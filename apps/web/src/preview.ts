@@ -28,6 +28,7 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'session-mount'
     || searchParams.get('browser-native-test') === 'session-projection'
     || searchParams.get('browser-native-test') === 'approval-integrity'
+    || searchParams.get('browser-native-test') === 'session-query'
     || searchParams.get('browser-native-test') === 'memory-isolation')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null

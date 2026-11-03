@@ -443,6 +443,14 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs
 ```
 
+## 浏览器端会话检索与规模上限
+
+[session-query 规模验证](session-query-browser-scale.md)在 120 个持久化 Session、60/60 个 cwd 分组的语料上验证列表 3.2 ms、cwd 精确过滤 2.6 ms、全文检索命中 60/60 且单 Session 内 1 条。验证镜像把 `openAt` 改为 `first-search` 后索引仍无法打开：Worker 没有 `node:sqlite.DatabaseSync`，只能退化为线性扫描，121 Session × 3 条短事件耗时 255.8 ms。结论是列表与精确过滤可留在 Worker，带排名/大语料全文检索必须有服务端依赖。同轮修复了持久化 `list()` 只取第一页（50 条）的问题，改为翻页至 `hasMore` 为 false。
+
+```sh
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-query-scale.e2e.mjs
+```
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。
