@@ -2993,6 +2993,49 @@ describe('browser-native DSH v2 backend', () => {
     }
   })
 
+  it('reports a severed upstream stream as a typed error after the partial chunks', async () => {
+    const upstream = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* consume the proxied body */ }
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write('data: {"choices":[{"delta":{"content":"PART"}}]}\n\n', () => response.destroy())
+    })
+    const upstreamOrigin = await listen(upstream)
+    try {
+      const envFile = await temporaryDirectory('browser-native-v2-env-').then(async directory => {
+        const file = join(directory, '.env')
+        await writeFile(file, [
+          `OPENAI_NEXT_GPT_BASE_URL=${upstreamOrigin}`,
+          'OPENAI_NEXT_GPT_COMPLETIONS_PATH=/v1/chat/completions',
+          'OPENAI_NEXT_GPT_MODEL=contract-model',
+          `OPENAI_NEXT_GPT_${'API_KEY'}=contract-secret`,
+          'HTTPS_PROXY=',
+          '',
+        ].join('\n'))
+        return file
+      })
+      const dataDir = await temporaryDirectory()
+      const { origin } = await start({ dataDir, llmMode: 'real', envFile })
+      const response = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-severed', {
+          messages: [{ role: 'user', content: 'SEVERED_STREAM_CONTRACT_PROMPT' }],
+        })),
+      })
+      const items = await readNdjson(response)
+      const streamed = items
+        .filter(item => item.kind === 'chunk')
+        .map(item => item.chunk?.block?.text ?? item.chunk?.text ?? '')
+        .join('')
+      assert.match(streamed, /PART/)
+      assert.equal(items.at(-1).kind, 'error')
+      assert.equal(items.at(-1).error.code, 'UPSTREAM_LLM_STREAM_FAILED')
+      assert.equal(items.some(item => item.chunk?.type === 'finish'), false)
+    } finally {
+      await close(upstream)
+    }
+  })
+
   it('aborts a real upstream request when the browser-side LLM response is cancelled', async () => {
     let upstreamAborted = false
     let resolveUpstreamAbort

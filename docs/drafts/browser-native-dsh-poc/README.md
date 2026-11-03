@@ -1339,6 +1339,12 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 16 个挂载但只放行 8 个 turn 时，turn 中位数降到 892 ms、p95 1,154 ms，代价是波次差异令 CV 从 0.095 升到 0.199。建议同时执行的 turn 数上限为 8，冷启动并发限制在 4–8；更多 Session 可以挂载，第 9 个及以后的 turn 排队。一次早先 16 路运行出现 3/48 个页面首次 boot payload fetch 失败，整页重载后恢复；正式采样的这一轮为 0/48，失败率未被表征。
 
+## 模型流断开与重连
+
+[模型流断开与重连](llm-network-interruption.md)在真实 Chrome 中分别切断上游 SSE 与浏览器到 backend 的 4 条 TCP 连接。上游在流出 4 个字符后断开时，turn 以 `UPSTREAM_LLM_STREAM_FAILED` 收束并保留文本前缀 `CUT`，无 `assistant/message`；浏览器连接在流出 8 个字符时整体断开后，turn 以 `network error` 收束，无需刷新即恢复。两类中断各只产生 1 次上游请求、0 个 retry 事件，续跑 turn 均完成；Session 43 个事件、四个 prompt 各 1 条，刷新前后 durable 事件前缀一致。
+
+配置的真实 provider 本轮返回 HTTP 403 `用户 [4912] 配额不足`，因此上游改用本地 OpenAI-compatible SSE，按相同 chunk 协议逐字流出；浏览器断连是真实 TCP 事件。真实模型的 token 计量与费用未验证，且 fetch 拒绝仍归类为 `UNKNOWN`，恢复配额后应重跑同一 harness。新增合同测试锁定“上游流出部分内容后断连必须以 `UPSTREAM_LLM_STREAM_FAILED` 收束且不产生 `finish`”，`backend-v2.test.mjs` 58/58 通过。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
