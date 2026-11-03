@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-078：提示注入危险动作的 egress 编码前缀绕过
+
+```text
+changeId: BN-P2-078
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/egress-proxy-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/prompt-injection-boundaries.test.mjs; docs/drafts/browser-native-dsh-poc/prompt-injection-boundaries.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 模拟恶意工具输出诱导模型外传/越权写入。egress 白名单按原始 `URL.pathname` 做前缀匹配，`/search/%2e%2e/collect` 会匹配 `/search` 并被转发，上游一旦解码就落到前缀外的路径；其余边界（未授权 origin、URL 内嵌凭据、禁用头、GET-only 方法、Workspace 越界写入、跨 principal 附件）已有防护，需要可判定证据。
+existingExtensionPointsChecked: 复用 `egress-proxy-v2.mjs` 既有的 `resolve`/`EgressError`/`matchesPathPrefix` 与 backend 既有 `/egress/fetch` 路由、Workspace `validatePath`、附件 principal 校验；未新增工具、未改 DSH 审批策略或 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 必须证明被拒请求没有到达攻击者或上游、越界写入没有落盘，以及合法 allowlist 请求仍能转发；静态描述无法给出请求计数和状态码。
+behaviorChange: `resolve()` 在 host/path 匹配前检查 pathname，解码后出现 `/`、`\`、NUL 或 `.`/`..` 段即 403 `EGRESS_PATH_NOT_ALLOWED`，不再转发。
+consumersUpdated: 新增 `tests/prompt-injection-boundaries.test.mjs`；新增 `prompt-injection-boundaries.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/prompt-injection-boundaries.test.mjs` 4/4（攻击者请求计数 0、上游编码穿越计数 0、合法请求计数 1、越界写入 400、跨 principal 403）。未跑真实模型 smoke，因为本批未改 LLM 代码；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若在 egress 层提供等价的编码路径校验，优先复用并删除本地补丁；重跑 `prompt-injection-boundaries.test.mjs`。
+deleteCondition: 上游 egress 代理在 host/path 匹配前提供等价的解码路径拒绝语义，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-077：路径穿越、编码分隔符与静态符号链接
 
 ```text

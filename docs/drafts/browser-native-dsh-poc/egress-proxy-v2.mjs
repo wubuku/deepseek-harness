@@ -124,6 +124,29 @@ function matchesPathPrefix(pathname, prefix) {
   return pathname === prefix || pathname.startsWith(`${prefix}/`)
 }
 
+const ENCODED_PATH_BYTE = /%[0-9A-Fa-f]{2}/
+
+/**
+ * Detect a pathname whose percent-decoded form changes path structure.
+ *
+ * The allowlist compares the raw URL pathname, while an upstream may decode it.
+ * Reject encoded separators, NUL, or dot segments before prefix matching so an
+ * allowed prefix cannot be turned into a different upstream path.
+ * @param pathname - Raw `URL.pathname` from the egress request.
+ * @returns Whether one decode pass yields a separator or traversal segment.
+ */
+function encodedPathEscape(pathname) {
+  if (!ENCODED_PATH_BYTE.test(pathname)) return false
+  let decoded
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return true
+  }
+  if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')) return true
+  return decoded.split('/').some(segment => segment === '.' || segment === '..')
+}
+
 function requestIdOf(body) {
   return body !== null && typeof body === 'object' && !Array.isArray(body)
     && typeof body.requestId === 'string' && body.requestId.length > 0 && body.requestId.length <= 200
@@ -275,6 +298,9 @@ export function createEgressPolicy(config) {
     }
     if (target.username !== '' || target.password !== '') {
       throw new EgressError('EGRESS_URL_CREDENTIALS_REJECTED', 'egress url must not embed credentials')
+    }
+    if (encodedPathEscape(target.pathname)) {
+      throw new EgressError('EGRESS_PATH_NOT_ALLOWED', 'egress path contains an encoded separator or traversal segment', 403, { path: target.pathname })
     }
     const candidates = entries.filter(entry => entry.origin.origin === target.origin)
     if (candidates.length === 0) {

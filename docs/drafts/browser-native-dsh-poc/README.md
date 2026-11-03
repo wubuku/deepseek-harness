@@ -992,6 +992,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/path-boundary.test.mjs` 4/4：14 个非法 Workspace 路径全部 400 `INVALID_PATH` 且 manifest 为空、根外 canary 目录不变；附件/blob/Session/durable 的穿越 id 全部 400；`name=../../escape.txt` 落盘名为 `escape.txt`；9 个静态穿越探针与符号链接探针全部 404 且不含根外内容。回归 `workspace-durability`、`verified-stream-backend`、`session-workspace-reconciliation`、`backend-v2` 92/92。未覆盖 `sessions/`/`attachments-v1/` 的本地符号链接（HTTP 层无处创建）与多层编码。
 
+## 提示注入驱动的危险动作
+
+[提示注入驱动的危险动作](prompt-injection-boundaries.md)记录恶意工具输出诱导外传/越权写入时的边界。Worker 工具面没有 web fetch，网络出口只经 `/api/browser-native/egress/fetch`；`egress-proxy-v2.mjs` 在 host/path 匹配前拒绝解码后出现分隔符、NUL 或 `.`/`..` 段的 pathname，堵住 `/search/%2e%2e/collect` 这类前缀绕过。未配置 egress 的部署该路由为 404。
+
+`tests/prompt-injection-boundaries.test.mjs` 4/4：攻击者 origin 403 `EGRESS_HOST_NOT_ALLOWED` 且请求计数 0；允许 origin 的编码穿越 403 且上游计数 0；前缀外路径 403；URL 内嵌凭据 400；`Authorization` 头 400；GET-only 能力 POST 405；合法请求 200 且上游计数恰为 1；写 `/etc/passwd`、`../../outside/...`、`..%2f...`、`C:/...` 均 400 `INVALID_PATH` 且根外 canary 不变；跨 principal 附件读取 403 且响应不含内容。审批强制点由 `permission-approval-lifecycle.e2e.mjs` 等既有 E2E 覆盖：默认 `approvalPolicy=ask`，Reject 后不落盘；PoC 文件工具标记 `permission: not-required`，Workspace 内写入靠路径边界与 egress 白名单约束，不靠人工审批。未跑真实模型 smoke（本批未改 LLM 代码）。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

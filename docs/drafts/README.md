@@ -144,6 +144,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 83. [Browser-Native 冷启动镜像下载可靠性](browser-native-dsh-poc/cold-start-reliability.md)：定位 16 路冷启动 boot payload 失败为 Chromium 在冷启动并发多 Worker 大响应体时取消镜像下载（服务端 `finished=false`/`ECONNRESET`，Worker 在 `inflateImageStream` 读 body 抛 `TypeError: Failed to fetch`；页面内并发 fetch 与小文件 Worker fetch 均正常）；`storage/image-fetch.ts` 改为最多 3 次幂等重试，仅重试 `TypeError` 与 408/429/5xx，退避 250 ms × 尝试序号 + 0–250 ms 抖动，4xx 立即失败。spec 5/5；16 路注入每个 Worker 首次 abort 的 E2E 每轮 32 个镜像请求、0 失败；无故障 16 路 × 3 轮 48/48。Chromium 内部取消来源未定位，重试只保证可恢复。
 84. [Browser-Native Session 格式升级路径](browser-native-dsh-poc/session-format-upgrade.md)：backend 镜像 `SESSION_FORMAT_VERSION = 4`，load 时拒绝非当前版本 header（422 `SESSION_FORMAT_UNSUPPORTED`，`details` 带 `storedVersion`/`expectedVersion`），`list` 不返回该会话，非 owner 404，`create` 拒绝旧 header 且不覆盖旧文件；Worker 映射为正式 `SessionFormatUnsupportedError` 并用 `sessionFormatVersionRefusal()` 生成方向感知文案。新合同测试 2/2，既有 backend 合同 80/80。本构建不提供迁移/降级，旧日志原样保留；未模拟旧版浏览器 OPFS 数据或跨主机 `dataDir`。
 85. [Browser-Native 路径穿越与文件边界](browser-native-dsh-poc/path-boundary-probing.md)：Workspace 路径、附件/blob、Session/durable id 与静态预览的穿越探测；修复编码分隔符（`%2f`/`%2e`/`%5c`/`%00`）、Windows 盘符与 dist 内根外符号链接。新测试 4/4，相关回归 92/92；未覆盖本地符号链接、多层编码与 Windows 路径语义。
+86. [Browser-Native 提示注入驱动的危险动作](browser-native-dsh-poc/prompt-injection-boundaries.md)：恶意工具输出诱导外传/越权写入；egress 白名单拒绝未授权 origin、编码前缀绕过、URL 内嵌凭据与禁用头，未配置 egress 时 404；Workspace 越界写入 400 且根外 canary 不变；跨 principal 附件 403。新测试 4/4；审批默认 `ask` 由既有 E2E 覆盖，未跑真实模型 smoke。
 
 ### 需要实现或审查代码时
 
