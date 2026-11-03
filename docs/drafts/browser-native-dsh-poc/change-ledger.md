@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-067：正式 SQLite KV 的故障注入测试
+
+```text
+changeId: BN-P2-067
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: packages/storage/storage-sqlite/tests/fault-injection.spec.ts; docs/drafts/browser-native-dsh-poc/tests/opfs-quota-tool-failure.e2e.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/storage-boundary-fault-injection.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 存储边界验证需要区分 Browser-Native 的 OPFS Workspace、PoC JSON Session 与正式 SQLite KV；正式 SQLite 此前没有页预算耗尽、WAL 非正常快照、损坏库和只读库的可见失败与恢复证据。
+existingExtensionPointsChecked: Reused the public `SqliteStorageBackend`, `SqliteKvUnit` from `src/unit.ts`, SQLite `PRAGMA max_page_count`, node:sqlite WAL files and POSIX file modes. No product source, Agent Loop, Session format, default profile, root dependency or lockfile changed.
+whyDraftOnlyWasInsufficient: PoC 的 Session 不是 SQLite；只写 draft 无法证明正式 `storage-sqlite` 在 SQLITE_FULL 和 journal 恢复下的行为。两类存储必须分开取证。
+behaviorChange: 仅新增测试；正式产品行为不变。
+directoryOutChangeReason: `packages/storage/storage-sqlite/tests/` 是该包故障注入测试的 owner 位置；新增文件不影响其他包或默认 profile。
+consumersUpdated: PoC OPFS 配额 E2E、storage boundary 文档、PoC README、operational compatibility matrix、drafts index 和本账本。
+tests: `pnpm vitest run packages/storage/storage-sqlite/tests/fault-injection.spec.ts` 4/4 通过，覆盖 SQLITE_FULL 拒绝与恢复、WAL 快照恢复与主文件单副本的负向对照、损坏库拒绝且文件不变、只读库首次写失败与 `-shm` 恢复；Chrome OPFS 配额 E2E 通过，含工具失败可见、自动重试单次提交、fail-closed 撤下工具、刷新恢复 revision 1 与 revision 2 写入。
+syncReplaySteps: 上游若修改 `SqliteStorageBackend` 的 open/close、`SqliteKvUnit.putRecord` 或 WAL/journal 配置，重跑该 spec；若上游改用其他存储实现，把四类注入迁移到新实现的等价边界。
+deleteCondition: 正式存储测试套件自行覆盖 SQLITE_FULL、journal 恢复、损坏与只读边界后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-066：单 Worker Session 编排、route 切换与 admission
 
 ```text

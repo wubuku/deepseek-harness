@@ -1305,6 +1305,12 @@ OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL�
 
 Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')` 绕过 pagehide：崩溃后 1 秒事件数保持 26、无模型请求；刷新恢复使 `ownerEpoch` 1→2、writer fencing token 1→2，崩溃到结算共 2959 ms。与[关闭标签](tab-close-background-agent-semantics.md)的差异是：刷新和崩溃都能在同一页面重新挂载并结算，关闭标签没有自动重开路径，结算只在下一拥有者打开 Session 时发生。未覆盖浏览器进程崩溃、OS 崩溃、真实模型在途工具、刷新期间模型流重连、多实例接管与 Safari。
 
+## 存储边界与故障注入
+
+[存储边界结论](storage-boundary-fault-injection.md)先划清四种存储：OPFS Workspace、PoC JSON Session、正式 Session JSONL 与正式 SQLite KV。真实 `write` 工具期间注入一次 OPFS 配额失败：工具结果 `isError=true` 且带 quota 诊断，store 自动重试一次并提交完整 revision 1（内容 `quota-tool-first-attempt\n`），无半份数据；未确认保存使 Worker 在本生命周期内撤下 `edit`/`glob`/`grep`/`read`/`working_directory`/`write`（fail-closed），第二个 turn 写入数为 0、revision 仍为 1；刷新 hydrate 同一 `workspaceId` 与 revision 1，重新发布工具，重试写入新文件提交 revision 2，首个文件保持原内容。
+
+正式 `storage-sqlite` 新增四类注入测试（4/4 通过）：页预算耗尽以 `database or disk is full` 拒绝且不部分提交，恢复预算后同一记录写入成功；只复制主文件会丢失仅存在于 WAL 的提交，带 `-wal`/`-shm` 的快照可完整恢复；损坏库打开被拒且文件字节不变；只读库打开成功但首次写显式失败，主文件与 `-shm` 均可写后既有记录完好并写入成功。限制是配额与页预算均为注入而非真实磁盘耗尽，WAL 用文件副本而非断电，只读用例在 Windows 跳过，正式 Session JSONL 故障注入仍由既有 `DURABILITY_UNKNOWN` 测试拥有。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

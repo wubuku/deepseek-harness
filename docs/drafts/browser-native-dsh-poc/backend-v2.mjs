@@ -2730,6 +2730,66 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const quotaToolMarker = 'BROWSER_NATIVE_QUOTA_TOOL_E2E'
+  if (latestUserText.includes(quotaToolMarker) && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(quotaToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-quota-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/quota-tool.txt',
+          content: 'quota-tool-first-attempt\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${quotaToolMarker}_DONE`)
+    return
+  }
+
+  const quotaReloadRetryMarker = 'BROWSER_NATIVE_QUOTA_RELOAD_RETRY_E2E'
+  if (latestUserText.includes(quotaReloadRetryMarker) && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(quotaReloadRetryMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-quota-reload-retry-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/quota-tool-retry.txt',
+          content: 'quota-tool-retry-succeeded\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${quotaReloadRetryMarker}_DONE`)
+    return
+  }
+
+  const quotaRetryMarker = 'BROWSER_NATIVE_QUOTA_RETRY_E2E'
+  if (latestUserText.includes(quotaRetryMarker) && hasTool(tools, 'write')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(quotaRetryMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-quota-retry-write',
+        name: 'write',
+        arguments: {
+          file_path: '/dsh/home/workspace/quota-tool.txt',
+          content: 'quota-tool-retry-succeeded\n',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${quotaRetryMarker}_DONE`)
+    return
+  }
+
   const reloadToolMarker = 'BROWSER_NATIVE_RELOAD_DURING_TOOL_E2E'
   if (latestUserText.includes(reloadToolMarker) && hasTool(tools, 'bash')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
