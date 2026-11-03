@@ -2730,6 +2730,33 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const reloadToolMarker = 'BROWSER_NATIVE_RELOAD_DURING_TOOL_E2E'
+  if (latestUserText.includes(reloadToolMarker) && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(reloadToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-reload-bash',
+        name: 'bash',
+        arguments: {
+          command: "sleep 8; printf 'BROWSER_NATIVE_RELOAD_RESIDUAL\\n' > /dsh/home/workspace/reload-residual.txt",
+          description: 'Write after a delay so the page can reload during execution.',
+          sandbox_permissions: 'workspace-write',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${reloadToolMarker}_DONE`)
+    return
+  }
+
+  const reloadContinueMarker = 'BROWSER_NATIVE_RELOAD_CONTINUE_E2E'
+  if (latestUserText.includes(reloadContinueMarker)) {
+    scriptedText(response, `${reloadContinueMarker}_DONE`)
+    return
+  }
+
   const tabCloseToolMarker = 'BROWSER_NATIVE_TAB_CLOSE_DURING_TOOL_E2E'
   if (latestUserText.includes(tabCloseToolMarker) && hasTool(tools, 'bash')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'

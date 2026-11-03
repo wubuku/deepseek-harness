@@ -1299,6 +1299,12 @@ Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydr
 
 OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL：backend 判定旧 lease 过期并返回 `409 WORKSPACE_OWNERSHIP_LOST`，其他客户端 claim 得到 fencing token 2；恢复后页面进入 `error`、不再发送续租请求、本地拒绝写入，刷新后以 fencing token 3 重新取得写权并成功写入。冻结仅模拟进程挂起，真实 OS 休眠、待决审批/在途工具组合、BFCache 与 Safari 仍未验证。
 
+## 刷新与 Worker 崩溃时的在途 turn
+
+[语义决策与证据](reload-crash-recovery-validation.md)定义：刷新会恢复 Session 与页面，但不会继续在途 turn；`agentLoop.resume` 在挂载时追加 `interruptedTurnClosers`，开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放。刷新在 2083 ms 内完成接管与结算（TTL 5000 ms），fencing token 1→2；Session event 从 26 变为 30，只增加三个 closer 和一个 `session/end-seed`，持久化前缀逐项不变，结算期间 0 次模型请求、延迟写入不落地、Workspace revision 不变。
+
+Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')` 绕过 pagehide：崩溃后 1 秒事件数保持 26、无模型请求；刷新恢复使 `ownerEpoch` 1→2、writer fencing token 1→2，崩溃到结算共 2959 ms。与[关闭标签](tab-close-background-agent-semantics.md)的差异是：刷新和崩溃都能在同一页面重新挂载并结算，关闭标签没有自动重开路径，结算只在下一拥有者打开 Session 时发生。未覆盖浏览器进程崩溃、OS 崩溃、真实模型在途工具、刷新期间模型流重连、多实例接管与 Safari。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
