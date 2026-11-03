@@ -1044,6 +1044,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/durable-multi-host.test.mjs` 2/2：启动竞态 `ready: 1, refused: 1`；并发 claim `[200, 409]`；epoch 1 → 2，重启接管后 3；旧 token 在同进程与重启后都被 `SESSION_OWNERSHIP_LOST` 拒绝；运行中 open 409（`retryAfterMs` 29984）、append 409、第二 turn 409 `SESSION_TURN_ACTIVE`；取消后 open 200、下一 turn `completed`。同批复跑重启恢复、审批、取消、接管、可观测性 6/6。未改 `packages/`。
 
+## 真实模型 durable 全链路
+
+[真实模型 durable 全链路](durable-real-provider.md)用 LongCat-2.5 跑审批、取消与重启恢复。第一次真实运行暴露 `SESSION_OWNERSHIP_LOST`：模型响应约 62 秒，超过默认 30 秒 Session 租约，durable host 没有续租。修复为 turn 运行期间每租约 1/3 续租一次；token 被接管或已过期时静默停止。
+
+`tests/durable-real-lifecycle.e2e.mjs` 1/1（`DSH_POC_ENV_FILE` + `DSH_POC_REAL_PROVIDER=longcat`）：审批 turn `completed` 且文件出现；待决时 stop → `cancelled` 且文件不存在；待决时 `SIGKILL` → 重启 `recovered: 1`、`failed`/`DURABLE_HOST_RESTARTED`、8 条事件、`modelRequestsAfterRestart: 0`、journal 删除、文件不存在；总耗时 71 494 ms。同批 scripted 回归 8/8。未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

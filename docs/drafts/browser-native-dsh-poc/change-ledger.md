@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-086：真实模型 durable 全链路与慢响应租约续期
+
+```text
+changeId: BN-P2-086
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-real-lifecycle.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/real-durable-backend-process.mjs; docs/drafts/browser-native-dsh-poc/durable-real-provider.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 审批、取消与重启恢复此前只有 scripted 证据；真实 provider 的响应延迟会跨越默认 30 秒 Session 租约，durable host 在等待模型期间不续租，导致模型返回后 append 被 `SESSION_OWNERSHIP_LOST` 拒绝。这正是 scripted 无法暴露的回归。
+existingExtensionPointsChecked: 复用 durable host 的 claim/release、`store.renew` 与 `store.exclusive`、`ownerLeaseMs/3` 的既有租约建议值；在 `driveTurn` 期间加入心跳，结算时清除。测试复用 `DSH_POC_ENV_FILE` 约定、workspace identity、durable approve/stop 与重启 journal；未改 Agent Loop、Session format 或 `packages/`。
+whyDraftOnlyWasInsufficient: LongCat-2.5 真实流式响应约 62 秒，超过租约；scripted 模型毫秒级返回，永远触发不到。真实链路还验证了 provider 流式格式、工具调用解析与审批等待在真实延迟下的组合。
+behaviorChange: `durable-host-v2.mjs` 在 `driveTurn` 期间每 `ownerLeaseMs / 3` 通过 `store.exclusive` 续租；token/epoch 已变化或租约已过期时停止；`clearInterval` 后释放租约。真实 e2e 新增 `durable-real-lifecycle.e2e.mjs` 与 `real-durable-backend-process.mjs`（`provider=longcat` 读取 `OPENAI_MODEL/BASE_URL/API_KEY`，`llmTimeoutMs` 120 秒）。
+consumersUpdated: 新增 `durable-real-provider.md`，PoC README、matrix、drafts index 与本账本同步；`durable-host-v2.mjs` 文件头说明续租。
+tests: 修复前真实运行在第三 turn 报 `SESSION_OWNERSHIP_LOST`；修复后 `DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_REAL_PROVIDER=longcat node --test docs/drafts/browser-native-dsh-poc/tests/durable-real-lifecycle.e2e.mjs` 1/1，71 515 ms：审批 `completed` 且文件出现；待决 stop → `cancelled` 且文件不存在；待决 SIGKILL → 重启 `recovered: 1`、`failed`/`DURABLE_HOST_RESTARTED`、8 条事件、`modelRequestsAfterRestart: 0`、journal 删除、文件不存在。scripted 回归 8/8（审批、取消、接管、重启恢复 2、多 host 2、可观测性）。未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供 durable 租约续期或真实 provider e2e 契约，复用其续租入口并删除本地心跳；复跑真实 e2e 与 scripted 回归。检查审批/取消/重启恢复在真实延迟下仍按同一错误码结算。
+deleteCondition: 上游 durable 路径自带租约续期且真实 provider 链路有等价证据，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-085：多 host 竞争、fencing token 与租约接管验证
 
 ```text

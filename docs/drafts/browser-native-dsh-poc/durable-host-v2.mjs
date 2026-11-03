@@ -11,7 +11,10 @@
  * to the model, so a tool step started before the tab closed still finishes on
  * the backend. A page can cancel a running turn: the in-flight model request is
  * aborted and the turn settles as `aborted` after at most one tool call.
- * `write` requires page approval. A running-turn journal is written next to the
+ * `write` requires page approval. While a turn runs, the host renews its Session
+ * lease every third of the lease duration, so a real model that answers after
+ * the initial 30-second window still owns the Session when the response arrives.
+ * A running-turn journal is written next to the
  * Session store: after a backend restart, each unfinished turn is settled as
  * `DURABLE_HOST_RESTARTED` with an error result for every open tool call, and
  * no model request or tool is executed again. Other tools are not implemented:
@@ -587,6 +590,32 @@ export function createDurableTurnHost({
     })
   }
 
+  /**
+   * Keep the Session write lease alive while a durable turn runs.
+   *
+   * A real model request can take longer than the 30-second lease. Renewal
+   * serializes with appends through the Session lock and stops silently once
+   * the token or epoch has moved to another writer.
+   * @param {object} run - Running turn carrying the Session id.
+   * @param {{ownerToken: string, ownerEpoch: number}} owner - Claimed lease.
+   * @returns {ReturnType<typeof setInterval>} Timer cleared when the turn settles.
+   */
+  const startLeaseHeartbeat = (run, owner) => {
+    const intervalMs = Math.max(300, Math.floor(store.ownerLeaseMs / 3))
+    const timer = setInterval(() => {
+      void store.exclusive(run.sessionId, async () => {
+        const session = store.sessions.get(run.sessionId)
+        if (session === undefined || session.ownerToken !== owner.ownerToken) return
+        if (session.ownerExpiresAt <= store.now()) return
+        store.renew(session, owner.ownerToken)
+      }).catch(error => {
+        process.stderr.write(`browser-native durable host: lease renewal failed: ${String(error)}\n`)
+      })
+    }, intervalMs)
+    timer.unref()
+    return timer
+  }
+
   const execute = async (run, prompt, header) => {
     let owner
     try {
@@ -619,6 +648,7 @@ export function createDurableTurnHost({
       throw error
     }
     run.phaseOne.resolve({ ok: true })
+    const heartbeat = startLeaseHeartbeat(run, owner)
     try {
       await driveTurn(run, prompt, owner)
     } catch (error) {
@@ -629,6 +659,7 @@ export function createDurableTurnHost({
       }
       throw error
     } finally {
+      clearInterval(heartbeat)
       try {
         await releaseOwner(run, owner)
       } catch {

@@ -152,6 +152,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 91. [Browser-Native durable 审批](browser-native-dsh-poc/durable-approval.md)：durable `write` 强制 `ask`，未批准不写盘，拒绝/超时/取消都补 `tool/result`；同一审批跨客户端只结算一次，跨 principal 404。新测试 1/1，同批回归 7/7；审批状态在内存，重启丢失。
 92. [Browser-Native durable 重启恢复](browser-native-dsh-poc/durable-host-restart.md)：`dataDir/durable-runs.json` 记录未结算 turn，backend 在监听前 `recover()`，补 `isError` 的 `tool/result`、关闭 step、以 `DURABLE_HOST_RESTARTED` 结算，bump `ownerEpoch` 清空 owner token；不重放模型或工具。fork 子进程 + `SIGKILL` 测试 2/2：重启后模型请求 0、工具调用 0、Workspace 为空、journal 删除、新 claim 成功、下一 turn 完成；同批回归 4/4。不续跑、不回滚已提交副作用、journal 非事务。
 93. [Browser-Native 多 host 竞争与租约接管](browser-native-dsh-poc/durable-multi-host.md)：`dataDir` 锁保证单 backend，`ownerToken`/`ownerEpoch` 保证单写者。测试 2/2：同时启动 `ready: 1, refused: 1`（`BACKEND_ALREADY_RUNNING`）；并发 claim `[200,409]`（`SESSION_ALREADY_OWNED`，`retryAfterMs` 约 30 000）；epoch 1 → 2、重启接管后 3；旧 token 为 `SESSION_OWNERSHIP_LOST`；durable 运行中 open/append 409、第二 turn `SESSION_TURN_ACTIVE`；结算后 open 200 且下一 turn 完成。同批回归 6/6。无共享数据库或分布式租约，跨实例 handoff 与 Workspace fencing 组合未验证。
+94. [Browser-Native 真实模型 durable 全链路](browser-native-dsh-poc/durable-real-provider.md)：LongCat-2.5 真实端点跑审批 + 取消 + 重启恢复。首次运行发现 ~62 秒响应耗尽 30 秒 Session 租约（`SESSION_OWNERSHIP_LOST`），加入 `driveTurn` 期间每租约 1/3 的续租心跳后通过：审批 `completed` 且写盘、待决 stop → `cancelled`、待决 `SIGKILL` → 重启 `recovered: 1`/`DURABLE_HOST_RESTARTED`、`modelRequestsAfterRestart: 0`、journal 删除；71 494 ms，3 次真实请求；scripted 回归 8/8。依赖本机 `docs/drafts/.env`，单一 provider、取消未覆盖流式中途。
 
 ### 需要实现或审查代码时
 
