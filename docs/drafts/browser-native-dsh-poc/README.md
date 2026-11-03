@@ -1327,6 +1327,12 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 [性能基线](performance-baseline.md)测量 1 个与 4 个并行 Session 的冷启动、hydrate、首个 scripted turn 与 JavaScript 堆。每个 Session 独立 `BrowserContext` 与 durable OPFS Workspace，因此 4 个 Session 就是 4 个标签页与 4 个 Dedicated Worker。冷启动 `synced` 中位数 2.32 秒（1 个）与 3.08 秒（4 个并行），hydrate 1.94 秒与 2.71 秒；page 堆约 42.7 MB、Worker 每页约 37.2 MB，两种规模下都不增长，单页合计约 79.9 MB。测量前对 page 与每个 Worker 强制 GC，两次独立运行得到相同的堆数字。harness 以 `DSH_POC_PERF_COLD_BUDGET_MS`、`DSH_POC_PERF_HYDRATE_BUDGET_MS`、`DSH_POC_PERF_HEAP_BUDGET_MB` 提供可收紧或放宽的回归阈值。
 
+## 会话规模曲线
+
+[会话规模曲线](session-scale-curve.md)在真实 Chrome 里把同一 Session 从 0 推到 300 turns：每 turn 一次 `read` 工具，每 20 turns 写一个 32 KB 工作区文件。100 turns 为 1,345 事件、1.55 MB durable JSON、hydrate 2.07 秒、page 堆 77.0 MB；300 turns 为 4,017 事件、4.64 MB、hydrate 2.57 秒、page 堆 108.5 MB；浏览器存储不随 turn 增长（IDB 恒为 221 KB，origin 只从 0.38 MB 增到 0.71 MB，增量来自工作区文件），flush 后 outbox 为空，hydrate 不重发模型请求且可继续第 301 turn。
+
+compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，只在每次 mount 打印 `no context capacity` 警告；`4096` 窗口在第 1 turn 触发，`8192` 在第 5 turn 触发，16 turns 内 `tool/call` 始终为 16，未重复工具。结论是事件日志不需要浏览器端存储 compaction，但产品 profile 必须声明 `contextWindow` 与按窗口缩放的 headroom，否则 128k 模型的 300-turn Session 会在约第 200 turn 才被动等 provider overflow。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

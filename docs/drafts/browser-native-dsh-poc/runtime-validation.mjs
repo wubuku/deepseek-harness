@@ -101,6 +101,10 @@ export async function createRuntimeValidationDist({
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
     await writeFile(join(home, 'browser-validation', 'input.txt'), 'runtime=DedicatedWorker\nfixture=VFS_INPUT_READY\n')
+    await writeFile(
+      join(home, 'browser-validation', 'scale-input.txt'),
+      Array.from({ length: 24 }, (_, index) => `scale-fixture-line-${String(index).padStart(4, '0')} ${'y'.repeat(60)}\n`).join(''),
+    )
     if (largeFileChars > 0) {
       const filler = Array.from(
         { length: Math.ceil(largeFileChars / 96) },

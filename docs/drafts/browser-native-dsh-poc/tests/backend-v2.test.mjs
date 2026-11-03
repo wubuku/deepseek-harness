@@ -436,6 +436,50 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(read.eventState, 'shared-frozen')
   })
 
+  it('fits an oversized Session read page inside the response byte budget', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'contract-large-read'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('create-large-read', {
+      sessionId: id,
+      header: header(id),
+    }))
+    const payload = 'R'.repeat(500_000)
+    let nextSeq = 0
+    for (const batch of [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]]) {
+      const events = batch.map(index => sessionEvent(index, 'user/message', { content: payload }))
+      await post(origin, '/api/browser-native/session/append', envelope(`append-large-${String(nextSeq)}`, {
+        sessionId: id,
+        ownerToken: created.owner.ownerToken,
+        expectedNextSeq: nextSeq,
+        events,
+      }))
+      nextSeq += events.length
+    }
+    const first = await post(origin, '/api/browser-native/session/read', envelope('read-large-1', {
+      sessionId: id,
+      offset: 0,
+      length: 10,
+    }))
+    assert.ok(first.events.length >= 1)
+    assert.ok(first.events.length < 10, 'an oversized page must be truncated below the requested length')
+    assert.ok(Buffer.byteLength(JSON.stringify(first.events)) <= 2 * 1024 * 1024)
+    assert.equal(first.hasMore, true)
+    const seen = first.events.map(event => event.seq)
+    let offset = first.events.length
+    for (let page = 0; page < 10; page += 1) {
+      const next = await post(origin, '/api/browser-native/session/read', envelope(`read-large-${String(page + 2)}`, {
+        sessionId: id,
+        offset,
+        length: 10,
+      }))
+      seen.push(...next.events.map(event => event.seq))
+      offset += next.events.length
+      if (next.hasMore === false) break
+    }
+    assert.deepEqual(seen, Array.from({ length: 10 }, (_, index) => index))
+  })
+
   it('can lose the response after accepting a Session append', async () => {
     const dataDir = await temporaryDirectory()
     let dropped = false

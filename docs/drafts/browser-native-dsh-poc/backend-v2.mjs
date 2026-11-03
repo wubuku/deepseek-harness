@@ -102,6 +102,24 @@ function jsonBytes(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8')
 }
 
+/**
+ * Keep one read page inside the response byte budget without skipping events.
+ * A single oversized event still advances the page so a reader can make progress.
+ * @param {object[]} events - Sequential events already sliced to the requested window.
+ * @returns {object[]} The longest prefix that fits, or the first event when even it does not fit.
+ */
+function truncateReadPage(events) {
+  let bytes = 2
+  let count = 0
+  for (const event of events) {
+    const nextBytes = bytes + (count === 0 ? 0 : 1) + jsonBytes([event]) - 2
+    if (count > 0 && nextBytes > MAX_SESSION_READ_BYTES) break
+    bytes = nextBytes
+    count += 1
+  }
+  return events.slice(0, count)
+}
+
 function catalogCursorFor(principalId, sessionId) {
   return Buffer.from(JSON.stringify({ version: 1, principalId, sessionId }), 'utf8').toString('base64url')
 }
@@ -1192,13 +1210,13 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
       const length = body.length === undefined ? MAX_SESSION_READ_EVENTS : boundedInteger(body.length, 'length', MAX_SESSION_READ_EVENTS)
       if (length === 0) throw new BackendError('INVALID_REQUEST', 'length must be at least 1')
       const events = clone(session.events.slice(offset, offset + length))
-      if (jsonBytes(events) > MAX_SESSION_READ_BYTES) throw new BackendError('RESPONSE_TOO_LARGE', 'Session read page exceeds the response byte budget', 413)
+      const page = truncateReadPage(events)
       return sessionResponse(session, {
-        events,
+        events: page,
         eventState: 'shared-frozen',
         durableThroughSeq: session.durableThroughSeq,
         ownerEpoch: session.ownerEpoch,
-        hasMore: offset + events.length < session.events.length,
+        hasMore: offset + page.length < session.events.length,
       })
     }
     if (operation === 'authorize-llm') {
@@ -1728,6 +1746,39 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
       return
     }
     scriptedText(response, `${compactionMarker}_DONE`)
+    return
+  }
+  const scaleTurnMarker = 'BROWSER_NATIVE_SESSION_SCALE_TURN_E2E'
+  if (latestUserText.includes(scaleTurnMarker) && hasTool(tools, 'read')) {
+    const turnIndex = Number(latestUserText.match(/scale-turn-(\d+)/)?.[1])
+    if (!Number.isSafeInteger(turnIndex)) {
+      scriptedText(response, `${scaleTurnMarker}_CONTINUE`)
+      return
+    }
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(scaleTurnMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-scale-read-${String(turnIndex)}`,
+        name: 'read',
+        arguments: { file_path: '/dsh/home/browser-validation/scale-input.txt' },
+      })
+      return
+    }
+    const wantsWorkspaceWrite = Number.isSafeInteger(turnIndex) && turnIndex % 20 === 0 && hasTool(tools, 'write')
+    if (wantsWorkspaceWrite && toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: `browser-native-scale-write-${String(turnIndex)}`,
+        name: 'write',
+        arguments: {
+          file_path: `/dsh/home/workspace/scale-turn-${String(turnIndex)}.txt`,
+          content: `scale-turn-${String(turnIndex)}\n${'S'.repeat(32_000)}`,
+        },
+      })
+      return
+    }
+    scriptedText(response, `${scaleTurnMarker}_${String(turnIndex)}_DONE`)
     return
   }
   const parallelToolMarker = [
