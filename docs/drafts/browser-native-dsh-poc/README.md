@@ -986,6 +986,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/session-format-upgrade.test.mjs` 2/2：旧版本（`version: 3`）会话落盘后重启 backend，`stat`/`open` 422 且 `details = { storedVersion: 3, expectedVersion: 4 }`，另一 principal 404，同 id 当前版本 `create` 仍被拒且文件字节不变；`version: 1` 的 `create` 被 422 拒绝，当前版本 `create`/`stat`/`list` 正常。既有 8 个 backend 合同测试文件复跑 80/80。本构建不提供迁移或降级，旧日志原样保留；未模拟旧版浏览器 OPFS/cache 数据、跨主机 `dataDir` 或并发多实例版本竞争。未改 `packages/`，无需 `build:check`。
 
+## 路径穿越与文件边界
+
+[路径穿越与文件边界](path-boundary-probing.md)记录对 Workspace、附件、blob、Session、durable 与静态预览的穿越探测。`validatePath()` 增加一次解码检查，拒绝解码后出现分隔符、NUL 或 `.`/`..` 段的路径（如 `..%2fescape.txt`、`%2e%2e%2f`、`..%5c`、`%00`），并一并拒绝 Windows 盘符；普通含 `%` 但不改变路径结构的名字仍可用。`safeStaticPath()` 对 dist 根与目标文件做 `realpath`，目标真实路径必须仍在真实根内，`dist` 内指向根外的符号链接从“可读出根外内容”改为 404。附件上传的 `name` 只保留叶子；附件/blob 的 `workspaceId` 与 Session id 的非法形态均由既有 UUID/字符集校验拒绝。
+
+`tests/path-boundary.test.mjs` 4/4：14 个非法 Workspace 路径全部 400 `INVALID_PATH` 且 manifest 为空、根外 canary 目录不变；附件/blob/Session/durable 的穿越 id 全部 400；`name=../../escape.txt` 落盘名为 `escape.txt`；9 个静态穿越探针与符号链接探针全部 404 且不含根外内容。回归 `workspace-durability`、`verified-stream-backend`、`session-workspace-reconciliation`、`backend-v2` 92/92。未覆盖 `sessions/`/`attachments-v1/` 的本地符号链接（HTTP 层无处创建）与多层编码。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

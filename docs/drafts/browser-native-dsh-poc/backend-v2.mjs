@@ -9,7 +9,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { createServer } from 'node:http'
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
@@ -3589,17 +3589,24 @@ async function realLlm(response, request, config, body) {
   }
 }
 
-function safeStaticPath(root, pathname) {
+async function safeStaticPath(root, pathname) {
   const relativePath = pathname === '/' ? 'preview.html' : pathname.slice(1)
   const file = resolve(root, relativePath)
   if (relative(root, file).startsWith('..')) throw new BackendError('NOT_FOUND', 'file not found', 404)
-  return file
+  const realRoot = await realpath(root).catch(() => root)
+  const realFile = await realpath(file).catch(error => {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return file
+    throw error
+  })
+  const withinRoot = relative(realRoot, realFile)
+  if (withinRoot === '' || withinRoot.startsWith('..')) throw new BackendError('NOT_FOUND', 'file not found', 404)
+  return realFile
 }
 
 async function serveStatic(response, root, pathname) {
   let body
   try {
-    body = await readFile(safeStaticPath(root, pathname))
+    body = await readFile(await safeStaticPath(root, pathname))
   } catch (error) {
     if (error?.code === 'ENOENT' || error?.code === 'EISDIR') throw new BackendError('NOT_FOUND', 'file not found', 404)
     throw error

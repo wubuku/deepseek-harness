@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-077：路径穿越、编码分隔符与静态符号链接
+
+```text
+changeId: BN-P2-077
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/path-boundary.test.mjs; docs/drafts/browser-native-dsh-poc/path-boundary-probing.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 探测 Workspace、附件、blob、Session、durable 与静态预览的路径边界。既有 UUID/十六进制/字符集校验挡住多数穿越，但 Workspace 路径把 `%2f`/`%2e%2e%2f`/`%5c`/`%00` 当作字面文件名保存，下游解码一次即可看到不同路径；静态预览的 `safeStaticPath()` 只做字符串前缀检查，`dist` 内指向根外的符号链接会被 `readFile` 跟随并读出根外内容；`C:/...` 在 POSIX 上被当作普通相对名。
+existingExtensionPointsChecked: 复用 `workspace-v2.mjs` 既有的 `validatePath()`、`WorkspaceError` 与 `attachmentName()`，以及 `backend-v2.mjs` 既有的 `safeStaticPath()`/`serveStatic`；未改 DSH Agent Loop、Workspace event schema 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 必须证明失败请求不会在根外创建/读取文件，并覆盖真实 HTTP 路由与文件系统落盘；静态符号链接只有在真实 `readFile` 路径上才暴露。
+behaviorChange: `validatePath()` 增加一次解码检查，解码后出现 `/`、`\`、NUL 或 `.`/`..` 段即 400 `INVALID_PATH`，同时拒绝 Windows 盘符；普通含 `%` 但不改变路径结构的名字仍可用。`safeStaticPath()` 对 dist 根与目标文件做 `realpath`，真实目标必须仍在真实根内，否则 404。
+consumersUpdated: 新增 `tests/path-boundary.test.mjs`；新增 `path-boundary-probing.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/path-boundary.test.mjs` 4/4；回归 `workspace-durability`、`verified-stream-backend`、`session-workspace-reconciliation`、`backend-v2` 共 92/92。未改 `packages/`，无需 `build:artifacts`/`build:check`；未改 LLM 请求语义，无需真实模型 smoke。
+syncReplaySteps: 上游若在 Workspace 路径解析或静态服务提供等价校验/`realpath` 约束，优先复用并删除本地补丁；重跑 `path-boundary.test.mjs` 与上述回归。
+deleteCondition: 上游 `validatePath`/静态服务在 backend 侧提供等价的编码与符号链接约束，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-076：落盘 Session 的格式版本判定
 
 ```text

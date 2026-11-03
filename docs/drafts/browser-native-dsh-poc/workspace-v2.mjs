@@ -238,14 +238,41 @@ function parseCookies(header) {
   return cookies
 }
 
+const ENCODED_PATH_BYTE = /%[0-9A-Fa-f]{2}/
+
+/**
+ * Detect a percent-encoded spelling whose decoded form changes path structure.
+ *
+ * Workspace paths are stored as raw POSIX names, so `%2f` is not a separator
+ * here; but a client or downstream consumer that decodes it once would see a
+ * different path. Reject encodings that decode to separators, NUL, `.` or `..`
+ * while leaving ordinary percent-containing names untouched.
+ * @param {string} value - Raw workspace path.
+ * @returns {boolean} Whether one decode pass yields a path escape.
+ */
+function encodedPathEscape(value) {
+  if (!ENCODED_PATH_BYTE.test(value)) return false
+  let decoded
+  try {
+    decoded = decodeURIComponent(value)
+  } catch {
+    return true
+  }
+  if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')) return true
+  return decoded.split('/').some(segment => segment === '.' || segment === '..')
+}
+
 function validatePath(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_PATH_LENGTH
-    || value.startsWith('/') || value.includes('\\') || value.includes('\0')) {
+    || value.startsWith('/') || /^[A-Za-z]:/.test(value) || value.includes('\\') || value.includes('\0')) {
     throw new WorkspaceError('INVALID_PATH', 'workspace path must be a relative POSIX path')
   }
   const segments = value.split('/')
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
     throw new WorkspaceError('INVALID_PATH', 'workspace path contains an invalid segment')
+  }
+  if (encodedPathEscape(value)) {
+    throw new WorkspaceError('INVALID_PATH', 'workspace path contains an encoded separator or traversal segment')
   }
   return value
 }
