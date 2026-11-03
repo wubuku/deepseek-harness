@@ -127,6 +127,21 @@ test('durable turn executes tools after the page stops reading and a reopened ta
     })
     assert.equal(started.status, 202, JSON.stringify(started.body))
 
+    await request(origin, '/api/browser-native/session/durable/approve', {
+      method: 'POST',
+      cookie: first.session,
+      body: await (async () => {
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const status = await request(origin, '/api/browser-native/session/durable?turnId=durable-tool-turn-1', { cookie: first.session })
+          if (status.body.pendingApproval !== undefined) {
+            return { turnId: 'durable-tool-turn-1', approvalId: status.body.pendingApproval.approvalId, decision: 'approve' }
+          }
+          await new Promise(resolveDelay => setTimeout(resolveDelay, 20))
+        }
+        throw new Error(`the durable write never requested approval: ${JSON.stringify(await request(origin, '/api/browser-native/session/durable?turnId=durable-tool-turn-1', { cookie: first.session }))}`)
+      })(),
+    })
+
     let beforeAttach = []
     for (let attempt = 0; attempt < 400; attempt += 1) {
       beforeAttach = await sessionEvents(origin, first.session, sessionId)

@@ -73,7 +73,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 
 ```text
 ✔ structured metrics classify failures and export a minimal evidence bundle for one turn (168.1ms)
-{"result":"passed","scope":"observability","failureCodes":{"NOT_FOUND":1,"UNAUTHENTICATED":1},"modelRequests":2,"durableTurns":{"failed":1,"completed":1},"failedElapsedMs":25,"evidenceEvents":4,"evidenceBytes":5666,"prometheusLines":225}
+{"result":"passed","scope":"observability","failureCodes":{"NOT_FOUND":1,"UNAUTHENTICATED":1},"modelRequests":2,"durableTurns":{"failed":1,"completed":1},"failedElapsedMs":25,"evidenceEvents":4,"evidenceBytes":5759,"prometheusLines":225}
 ```
 
 | 断言 | 观测 |

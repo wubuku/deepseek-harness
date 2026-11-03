@@ -149,6 +149,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 88. [Browser-Native durable 工具执行与中途接管](browser-native-dsh-poc/durable-tool-continuation.md)：durable host 在无客户端读取时执行 `read`/`write` Workspace 工具，重开标签可从任意 `fromSeq` 接管 NDJSON 事件流；16 条事件与 Session 日志逐字段相等、模型请求 3 次且重放不重复执行、运行中 lease 拒绝接管。新测试 1/1；修复 finish reason 漏读与起始事件未发布；未跑真实 provider。
 89. [Browser-Native 可观测性](browser-native-dsh-poc/observability.md)：`/observability/metrics` 导出 HTTP/模型/队列/租约/durable turn 指标与 Prometheus 文本，`/observability/failure` 给出单 turn 证据包；401/404 分类、空白 completion 归类为 turn 失败、证据不含 prompt、跨 principal 404。新测试 1/1，同批回归 15/15；指标仅进程内存，重启归零。
 90. [Browser-Native durable 取消](browser-native-dsh-poc/durable-cancellation.md)：`POST /session/durable/stop` 中止在途模型请求并以 `aborted`/`user` 结算，释放租约、计入 `cancelled` 指标；模型只请求 1 次、事件 `seq` 连续、attach 回放一致、重复 stop 幂等、跨 principal 404。新测试 1/1，同批回归 7/7；取消在 step 边界生效，重启后无法取消。
+91. [Browser-Native durable 审批](browser-native-dsh-poc/durable-approval.md)：durable `write` 强制 `ask`，未批准不写盘，拒绝/超时/取消都补 `tool/result`；同一审批跨客户端只结算一次，跨 principal 404。新测试 1/1，同批回归 7/7；审批状态在内存，重启丢失。
 
 ### 需要实现或审查代码时
 

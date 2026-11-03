@@ -1026,6 +1026,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/durable-cancellation.test.mjs` 1/1：模型仅请求 1 次、backend 记录 1 次客户端断开；5 条事件 `seq` 0–4 连续、末条 `aborted/user`；attach 流回放与 Session 日志 deepEqual；重复 stop 与 replay 均返回 `cancelled` 且不新增模型请求；其他 principal 404、匿名 401；结算后写租约 200；Prometheus `durable_turns_cancelled 1`。同批回归 7/7。未改 `packages/`。
 
+## durable 审批
+
+[durable 审批](durable-approval.md)为 durable 路径的 `write` 增加强制 `ask`：状态接口暴露 `pendingApproval`（工具名与目标路径），`POST /session/durable/approve` 用 `approve`/`reject` 决策。未批准前不写盘；拒绝时工具结果为 `isError` 且 turn 正常完成；审批超时以 `DURABLE_APPROVAL_TIMEOUT` 失败；取消以 `aborted` 结算。拒绝、超时与取消都会先补 `tool/result`，保证工具调用全部结算。
+
+`tests/durable-approval.test.mjs` 1/1：拒绝后文件不存在、批准后才出现；同一审批第二次决策 409 `APPROVAL_ALREADY_DECIDED`；900 ms 超时失败；待决时 stop → `cancelled` 且文件不存在；跨 principal 404、匿名 401；`approvals={pending:0,requested:6,approved:2,rejected:1,timedOut:1,cancelled:2}`。同批回归 7/7。未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-083：durable 危险工具审批强制点
+
+```text
+changeId: BN-P2-083
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-approval.test.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-tool-attach.test.mjs; docs/drafts/browser-native-dsh-poc/tests/observability.test.mjs; docs/drafts/browser-native-dsh-poc/durable-approval.md; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable host 直接执行 `write`，没有 `ask` 强制点；模型或恶意工具输出可以在无人确认时写盘，跨标签也无法阻止重复决策。
+existingExtensionPointsChecked: 复用 `durable-host-v2.mjs` 的 run 状态机、`settleFailure` 与 step 循环，新增 `requestApproval`/`decide` 与 `run.pendingApproval`；`backend-v2.mjs` 复用 `workspaces` 提交路径与既有 principal 解析；未改 Agent Loop、审批插件或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 需要证明待决期间没有 Workspace 写入、拒绝/超时/取消都写出 `tool/result` 以保持调用平衡、同一审批跨客户端只结算一次，这些只能通过真实 socket 与 Workspace manifest 验证。
+behaviorChange: `requiresApproval(call)` 对 `write` 强制审批；`requestApproval` 发布 `pendingApproval` 并在 `durableApprovalTimeoutMs` 后以 `DURABLE_APPROVAL_TIMEOUT` 拒绝；`decide` 先到者生效，重复决策 409 `APPROVAL_ALREADY_DECIDED`，不匹配 409 `APPROVAL_NOT_PENDING`；拒绝以 `isError` 工具结果继续，超时/取消先补 `tool/result` 再结算；`snapshot()` 增加 `approvals` 计数；新增 `POST /session/durable/approve`（202）。
+consumersUpdated: `durable-tool-attach.test.mjs` 在写入前补决策；新增 `durable-approval.test.mjs`；`observability.test.mjs`/`observability.md` 随新增 `approvals` 快照更新证据字节；新增 `durable-approval.md`，README、matrix、drafts index 与本账本同步。
+tests: `node --test tests/durable-approval.test.mjs` 1/1：拒绝后文件不存在、批准后存在；双决策第二个 409 `APPROVAL_ALREADY_DECIDED`；900 ms 超时 `failed`/`DURABLE_APPROVAL_TIMEOUT`；待决时 stop → `cancelled`、`pendingApproval` 清除、文件不存在；`tool/call` 与 `tool/result` 数相等；取消后可开新 turn；跨 principal 404、匿名 401；`approvals={pending:0,requested:6,approved:2,rejected:1,timedOut:1,cancelled:2}`。同批 `durable-tool-attach`、`durable-host`、`durable-cancellation`、`observability`、`resource-limits` 回归 7/7。scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供 durable 工具审批契约，复用其状态与错误码并删除本地补丁；重跑 `durable-approval.test.mjs` 与上述回归。
+deleteCondition: 上游 durable 路径提供等价审批强制点，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-082：durable turn 取消与租约释放
 
 ```text

@@ -172,17 +172,80 @@ function assertBoundedText(value, name, maximum) {
 
 /**
  * Create the server-owned durable turn host.
- * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, timeoutMs: number, tools?: object[], executeTool?: Function}} options - Session store, admission controller, served origin, model timeout, advertised tool definitions, and their server-side executor.
- * @returns {{start: Function, status: Function, subscribe: Function, version: number}} Host operations.
+ * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function}} options - Session store, admission controller, served origin, model timeout, approval policy and timeout, advertised tool definitions, and their server-side executor.
+ * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, version: number}} Host operations.
  */
-export function createDurableTurnHost({ store, admission, model, originOf, timeoutMs, tools = [], executeTool }) {
+export function createDurableTurnHost({
+  store,
+  admission,
+  model,
+  originOf,
+  timeoutMs,
+  approvalTimeoutMs = 60_000,
+  requiresApproval = () => false,
+  tools = [],
+  executeTool,
+}) {
   if (typeof store?.exclusive !== 'function') throw new TypeError('durable host requires the formal Session store')
   if (typeof originOf !== 'function') throw new TypeError('durable host requires the served origin resolver')
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 300) throw new TypeError('durable host timeoutMs must be an integer of at least 300')
+  if (!Number.isSafeInteger(approvalTimeoutMs) || approvalTimeoutMs < 300) throw new TypeError('durable host approvalTimeoutMs must be an integer of at least 300')
+  if (typeof requiresApproval !== 'function') throw new TypeError('durable host requiresApproval must be a function')
   if (!Array.isArray(tools)) throw new TypeError('durable host tools must be an array')
   if (tools.length > 0 && typeof executeTool !== 'function') throw new TypeError('durable host tools require an executeTool function')
   const runs = new Map()
   const settledRuns = []
+  const approvalCounters = { requested: 0, approved: 0, rejected: 0, timedOut: 0, cancelled: 0 }
+
+  const approvalTarget = call => {
+    try {
+      const args = JSON.parse(call.arguments)
+      if (typeof args?.file_path === 'string') return args.file_path.slice(0, 200)
+      if (typeof args?.url === 'string') return args.url.slice(0, 200)
+    } catch {
+      // Malformed tool arguments still reach approval with the tool name only.
+    }
+    return call.name
+  }
+
+  /**
+   * Ask a page to approve one tool call and wait for its decision.
+   * @param {object} run - Running turn.
+   * @param {{id: string, name: string, arguments: string}} call - Model tool call awaiting approval.
+   * @returns {Promise<{approved: boolean}>} Decision; rejects with a cancelled or timed-out code.
+   */
+  const requestApproval = (run, call) => new Promise((resolve, reject) => {
+    const approval = {
+      approvalId: randomUUID(),
+      callId: call.id,
+      name: call.name,
+      target: approvalTarget(call),
+      createdAt: Date.now(),
+    }
+    approvalCounters.requested += 1
+    let settled = false
+    const finish = (error, decision) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (run.pendingApproval?.approvalId === approval.approvalId) run.pendingApproval = undefined
+      if (error !== undefined) {
+        if (error.code === 'DURABLE_APPROVAL_TIMEOUT') approvalCounters.timedOut += 1
+        else approvalCounters.cancelled += 1
+        reject(error)
+        return
+      }
+      if (decision.approved) approvalCounters.approved += 1
+      else approvalCounters.rejected += 1
+      resolve(decision)
+    }
+    const timer = setTimeout(() => finish(new DurableTurnError(
+      'DURABLE_APPROVAL_TIMEOUT',
+      `approval ${approval.approvalId} for tool ${approval.name} was not decided within ${String(approvalTimeoutMs)}ms`,
+      409,
+    )), approvalTimeoutMs)
+    run.pendingApproval = { ...approval, finish }
+  })
 
   const recordSettled = run => {
     settledRuns.push({
@@ -218,6 +281,15 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     ...(run.startSeqs === undefined ? {} : { startSeqs: [...run.startSeqs] }),
     ...(run.endSeqs === undefined ? {} : { endSeqs: [...run.endSeqs] }),
     ...(run.nextSeq === undefined ? {} : { nextSeq: run.nextSeq }),
+    ...(run.pendingApproval === undefined ? {} : {
+      pendingApproval: {
+        approvalId: run.pendingApproval.approvalId,
+        callId: run.pendingApproval.callId,
+        name: run.pendingApproval.name,
+        target: run.pendingApproval.target,
+        requestedAt: run.pendingApproval.createdAt,
+      },
+    }),
     ...(run.error === undefined ? {} : { error: { ...run.error } }),
   })
 
@@ -322,17 +394,55 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
           ])
           let result
           try {
-            result = await executeTool({
-              principalId: run.principalId,
-              sessionId: run.sessionId,
-              turnId: run.turnId,
-              turn: run.turn,
-              step,
-              callId: call.id,
-              name: call.name,
-              arguments: call.arguments,
-            })
+            if (requiresApproval(call)) {
+              const decision = await requestApproval(run, call)
+              result = decision.approved
+                ? await executeTool({
+                    principalId: run.principalId,
+                    sessionId: run.sessionId,
+                    turnId: run.turnId,
+                    turn: run.turn,
+                    step,
+                    callId: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                  })
+                : { text: `tool ${call.name} was rejected by the user; no change was made`, isError: true }
+            } else {
+              result = await executeTool({
+                principalId: run.principalId,
+                sessionId: run.sessionId,
+                turnId: run.turnId,
+                turn: run.turn,
+                step,
+                callId: call.id,
+                name: call.name,
+                arguments: call.arguments,
+              })
+            }
           } catch (error) {
+            const settled = error?.code === 'DURABLE_TURN_CANCELLED' || error?.code === 'DURABLE_APPROVAL_TIMEOUT'
+            if (settled) {
+              const text = error.code === 'DURABLE_APPROVAL_TIMEOUT'
+                ? `tool ${call.name} was not approved within the approval timeout`
+                : `tool ${call.name} was cancelled while awaiting approval`
+              await appendEvents(run, owner, [{
+                type: 'tool/result',
+                data: {
+                  turn: run.turn,
+                  step,
+                  message: {
+                    id: `durable-tool-${call.id}-${randomUUID()}`,
+                    role: 'tool',
+                    source: { kind: 'tool', callId: call.id },
+                    toolCallId: call.id,
+                    content: [{ type: 'text', text }],
+                    isError: true,
+                  },
+                },
+              }])
+              throw error
+            }
             result = { text: `tool ${call.name} failed: ${typeof error?.message === 'string' ? error.message : String(error)}`, isError: true }
           }
           const resultText = typeof result?.text === 'string' ? result.text : String(result)
@@ -510,6 +620,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       channelWaiters: new Set(),
       abortController: new AbortController(),
       stopRequested: false,
+      decidedApprovals: new Map(),
     }
     runs.set(turnId, run)
     void execute(run, prompt, header).catch(error => {
@@ -573,6 +684,10 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       cancelled,
       runningTurns: runningTurns.slice(-16),
       recentSettled: [...settledRuns].reverse().slice(0, 12),
+      approvals: {
+        pending: [...runs.values()].filter(run => run.pendingApproval !== undefined).length,
+        ...approvalCounters,
+      },
     }
   }
 
@@ -595,9 +710,42 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     }
     if (run.status === 'running' && !run.stopRequested) {
       run.stopRequested = true
+      run.pendingApproval?.finish(new DurableTurnError('DURABLE_TURN_CANCELLED', 'the turn was cancelled while awaiting approval', 409))
       run.abortController.abort()
     }
     return { ...runStatus(run), cancelRequested: run.stopRequested }
+  }
+
+  /**
+   * Record the single approval decision for a pending tool call.
+   *
+   * The first decision wins. A repeated or concurrent decision for the same
+   * approval is refused with `APPROVAL_ALREADY_DECIDED`, so two tabs cannot
+   * approve and reject the same call. A turn bound to another principal is
+   * reported as absent.
+   * @param {{turnId: string, principalId: string, approvalId: string, decision: string}} request - Turn, principal, approval, and `approve` or `reject`.
+   * @returns {{approvalId: string, decision: string}} Settled decision.
+   */
+  const decide = ({ turnId, principalId, approvalId, decision }) => {
+    assertBoundedText(turnId, 'turnId', MAX_TURN_ID_LENGTH)
+    assertBoundedText(approvalId, 'approvalId', MAX_TURN_ID_LENGTH)
+    if (decision !== 'approve' && decision !== 'reject') {
+      throw new DurableTurnError('INVALID_REQUEST', 'approval decision must be approve or reject')
+    }
+    const run = runs.get(turnId)
+    if (run === undefined || run.principalId !== principalId) {
+      throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
+    }
+    if (run.decidedApprovals.has(approvalId)) {
+      throw new DurableTurnError('APPROVAL_ALREADY_DECIDED', 'approval has already been decided', 409)
+    }
+    const pending = run.pendingApproval
+    if (pending === undefined || pending.approvalId !== approvalId) {
+      throw new DurableTurnError('APPROVAL_NOT_PENDING', 'the turn has no pending approval with that id', 409)
+    }
+    run.decidedApprovals.set(approvalId, decision)
+    pending.finish(undefined, { approved: decision === 'approve' })
+    return { approvalId, decision }
   }
 
   /**
@@ -656,5 +804,5 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     return { status: () => runStatus(run), next }
   }
 
-  return { start, status, cancel, subscribe, snapshot, version: 1 }
+  return { start, status, cancel, decide, subscribe, snapshot, version: 1 }
 }

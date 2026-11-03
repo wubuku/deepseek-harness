@@ -3994,6 +3994,7 @@ export async function createBrowserNativeV2Server(options) {
   }
   const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
     ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
+  const durableApprovalTimeoutMs = timeoutMs(options.durableApprovalTimeoutMs ?? 60_000, 'durableApprovalTimeoutMs')
   const requestTimeoutMs = timeoutMs(options.requestTimeoutMs ?? 30_000, 'requestTimeoutMs')
   const headersTimeoutMs = timeoutMs(options.headersTimeoutMs ?? 15_000, 'headersTimeoutMs')
   const keepAliveTimeoutMs = timeoutMs(options.keepAliveTimeoutMs ?? 5_000, 'keepAliveTimeoutMs')
@@ -4010,6 +4011,8 @@ export async function createBrowserNativeV2Server(options) {
     model: llm.model,
     originOf: () => servedOrigin,
     timeoutMs: durableTurnTimeoutMs,
+    approvalTimeoutMs: durableApprovalTimeoutMs,
+    requiresApproval: call => call.name === 'write',
     tools: DURABLE_TOOL_DEFINITIONS,
     executeTool: executeDurableTool,
   })
@@ -4460,6 +4463,17 @@ export async function createBrowserNativeV2Server(options) {
         const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
         const cancelRequested = durableHost.cancel({ turnId, principalId })
         sendJson(response, 202, { protocolVersion: PROTOCOL_VERSION, ...cancelRequested })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/durable/approve') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        const approvalId = boundedString(body.approvalId, 'approvalId', MAX_HANDOFF_ID_LENGTH)
+        const decision = boundedString(body.decision, 'decision', 16)
+        const decided = durableHost.decide({ turnId, principalId, approvalId, decision })
+        sendJson(response, 202, { protocolVersion: PROTOCOL_VERSION, ...decided })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/durable/stream') {
