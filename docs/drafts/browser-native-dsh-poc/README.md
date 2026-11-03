@@ -1353,6 +1353,14 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs`；合同测试见 `tests/backend-v2.test.mjs`。
 
+## 长转录渲染成本与主线程占用
+
+[长转录渲染成本与主线程占用](long-transcript-rendering.md)用真实 composer 跑到 300 turns，在 50/150/300 三个检查点测量 20 步全文滚动、DOM 规模、长任务和一条 12,000 字符消息的两段流式追加。滚动在 300 turns 内仍可接受（20 步主线程 423.5 ms、无 >50 ms 长任务、最大帧 76.4 ms）；流式追加最先恶化（150 turns 391 ms、0 个长任务 → 300 turns 909.6 ms、8 个长任务、最长 80 ms、单帧 695 ms）。
+
+据此把必须引入转录虚拟化的触发线定为 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符，或任意单条消息追加出现 >100 ms 长任务；建议先做已结算 turn 的折叠/分页，再做窗口化虚拟列表。测量中还修正了 `submitPrompt` 的读取方式：原实现从 `offset: 0` 轮询整段 Session，超过读页字节预算后看不到最新 `turn/end`，现改为读取最后 64 个事件并按事件 `seq` 判定。
+
+复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs`。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

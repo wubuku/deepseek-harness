@@ -157,22 +157,28 @@ export async function submitPrompt({ page, origin, requests, prompt, sessionId, 
   const streamSamples = []
   sessionId ??= await waitFor(async () => requests.find(request => request.path.endsWith('/session/create'))?.body.sessionId, 'Session creation')
   await rememberSessionPrincipal(page, origin, sessionId)
+  const readTail = async () => {
+    const head = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+    const total = typeof head.nextSeq === 'number' ? head.nextSeq : 0
+    const start = Math.max(0, total - 64)
+    return start === 0 ? head : await sessionRequest(origin, 'read', { sessionId, offset: start })
+  }
   const submitted = await waitFor(async () => {
-    const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
+    const current = await readTail()
     const userIndex = [...(current.events ?? [])].findLastIndex(event => event.type === 'user/message'
       && eventText(event).trim() === prompt.trim())
     if (userIndex < 0) return undefined
-    return { session: current, userIndex }
+    return { session: current, userSeq: current.events[userIndex].seq }
   }, `user message for ${prompt.slice(0, 80)}`, timeout)
   const runningProbe = probeWhileRunning === undefined
     ? undefined
     : await probeWhileRunning({ page, requests, sessionId, submittedAt, timeout })
   const session = await waitFor(async () => {
-    const current = await sessionRequest(origin, 'read', { sessionId, offset: 0 })
-    const completed = (current.events ?? []).some((event, index) => index > submitted.userIndex && event.type === 'turn/end')
+    const current = await readTail()
+    const completed = (current.events ?? []).some(event => event.seq > submitted.userSeq && event.type === 'turn/end')
     return completed ? current : undefined
   }, `terminal turn for ${prompt.slice(0, 80)}`, timeout)
-  const terminal = session.events.findLast((event, index) => index > submitted.userIndex && event.type === 'turn/end')
+  const terminal = session.events.findLast(event => event.seq > submitted.userSeq && event.type === 'turn/end')
   assert.ok(terminal, `Missing terminal turn event for ${prompt.slice(0, 80)}`)
   const turn = terminal.data.turn
   if (expectedReason !== null) {
