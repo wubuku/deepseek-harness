@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-079：HTTP 并发准入、客户端超时与 durable 流式 body 超时
+
+```text
+changeId: BN-P2-079
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/resource-limits.test.mjs; docs/drafts/browser-native-dsh-poc/resource-limits.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 对 backend 施加请求洪泛、超大 body、慢客户端和超长模型执行。既有的 8 MiB body 上限与 Worker 准入已存在，但 Node 默认 `requestTimeout=300 s`、`headersTimeout≤60 s`、`maxConnections=∞`，且默认 30 s 才检查一次超时；慢 body 可长期占用连接，请求洪泛没有并发上限。durable host 在 `fetch` 返回响应头后清除定时器，模型先返回响应头再拖住流式 body 时不受 turn 超时约束。
+existingExtensionPointsChecked: 复用 `backend-v2.mjs` 既有的 `timeoutMs` 校验、`sendJson`/`BackendError` 错误通道、`readBody`/`readRawBody` 既有 body 上限和 `admission-v2.mjs` 既有 turn/挂载准入；durable 复用既有 `DURABLE_LLM_TIMEOUT` 与 `AbortController`；未新增工具、未改 DSH Agent Loop 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 必须证明越界请求在真实 socket 上快速失败、慢客户端连接确实被销毁、durable turn 在模型延迟时按超时结算，而不是只依赖文档或常量审查；关闭时间与结算时间需要实测数字。
+behaviorChange: backend 新增 `requestTimeoutMs`(30 s)、`headersTimeoutMs`(15 s)、`keepAliveTimeoutMs`(5 s)、`maxConnections`(128)、`maxConcurrentRequests`(64)、`connectionsCheckingIntervalMs`(1 s)，并写入对应 Node server 属性；处理函数在 `response` 的 `close` 释放计数，超过并发上限立即返回 503 `SERVER_BUSY` 与 `retry-after: 1`。durable host 的 `AbortController` 定时器覆盖整个响应体读取，超时统一映射 504 `DURABLE_LLM_TIMEOUT`。
+consumersUpdated: 新增 `tests/resource-limits.test.mjs`；新增 `resource-limits.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/resource-limits.test.mjs` 4/4：9 MiB body 413 且 `/health` 200；并发上限 2 时第三个请求 503 `SERVER_BUSY`/`retry-after: 1` 并恢复；1.5 s 请求超时下慢 body 2 017 ms 关闭；1.2 s durable 超时下 5 s 延迟模型 1 281 ms 结算为 `failed`/`DURABLE_LLM_TIMEOUT`。同批复跑 `durable-host`、`path-boundary`、`prompt-injection-boundaries` 共 13/13。未改 LLM 请求语义，无需真实模型 smoke；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供等价的 HTTP 层并发整形与模型流超时，优先复用并删除本地补丁；重跑 `resource-limits.test.mjs` 与上述回归。
+deleteCondition: 上游 backend 或宿主提供等价的请求并发上限、慢客户端超时与模型流超时语义，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-078：提示注入危险动作的 egress 编码前缀绕过
 
 ```text

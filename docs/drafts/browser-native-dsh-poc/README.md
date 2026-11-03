@@ -998,6 +998,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/prompt-injection-boundaries.test.mjs` 4/4：攻击者 origin 403 `EGRESS_HOST_NOT_ALLOWED` 且请求计数 0；允许 origin 的编码穿越 403 且上游计数 0；前缀外路径 403；URL 内嵌凭据 400；`Authorization` 头 400；GET-only 能力 POST 405；合法请求 200 且上游计数恰为 1；写 `/etc/passwd`、`../../outside/...`、`..%2f...`、`C:/...` 均 400 `INVALID_PATH` 且根外 canary 不变；跨 principal 附件读取 403 且响应不含内容。审批强制点由 `permission-approval-lifecycle.e2e.mjs` 等既有 E2E 覆盖：默认 `approvalPolicy=ask`，Reject 后不落盘；PoC 文件工具标记 `permission: not-required`，Workspace 内写入靠路径边界与 egress 白名单约束，不靠人工审批。未跑真实模型 smoke（本批未改 LLM 代码）。
 
+## 资源耗尽防护
+
+[资源耗尽防护](resource-limits.md)记录请求洪泛、超大 body、慢客户端与超长模型执行的阈值。JSON 请求体上限 8 MiB，附件 64 MiB，Workspace blob 分块 1 MiB；backend 新增并发请求上限 64（超出 503 `SERVER_BUSY` 且 `retry-after: 1`）、连接上限 128、整请求 30 s、请求头 15 s、keep-alive 5 s 与 1 s 连接检查间隔。durable 模型超时改为覆盖整个响应体读取，超时映射 504 `DURABLE_LLM_TIMEOUT` 并结算为 failed。worker turn 准入沿用 `admission-v2.mjs` 的 8 并发与 16 挂载。
+
+`tests/resource-limits.test.mjs` 4/4：9 MiB body 返回 413 后 `/health` 仍 200；并发上限 2 时第三个请求 503 `SERVER_BUSY`，慢请求销毁后恢复；1.5 s 请求超时的慢客户端在 2 017 ms 关闭；1.2 s durable 超时下模型延迟 5 s 仍在 1 281 ms 结算为 `failed`/`DURABLE_LLM_TIMEOUT`。内存上界按路径推算（64 路满额 JSON body 约 1–1.5 GiB），未采集 RSS；磁盘容量无配额。未改 LLM 请求语义，无需真实模型 smoke；未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

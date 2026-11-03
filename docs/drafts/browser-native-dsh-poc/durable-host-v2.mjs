@@ -180,38 +180,46 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     if (typeof origin !== 'string') throw new DurableTurnError('DURABLE_HOST_NOT_READY', 'the durable host has no served origin', 503)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
-    let response
+    const timedOut = () => new DurableTurnError('DURABLE_LLM_TIMEOUT', `the model did not answer within ${String(timeoutMs)}ms`, 504)
     try {
-      response = await fetch(`${origin}/api/browser-native/llm`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          protocolVersion: 1,
-          requestId: run.turnId,
-          sessionId: run.sessionId,
-          ownerToken: owner.ownerToken,
-          ownerEpoch: owner.ownerEpoch,
-          messages: [{ role: 'user', content: prompt }],
-          tools: [],
-        }),
-        signal: controller.signal,
-      })
-    } catch (error) {
-      if (controller.signal.aborted) throw new DurableTurnError('DURABLE_LLM_TIMEOUT', `the model did not answer within ${String(timeoutMs)}ms`, 504)
-      throw new DurableTurnError('DURABLE_LLM_UNAVAILABLE', `the model route could not be reached: ${String(error)}`, 502)
+      let response
+      try {
+        response = await fetch(`${origin}/api/browser-native/llm`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            protocolVersion: 1,
+            requestId: run.turnId,
+            sessionId: run.sessionId,
+            ownerToken: owner.ownerToken,
+            ownerEpoch: owner.ownerEpoch,
+            messages: [{ role: 'user', content: prompt }],
+            tools: [],
+          }),
+          signal: controller.signal,
+        })
+      } catch (error) {
+        if (controller.signal.aborted) throw timedOut()
+        throw new DurableTurnError('DURABLE_LLM_UNAVAILABLE', `the model route could not be reached: ${String(error)}`, 502)
+      }
+      if (!response.ok || response.body === null) {
+        let detail
+        try { detail = await response.json() } catch { detail = undefined }
+        throw new DurableTurnError(
+          typeof detail?.error?.code === 'string' ? detail.error.code : 'DURABLE_LLM_FAILED',
+          typeof detail?.error?.message === 'string' ? detail.error.message : `the model route returned HTTP ${String(response.status)}`,
+          response.status,
+        )
+      }
+      try {
+        return await parseCompletion(response.body)
+      } catch (error) {
+        if (controller.signal.aborted) throw timedOut()
+        throw error
+      }
     } finally {
       clearTimeout(timer)
     }
-    if (!response.ok || response.body === null) {
-      let detail
-      try { detail = await response.json() } catch { detail = undefined }
-      throw new DurableTurnError(
-        typeof detail?.error?.code === 'string' ? detail.error.code : 'DURABLE_LLM_FAILED',
-        typeof detail?.error?.message === 'string' ? detail.error.message : `the model route returned HTTP ${String(response.status)}`,
-        response.status,
-      )
-    }
-    return await parseCompletion(response.body)
   }
 
   const settleSuccess = async (run, owner, completion) => {

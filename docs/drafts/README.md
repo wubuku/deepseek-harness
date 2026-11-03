@@ -145,6 +145,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 84. [Browser-Native Session 格式升级路径](browser-native-dsh-poc/session-format-upgrade.md)：backend 镜像 `SESSION_FORMAT_VERSION = 4`，load 时拒绝非当前版本 header（422 `SESSION_FORMAT_UNSUPPORTED`，`details` 带 `storedVersion`/`expectedVersion`），`list` 不返回该会话，非 owner 404，`create` 拒绝旧 header 且不覆盖旧文件；Worker 映射为正式 `SessionFormatUnsupportedError` 并用 `sessionFormatVersionRefusal()` 生成方向感知文案。新合同测试 2/2，既有 backend 合同 80/80。本构建不提供迁移/降级，旧日志原样保留；未模拟旧版浏览器 OPFS 数据或跨主机 `dataDir`。
 85. [Browser-Native 路径穿越与文件边界](browser-native-dsh-poc/path-boundary-probing.md)：Workspace 路径、附件/blob、Session/durable id 与静态预览的穿越探测；修复编码分隔符（`%2f`/`%2e`/`%5c`/`%00`）、Windows 盘符与 dist 内根外符号链接。新测试 4/4，相关回归 92/92；未覆盖本地符号链接、多层编码与 Windows 路径语义。
 86. [Browser-Native 提示注入驱动的危险动作](browser-native-dsh-poc/prompt-injection-boundaries.md)：恶意工具输出诱导外传/越权写入；egress 白名单拒绝未授权 origin、编码前缀绕过、URL 内嵌凭据与禁用头，未配置 egress 时 404；Workspace 越界写入 400 且根外 canary 不变；跨 principal 附件 403。新测试 4/4；审批默认 `ask` 由既有 E2E 覆盖，未跑真实模型 smoke。
+87. [Browser-Native 资源耗尽防护](browser-native-dsh-poc/resource-limits.md)：8 MiB body 上限、并发请求 64/连接 128、30 s 请求与 15 s 头超时、5 s keep-alive、1 s 连接检查；durable 模型超时覆盖响应体读取。9 MiB body 413、并发超出 503 `SERVER_BUSY`、慢 body 2 017 ms 关闭、durable 1 281 ms 结算 `DURABLE_LLM_TIMEOUT`。新测试 4/4；内存上界按路径推算，未采集 RSS，磁盘容量无配额。
 
 ### 需要实现或审查代码时
 

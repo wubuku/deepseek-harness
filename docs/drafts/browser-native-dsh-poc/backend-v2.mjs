@@ -3866,6 +3866,13 @@ export async function createBrowserNativeV2Server(options) {
   }
   const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
     ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
+  const requestTimeoutMs = timeoutMs(options.requestTimeoutMs ?? 30_000, 'requestTimeoutMs')
+  const headersTimeoutMs = timeoutMs(options.headersTimeoutMs ?? 15_000, 'headersTimeoutMs')
+  const keepAliveTimeoutMs = timeoutMs(options.keepAliveTimeoutMs ?? 5_000, 'keepAliveTimeoutMs')
+  const maxConnections = timeoutMs(options.maxConnections ?? 128, 'maxConnections')
+  const maxConcurrentRequests = timeoutMs(options.maxConcurrentRequests ?? 64, 'maxConcurrentRequests')
+  const connectionsCheckingIntervalMs = timeoutMs(options.connectionsCheckingIntervalMs ?? 1_000, 'connectionsCheckingIntervalMs')
+  let activeRequests = 0
   let servedOrigin
   const durableHost = createDurableTurnHost({
     store,
@@ -3874,10 +3881,25 @@ export async function createBrowserNativeV2Server(options) {
     originOf: () => servedOrigin,
     timeoutMs: durableTurnTimeoutMs,
   })
-  const server = createServer(async (request, response) => {
+  const server = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs }, async (request, response) => {
     let url
+    activeRequests += 1
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      activeRequests -= 1
+    }
+    response.on('close', release)
     for (const [name, value] of Object.entries(responseHeaders)) response.setHeader(name, value)
     try {
+      if (activeRequests > maxConcurrentRequests) {
+        release()
+        sendJson(response, 503, {
+          error: { code: 'SERVER_BUSY', message: `the backend already handles ${String(maxConcurrentRequests)} concurrent requests` },
+        }, { 'retry-after': '1' })
+        return
+      }
       url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
@@ -4380,6 +4402,10 @@ export async function createBrowserNativeV2Server(options) {
       else response.destroy()
     }
   })
+  server.requestTimeout = requestTimeoutMs
+  server.headersTimeout = headersTimeoutMs
+  server.keepAliveTimeout = keepAliveTimeoutMs
+  server.maxConnections = maxConnections
   return {
     server,
     store,
