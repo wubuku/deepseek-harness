@@ -53,5 +53,5 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/compaction-
 
 - 窗口值来自 profile，不是运行时从 provider 读到的真实容量；真实模型 smoke 仍需 backend 显式传入实际窗口。
 - 只验证一个 128k 窗口与 80% 压力线，没有覆盖 32k/64k/200k 或不同 headroom 比例的曲线。
-- scripted 摘要内容由 stand-in 生成，不代表真实模型摘要质量；压缩后的语义正确性未被评估。
+- scripted 摘要内容由 stand-in 生成，不代表真实模型摘要质量；真实 LongCat-2.5 的 8k 窗口摘要与召回见[真实模型 8k compaction 质量](real-model-compaction.md)。
 - 42 turns 只触发 1 次 compaction，没有验证多次压缩后的事件增长、摘要链式引用或长期召回。

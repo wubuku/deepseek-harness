@@ -9,13 +9,31 @@ import { dump, load } from 'js-yaml'
 const execFileAsync = promisify(execFile)
 const here = new URL('.', import.meta.url)
 
+/** Find one patch entry by id, walking nested plugin lists and group configs. */
+function findPluginEntry(value, id) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findPluginEntry(item, id)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (value === null || typeof value !== 'object') return undefined
+  if (value.id === id) return value
+  for (const child of Object.values(value)) {
+    const found = findPluginEntry(child, id)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number}} options - Built preview and validation fixtures.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
-  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout,
+  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens,
 } = {}) {
   if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent'].includes(roster)) {
     throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, or browser-subagent')
@@ -26,6 +44,15 @@ export async function createRuntimeValidationDist({
   if (timedQuestionTimeout !== undefined
     && (!Number.isSafeInteger(timedQuestionTimeout) || timedQuestionTimeout < 1 || timedQuestionTimeout > 2_147_483)) {
     throw new Error('timedQuestionTimeout must be an integer between 1 and 2147483 seconds')
+  }
+  if (contextWindow !== undefined && (!Number.isSafeInteger(contextWindow) || contextWindow <= 0)) {
+    throw new Error('contextWindow must be a positive safe integer')
+  }
+  if (compactHeadroomTokens !== undefined && (!Number.isSafeInteger(compactHeadroomTokens) || compactHeadroomTokens <= 0)) {
+    throw new Error('compactHeadroomTokens must be a positive safe integer')
+  }
+  if (compactMaxTokens !== undefined && (!Number.isSafeInteger(compactMaxTokens) || compactMaxTokens <= 0)) {
+    throw new Error('compactMaxTokens must be a positive safe integer')
   }
   const sourceRoot = resolve(distRoot)
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-browser-runtime-image-'))
@@ -38,9 +65,23 @@ export async function createRuntimeValidationDist({
       ? 'runtime-validation.cordis.patch.yml'
       : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
-    if (timedQuestionTimeout !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent') {
+    if (timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent') {
       const entries = load(profilePatch)
       if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
+      if (contextWindow !== undefined) {
+        const llm = findPluginEntry(entries, 'llm-browser-native')
+        if (llm === undefined) throw new Error('validation profile has no llm-browser-native entry')
+        llm.config = { ...llm.config, contextWindow }
+      }
+      if (compactHeadroomTokens !== undefined || compactMaxTokens !== undefined) {
+        const compaction = findPluginEntry(entries, 'compaction-basic')
+        if (compaction === undefined) throw new Error('validation profile has no compaction-basic entry')
+        compaction.config = {
+          ...compaction.config,
+          ...(compactHeadroomTokens === undefined ? {} : { headroomTokens: compactHeadroomTokens }),
+          ...(compactMaxTokens === undefined ? {} : { maxTokens: compactMaxTokens }),
+        }
+      }
       if (timedQuestionTimeout !== undefined) {
         const preset = entries.find(entry => entry?.id === 'preset-standard')
         if (!Array.isArray(preset?.config?.plugins)) throw new Error('validation profile has no preset-standard plugin list')

@@ -1575,7 +1575,21 @@ async function createLlmConfig(options) {
     apiKey,
     proxyConfigured: proxy !== undefined,
     timeoutMs: timeout,
+    includeUsage: options.llmIncludeUsage === true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
+  }
+}
+
+/** Map an OpenAI-compatible usage object to the adapter's token usage fields. */
+function streamUsage(value) {
+  if (value === null || typeof value !== 'object') return undefined
+  const inputTokens = value.prompt_tokens
+  const outputTokens = value.completion_tokens
+  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) return undefined
+  return {
+    inputTokens,
+    outputTokens,
+    ...(Number.isSafeInteger(value.total_tokens) ? { totalTokens: value.total_tokens } : {}),
   }
 }
 
@@ -3505,6 +3519,7 @@ async function realLlm(response, request, config, body) {
           max_tokens: body.maxTokens,
           reasoning_effort: body.reasoningEffort,
           stream: true,
+          ...(config.includeUsage ? { stream_options: { include_usage: true } } : {}),
         }),
         signal: controller.signal,
       })
@@ -3529,6 +3544,7 @@ async function realLlm(response, request, config, body) {
     let nextIndex = 0
     let textIndex
     let finished = false
+    let pendingFinish
     const finishStream = finishReason => {
       if (toolCalls.size === 0 && textIndex === undefined) {
         writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
@@ -3542,8 +3558,10 @@ async function realLlm(response, request, config, body) {
       return true
     }
     const consume = data => {
-      if (data === '[DONE]') return finished || finishStream(toolCalls.size > 0 ? 'tool_calls' : 'stop')
+      if (data === '[DONE]') return finished || finishStream(pendingFinish ?? (toolCalls.size > 0 ? 'tool_calls' : 'stop'))
       const item = JSON.parse(data)
+      const usage = streamUsage(item.usage)
+      if (usage !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage } })
       const delta = item.choices?.[0]?.delta
       if (typeof delta?.content === 'string' && delta.content.length > 0) {
         if (textIndex === undefined) {
@@ -3575,7 +3593,9 @@ async function realLlm(response, request, config, body) {
       }
       const finish = item.choices?.[0]?.finish_reason
       if (finish !== undefined && finish !== null) {
-        return finishStream(finish)
+        pendingFinish = finish
+        // OpenAI-compatible providers send the usage chunk after finish_reason when asked.
+        if (!config.includeUsage) return finishStream(finish)
       }
       return false
     }
@@ -3596,6 +3616,7 @@ async function realLlm(response, request, config, body) {
     }
     if (!finished && !clientClosed) {
       if (timedOut) writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
+      else if (config.includeUsage && pendingFinish !== undefined) finishStream(pendingFinish)
       else writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
     } else if (!response.writableEnded) {
       response.end()
@@ -3660,6 +3681,7 @@ async function serveStatic(response, root, pathname) {
  * Create the PoC server. Verified downloads require explicit chunk-object mode.
  * @param {object} options - Server configuration; workspaceVerifiedDownloads defaults
  * to false, workspaceDownloadMaxReaders to 4, and workspaceDownloadTimeoutMs to 30000.
+ * `llmIncludeUsage` asks the real upstream for provider-reported token usage.
  * Reader limits include verification; deadlines include verification and transmission.
  * Cancellation destroys the connection immediately; in-progress descriptor/chunk
  * verification finishes before its returned reader can be closed and its slot released.

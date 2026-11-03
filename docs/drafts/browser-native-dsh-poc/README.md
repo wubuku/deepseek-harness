@@ -1435,6 +1435,10 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 解析顺序是 backend 显式模型容量优先、profile 声明兜底、两者都缺时才暴露警告；不合法配置在 Cordis 加载时直接失败。
 
+## 真实模型 8k compaction 质量
+
+[真实模型 8k compaction 质量](real-model-compaction.md)把 profile 窗口降到 `8192`、headroom 设为 `512`，用真实 LongCat-2.5 跑自动压力 compaction。第 5 turn 触发 1 组 start/summary/end；首轮只出现一次的码字 `ORANGE-FALCON-42` 在第 6 turn 被原样召回，证明摘要而非保留尾部承载了该事实。provider 上报 7 次请求、输入 30,064 / 输出 887 / 合计 30,951 tokens，其中摘要请求 5,598 tokens；durable JSON 86 KB、63 个事件，刷新后 compaction 事件完整重建，第 7 turn 继续完成。profile 的 512 token 摘要 cap 对 LongCat 不足（截断为 `summarization truncated at the token cap`），测试以 `compactMaxTokens: 1024` 覆盖并通过。
+
 ## 多 Session 争用上限
 
 [多 Session 争用上限](multi-session-contention.md)让 1、8、16 个独立 `BrowserContext`/Worker 同时提交 scripted turn。单 Session turn 中位数 257 ms、冷启动 2.2 秒、CPU 1.15–1.63 核；8 路为 615 ms / 5.4 秒 / 4.5–5.1 核；16 路为 1,694 ms / 13.8 秒 / 5.3–5.8 核，p95 1,824 ms。页堆在三种规模下都稳定在 46.7 MB，内存不是上限；CPU 在 8 路已接近 5 核、16 路只再涨约 17%，吞吐不再提高。
