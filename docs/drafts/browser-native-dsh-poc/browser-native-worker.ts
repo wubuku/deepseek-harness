@@ -85,6 +85,8 @@ import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.t
 import type { DownloadPublicationStage } from './browser-native-workspace-store.ts'
 import { createBrowserNativeBuiltinMemberTrace } from './browser-native-builtin-member-trace.ts'
 import { createBrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
+import { createBrowserNativeToolPolicy } from './browser-native-tool-policy.ts'
+import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
 import type { BrowserNativeMemoryProbe } from './browser-native-memory.ts'
 import { BrowserNativeSessionMountCoordinator } from './browser-native-session-mount.ts'
 import type { BrowserNativeExecutionIdentity, BrowserNativeSessionEvent } from './browser-native-session-adapter.ts'
@@ -136,6 +138,7 @@ let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
 let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
 const capabilityPublication = new BrowserNativeCapabilityPublication()
 const permissionProbe = createBrowserNativePermissionProbe()
+const toolPolicyProbeForTest: BrowserNativeToolPolicyProbe = createBrowserNativeToolPolicy()
 let memoryProbeForTest: BrowserNativeMemoryProbe | undefined
 const cpuContentionProbe = createBrowserNativeCpuContentionProbe(event => {
   if (workspaceTestPort === undefined) throw new Error('CPU contention probe requires the validation MessagePort')
@@ -272,13 +275,14 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'tool-policy-state' | 'tool-policy-set' | 'tool-policy-rogue-allow' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly urls?: Readonly<Record<string, string>>
   readonly targets?: BrowserNativeEgressTargets
   readonly sessionId?: string
   readonly childSessionId?: string
   readonly headerSessionId?: string
+  readonly toolPolicy?: { readonly tools?: Readonly<Record<string, string>>; readonly default?: string }
   readonly iterations?: number
   readonly boundary?: number
   readonly provider?: string
@@ -406,6 +410,17 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   }
   if (data.action === 'session-continuity-status' || data.action === 'session-continuity-dispose') return true
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
+  if (data.action === 'tool-policy-state' || data.action === 'tool-policy-rogue-allow') return true
+  if (data.action === 'tool-policy-set') {
+    if (data.toolPolicy === null || typeof data.toolPolicy !== 'object' || Array.isArray(data.toolPolicy)) return false
+    const tools = data.toolPolicy.tools
+    if (tools !== undefined) {
+      if (tools === null || typeof tools !== 'object' || Array.isArray(tools)) return false
+      if (!Object.entries(tools).every(([name, action]) =>
+        name.length > 0 && typeof action === 'string' && ['allow', 'ask', 'deny'].includes(action))) return false
+    }
+    return data.toolPolicy.default === undefined || ['allow', 'ask', 'deny'].includes(data.toolPolicy.default)
+  }
   if (data.action === 'cancel-session') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'session-mount-probe' || data.action === 'session-projection-probe' || data.action === 'approval-projection-probe') return true
   if (data.action === 'wait-attachment-opfs-staging-write'
@@ -1741,6 +1756,23 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, permission: permissionProbe.inspect(request.sessionId) })
       return
     }
+    if (request.action.startsWith('tool-policy-')) {
+      if (workspaceTestPort === undefined) throw new Error('browser-native tool policy test: the validation MessagePort is disabled')
+      if (request.action === 'tool-policy-state') {
+        workspaceTestResponse(request.requestId, { ok: true, policy: toolPolicyProbeForTest.state() })
+        return
+      }
+      if (request.action === 'tool-policy-set') {
+        if (request.toolPolicy === undefined) throw new Error('browser-native tool policy test: toolPolicy is required')
+        workspaceTestResponse(request.requestId, { ok: true, policy: toolPolicyProbeForTest.setPolicy(request.toolPolicy) })
+        return
+      }
+      if (request.action === 'tool-policy-rogue-allow') {
+        toolPolicyProbeForTest.armRogueAllow()
+        workspaceTestResponse(request.requestId, { ok: true })
+        return
+      }
+    }
     if (request.action.startsWith('memory-')) {
       const probe = memoryProbeForTest
       if (probe === undefined) throw new Error('browser-native memory probe: the validation MessagePort is disabled')
@@ -2683,6 +2715,7 @@ self.addEventListener('message', (event: MessageEvent) => {
           workspaceTestPort === undefined ? undefined : {
             onModuleReady: probe => { memoryProbeForTest = probe },
           },
+          workspaceTestPort === undefined ? undefined : toolPolicyProbeForTest,
         ),
       },
       staticModulePrefixes: REPLACED_PREFIXES,

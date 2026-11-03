@@ -71,6 +71,7 @@ import { splitSessionAppendBatches } from './browser-native-session-transport.ts
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
 import type { BrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
+import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -1366,6 +1367,7 @@ export function createBrowserNativeStaticModules(
   attachmentTestHooks?: BrowserNativeAttachmentTestHooks,
   permissionProbe?: BrowserNativePermissionProbe,
   memoryTestHooks?: BrowserNativeMemoryTestHooks,
+  toolPolicy?: BrowserNativeToolPolicyProbe,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
   attachmentTestHooks?.onModuleReady?.(attachments)
@@ -1379,6 +1381,9 @@ export function createBrowserNativeStaticModules(
     '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication),
     ...(permissionProbe === undefined ? {} : {
       '@deepseek-ai/dsh-browser-native-permission-probe': permissionProbe.factory,
+    }),
+    ...(toolPolicy === undefined ? {} : {
+      '@deepseek-ai/dsh-browser-native-tool-policy': toolPolicy.factory,
     }),
   }
 }

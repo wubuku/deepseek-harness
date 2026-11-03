@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-091：验证 roster 的 profile 工具策略（allow/ask/deny）与审计
+
+```text
+changeId: BN-P2-091
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-tool-policy.ts; docs/drafts/browser-native-dsh-poc/browser-native-tool-policy.js; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs; docs/drafts/browser-native-dsh-poc/approval-policy-configuration.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 需要验证危险工具的 allow/ask/deny 策略能否由 profile 配置、同一 Session 内即时生效、deny 不可绕过且审计可追溯；既有正式 permission preset 只有 ask/never，没有按工具名的策略。
+existingExtensionPointsChecked: 复用 `ctx.tools.guard()` 的单调拒绝层、`tools/pre-execute` waterfall、`SessionEventMap` declaration merging、`exec.agent.session.append()`、Worker static module map 与既有 validation MessagePort；没有修改 packages/、Agent Loop、Session format 或正式 profile。
+whyDraftOnlyWasInsufficient: deny 是否被其它 pre-execute 放行或审批结果绕过，只能由真实工具管线证明；模型在拒绝后如何继续也只能由真实 provider 的同一 Session 证明。
+behaviorChange: 新增 validation-only `browser-native-tool-policy` 静态模块与 `browser-tool-policy` roster；profile config 为 `write: ask`、`edit: deny`、`read: allow`、`default: allow`。`deny` 注册 `ctx.tools.guard`，在任何 allow 或审批后复核；决策追加 `tool-policy/decided` Session 事件。test port 新增 `tool-policy-state`、`tool-policy-set`、`tool-policy-rogue-allow`，仅在 validation MessagePort 存在时可用。
+consumersUpdated: Worker static module map、runtime validation image 的 shim 拷贝、PoC README、drafts index 107 与本 ledger；未注册正式 profile 与发布名单。
+test: `DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs` 通过：profile 策略读出与 YAML 一致；deny turn 在注册 prepended allow 后仍返回 `denied by the profile tool policy`，文件不存在，`approval/asked` 为 0，审计恰好一条 deny，模型产生后续文本并正常结束；allow turn 无审批且文件字节一致；ask turn 显示 `Allow once`，`approval/decided` 为 `allowed-once`；审计 deny/allow/ask 各 1。`pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 与 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过。
+syncReplaySteps: 上游同步后核对 `ctx.tools.guard` 的复核时机、`tools/pre-execute` 的 prepend 语义与 `SessionEventMap` 合并；复跑 preview build 与 approval policy E2E，确认正式 profile 仍未注册该插件。
+deleteCondition: 正式产品提供按 profile/用户可编辑的工具策略与审计视图；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-090：工具能力矩阵、未知工具降级与验证 roster 记忆门控
 
 ```text

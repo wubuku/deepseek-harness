@@ -425,6 +425,15 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/golden-path.e2e.mjs
 ```
 
+## 审批策略与工具决策
+
+[profile 工具策略验证](approval-policy-configuration.md)用真实模型在同一个 Session 内验证 `write` 的 ask→deny→allow→ask 变更即时生效。deny 由 `ctx.tools.guard` 单调执行：即使先注册一个 prepended `allow` 监听器，模型仍收到 `tool "write" is denied by the profile tool policy`，文件不存在，且该调用没有进入审批。三次决策分别在 `tool-policy/decided` 审计中留下一条 `deny`/`allow`/`ask`，ask 路径同时产生 `approval/asked` + `allowed-once`。策略来自验证 roster 的 profile `config`，正式 product profile 未注册该插件。
+
+```sh
+DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs
+```
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。
