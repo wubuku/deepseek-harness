@@ -364,6 +364,8 @@ interface BrowserToolResultErrorEnvelope {
 
 PoC 使用以下稳定错误码：`PROTOCOL_UNSUPPORTED`、`INVALID_REQUEST`、`REQUEST_TOO_LARGE`、`SESSION_NOT_FOUND`、`SESSION_ALREADY_EXISTS`、`SESSION_ALREADY_OWNED`、`SESSION_OWNERSHIP_LOST`、`SEQ_CONFLICT`、`DURABILITY_FAILED`、`REQUEST_OUTCOME_UNKNOWN`、`MODEL_NOT_ALLOWED`、`UPSTREAM_LLM_FAILED`、`TOOL_NOT_ALLOWED`、`TOOL_TIMEOUT`、`CANCELED`、`STREAM_LIMIT` 和 `INTERNAL`。
 
+v2 real provider route 在此列表之外增加上游分类码：`UPSTREAM_LLM_AUTH_FAILED`、`UPSTREAM_LLM_RATE_LIMITED`、`UPSTREAM_LLM_UNAVAILABLE`、`UPSTREAM_LLM_TIMEOUT`、`UPSTREAM_LLM_STREAM_FAILED`、`UPSTREAM_LLM_EMPTY` 和 `UPSTREAM_LLM_TRUNCATED`；语义见[双 provider 兼容](dual-provider-compatibility.md#错误映射)。本列表仍描述 legacy `backend.mjs`。
+
 HTTP status 是 transport signal，不能替代业务 error code。JSON/NDJSON error body 必须包含 code 和安全 message；客户端需要保留 code 并把不可恢复错误传给 DSH failure normalization。
 
 正式 provider route 的客户端取消必须触发 AbortSignal、停止消费 stream、按 provider adapter 的取消能力通知 backend，并释放本地 pending state。当前 PoC real route 在浏览器连接中断时向上游 fetch 传递 AbortSignal，但没有独立 cancel route；断开连接只表示 backend 尝试取消上游请求，不承诺 provider 已撤销已经开始的推理或计费。取消不等于回滚已经提交的 Session event 或已经发生的外部副作用。

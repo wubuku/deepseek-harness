@@ -1687,6 +1687,40 @@ async function createLlmConfig(options) {
   }
   if (mode !== 'real') throw new Error(`unsupported LLM mode: ${mode}`)
   const env = await loadEnv(options.envFile)
+  const kind = options.llmProviderKind ?? env.DSH_POC_LLM_PROVIDER ?? 'openai'
+  if (kind !== 'openai' && kind !== 'anthropic') {
+    throw new Error('real LLM mode needs DSH_POC_LLM_PROVIDER=openai or DSH_POC_LLM_PROVIDER=anthropic')
+  }
+  const proxy = env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy
+  if (proxy?.startsWith('socks')) throw new Error('real LLM mode needs an HTTP(S) proxy; SOCKS proxy support is not implemented in this PoC')
+  const configuredTimeout = options.llmTimeoutMs ?? (env.DSH_POC_LLM_TIMEOUT_MS === undefined
+    ? DEFAULT_LLM_TIMEOUT_MS
+    : Number(env.DSH_POC_LLM_TIMEOUT_MS))
+  const timeout = timeoutMs(configuredTimeout, 'llmTimeoutMs')
+  const contextWindow = positiveInteger(options.contextWindow ?? env.DSH_POC_CONTEXT_WINDOW, 'DSH_POC_CONTEXT_WINDOW')
+  if (kind === 'anthropic') {
+    const model = options.model ?? env.ANTHROPIC_MODEL
+    if (typeof model !== 'string' || model.length === 0) throw new Error('ANTHROPIC_MODEL is required for an Anthropic-compatible endpoint')
+    const baseUrl = options.llmBaseUrl ?? env.ANTHROPIC_BASE_URL
+    const path = options.llmCompletionsPath ?? env.ANTHROPIC_MESSAGES_PATH ?? 'v1/messages'
+    const apiKey = options.llmApiKey ?? env.ANTHROPIC_API_KEY
+    if (!baseUrl || !apiKey) throw new Error('Anthropic-compatible mode needs ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY')
+    const apiVersion = options.llmApiVersion ?? env.ANTHROPIC_VERSION ?? '2023-06-01'
+    const defaultMaxTokens = positiveInteger(options.llmMaxTokens ?? env.DSH_POC_LLM_MAX_TOKENS ?? 4096, 'llmMaxTokens')
+    return {
+      mode,
+      kind,
+      model,
+      provider: 'anthropic-compatible',
+      url: new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString(),
+      apiKey,
+      apiVersion,
+      defaultMaxTokens,
+      proxyConfigured: proxy !== undefined,
+      timeoutMs: timeout,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+    }
+  }
   const model = options.model ?? env.OPENAI_NEXT_GPT_MODEL
   if (typeof model !== 'string' || model.length === 0) throw new Error('OPENAI_NEXT_GPT_MODEL is required in real mode')
   const grok = model.startsWith('grok-')
@@ -1696,15 +1730,9 @@ async function createLlmConfig(options) {
     ?? (grok ? (env.OPENAI_NEXT_GROK_COMPLETIONS_PATH ?? env.OPENAI_NEXT_GPT_COMPLETIONS_PATH) : env.OPENAI_NEXT_GPT_COMPLETIONS_PATH)
   const apiKey = options.llmApiKey ?? (grok ? env.OPENAI_NEXT_GROK_API_KEY : env.OPENAI_NEXT_GPT_API_KEY)
   if (!baseUrl || !path || !apiKey) throw new Error('real LLM mode needs the configured OpenAI Next base URL, completions path, model, and API key')
-  const proxy = env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy
-  if (proxy?.startsWith('socks')) throw new Error('real LLM mode needs an HTTP(S) proxy; SOCKS proxy support is not implemented in this PoC')
-  const configuredTimeout = options.llmTimeoutMs ?? (env.DSH_POC_LLM_TIMEOUT_MS === undefined
-    ? DEFAULT_LLM_TIMEOUT_MS
-    : Number(env.DSH_POC_LLM_TIMEOUT_MS))
-  const timeout = timeoutMs(configuredTimeout, 'llmTimeoutMs')
-  const contextWindow = positiveInteger(options.contextWindow ?? env.DSH_POC_CONTEXT_WINDOW, 'DSH_POC_CONTEXT_WINDOW')
   return {
     mode,
+    kind,
     model,
     provider: grok ? 'grok' : 'gpt',
     url: new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString(),
@@ -3619,6 +3647,338 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
   response.end()
 }
 
+/** OpenAI-compatible Chat Completions request body carrying the Worker wire request unchanged. */
+function openAiRequestBody(config, body) {
+  return {
+    model: config.model,
+    messages: body.messages,
+    tools: body.tools,
+    temperature: body.temperature,
+    max_tokens: body.maxTokens,
+    reasoning_effort: body.reasoningEffort,
+    stream: true,
+    ...(config.includeUsage ? { stream_options: { include_usage: true } } : {}),
+  }
+}
+
+/** Parse historical tool arguments for a tool_use block; unrepresentable input becomes an empty object. */
+function anthropicToolInput(argumentsText) {
+  if (typeof argumentsText !== 'string' || argumentsText.length === 0) return {}
+  try {
+    const parsed = JSON.parse(argumentsText)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Merge one translated message into the Anthropic conversation.
+ * @param messages - Anthropic-format conversation accumulated so far.
+ * @param role - Anthropic role for the new content blocks.
+ * @param blocks - Content blocks in provider order; empty lists are dropped.
+ * @returns Nothing; the last message absorbs consecutive same-role blocks.
+ */
+function appendAnthropicMessage(messages, role, blocks) {
+  if (blocks.length === 0) return
+  const previous = messages.at(-1)
+  if (previous === undefined || previous.role !== role) messages.push({ role, content: blocks })
+  else previous.content.push(...blocks)
+}
+
+/** Translate the Worker's OpenAI-shaped wire request into an Anthropic Messages body. */
+function anthropicRequestBody(config, body) {
+  const system = []
+  const messages = []
+  for (const message of body.messages ?? []) {
+    if (message.role === 'system' || message.role === 'developer') {
+      if (typeof message.content === 'string' && message.content.length > 0) system.push(message.content)
+      continue
+    }
+    if (message.role === 'tool') {
+      appendAnthropicMessage(messages, 'user', [{
+        type: 'tool_result',
+        tool_use_id: message.tool_call_id,
+        content: typeof message.content === 'string' ? message.content : '',
+      }])
+      continue
+    }
+    const blocks = []
+    if (typeof message.content === 'string' && message.content.length > 0) blocks.push({ type: 'text', text: message.content })
+    for (const call of message.tool_calls ?? []) {
+      blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: anthropicToolInput(call.function.arguments) })
+    }
+    appendAnthropicMessage(messages, message.role === 'assistant' ? 'assistant' : 'user', blocks)
+  }
+  return {
+    model: config.model,
+    max_tokens: body.maxTokens ?? config.defaultMaxTokens,
+    ...(system.length === 0 ? {} : { system: system.join('\n\n') }),
+    messages,
+    ...(Array.isArray(body.tools) && body.tools.length > 0 ? {
+      tools: body.tools.map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        input_schema: tool.function.parameters,
+      })),
+    } : {}),
+    ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+    stream: true,
+  }
+}
+
+/** Provider headers: Anthropic uses `x-api-key` plus an API version; OpenAI uses bearer auth. */
+function upstreamHeaders(config) {
+  const common = {
+    'content-type': 'application/json',
+    accept: 'text/event-stream',
+    'user-agent': 'deepseek-harness/0.2.0-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)',
+  }
+  return config.kind === 'anthropic'
+    ? { ...common, 'x-api-key': config.apiKey, 'anthropic-version': config.apiVersion }
+    : { ...common, authorization: `Bearer ${config.apiKey}` }
+}
+
+function retryAfterMsOf(value) {
+  if (value === null) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000)
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined
+}
+
+/**
+ * Classify an upstream HTTP failure so the UI can distinguish credentials,
+ * quota, and availability from an unclassified provider error.
+ * @param upstream - Non-OK provider response.
+ * @returns BackendError preserving the provider status in details.
+ */
+async function upstreamFailure(upstream) {
+  const status = upstream.status
+  const retryAfterMs = retryAfterMsOf(upstream.headers.get('retry-after'))
+  let providerErrorType
+  try {
+    const payload = await upstream.json()
+    if (typeof payload?.error?.type === 'string') providerErrorType = payload.error.type
+  } catch {
+    // A non-JSON error body still carries its HTTP status; keep the classification.
+  }
+  const details = { providerStatus: status, ...(providerErrorType === undefined ? {} : { providerErrorType }) }
+  if (status === 401 || status === 403) {
+    return new BackendError('UPSTREAM_LLM_AUTH_FAILED', `upstream LLM rejected credentials with HTTP ${status}`, 502, undefined, details)
+  }
+  if (status === 429) {
+    return new BackendError('UPSTREAM_LLM_RATE_LIMITED', 'upstream LLM rate limit or quota was exceeded', 503, retryAfterMs, details)
+  }
+  if (status === 503 || status === 529) {
+    return new BackendError('UPSTREAM_LLM_UNAVAILABLE', `upstream LLM is unavailable with HTTP ${status}`, 503, retryAfterMs, details)
+  }
+  if (status === 408 || status === 504) {
+    return new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM timed out with HTTP ${status}`, 504, retryAfterMs, details)
+  }
+  return new BackendError('UPSTREAM_LLM_FAILED', `upstream LLM returned HTTP ${status}`, 502, retryAfterMs, details)
+}
+
+/** OpenAI-compatible SSE to DSH stream-chunk translation, preserving the finish/usage ordering. */
+function createOpenAiStream(response, config) {
+  const toolCalls = new Map()
+  let nextIndex = 0
+  let textIndex
+  let text = ''
+  let reasoningIndex
+  let reasoning = ''
+  let finished = false
+  let pendingFinish
+  const finishStream = finishReason => {
+    if (toolCalls.size === 0 && textIndex === undefined && reasoningIndex === undefined) {
+      writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
+      finished = true
+      return true
+    }
+    if (reasoningIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: reasoningIndex, block: { type: 'reasoning', text: reasoning } } })
+    if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
+    for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finishReason === 'length' ? { kind: 'max-tokens' } : toolCalls.size > 0 ? { kind: 'tool-calls' } : { kind: 'stop' } } })
+    finished = true
+    return true
+  }
+  const consume = data => {
+    if (data === '[DONE]') return finished || finishStream(pendingFinish ?? (toolCalls.size > 0 ? 'tool_calls' : 'stop'))
+    const item = JSON.parse(data)
+    const usage = streamUsage(item.usage)
+    if (usage !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage } })
+    const delta = item.choices?.[0]?.delta
+    if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+      if (reasoningIndex === undefined) {
+        reasoningIndex = nextIndex++
+        writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: reasoningIndex, blockType: 'reasoning' } })
+      }
+      reasoning += delta.reasoning_content
+      writeStream(response, { kind: 'chunk', chunk: { type: 'reasoning-delta', index: reasoningIndex, text: delta.reasoning_content } })
+    }
+    if (typeof delta?.content === 'string' && delta.content.length > 0) {
+      if (textIndex === undefined) {
+        textIndex = nextIndex++
+        writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: textIndex, blockType: 'text' } })
+      }
+      text += delta.content
+      writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: textIndex, text: delta.content } })
+    }
+    for (const providerCall of delta?.tool_calls ?? []) {
+      const providerIndex = providerCall.index ?? 0
+      let toolCall = toolCalls.get(providerIndex)
+      if (toolCall === undefined) {
+        toolCall = {
+          index: nextIndex++,
+          id: typeof providerCall.id === 'string' && providerCall.id.length > 0 ? providerCall.id : randomUUID(),
+          name: '',
+          arguments: '',
+        }
+        toolCalls.set(providerIndex, toolCall)
+        writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: toolCall.index, blockType: 'tool-call' } })
+      }
+      if (typeof providerCall.id === 'string' && providerCall.id.length > 0) toolCall.id = providerCall.id
+      toolCall.name += providerCall.function?.name ?? ''
+      if (providerCall.function?.arguments) {
+        toolCall.arguments += providerCall.function.arguments
+        writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: toolCall.index, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
+      }
+    }
+    const finish = item.choices?.[0]?.finish_reason
+    if (finish !== undefined && finish !== null) {
+      pendingFinish = finish
+      // OpenAI-compatible providers send the usage chunk after finish_reason when asked.
+      if (!config.includeUsage) return finishStream(finish)
+    }
+    return false
+  }
+  return {
+    get finished() { return finished },
+    consume,
+    finishAtEof() {
+      if (!finished && config.includeUsage && pendingFinish !== undefined) finishStream(pendingFinish)
+      return finished
+    },
+  }
+}
+
+const ANTHROPIC_STREAM_ERROR_CODES = new Map([
+  ['authentication_error', 'UPSTREAM_LLM_AUTH_FAILED'],
+  ['permission_error', 'UPSTREAM_LLM_AUTH_FAILED'],
+  ['rate_limit_error', 'UPSTREAM_LLM_RATE_LIMITED'],
+  ['overloaded_error', 'UPSTREAM_LLM_UNAVAILABLE'],
+  ['invalid_request_error', 'UPSTREAM_LLM_FAILED'],
+  ['not_found_error', 'UPSTREAM_LLM_FAILED'],
+  ['api_error', 'UPSTREAM_LLM_STREAM_FAILED'],
+])
+
+/** Anthropic Messages SSE to DSH stream-chunk translation. */
+function createAnthropicStream(response) {
+  const blocks = new Map()
+  let finished = false
+  let stopReason
+  let inputTokens
+  let outputTokens
+  const writeUsage = () => {
+    if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) return
+    writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } } })
+  }
+  const finishStream = () => {
+    if (blocks.size === 0) {
+      writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
+      finished = true
+      return true
+    }
+    writeUsage()
+    const reason = stopReason === 'max_tokens' || stopReason === 'model_context_window_exceeded'
+      ? { kind: 'max-tokens' }
+      : stopReason === 'tool_use' ? { kind: 'tool-calls' } : { kind: 'stop' }
+    writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason } })
+    finished = true
+    return true
+  }
+  const consume = data => {
+    const item = JSON.parse(data)
+    switch (item.type) {
+      case 'message_start': {
+        const usage = item.message?.usage
+        if (Number.isSafeInteger(usage?.input_tokens)) inputTokens = usage.input_tokens
+        if (Number.isSafeInteger(usage?.output_tokens)) outputTokens = usage.output_tokens
+        return false
+      }
+      case 'content_block_start': {
+        const block = item.content_block ?? {}
+        if (block.type === 'text') {
+          blocks.set(item.index, { kind: 'text', text: '' })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: item.index, blockType: 'text' } })
+        } else if (block.type === 'thinking') {
+          blocks.set(item.index, { kind: 'reasoning', text: '' })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: item.index, blockType: 'reasoning' } })
+        } else if (block.type === 'tool_use') {
+          blocks.set(item.index, { kind: 'tool-call', id: block.id, name: block.name ?? '', arguments: '' })
+          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: item.index, blockType: 'tool-call' } })
+        }
+        return false
+      }
+      case 'content_block_delta': {
+        const block = blocks.get(item.index)
+        if (block === undefined) return false
+        if (block.kind === 'text' && item.delta?.type === 'text_delta' && typeof item.delta.text === 'string') {
+          block.text += item.delta.text
+          writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: item.index, text: item.delta.text } })
+        } else if (block.kind === 'reasoning' && item.delta?.type === 'thinking_delta' && typeof item.delta.thinking === 'string') {
+          block.text += item.delta.thinking
+          writeStream(response, { kind: 'chunk', chunk: { type: 'reasoning-delta', index: item.index, text: item.delta.thinking } })
+        } else if (block.kind === 'tool-call' && item.delta?.type === 'input_json_delta') {
+          const partial = typeof item.delta.partial_json === 'string' ? item.delta.partial_json : ''
+          if (partial.length > 0) {
+            block.arguments += partial
+            writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: item.index, id: block.id, name: block.name, argumentsDelta: partial } })
+          }
+        }
+        return false
+      }
+      case 'content_block_stop': {
+        const block = blocks.get(item.index)
+        if (block === undefined) return false
+        writeStream(response, {
+          kind: 'chunk',
+          chunk: block.kind === 'text'
+            ? { type: 'block-end', index: item.index, block: { type: 'text', text: block.text } }
+            : block.kind === 'reasoning'
+              ? { type: 'block-end', index: item.index, block: { type: 'reasoning', text: block.text } }
+              : { type: 'block-end', index: item.index, block: { type: 'tool-call', id: block.id, name: block.name, arguments: block.arguments } },
+        })
+        return false
+      }
+      case 'message_delta': {
+        if (typeof item.delta?.stop_reason === 'string') stopReason = item.delta.stop_reason
+        if (Number.isSafeInteger(item.usage?.input_tokens)) inputTokens = item.usage.input_tokens
+        if (Number.isSafeInteger(item.usage?.output_tokens)) outputTokens = item.usage.output_tokens
+        return false
+      }
+      case 'message_stop':
+        return finished || finishStream()
+      case 'error': {
+        const type = typeof item.error?.type === 'string' ? item.error.type : ''
+        const message = typeof item.error?.message === 'string' ? item.error.message : 'upstream LLM reported a stream error'
+        writeStreamError(response, ANTHROPIC_STREAM_ERROR_CODES.get(type) ?? 'UPSTREAM_LLM_STREAM_FAILED', message)
+        finished = true
+        return true
+      }
+      case 'ping':
+        return false
+      default:
+        return false
+    }
+  }
+  return {
+    get finished() { return finished },
+    consume,
+    finishAtEof() { return finished },
+  }
+}
+
 async function realLlm(response, request, config, body) {
   const controller = new AbortController()
   let clientClosed = false
@@ -3641,22 +4001,8 @@ async function realLlm(response, request, config, body) {
     try {
       upstream = await fetch(config.url, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          authorization: `Bearer ${config.apiKey}`,
-          'user-agent': 'deepseek-harness/0.2.0-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)',
-        },
-        body: JSON.stringify({
-          model: config.model,
-          messages: body.messages,
-          tools: body.tools,
-          temperature: body.temperature,
-          max_tokens: body.maxTokens,
-          reasoning_effort: body.reasoningEffort,
-          stream: true,
-          ...(config.includeUsage ? { stream_options: { include_usage: true } } : {}),
-        }),
+        headers: upstreamHeaders(config),
+        body: JSON.stringify(config.kind === 'anthropic' ? anthropicRequestBody(config, body) : openAiRequestBody(config, body)),
         signal: controller.signal,
       })
     } catch (error) {
@@ -3664,77 +4010,16 @@ async function realLlm(response, request, config, body) {
       if (clientClosed) return
       throw new BackendError('UPSTREAM_LLM_UNAVAILABLE', 'upstream LLM could not be reached', 502)
     }
-    if (!upstream.ok || upstream.body === null) {
-      throw new BackendError('UPSTREAM_LLM_FAILED', `upstream LLM returned HTTP ${upstream.status}`, 502)
-    }
+    if (!upstream.ok || upstream.body === null) throw await upstreamFailure(upstream)
     response.writeHead(200, {
       'content-type': 'application/x-ndjson; charset=utf-8',
       'cache-control': 'no-store',
       'x-browser-native-protocol': String(PROTOCOL_VERSION),
     })
+    const stream = config.kind === 'anthropic' ? createAnthropicStream(response) : createOpenAiStream(response, config)
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let text = ''
-    const toolCalls = new Map()
-    let nextIndex = 0
-    let textIndex
-    let finished = false
-    let pendingFinish
-    const finishStream = finishReason => {
-      if (toolCalls.size === 0 && textIndex === undefined) {
-        writeStream(response, { kind: 'error', error: { code: 'UPSTREAM_LLM_EMPTY', message: 'upstream LLM completed without text or tool calls' } })
-        finished = true
-        return true
-      }
-      if (textIndex !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index: textIndex, block: { type: 'text', text } } })
-      for (const { index, ...toolCall } of toolCalls.values()) writeStream(response, { kind: 'chunk', chunk: { type: 'block-end', index, block: { type: 'tool-call', ...toolCall } } })
-      writeStream(response, { kind: 'chunk', chunk: { type: 'finish', reason: finishReason === 'length' ? { kind: 'max-tokens' } : toolCalls.size > 0 ? { kind: 'tool-calls' } : { kind: 'stop' } } })
-      finished = true
-      return true
-    }
-    const consume = data => {
-      if (data === '[DONE]') return finished || finishStream(pendingFinish ?? (toolCalls.size > 0 ? 'tool_calls' : 'stop'))
-      const item = JSON.parse(data)
-      const usage = streamUsage(item.usage)
-      if (usage !== undefined) writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage } })
-      const delta = item.choices?.[0]?.delta
-      if (typeof delta?.content === 'string' && delta.content.length > 0) {
-        if (textIndex === undefined) {
-          textIndex = nextIndex++
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: textIndex, blockType: 'text' } })
-        }
-        text += delta.content
-        writeStream(response, { kind: 'chunk', chunk: { type: 'text-delta', index: textIndex, text: delta.content } })
-      }
-      for (const providerCall of delta?.tool_calls ?? []) {
-        const providerIndex = providerCall.index ?? 0
-        let toolCall = toolCalls.get(providerIndex)
-        if (toolCall === undefined) {
-          toolCall = {
-            index: nextIndex++,
-            id: typeof providerCall.id === 'string' && providerCall.id.length > 0 ? providerCall.id : randomUUID(),
-            name: '',
-            arguments: '',
-          }
-          toolCalls.set(providerIndex, toolCall)
-          writeStream(response, { kind: 'chunk', chunk: { type: 'block-start', index: toolCall.index, blockType: 'tool-call' } })
-        }
-        if (typeof providerCall.id === 'string' && providerCall.id.length > 0) toolCall.id = providerCall.id
-        toolCall.name += providerCall.function?.name ?? ''
-        if (providerCall.function?.arguments) {
-          toolCall.arguments += providerCall.function.arguments
-          writeStream(response, { kind: 'chunk', chunk: { type: 'tool-call-delta', index: toolCall.index, id: toolCall.id, name: toolCall.name, argumentsDelta: providerCall.function.arguments } })
-        }
-      }
-      const finish = item.choices?.[0]?.finish_reason
-      if (finish !== undefined && finish !== null) {
-        pendingFinish = finish
-        // OpenAI-compatible providers send the usage chunk after finish_reason when asked.
-        if (!config.includeUsage) return finishStream(finish)
-      }
-      return false
-    }
     while (true) {
       const part = await reader.read()
       buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
@@ -3742,7 +4027,7 @@ async function realLlm(response, request, config, body) {
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim()
         buffer = buffer.slice(newline + 1)
-        if (line.startsWith('data:') && consume(line.slice(5).trim())) {
+        if (line.startsWith('data:') && stream.consume(line.slice(5).trim())) {
           response.end()
           return
         }
@@ -3750,13 +4035,11 @@ async function realLlm(response, request, config, body) {
       }
       if (part.done) break
     }
-    if (!finished && !clientClosed) {
+    if (!stream.finished && !clientClosed) {
       if (timedOut) writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
-      else if (config.includeUsage && pendingFinish !== undefined) finishStream(pendingFinish)
-      else writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
-    } else if (!response.writableEnded) {
-      response.end()
+      else if (!stream.finishAtEof()) writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
     }
+    if (!response.writableEnded) response.end()
   } catch (error) {
     if (clientClosed) return
     if (timedOut && response.headersSent) {
@@ -4309,7 +4592,13 @@ export async function createBrowserNativeV2Server(options) {
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/health') {
-        sendJson(response, 200, { ok: true, llmMode: llm.mode, model: llm.model, ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }) })
+        sendJson(response, 200, {
+          ok: true,
+          llmMode: llm.mode,
+          model: llm.model,
+          ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
+          ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }),
+        })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/config') {
@@ -4317,6 +4606,7 @@ export async function createBrowserNativeV2Server(options) {
           llmMode: llm.mode,
           provider: llm.provider,
           model: llm.model,
+          ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
           ...(llm.contextWindow === undefined ? {} : { contextWindow: llm.contextWindow }),
         })
         return

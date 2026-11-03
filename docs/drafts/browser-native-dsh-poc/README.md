@@ -400,6 +400,17 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules
 
 这里的 scripted fault 是真实 DSH Worker/Host 的确定性故障注入，不是独立聊天 demo，也不等同真实模型自然断流。真实 LLM 普通流的历史证据仍有效，但本批没有把外网供应商重新运行结果写成半包故障证据；自然 eviction、OS crash、Safari、生产多实例 backend 和后台 Agent 仍未验证。
 
+## 双 provider 真实兼容
+
+[provider 兼容性报告](dual-provider-compatibility.md)记录同一 LLM proxy 对 OpenAI-compatible 与 Anthropic-compatible 端点的翻译和验证。real 模式用 `DSH_POC_LLM_PROVIDER=openai|anthropic` 选择协议族；Anthropic 分支把 system/developer 合并为顶层 `system`，把历史 `tool_calls` 翻译为 `tool_use`、`tool_call_id` 翻译为 `tool_result`，并使用 `max_tokens` 默认值 4096。
+
+真实 LongCat-2.5 与 MiniMax 冒烟都完成文本、`echo` 工具调用、usage 和取消：文本 1,582/1,209 ms，工具 1,600/924 ms，取消 908/518 ms。确定性 fake upstream 另覆盖 401/429/529 分类、流内 `overloaded_error`、空响应、断流与取消时上游关闭。缺口包括 DSH retry 分类映射、Anthropic thinking signature 回放、附件/图片 block 和 `tool_result.is_error`。
+
+```sh
+node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
+DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
+```
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。
