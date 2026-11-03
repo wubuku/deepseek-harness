@@ -1,6 +1,6 @@
 /** Temporary validation image over the built v2 preview; never mutates shared build outputs. */
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -118,22 +118,20 @@ export async function createRuntimeValidationDist({
     await execFileAsync('tar', ['--format=ustar', '--no-xattrs', '-czf', archive, '-C', imageRoot, 'home'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
     const dataUrl = `data:application/gzip;base64,${(await readFile(archive)).toString('base64')}`
     await mkdir(join(outputRoot, 'preview'), { recursive: true })
+    // The preview server refuses static reads that realpath outside its root, so
+    // every entry is copied rather than symlinked into the image.
     for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
-      if (entry.name !== 'preview') await symlink(join(sourceRoot, entry.name), join(outputRoot, entry.name))
+      await cp(join(sourceRoot, entry.name), join(outputRoot, entry.name), { recursive: true, dereference: true })
     }
     let replaced = 0
-    for (const entry of await readdir(join(sourceRoot, 'preview'), { withFileTypes: true })) {
-      const source = join(sourceRoot, 'preview', entry.name)
+    for (const entry of await readdir(join(outputRoot, 'preview'), { withFileTypes: true })) {
+      if (!(entry.name.startsWith('bootstrap-') && entry.name.endsWith('.js'))) continue
       const target = join(outputRoot, 'preview', entry.name)
-      if (entry.name.startsWith('bootstrap-') && entry.name.endsWith('.js')) {
-        const text = await readFile(source, 'utf8')
-        const matches = text.match(/data:application\/gzip;base64,[A-Za-z0-9+/=]+/g) ?? []
-        if (matches.length !== 1) throw new Error('preview bootstrap must contain exactly one inline profile overlay; rebuild preview or update the validation image builder')
-        await writeFile(target, text.replace(matches[0], dataUrl))
-        replaced += 1
-      } else {
-        await symlink(source, target)
-      }
+      const text = await readFile(target, 'utf8')
+      const matches = text.match(/data:application\/gzip;base64,[A-Za-z0-9+/=]+/g) ?? []
+      if (matches.length !== 1) throw new Error('preview bootstrap must contain exactly one inline profile overlay; rebuild preview or update the validation image builder')
+      await writeFile(target, text.replace(matches[0], dataUrl))
+      replaced += 1
     }
     if (replaced !== 1) throw new Error('expected one preview bootstrap; run build:preview first')
     return { distRoot: outputRoot, roster, cleanup: () => rm(temporary, { recursive: true, force: true }) }
