@@ -10,6 +10,8 @@ description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚�
 
 可判定结论：**滚动在 300 turns 内仍可接受**（20 步总主线程 423.5 ms、约 21 ms/步，没有超过 50 ms 的长任务，最大帧间隔 76.4 ms）；**流式追加是最先恶化的路径**（150 turns 时主线程 391 ms、0 个长任务；300 turns 时 909.6 ms、8 个长任务共 476 ms、最长 80 ms，单帧间隔 695 ms）。因此把**必须引入转录虚拟化的触发线定在 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符**：再翻一倍时按 150→300 的 2.3 倍增长，长任务会越过 100 ms 的单任务预算。
 
+本批按该触发线做了一次最小修复：把流式追加的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，同一 harness 下 300 turns 追加的长任务从 8 个/476 ms 降到 1 个/73 ms、单帧 695.4 → 629.1 ms，详见[流式追加性能修复](#流式追加性能修复)。虚拟化本身仍未实现。
+
 ## 测量方法
 
 - 滚动：找到 `overflow-y: auto|scroll` 且溢出最大的元素作为转录滚动容器，先从底部滚到顶部再滚回底部；每步等待两个 `requestAnimationFrame`，用 CDP `Performance.getMetrics` 的累计值计算整段差值（秒转毫秒）。
@@ -43,6 +45,45 @@ description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚�
 - **可用但降级**：150–300 turns。滚动仍无长任务，但长消息流式追加已产生 80 ms 长任务与 0.7 s 单帧；应避免在该区间播放超长流式文本。
 - **必须虚拟化**：≥ 300 turns、或 DOM ≥ 16,000、或可见字符 ≥ 75,000、或任意单条消息流式追加出现 > 100 ms 长任务。理由是按 150→300 的 2.3 倍增长，600 turns 时的长任务会越过 100 ms 的单任务预算；触发线放在 300 turns 留出约一倍余量。
 - **建议的浏览器端策略**：先做“已结算 turn 折叠/分页”（保留最近 N 个 turn 的完整转录，更早的折叠为摘要行），再考虑窗口化虚拟列表；虚拟化需要保留 `data-chat-flow-kind` 语义与滚动锚点，否则会破坏现有测试与工具卡片定位。
+
+## 流式追加性能修复
+
+修复前的追加路径在 React layout effect 里同步测量：`processContent` 对每次内容增长调用 `ChatViewport.scrollToBottom()`，后者在 DOM 变更之后读取 `clientHeight`/`scrollHeight` 才能知道尾部，这次读取强制一次全文档布局。300 turns、15.8k 节点时单次强制布局约 15–40 ms；一次 12,000 字符追加共有 12 次这样的读取（对应 tracing 里 16 次 `Layout`、约 200 ms）。`scrollToBottom` 自身还重复测量：`metrics()`、`reclaimBelow()` 内部的 `readScroll()`、落地前的 `scrollMetrics()` 各一次。
+
+两处改动都在 `packages/client/ui-chat`：
+
+- `use-chat-viewport.ts` 的 `scrollToBottom` 改为先 `reclaimBelow()`、再测量一次。`reclaimBelow()` 可能写回底部空间，落地必须在它之后测量；它之前那次 `metrics()` 只用于更新 `observation`，现由落地结果统一写入。
+- `use-chat-scroll.ts` 的 `processContent`：`running` 不变且 `lastKey` 变化的流式增长、且已跟随尾部时，commit 不再同步落地，改由已有的 `ResizeObserver` 在当帧 layout 之后落地。观察者在 layout 之后回调，几何已是最新，读取不再触发第二次布局；同一帧内的多次 commit 也只产生一次尺寸变化，等于把追加落地合并成每帧一次。`Viewport.observesLayout` 为假的环境（无 `ResizeObserver`）保留同步落地；`running`、就绪状态与历史 prepend 不满足该条件，仍走原来的同步落地。
+
+对照测量交替构建修复前后版本（源文件 `git stash` → `build:artifacts` → `build:preview`），同一 300 turns 转录各跑多次，用 CDP tracing 与 Profiler 聚合：
+
+| 指标（300 turns，12,000 字符两段追加） | 修复前（4 次） | 修复后（3 次） |
+| --- | --- | --- |
+| turn 总时长（中位数） | 538 ms | 454 ms |
+| 主线程 `TaskDuration`（中位数） | 865 ms | 741 ms |
+| `Layout` 次数 / 总时长（中位数） | 16 / 198.5 ms | 13 / 155.2 ms |
+| `UpdateLayoutTree` 次数 / 总时长（中位数） | 27 / 198.5 ms | 25 / 160.3 ms |
+| 长任务数（> 50 ms） | 4–5（单次 3–7） | 1（单次 1–2） |
+| 长任务总时长（中位数） | 261 ms | 96 ms |
+| 单帧最大间隔（中位数） | 487 ms | 450 ms |
+
+同一修复在[长转录渲染](tests/long-transcript-rendering.e2e.mjs)的原 harness 下复测 300 turns：追加主线程 909.6 → 787.4 ms，长任务 8 个/476 ms/最长 80 ms → 1 个/73 ms，单帧 695.4 → 629.1 ms，turn 736 → 637 ms；滚动检查点与页面错误仍为 0。
+
+没有采用另外两种候选：
+
+- **阈值虚拟化（`content-visibility: auto` + `contain-intrinsic-size`）**：在 150 turns 的追加里反而更慢（主线程 759 ms、`UpdateLayoutTree` 470 次），追加期间可见性切换本身触发大量样式重算；`contain: layout paint` 在 300 turns 只把长任务降到 4 个/240 ms，单次约 41 ms 的全文档布局仍在。
+- **rAF 合并追加**：测试里的两段追加相隔 120 ms，不落在同一帧；真正可合并的是同一帧内的多次 commit 落地，交给 `ResizeObserver` 即可，不需要额外的事件循环。
+
+剩余瓶颈是列上的昂贵选择器（`ChatView.module.css` 的 `:nth-last-child(2 of :not(...):has(...))`）：每次 DOM 变更仍触发全列样式重算，`UpdateLayoutTree` 仍有 25 次、约 160 ms。要把单次布局从约 15 ms 降到 1 ms 量级，仍需“已结算 turn 折叠/窗口化”，触发线见上一节。
+
+复跑：
+
+```sh
+pnpm run build:artifacts && pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+DSH_POC_BROWSER=chrome DSH_POC_RENDER_TURNS=300 node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs
+```
+
+表格里的 tracing/Profiler 采样用一次性脚本完成，未提交；可比指标（主线程、长任务、单帧）来自上面这条命令。
 
 ## 测试基础设施修正
 

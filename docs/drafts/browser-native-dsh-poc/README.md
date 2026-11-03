@@ -1365,6 +1365,8 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 据此把必须引入转录虚拟化的触发线定为 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符，或任意单条消息追加出现 >100 ms 长任务；建议先做已结算 turn 的折叠/分页，再做窗口化虚拟列表。测量中还修正了 `submitPrompt` 的读取方式：原实现从 `offset: 0` 轮询整段 Session，超过读页字节预算后看不到最新 `turn/end`，现改为读取最后 64 个事件并按事件 `seq` 判定。
 
+本批在该触发线内做了最小修复（仍不实现虚拟化）：`ChatViewport.scrollToBottom` 不再重复测量，流式增长时的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，避免每次 DOM 变更后强制一次全文档布局。交替构建前后的 300 turns 追加对照：长任务 4–5 → 1 个、长任务总时长 261 → 96 ms、turn 535 → 454 ms、单帧 487 → 450 ms；原 harness 复测 300 turns 时追加主线程 909.6 → 787.4 ms、长任务 8 个/476 ms → 1 个/73 ms、单帧 695.4 → 629.1 ms。剩余瓶颈是列上的 `:nth-last-child(of :has())` 选择器引起的全列样式重算，折叠/窗口化仍是把单次布局降到 1 ms 量级的唯一路径。
+
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs`。
 
 ## 准入控制：并发 turn 上限与挂载租约

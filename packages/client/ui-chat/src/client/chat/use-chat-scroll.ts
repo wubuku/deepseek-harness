@@ -94,7 +94,12 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     if (tipChanged && reading.followingTail) {
       navigation.cancel()
       if (current.deferCompletedTurns && reading.followInputFold()) return
-      reading.followTail()
+      // Streamed growth lands through the size observer after this frame's layout, where geometry is
+      // already clean; measuring here would force a second full-document layout. Transitions
+      // (running, readiness) still land here because they may not change the observed size.
+      const streamGrew = previous !== null && current.running === previous.running
+        && current.lastKey !== previous.lastKey
+      if (!(streamGrew && viewport.observesLayout)) reading.followTail()
     } else navigation.reconcile()
   }, [reading, navigation])
 

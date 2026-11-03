@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-069：流式追加的尾部落地测量修复
+
+```text
+changeId: BN-P2-069
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: packages/client/ui-chat/src/client/chat/use-chat-viewport.ts; packages/client/ui-chat/src/client/chat/use-chat-scroll.ts; packages/client/ui-chat/tests/chat-view.client.spec.tsx; docs/drafts/browser-native-dsh-poc/long-transcript-rendering.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: [长转录渲染成本](long-transcript-rendering.md)显示 300 turns 时一次 12,000 字符流式追加会产生 8 个长任务（476 ms，最长 80 ms）与 695 ms 单帧；追加路径在 React layout effect 里对每次内容增长同步读取 `clientHeight`/`scrollHeight`，在 15.8k 节点上强制一次全文档布局，且 `scrollToBottom` 自身在前置 `metrics()`、`reclaimBelow()` 与落地之间重复测量。
+existingExtensionPointsChecked: 复用 `ChatViewport.scrollToBottom`/`reclaimBelow`/`observesLayout` 与 `use-chat-scroll` 的 `processContent` 分支；`ChatViewport` 的 `ResizeObserver` 已在 `attach` 中观察 column/scroller/composer。未改 Agent Loop、Session format、Web/Desktop/Headless profile、CSS 选择器或虚拟化策略。
+whyDraftOnlyWasInsufficient: 只记录触发线不能证明该路径可修；必须改动 UI 源码并用前后对照的同一 300 turns 转录验证长任务与帧间隔。
+behaviorChange: 流式增长（`running` 不变且 `lastKey` 变化）且已跟随尾部时，尾部落地改由 `ResizeObserver` 在当帧 layout 之后执行；无 `ResizeObserver` 的环境、`running`/就绪状态切换与历史 prepend 仍同步落地。`scrollToBottom` 在 `reclaimBelow()` 之后只测量一次。滚动位置、跟随语义与 DOM 结构不变。
+directoryOutChangeReason: Browser-Native preview 复用 `@deepseek-ai/dsh-client-ui-chat` 的聊天视图，因此性能修复必须落在该 package 本身；改动不引入 Browser-Native 专用分支。
+consumersUpdated: `chat-view.client.spec.tsx` 新增“streamed growth lands through the size observer”用例（在修复前版本上失败），PoC 长转录文档、PoC README、operational compatibility matrix、drafts index 和本账本。
+tests: `pnpm vitest run packages/client/ui-chat` 844/844 通过（含新用例）；`pnpm run build:artifacts` 7/7 与 `pnpm run build:check` 2/2 通过；交替构建前后版本各跑同一 300 turns 追加：长任务 4–5 → 1 个、总时长 261 → 96 ms、turn 535 → 454 ms、`Layout` 16 → 13 次、单帧 487 → 450 ms；`DSH_POC_RENDER_TURNS=300 node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs` 通过，追加主线程 909.6 → 787.4 ms、长任务 8/476 → 1/73 ms、单帧 695.4 → 629.1 ms、页面错误 0。
+syncReplaySteps: 上游若调整 `ChatViewport` 的滚动策略、`ResizeObserver` 观察对象或 `processContent` 的 tip 判定，重跑 `pnpm vitest run packages/client/ui-chat` 与 300 turns 追加 E2E；若上游先落地转录虚拟化，本条修复按其折叠/窗口化实现重放或删除。
+deleteCondition: 转录虚拟化（已结算 turn 折叠或窗口列表）落地并由其自身保证追加成本后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-068：跨标签页 turn 准入与挂载租约
 
 ```text

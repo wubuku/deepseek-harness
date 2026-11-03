@@ -155,6 +155,11 @@ export class ChatViewport {
     this.observation.landing = null
   }
 
+  /** Whether content size changes arrive through the attached size observer. */
+  get observesLayout(): boolean {
+    return this.observer !== null
+  }
+
   private spacerHeight(): number {
     const spacer = this.elements?.spacer
     return spacer == null ? 0 : Number.parseFloat(spacer.style.height) || 0
@@ -707,12 +712,14 @@ export class ChatViewport {
    * position; native scroll delivery moves it.
    */
   scrollToBottom(follow: ScrollFollow, behavior: 'instant' | 'smooth' = 'instant'): ViewportLanding | null {
-    const metrics = this.metrics()
-    if (metrics === null || this.elements === null) return null
-    this.observation = { top: metrics.top, landing: null }
+    const elements = this.elements
+    if (elements === null) return null
+    // Reclaim may trim the spacer; measure once afterwards so the landing reflects that write.
     this.reclaimBelow()
+    const metrics = scrollMetrics(elements.scroller)
+    this.observation = { top: metrics.top, landing: null }
     const landing: ViewportLanding = {
-      metrics: follow.toBottom(this.elements.scroller, scrollMetrics(this.elements.scroller), behavior),
+      metrics: follow.toBottom(elements.scroller, metrics, behavior),
       position: null,
       turn: this.latestTurn,
     }

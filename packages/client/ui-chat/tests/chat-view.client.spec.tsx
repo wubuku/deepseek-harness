@@ -4045,6 +4045,34 @@ describe('ChatView', () => {
     expect(view.getByLabelText('回到底部')).toBeTruthy()
   })
 
+  it('streamed growth lands through the size observer instead of measuring in the commit', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] }, { running: true })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[data-chat-flow]')!.parentElement as HTMLDivElement
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1_000, writable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 300, writable: true })
+    scroller.scrollTop = 700
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    // A streamed step arrives without a running transition: the commit must not measure the
+    // growth it just rendered; the observer lands once the frame has laid the new content out.
+    Object.defineProperty(scroller, 'scrollHeight', { value: 1_100, writable: true })
+    act(() => { h.setChat({ partial: { turn: 2, step: 1, blocks: [{ kind: 'text', text: 'streamed' }] } }) })
+    expect(scroller.scrollTop).toBe(700)
+    act(() => { notify?.() })
+    expect(scroller.scrollTop).toBe(800)
+  })
+
   it('one ResizeObserver owns pinned dynamic-height follow and ignores growth while away', () => {
     let notify: (() => void) | undefined
     const observe = vi.fn<(element: Element) => void>()
