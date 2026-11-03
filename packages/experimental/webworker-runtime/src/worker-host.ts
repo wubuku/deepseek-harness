@@ -32,7 +32,7 @@ import { join } from './module-system/posix-path.ts'
 import { installProcessGlobal } from './node/globals/process.ts'
 import type { RequestListener } from './transport/synthetic-http.ts'
 import { TunnelServer, type TunnelPort } from './transport/tunnel.ts'
-import { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
+import { readImage } from './storage/image-fetch.ts'
 import { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
 import { setActiveVfs, type NodeBuiltinMemberObserver } from './storage/active.ts'
 import { setTextViewer } from './shell/process/xdg-open.ts'
@@ -163,16 +163,6 @@ function requireGlobalPort(channel: TunnelPort | undefined): TunnelPort {
     throw new Error('webworker host: no channel; pass options.channel outside a dedicated worker')
   }
   return { postMessage: (message, transfer) => { post(message, transfer) } }
-}
-
-async function readImage(image: Uint8Array | string): Promise<Uint8Array> {
-  if (typeof image !== 'string') return await inflateImage(image, 'the image bytes given to createWorkerHost')
-  const response = await fetch(image)
-  if (!response.ok) throw new Error(`webworker host: image fetch failed with ${String(response.status)} for ${image}`)
-  if (response.body === null) throw new Error(`webworker host: image response for ${image} carried no body`)
-  // Inflated off the response stream: the archive is built while the rest of the
-  // image is still arriving.
-  return await inflateImageStream(response.body, image)
 }
 
 /**

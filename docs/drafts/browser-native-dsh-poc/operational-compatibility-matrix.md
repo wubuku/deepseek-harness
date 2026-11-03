@@ -119,6 +119,8 @@ description: "按真实 Chrome Worker 执行、同源 backend 提供、明确排
 
 多 Worker 本地写权、snapshot ABA、IndexedDB 保留式升级和旧写者迟到保存的本批结果见[本地写权进度](local-writer-fencing-validation-progress.md)。本地 generation、writer epoch、远端 revision 和 backend fencing token 分别表达不同事实；任何一个都不能替代其余检查。durable observer 的私有 OPFS range backing、16 MiB 文件 alias、强杀回收和 read/grep/stale 证据见[只读缓存进度](observer-range-backing-validation-progress.md)；volatile observer 仍整文件驻留，未证明整个 Chrome heap/RSS 或 origin 总磁盘预算。
 
+冷启动镜像下载的失败定位与有界重试见[冷启动可靠性记录](cold-start-reliability.md)。16 路并发冷启动首轮曾出现 2–8 个 Worker 的 boot payload 503；服务端在镜像写完前收到客户端 RST，Worker 在读取响应 body 时抛 `TypeError: Failed to fetch`，而同文件页面内并发 fetch、小文件 Worker fetch 均正常，延迟或预热后不复现。`storage/image-fetch.ts` 现为幂等镜像 GET 提供最多 3 次尝试，仅重试 `TypeError` 与 408/429/5xx，并加抖动退避；4xx 与非 gzip 响应立即失败。这证明失败可恢复，不证明 Chromium 内部取消来源已定位，也不覆盖分块校验、断点续传或服务端并发整形。
+
 测试使用真实 Chrome，但除明确标记真实模型的 Session/LLM 路径外，能力和故障验收使用 scripted LLM。`default-profile-capabilities.e2e.mjs` 验证 Browser profile 的实际 schema 与受限 Bash 调用；`default-interaction-tools.e2e.mjs` 验证问答与工作目录闭环；`runtime-validation.e2e.mjs` 的真实模型文件读写序列使用独立 Browser validation roster。因此，不要把这些测试合并表述成“真实模型已验证 Browser profile 中每个工具”。
 
 运行命令、Chrome 版本、测试结果和未验证范围见[运行范围验证进度](operational-envelope-validation-progress.md)。矩阵针对本 PoC 当前 checkout，不能替代 DSH package README、runtime API 文档或生产兼容性承诺。

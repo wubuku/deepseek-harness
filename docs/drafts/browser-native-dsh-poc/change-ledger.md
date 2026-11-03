@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-075：镜像下载有界重试（冷启动 boot payload 可靠性）
+
+```text
+changeId: BN-P2-075
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: packages/experimental/webworker-runtime/src/storage/image-fetch.ts; packages/experimental/webworker-runtime/src/worker-host.ts; packages/experimental/webworker-runtime/tests/storage/image-fetch.spec.ts; packages/experimental/webworker-runtime/README.md; packages/experimental/webworker-runtime/README.zh.md; docs/drafts/browser-native-dsh-poc/tests/cold-start.e2e.mjs; docs/drafts/browser-native-dsh-poc/cold-start-reliability.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 16 路并发冷启动时，2–8 个 Worker 的 boot payload 因 `TypeError: Failed to fetch` 失败；服务端已开始写 9,841,578 bytes 的镜像，客户端中途 RST（`finished=false`、`ECONNRESET`/`EPIPE`），错误发生在 `inflateImageStream` 读 body 而非 `fetch` 拒绝。页面内对同一文件的并发 fetch 全部成功，小文件 Worker fetch 全部成功，延迟 1.5 s 或系统预热后不再复现，因此是 Chromium 在冷启动并发多 Worker 大响应体时取消 worker 下载，而非服务端竞态、超时或 gzip 管线。
+existingExtensionPointsChecked: 复用 `worker-host.ts` 既有的 `readImage` 入口与 `storage/image-gzip.ts` 的流式 inflate；不改 tunnel、图像格式、packer、profile、Session 或 Agent Loop。
+whyDraftOnlyWasInsufficient: 修复必须让真实 Worker 在真实截断的网络响应后继续 boot；文档和纯 unit 无法证明重试与抖动确实恢复启动。
+behaviorChange: 把 `readImage` 抽到 `storage/image-fetch.ts`。镜像 GET 幂等，最多 3 次尝试；仅对 `TypeError`（fetch 拒绝或 body 读取失败）与 408/429/5xx 重试，退避 250 ms × 尝试序号 + 0–250 ms 抖动；4xx 与非 gzip 响应立即失败。懒加载归档经同一 `readImage`，共享重试。`worker-host.ts` 只保留调用点。
+consumersUpdated: 新增 `tests/storage/image-fetch.spec.ts`；package 英文/中文 README 同步；新增 `tests/cold-start.e2e.mjs` 与 `cold-start-reliability.md`，PoC README、matrix、drafts index 与本账本同步；`apps/web/dist` preview 重建。
+tests: `pnpm exec vitest run packages/experimental/webworker-runtime/tests/storage/image-fetch.spec.ts` 5/5；package 全量 1004/1005；唯一失败是既有的 `transform-corpus: every built bundle imports under Node`（`session-title-all-prompts-llm` 构建产物引用 `@deepseek-ai/dsh-session-title-llm` 缺失导出，`packages/session` 工作区无改动，与本批无关）。`DSH_POC_COLD_FAULT=1 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/cold-start.e2e.mjs` Chrome 156 16 路 × 2 轮，每轮 `routedImageRequests=32`、`failures=0`，单轮 7.9/8.6 s、最慢页面 6.8/7.2 s；不带故障注入 16 路 × 3 轮 48/48，单轮 7.8–8.8 s。`pnpm run build:artifacts` 7/7、`pnpm run build:check` 2/2。未改 LLM 代码，无需真实模型 smoke。
+syncReplaySteps: 上游若提供镜像下载重试、并发整形或分块校验，优先复用并删除本地重试；重跑 image-fetch spec、16 路冷启动 E2E 与 build:check。
+deleteCondition: 上游 webworker-runtime 自带等价的有界重试或被 PoC 移除后删除；或移除 Browser-Native DSH PoC。
+status: implemented
+```
+
 ### BN-P2-074：最小服务端 durable turn host
 
 ```text

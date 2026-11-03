@@ -974,6 +974,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 原型只执行文本 turn，tool-call 以 `DURABLE_TOOL_UNSUPPORTED` 错误结算；运行记录仅在内存，backend 重启后的未结算 turn 需要恢复流程；产品 Worker 尚无只读挂载服务端 Session 的聊天 UI；审批、取消、附件、Workspace 工具、多 backend/HA 与 Safari/WebKit 未闭环。
 
+## 冷启动镜像下载可靠性
+
+[冷启动可靠性记录](cold-start-reliability.md)定位 16 路并发冷启动时偶发的 `boot payload failed with HTTP 503: TypeError: Failed to fetch`。服务端在写完 9,841,578 bytes 镜像前看到客户端断开（`finished=false`、`ECONNRESET`/`EPIPE`），Worker 在 `inflateImageStream` 读 body 阶段失败；对照组中页面内并发 fetch 全部成功、小文件 Worker fetch 全部成功，延迟 1.5 s 或系统预热后不复现，因此是 Chromium 在冷启动并发多 Worker 大响应体时取消下载，而非服务端竞态、超时或 gzip 管线。
+
+`packages/experimental/webworker-runtime/src/storage/image-fetch.ts` 为幂等镜像 GET 增加最多 3 次尝试，仅重试 `TypeError` 与 408/429/5xx，退避 250 ms × 尝试序号加 0–250 ms 抖动，4xx 与非 gzip 响应立即失败；懒加载归档共用该下载。`tests/storage/image-fetch.spec.ts` 5/5；`tests/cold-start.e2e.mjs` 在 16 路下注入每个 Worker 首次镜像 abort，每轮 `routedImageRequests=32`、0 失败；无注入 16 路 × 3 轮 48/48。Chromium 内部取消来源未定位，重试只保证失败可恢复；分块校验、断点续传、服务端并发整形与 Windows/Safari 未验证。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。
