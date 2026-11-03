@@ -10,9 +10,12 @@
  * The host also executes the Workspace `read`/`write` tool calls it advertises
  * to the model, so a tool step started before the tab closed still finishes on
  * the backend. A page can cancel a running turn: the in-flight model request is
- * aborted and the turn settles as `aborted` after at most one tool call. Approvals,
- * process-restart recovery, and every other tool are not implemented: an
- * unsupported or missing tool result settles the turn as an explicit error
+ * aborted and the turn settles as `aborted` after at most one tool call.
+ * `write` requires page approval. A running-turn journal is written next to the
+ * Session store: after a backend restart, each unfinished turn is settled as
+ * `DURABLE_HOST_RESTARTED` with an error result for every open tool call, and
+ * no model request or tool is executed again. Other tools are not implemented:
+ * an unsupported or missing tool result settles the turn as an explicit error
  * instead of replaying or fabricating a value.
  *
  * A reopened page can attach to the turn's event stream from any sequence number.
@@ -20,12 +23,14 @@
  * settles; attaching never executes a model request or a tool again.
  */
 import { randomUUID } from 'node:crypto'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 
 const MAX_TURN_ID_LENGTH = 200
 const MAX_PROMPT_CHARS = 10_000
 const MAX_DURABLE_STEPS = 8
 const MAX_TOOL_RESULT_CHARS = 32_000
 const MAX_ATTACH_SEQ = 1_000_000
+const JOURNAL_VERSION = 1
 
 /**
  * Structured failure raised by the durable host.
@@ -171,9 +176,22 @@ function assertBoundedText(value, name, maximum) {
 }
 
 /**
+ * Validate one text field read from the running-turn journal.
+ * @param {unknown} value - Journal field value.
+ * @param {string} name - Field name reported in the failure.
+ * @returns {string} The validated field.
+ */
+function journalText(value, name) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_TURN_ID_LENGTH) {
+    throw new Error(`durable host journal contains an invalid ${name}`)
+  }
+  return value
+}
+
+/**
  * Create the server-owned durable turn host.
- * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function}} options - Session store, admission controller, served origin, model timeout, approval policy and timeout, advertised tool definitions, and their server-side executor.
- * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, version: number}} Host operations.
+ * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, journalPath?: string}} options - Session store, admission controller, served origin, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, and the running-turn journal path.
+ * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, recover: Function, version: number}} Host operations.
  */
 export function createDurableTurnHost({
   store,
@@ -185,17 +203,42 @@ export function createDurableTurnHost({
   requiresApproval = () => false,
   tools = [],
   executeTool,
+  journalPath,
 }) {
   if (typeof store?.exclusive !== 'function') throw new TypeError('durable host requires the formal Session store')
   if (typeof originOf !== 'function') throw new TypeError('durable host requires the served origin resolver')
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 300) throw new TypeError('durable host timeoutMs must be an integer of at least 300')
   if (!Number.isSafeInteger(approvalTimeoutMs) || approvalTimeoutMs < 300) throw new TypeError('durable host approvalTimeoutMs must be an integer of at least 300')
   if (typeof requiresApproval !== 'function') throw new TypeError('durable host requiresApproval must be a function')
+  if (journalPath !== undefined && typeof journalPath !== 'string') throw new TypeError('durable host journalPath must be a string')
   if (!Array.isArray(tools)) throw new TypeError('durable host tools must be an array')
   if (tools.length > 0 && typeof executeTool !== 'function') throw new TypeError('durable host tools require an executeTool function')
   const runs = new Map()
   const settledRuns = []
+  const recoveredRuns = new Map()
+  const journalEntries = new Map()
   const approvalCounters = { requested: 0, approved: 0, rejected: 0, timedOut: 0, cancelled: 0 }
+  let journalChain = Promise.resolve()
+  let journalHealthy = true
+
+  /**
+   * Rewrite the running-turn journal after the previous write completes.
+   * @returns {Promise<void>} Resolves when the snapshot is published.
+   */
+  const persistJournal = () => {
+    if (journalPath === undefined) return Promise.resolve()
+    const payload = `${JSON.stringify({ version: JOURNAL_VERSION, runs: [...journalEntries.values()] })}\n`
+    journalChain = journalChain.then(async () => {
+      const temporary = `${journalPath}.${randomUUID()}.tmp`
+      await writeFile(temporary, payload, 'utf8')
+      await rename(temporary, journalPath)
+    })
+    journalChain = journalChain.catch(error => {
+      journalHealthy = false
+      process.stderr.write(`browser-native durable host: running-turn journal write failed: ${String(error)}\n`)
+    })
+    return journalChain
+  }
 
   const approvalTarget = call => {
     try {
@@ -257,6 +300,7 @@ export function createDurableTurnHost({
       settledAt: run.settledAt ?? Date.now(),
     })
     if (settledRuns.length > 20) settledRuns.shift()
+    if (journalEntries.delete(run.turnId)) void persistJournal()
   }
 
   const wakeChannel = run => {
@@ -595,6 +639,136 @@ export function createDurableTurnHost({
   }
 
   /**
+   * Settle every turn left running by a previous backend process.
+   *
+   * Recovery never resumes a model request or a tool. It reads the running-turn
+   * journal, appends an error `tool/result` for each unsettled tool call, closes
+   * an open step, and settles the turn as `DURABLE_HOST_RESTARTED`. It also
+   * increments the Session owner epoch and clears the owner token, so a stale
+   * pre-restart lease cannot write after recovery.
+   * @returns {Promise<{recovered: number, journalHealthy: boolean}>} Count of settled turns.
+   */
+  const recover = async () => {
+    if (journalPath === undefined) return { recovered: 0, journalHealthy }
+    let raw
+    try {
+      raw = await readFile(journalPath, 'utf8')
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { recovered: 0, journalHealthy }
+      throw error
+    }
+    const parsed = JSON.parse(raw)
+    if (parsed?.version !== JOURNAL_VERSION || !Array.isArray(parsed.runs)) {
+      throw new Error('durable host journal is not a v1 running-turn journal')
+    }
+    let recovered = 0
+    for (const entry of parsed.runs) {
+      if (entry === null || typeof entry !== 'object') throw new Error('durable host journal contains a non-object entry')
+      const turnId = journalText(entry.turnId, 'turnId')
+      const sessionId = journalText(entry.sessionId, 'sessionId')
+      const principalId = journalText(entry.principalId, 'principalId')
+      const startedAt = Number.isSafeInteger(entry.startedAt) ? entry.startedAt : Date.now()
+      const session = store.sessions.get(sessionId)
+      if (session === undefined) continue
+      let openTurn
+      let startSeq
+      let openStep
+      const openCalls = new Map()
+      for (const [index, event] of session.events.entries()) {
+        switch (event.type) {
+          case 'turn/start':
+            openTurn = event.data?.turn
+            startSeq = index
+            openStep = undefined
+            openCalls.clear()
+            break
+          case 'turn/end':
+            openTurn = undefined
+            openStep = undefined
+            openCalls.clear()
+            break
+          case 'step/start':
+            openStep = event.data?.step
+            break
+          case 'step/end':
+            openStep = undefined
+            break
+          case 'tool/call':
+            openCalls.set(event.data?.callId, { step: event.data?.step, name: event.data?.name })
+            break
+          case 'tool/result': {
+            const callId = event.data?.message?.toolCallId
+            if (typeof callId === 'string') openCalls.delete(callId)
+            break
+          }
+          default:
+            break
+        }
+      }
+      if (openTurn === undefined || startSeq === undefined) continue
+      const reason = { kind: 'error', error: { code: 'DURABLE_HOST_RESTARTED', message: 'the backend restarted before the turn settled' } }
+      const events = []
+      for (const [callId, call] of openCalls) {
+        events.push({
+          type: 'tool/result',
+          data: {
+            turn: openTurn,
+            step: call.step,
+            message: {
+              id: `durable-tool-${callId}-${randomUUID()}`,
+              role: 'tool',
+              source: { kind: 'tool', callId },
+              toolCallId: callId,
+              content: [{ type: 'text', text: `tool ${call.name} was interrupted by a backend restart; it was not retried` }],
+              isError: true,
+            },
+          },
+        })
+      }
+      if (openStep !== undefined) events.push({ type: 'step/end', data: { turn: openTurn, step: openStep } })
+      events.push({ type: 'turn/end', data: { turn: openTurn, reason } })
+      const written = await store.exclusive(sessionId, async () => {
+        const current = store.sessions.get(sessionId)
+        if (current === undefined) return undefined
+        const base = current.events.length
+        const rows = events.map((event, index) => ({ seq: base + index, ...event }))
+        current.events.push(...rows)
+        current.ownerEpoch += 1
+        current.ownerToken = undefined
+        current.ownerExpiresAt = 0
+        await store.flush(current)
+        return { rows, startSeq, endSeq: current.events.length - 1, replay: current.events.slice(startSeq) }
+      })
+      if (written === undefined) continue
+      const settledAt = Date.now()
+      recoveredRuns.set(turnId, {
+        principalId,
+        events: written.replay,
+        status: {
+          version: 1,
+          turnId,
+          sessionId,
+          status: 'failed',
+          turn: openTurn,
+          model,
+          startedAt,
+          settledAt,
+          elapsedMs: settledAt - startedAt,
+          startSeqs: [startSeq],
+          endSeqs: [written.endSeq],
+          nextSeq: written.endSeq + 1,
+          error: { ...reason.error },
+          recovered: true,
+        },
+      })
+      recovered += 1
+    }
+    await rm(journalPath, { force: true })
+    journalEntries.clear()
+    return { recovered, journalHealthy }
+  }
+
+  /**
    * Start or replay a server-owned turn.
    * @param {{sessionId: string, principalId: string, turnId: string, prompt: string, header: object}} request - Turn identity, owner principal, prompt, and Session header.
    * @returns {Promise<object>} Current run status; a replayed turn never executes twice.
@@ -609,6 +783,15 @@ export function createDurableTurnHost({
       }
       return { ...runStatus(existing), replayed: true }
     }
+    const recovered = recoveredRuns.get(turnId)
+    if (recovered !== undefined) {
+      if (recovered.status.sessionId !== sessionId || recovered.principalId !== principalId) {
+        throw new DurableTurnError('TURN_CONFLICT', 'turnId is already bound to another Session or principal', 409)
+      }
+      return { ...recovered.status, replayed: true }
+    }
+    journalEntries.set(turnId, { turnId, sessionId, principalId, startedAt: Date.now() })
+    await persistJournal()
     const run = {
       turnId,
       sessionId,
@@ -682,6 +865,8 @@ export function createDurableTurnHost({
       completed,
       failed,
       cancelled,
+      recovered: recoveredRuns.size,
+      journalHealthy,
       runningTurns: runningTurns.slice(-16),
       recentSettled: [...settledRuns].reverse().slice(0, 12),
       approvals: {
@@ -705,7 +890,14 @@ export function createDurableTurnHost({
   const cancel = ({ turnId, principalId }) => {
     assertBoundedText(turnId, 'turnId', MAX_TURN_ID_LENGTH)
     const run = runs.get(turnId)
-    if (run === undefined || run.principalId !== principalId) {
+    if (run === undefined) {
+      const recovered = recoveredRuns.get(turnId)
+      if (recovered !== undefined && recovered.principalId === principalId) {
+        return { ...recovered.status, cancelRequested: false }
+      }
+      throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
+    }
+    if (run.principalId !== principalId) {
       throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
     }
     if (run.status === 'running' && !run.stopRequested) {
@@ -733,7 +925,14 @@ export function createDurableTurnHost({
       throw new DurableTurnError('INVALID_REQUEST', 'approval decision must be approve or reject')
     }
     const run = runs.get(turnId)
-    if (run === undefined || run.principalId !== principalId) {
+    if (run === undefined) {
+      const recovered = recoveredRuns.get(turnId)
+      if (recovered !== undefined && recovered.principalId === principalId) {
+        throw new DurableTurnError('APPROVAL_NOT_PENDING', 'the restored turn has no pending approval', 409)
+      }
+      throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
+    }
+    if (run.principalId !== principalId) {
       throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
     }
     if (run.decidedApprovals.has(approvalId)) {
@@ -756,10 +955,10 @@ export function createDurableTurnHost({
   const status = ({ turnId, principalId }) => {
     assertBoundedText(turnId, 'turnId', MAX_TURN_ID_LENGTH)
     const run = runs.get(turnId)
-    if (run === undefined || run.principalId !== principalId) {
-      throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
-    }
-    return runStatus(run)
+    if (run !== undefined && run.principalId === principalId) return runStatus(run)
+    const recovered = recoveredRuns.get(turnId)
+    if (recovered !== undefined && recovered.principalId === principalId) return { ...recovered.status }
+    throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
   }
 
   /**
@@ -777,7 +976,23 @@ export function createDurableTurnHost({
       throw new DurableTurnError('INVALID_REQUEST', 'fromSeq must be an integer between 0 and 1000000')
     }
     const run = runs.get(turnId)
-    if (run === undefined || run.principalId !== principalId) {
+    if (run === undefined) {
+      const recovered = recoveredRuns.get(turnId)
+      if (recovered === undefined || recovered.principalId !== principalId) {
+        throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
+      }
+      let index = 0
+      const next = async () => {
+        if (signal?.aborted === true) return undefined
+        while (index < recovered.events.length && recovered.events[index].seq < fromSeq) index += 1
+        if (index >= recovered.events.length) return undefined
+        const event = recovered.events[index]
+        index += 1
+        return event
+      }
+      return { status: () => ({ ...recovered.status }), next }
+    }
+    if (run.principalId !== principalId) {
       throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
     }
     let cursor = fromSeq
@@ -804,5 +1019,5 @@ export function createDurableTurnHost({
     return { status: () => runStatus(run), next }
   }
 
-  return { start, status, cancel, decide, subscribe, snapshot, version: 1 }
+  return { start, status, cancel, decide, subscribe, snapshot, recover, version: 1 }
 }

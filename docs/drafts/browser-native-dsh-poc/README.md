@@ -1032,6 +1032,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/durable-approval.test.mjs` 1/1：拒绝后文件不存在、批准后才出现；同一审批第二次决策 409 `APPROVAL_ALREADY_DECIDED`；900 ms 超时失败；待决时 stop → `cancelled` 且文件不存在；跨 principal 404、匿名 401；`approvals={pending:0,requested:6,approved:2,rejected:1,timedOut:1,cancelled:2}`。同批回归 7/7。未改 `packages/`。
 
+## durable 重启恢复
+
+[durable 重启恢复](durable-host-restart.md)用 `dataDir/durable-runs.json` 记录未结算 turn。backend 在 `store.load()` 之后、开始监听之前调用 `durableHost.recover()`：为每个未结算工具调用补 `isError` 的 `tool/result`，关闭未闭合 step，以 `turn/end {kind:"error", error:{code:"DURABLE_HOST_RESTARTED"}}` 结算，并把 `ownerEpoch` 加 1、清空 owner token；恢复不重放模型或工具。查询与 attach 从 Session 日志回放恢复状态，随后删除 journal。
+
+`tests/durable-host-restart.test.mjs` 2/2（fork 子进程 + `SIGKILL`）：被强杀的 turn 恢复为 `failed`/`DURABLE_HOST_RESTARTED`，8 条事件里 `tool/result` 为 `isError`、`turn/end` reason 为 error；重启后模型请求 0、工具调用 0、Workspace 仍为空、journal 已删除、旧 epoch 1 → 2 且新 claim 成功；下一 turn `completed`/`turn: 2`。第二个用例在 `step/start` 后强杀，恢复补 `step/end` 与 `turn/end`。同批复跑审批、取消、接管、可观测性 4/4。未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

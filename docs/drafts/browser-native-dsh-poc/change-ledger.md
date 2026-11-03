@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-084：durable 重启恢复与运行 journal
+
+```text
+changeId: BN-P2-084
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-host-restart.test.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/durable-backend-process.mjs; docs/drafts/browser-native-dsh-poc/durable-host-restart.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable host 的 run 只在进程内存；backend 被强杀后 Session 停在 tool/call 或 step/start 后，没有 turn/end，写租约也无人释放，重启后既不能查询结算状态也无法安全开始新 turn。
+existingExtensionPointsChecked: 复用 `durable-host-v2.mjs` 的 run 状态机、`store.exclusive`/`flush`、`turn/end` error reason、`subscribe` 回放与 `snapshot()`；新增 `journalPath`、`persistJournal`、`recover()` 与 `recoveredRuns`。`backend-v2.mjs` 复用 `session/open` 的 claim 与既有 `dataDir`；未改 Agent Loop、Session format 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 内存状态无法证明进程被强杀后事件仍可结算；需要真实 fork 子进程、SIGKILL、重启后同一 dataDir 上验证 journal 读取、事件补写、epoch fencing 与“不重复执行”。
+behaviorChange: `createDurableTurnHost` 接受 `journalPath`，`start()` 在 claim 前原子写入 `{version:1,runs:[{turnId,sessionId,principalId,startedAt}]}`，结算时删除条目；新增 `recover()`：读取 journal，对每个仍有打开 turn 的 Session 补 `isError` 的 `tool/result`、关闭未闭合 step、追加 `DURABLE_HOST_RESTARTED` 的 `turn/end`，`ownerEpoch += 1` 并清空 owner token，记录 `recoveredRuns` 供 `status`/`subscribe`/`cancel` 使用，最后删除 journal。损坏或非 v1 journal 在启动时抛错。`snapshot()` 增加 `recovered` 与 `journalHealthy`。backend 在 `store.load()` 后传 `dataDir/durable-runs.json` 并 `await durableHost.recover()`，导出 `durableRecovery`。
+consumersUpdated: 新增 `tests/durable-host-restart.test.mjs` 与 `tests/fixtures/durable-backend-process.mjs`；新增 `durable-host-restart.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test tests/durable-host-restart.test.mjs` 2/2（fork 子进程 + SIGKILL）：重启在 `tool/call` 处恢复 1 个 turn，状态 `failed`/`DURABLE_HOST_RESTARTED`、attach 8 条事件且 `tool/result` 为 `isError`、`turn/end` reason 为 error；模型请求 0、工具调用 0、Workspace 为空、`durable-runs.json` 删除；`ownerEpoch` 1 → 2，新 write claim 得到 3；后续 turn `completed`/`turn: 2`。第二个用例在 `step/start` 后强杀，恢复补 `step/end` 与 `turn/end`，模型请求 0。同批 `durable-approval`、`durable-cancellation`、`durable-tool-attach`、`observability` 回归 4/4。scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供 durable running-turn journal 或重启结算契约，复用其恢复入口与错误码并删除本地补丁；复跑 `durable-host-restart.test.mjs` 与上述回归。检查 backend 仍在监听前完成恢复，`session/open` 仍能接管被恢复的 Session。
+deleteCondition: 上游 durable 路径提供等价的未结算 turn 恢复与 fencing，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-083：durable 危险工具审批强制点
 
 ```text

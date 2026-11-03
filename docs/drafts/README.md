@@ -150,6 +150,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 89. [Browser-Native 可观测性](browser-native-dsh-poc/observability.md)：`/observability/metrics` 导出 HTTP/模型/队列/租约/durable turn 指标与 Prometheus 文本，`/observability/failure` 给出单 turn 证据包；401/404 分类、空白 completion 归类为 turn 失败、证据不含 prompt、跨 principal 404。新测试 1/1，同批回归 15/15；指标仅进程内存，重启归零。
 90. [Browser-Native durable 取消](browser-native-dsh-poc/durable-cancellation.md)：`POST /session/durable/stop` 中止在途模型请求并以 `aborted`/`user` 结算，释放租约、计入 `cancelled` 指标；模型只请求 1 次、事件 `seq` 连续、attach 回放一致、重复 stop 幂等、跨 principal 404。新测试 1/1，同批回归 7/7；取消在 step 边界生效，重启后无法取消。
 91. [Browser-Native durable 审批](browser-native-dsh-poc/durable-approval.md)：durable `write` 强制 `ask`，未批准不写盘，拒绝/超时/取消都补 `tool/result`；同一审批跨客户端只结算一次，跨 principal 404。新测试 1/1，同批回归 7/7；审批状态在内存，重启丢失。
+92. [Browser-Native durable 重启恢复](browser-native-dsh-poc/durable-host-restart.md)：`dataDir/durable-runs.json` 记录未结算 turn，backend 在监听前 `recover()`，补 `isError` 的 `tool/result`、关闭 step、以 `DURABLE_HOST_RESTARTED` 结算，bump `ownerEpoch` 清空 owner token；不重放模型或工具。fork 子进程 + `SIGKILL` 测试 2/2：重启后模型请求 0、工具调用 0、Workspace 为空、journal 删除、新 claim 成功、下一 turn 完成；同批回归 4/4。不续跑、不回滚已提交副作用、journal 非事务。
 
 ### 需要实现或审查代码时
 

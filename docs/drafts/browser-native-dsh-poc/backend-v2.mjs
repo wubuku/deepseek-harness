@@ -4015,7 +4015,9 @@ export async function createBrowserNativeV2Server(options) {
     requiresApproval: call => call.name === 'write',
     tools: DURABLE_TOOL_DEFINITIONS,
     executeTool: executeDurableTool,
+    journalPath: join(options.dataDir, 'durable-runs.json'),
   })
+  const durableRecovery = await durableHost.recover()
   const server = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs }, async (request, response) => {
     let url
     activeRequests += 1
@@ -4703,6 +4705,7 @@ export async function createBrowserNativeV2Server(options) {
     accessAudit,
     sweepAttachments,
     durableHost,
+    durableRecovery,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {
         await releaseDataDirLock().catch(() => {})
