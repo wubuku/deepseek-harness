@@ -1050,6 +1050,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/durable-real-lifecycle.e2e.mjs` 1/1（`DSH_POC_ENV_FILE` + `DSH_POC_REAL_PROVIDER=longcat`）：审批 turn `completed` 且文件出现；待决时 stop → `cancelled` 且文件不存在；待决时 `SIGKILL` → 重启 `recovered: 1`、`failed`/`DURABLE_HOST_RESTARTED`、8 条事件、`modelRequestsAfterRestart: 0`、journal 删除、文件不存在；总耗时 71 494 ms。同批 scripted 回归 8/8。未改 `packages/`。
 
+## durable 附件与 Workspace 写入一致性
+
+[durable 附件与 Workspace 写入一致性](durable-workspace-consistency.md)区分两件事：durable turn 的 `user/message.content` 是文本 prompt，附件引用要求数组形式的 `file` 块，因此附件不适用于 durable 路径，durable 工具也只能触达 `/dsh/home/workspace/`；已经审批并提交的 Workspace 写入在 backend 重启后保持同一 `hash`、`bytes` 与 Session 事件序列。
+
+`tests/durable-workspace-recovery.test.mjs` 1/1：审批前 manifest 无文件，批准后 turn `completed` 并提交 23 字节文件；journal 清空后 `SIGKILL`，重启 `recovered: 0`、journal 删除，manifest 的 `hash`/`bytes` 与 blob 字节不变，11 条 Session 事件类型不变；下一 turn 的 `read` 返回原内容并 `completed`/`turn: 2`。同批回归 8/8。未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

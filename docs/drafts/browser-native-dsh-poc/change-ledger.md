@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-087：durable 附件不适用与已提交 Workspace 写入恢复一致性
+
+```text
+changeId: BN-P2-087
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.test.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/durable-backend-process.mjs; docs/drafts/browser-native-dsh-poc/durable-workspace-consistency.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable 生命周期此前只验证未获批写入不落盘与重启恢复；没有说明 durable turn 是否携带附件，也没有证明已结算 turn 的已提交 Workspace 写入在 backend 重启后仍与 Session 日志一致。
+existingExtensionPointsChecked: 复用 durable host 的 `read`/`write` 工具、`executeDurableTool` 的 Workspace commit、approval、running-turn journal 与 `recover()`；测试复用 fork 进程 fixture 与 `SIGKILL` 模式。未改产品代码；只在 fixture 增加 `commit-write` 与 `read-committed` 脚本化模型模式。
+whyDraftOnlyWasInsufficient: 静态阅读可说明 durable `user/message.content` 是字符串，但附件是否适用需要用实际事件与 durable 工具路径证明；已提交写入在重启后是否仍一致需要真实进程强杀与重启，内存测试无法覆盖。
+behaviorChange: 无产品行为变更；新增 `tests/durable-workspace-recovery.test.mjs` 1/1。附件部分记录为不适用：durable 输入只有文本 prompt，附件引用要求数组 `file` 块，durable 工具路径只允许 `/dsh/home/workspace/`。Workspace 部分记录：审批提交后 journal 清空，重启 `recovered: 0`，manifest `hash`/`bytes` 与 blob 字节不变，11 条 Session 事件类型不变，下一 turn `read` 成功。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/durable-workspace-recovery.test.mjs` 1/1；同批复跑 durable 重启、多 host、审批、取消、接管、可观测性 8/8。诊断 JSON：`{"result":"passed","scope":"durable-workspace-recovery","committedWrite":{"status":"completed","bytes":23,"hash":"b8be2b..."},"attachments":"not-applicable","restart":{"recovered":0,"journalCleared":true,"manifestHashStable":true,"sessionEventsStable":11},"postRestartRead":{"status":"completed","turn":2,"isError":false}}`。
+consumersUpdated: 新增 `durable-workspace-consistency.md`，PoC README、matrix、drafts index 与本账本同步。
+syncReplaySteps: 上游若让 durable 输入携带附件，需要同步事件字段、GC 引用规则与恢复测试；若提供跨存储事务，复跑本测试确认已提交写入与 Session 结算的一致性契约。
+deleteCondition: 上游提供等价的 durable 附件与 Workspace 恢复一致性证据，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-086：真实模型 durable 全链路与慢响应租约续期
 
 ```text

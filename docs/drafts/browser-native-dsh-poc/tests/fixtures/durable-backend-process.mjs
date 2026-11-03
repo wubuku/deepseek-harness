@@ -16,6 +16,27 @@ const app = await createBrowserNativeV2Server({
       if (modelMode === 'hang') return { kind: 'barrier-text', release: new Promise(() => {}) }
       if (modelMode === 'hang-first' && modelRequests === 1) return { kind: 'barrier-text', release: new Promise(() => {}) }
       if (modelMode === 'text' || modelMode === 'hang-first') return { kind: 'text', text: 'RESTART_TURN_DONE' }
+      if (modelMode === 'commit-write' || modelMode === 'read-committed') {
+        if (modelRequests > 1) return { kind: 'text', text: 'WORKSPACE_RECOVERY_DONE' }
+        toolCalls += 1
+        return modelMode === 'commit-write'
+          ? {
+              kind: 'tool-call',
+              call: {
+                id: 'durable-commit-write',
+                name: 'write',
+                arguments: { file_path: '/dsh/home/workspace/durable-committed.txt', content: 'DURABLE_COMMITTED_BODY\n' },
+              },
+            }
+          : {
+              kind: 'tool-call',
+              call: {
+                id: 'durable-commit-read',
+                name: 'read',
+                arguments: { file_path: '/dsh/home/workspace/durable-committed.txt' },
+              },
+            }
+      }
       toolCalls += 1
       return {
         kind: 'tool-call',
