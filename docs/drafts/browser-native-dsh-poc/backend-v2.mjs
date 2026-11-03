@@ -4179,6 +4179,7 @@ export async function createBrowserNativeV2Server(options) {
     workspaces,
     crossStoreLedger,
     llm,
+    egress,
     sweepAttachments,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {

@@ -97,6 +97,11 @@ try {
       response.end('direct-ok')
       return
     }
+    if (request.url.startsWith('/limited')) {
+      response.writeHead(200, { 'content-type': 'text/plain' })
+      response.end('limited-ok')
+      return
+    }
     response.writeHead(404, { 'content-type': 'text/plain' })
     response.end('missing')
   })
@@ -110,10 +115,21 @@ try {
     llmMode: 'scripted',
     responseHeaders: { 'content-security-policy': "connect-src 'self' data:" },
     egress: {
-      allow: [{
-        origin: allowlistedOrigin,
-        credential: { header: 'authorization', value: secretValue },
-      }],
+      allow: [
+        {
+          capability: 'upstream.private',
+          origin: allowlistedOrigin,
+          pathPrefix: '/private',
+          methods: ['GET'],
+          credential: { header: 'authorization', value: secretValue },
+        },
+        {
+          capability: 'upstream.limited',
+          origin: allowlistedOrigin,
+          pathPrefix: '/limited',
+          rateLimit: { windowMs: 60_000, maxRequests: 2 },
+        },
+      ],
     },
   })
   const origin = await app.listen(0)
@@ -132,7 +148,6 @@ try {
     try { body = JSON.parse(request.postData() ?? '{}') } catch {}
     requests.push({ path: url.pathname, body })
   })
-
   await openPreview(page, `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`)
   await page.waitForFunction(() => typeof window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ === 'function', undefined, { timeout: 30_000 })
   await page.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 30_000 })
@@ -146,6 +161,10 @@ try {
     redirect: `${allowlistedOrigin}/private/redirect`,
     leak: `${allowlistedOrigin}/private/leak`,
     direct: `${allowlistedOrigin}/private/direct`,
+    pathOutside: `${allowlistedOrigin}/admin/secret`,
+    pathBoundary: `${allowlistedOrigin}/privatex/echo`,
+    methodDenied: `${allowlistedOrigin}/private/echo`,
+    rateLimited: `${allowlistedOrigin}/limited/echo`,
   }
   const probe = await page.evaluate(payload => window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__({
     action: 'egress-probe',
@@ -165,8 +184,9 @@ try {
   check(allowed.credentialInjected === true, 'the proxy must report credential injection')
   check(allowlistedRecords.filter(record => record.path === '/private/echo').length === 1,
     'the allowlisted upstream must receive exactly one request')
-  check(allowlistedRecords[0]?.authorization === secretValue, 'the upstream must receive the injected credential')
-  check(allowlistedRecords[0]?.cookie === undefined, 'the proxy must not forward the principal cookie')
+  const echoRecord = allowlistedRecords.find(record => record.path === '/private/echo')
+  check(echoRecord?.authorization === secretValue, 'the upstream must receive the injected credential')
+  check(echoRecord?.cookie === undefined, 'the proxy must not forward the principal cookie')
   check(JSON.stringify(probe.allowlisted).includes(secretValue) === false,
     'the proxy response must not echo the injected credential')
   check(JSON.parse(allowed.body).received === 'present', 'the upstream must observe the credential')
@@ -174,7 +194,6 @@ try {
   check(probe.blockedHost.status === 403, 'a non-allowlisted host must be refused')
   check(probe.blockedHost.code === 'EGRESS_HOST_NOT_ALLOWED', 'the refusal must carry a typed code')
   check(blockedRecords.length === 0, 'a refused host must never receive the request')
-
   check(probe.injectedHeader.status === 400, 'a browser-supplied authorization header must be refused')
   check(probe.injectedHeader.code === 'EGRESS_FORBIDDEN_HEADER', 'the header refusal must carry a typed code')
   check(allowlistedRecords.filter(record => record.path === '/private/echo').length === 1,
@@ -196,6 +215,50 @@ try {
   check(probe.directFetch.ok === false, 'the CSP must block a direct Worker fetch to the allowlisted origin')
   check(allowlistedRecords.every(record => record.path !== '/private/direct'),
     'a CSP-blocked direct fetch must never reach the upstream')
+
+  check(probe.pathOutside.status === 403, 'a path outside the capability prefix must be refused')
+  check(probe.pathOutside.code === 'EGRESS_PATH_NOT_ALLOWED', 'the path refusal must carry a typed code')
+  check(allowlistedRecords.every(record => record.path !== '/admin/secret'),
+    'a path outside the capability prefix must never reach the upstream')
+  check(probe.pathBoundary.status === 403, 'a prefix must match on a path segment boundary')
+  check(probe.pathBoundary.code === 'EGRESS_PATH_NOT_ALLOWED', 'the boundary refusal must carry a typed code')
+  check(allowlistedRecords.every(record => record.path !== '/privatex/echo'),
+    'a path that only shares a string prefix must never reach the upstream')
+  check(probe.methodDenied.status === 405, 'a method outside the capability grant must be refused')
+  check(probe.methodDenied.code === 'EGRESS_METHOD_NOT_ALLOWED', 'the method refusal must carry a typed code')
+  check(allowlistedRecords.filter(record => record.path === '/private/echo').length === 1,
+    'a denied method must not reach the upstream')
+
+  const rateStatuses = probe.rateLimited.map(attempt => attempt.status)
+  check(JSON.stringify(rateStatuses) === JSON.stringify([200, 200, 429, 429]),
+    'the capability rate limit must admit two requests and refuse the next two')
+  check(probe.rateLimited[2].code === 'EGRESS_RATE_LIMITED' && probe.rateLimited[3].code === 'EGRESS_RATE_LIMITED',
+    'a rate-limited request must carry a typed code')
+  check(allowlistedRecords.filter(record => record.path === '/limited/echo').length === 2,
+    'requests above the capability rate limit must not reach the upstream')
+
+  const audit = app.egress.audit()
+  const auditByRequest = new Map(audit.map(entry => [entry.requestId, entry]))
+  check(audit.length === 13, 'every egress probe request must have one audit record')
+  check(auditByRequest.get('egress-allowlisted')?.decision === 'allow', 'an allowed request must be audited as allow')
+  check(auditByRequest.get('egress-allowlisted')?.capability === 'upstream.private',
+    'the audit record must name the capability that admitted the request')
+  check(auditByRequest.get('egress-allowlisted')?.path === '/private/echo', 'the audit record must name the target path')
+  check(auditByRequest.get('egress-path-outside')?.decision === 'deny', 'a denied path must be audited')
+  check(auditByRequest.get('egress-path-outside')?.code === 'EGRESS_PATH_NOT_ALLOWED',
+    'the audit record must retain the refusal code')
+  check(auditByRequest.get('egress-path-outside')?.path === '/admin/secret', 'the audit record must retain the denied path')
+  check(auditByRequest.get('egress-method-denied')?.code === 'EGRESS_METHOD_NOT_ALLOWED',
+    'a denied method must be audited with its code')
+  check(auditByRequest.get('egress-method-denied')?.capability === 'upstream.private',
+    'a denied method must be audited with the matched capability')
+  check(auditByRequest.get('egress-rate-3')?.code === 'EGRESS_RATE_LIMITED',
+    'a rate-limited request must be audited with its code')
+  check(auditByRequest.get('egress-rate-3')?.retryAfterMs > 0, 'the audit record must retain the retry delay')
+  check(audit.every(entry => typeof entry.at === 'string' && !Number.isNaN(Date.parse(entry.at))),
+    'every audit record must carry a timestamp')
+  check(audit.every(entry => !String(entry.path ?? '').includes('?')), 'audit records must not retain query strings')
+  check(JSON.stringify(audit).includes(secretValue) === false, 'audit records must never contain the credential')
 
   const turn = await sendTurn({
     page,
@@ -226,7 +289,7 @@ try {
       allowlisted: {
         status: probe.allowlisted.status,
         credentialInjected: allowed.credentialInjected,
-        upstreamAuthorizationPresent: allowlistedRecords[0]?.authorization === secretValue,
+        upstreamAuthorizationPresent: echoRecord?.authorization === secretValue,
         upstreamRequestCount: allowlistedRecords.filter(record => record.path === '/private/echo').length,
       },
       blockedHost: { status: probe.blockedHost.status, code: probe.blockedHost.code, upstreamRequests: blockedRecords.length },
@@ -237,6 +300,31 @@ try {
       echoedCredential: { redacted: String(leak.body).includes('[REDACTED]'),
         secretInResponse: String(leak.body).includes(secretValue),
         setCookieStripped: leak.headers['set-cookie'] === undefined },
+      pathPolicy: {
+        outside: { status: probe.pathOutside.status, code: probe.pathOutside.code,
+          upstreamRequests: allowlistedRecords.filter(record => record.path === '/admin/secret').length },
+        boundary: { status: probe.pathBoundary.status, code: probe.pathBoundary.code,
+          upstreamRequests: allowlistedRecords.filter(record => record.path === '/privatex/echo').length },
+      },
+      methodPolicy: {
+        status: probe.methodDenied.status,
+        code: probe.methodDenied.code,
+        upstreamEchoRequests: allowlistedRecords.filter(record => record.path === '/private/echo').length,
+      },
+      rateLimit: {
+        statuses: rateStatuses,
+        codes: probe.rateLimited.map(attempt => attempt.code ?? null),
+        upstreamRequests: allowlistedRecords.filter(record => record.path === '/limited/echo').length,
+      },
+      audit: {
+        entries: audit.length,
+        capability: auditByRequest.get('egress-allowlisted')?.capability ?? null,
+        pathDeniedTraceable: auditByRequest.get('egress-path-outside')?.code === 'EGRESS_PATH_NOT_ALLOWED',
+        methodDeniedTraceable: auditByRequest.get('egress-method-denied')?.code === 'EGRESS_METHOD_NOT_ALLOWED',
+        rateLimitTraceable: auditByRequest.get('egress-rate-3')?.code === 'EGRESS_RATE_LIMITED',
+        secretInAudit: JSON.stringify(audit).includes(secretValue),
+        queryRetained: audit.some(entry => String(entry.path ?? '').includes('?')),
+      },
     },
     csp: {
       directFetchBlocked: probe.directFetch.ok === false,

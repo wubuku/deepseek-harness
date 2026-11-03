@@ -483,7 +483,8 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.action === 'egress-probe') {
     if (data.targets === undefined || typeof data.targets !== 'object' || data.targets === null) return false
     return Object.entries(data.targets).every(([key, value]) =>
-      ['proxy', 'allowed', 'blocked', 'headerInjection', 'redirect', 'leak', 'direct'].includes(key)
+      ['proxy', 'allowed', 'blocked', 'headerInjection', 'redirect', 'leak', 'direct',
+        'pathOutside', 'pathBoundary', 'methodDenied', 'rateLimited'].includes(key)
         ? typeof value === 'string' && value.startsWith('http')
         : key === 'scheme' && typeof value === 'string' && value.length > 0)
   }

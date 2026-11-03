@@ -1353,9 +1353,11 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 ## 凭据隔离与服务端代理原型
 
-[凭据隔离与服务端代理原型](credential-isolation-proxy.md)把“浏览器不是凭据边界”的结论落成一个最小实现：页面 CSP 为 `connect-src 'self' data:`，Worker 的所有外联只能经过同源 backend 的 `POST /api/browser-native/egress/fetch`；backend 按 origin 白名单放行，通过校验后才注入 `authorization`，并拒绝浏览器自带凭据头、非 http(s) scheme、重定向跟随，同时对上游响应做 `[REDACTED]` 脱敏和 `set-cookie` 剥离。
+[凭据隔离与服务端代理原型](credential-isolation-proxy.md)把“浏览器不是凭据边界”的结论落成一个最小实现：页面 CSP 为 `connect-src 'self' data:`，Worker 的所有外联只能经过同源 backend 的 `POST /api/browser-native/egress/fetch`；backend 按 `capability` + `origin` + `pathPrefix` + 方法授权放行，路径按段边界匹配，全部通过后才注入 `authorization`，并按 capability 执行固定窗口限流；每次允许或拒绝都写入可按 request id 追溯的审计。代理拒绝浏览器自带凭据头、非 http(s) scheme、重定向跟随，并对上游响应做 `[REDACTED]` 脱敏和 `set-cookie` 剥离。
 
-Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返回 `EGRESS_HOST_NOT_ALLOWED` 且服务端 0 请求；Worker 注入 `authorization` 返回 `EGRESS_FORBIDDEN_HEADER`；302 作为数据返回、未跟随；上游回显凭据只得到占位符；Worker 直接 fetch 被 CSP 拦截、上游 0 请求；脚本 turn 仍完成且 Session/页面文本无凭据。密钥仍只存在于 backend 进程，白名单按 origin 而非路径或用户能力授权。
+真实 Chrome 运行中，授权路径外的 `/admin/secret` 与仅共享字符串前缀的 `/privatex/echo` 各以 `EGRESS_PATH_NOT_ALLOWED` 拒绝且上游 0 请求，`POST /private/echo` 以 `EGRESS_METHOD_NOT_ALLOWED` 拒绝，`/limited/echo` 的 4 次连续请求返回 `[200, 200, 429, 429]` 且上游只收到 2 次；13 次探针各产生 1 条审计，路径/方法/限流均可追溯，审计不含 query、凭据或密钥。合同测试 64/64。
+
+Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返回 `EGRESS_HOST_NOT_ALLOWED` 且服务端 0 请求；Worker 注入 `authorization` 返回 `EGRESS_FORBIDDEN_HEADER`；302 作为数据返回、未跟随；上游回显凭据只得到占位符；Worker 直接 fetch 被 CSP 拦截、上游 0 请求；脚本 turn 仍完成且 Session/页面文本无凭据。密钥仍只存在于 backend 进程；能力授权是静态部署配置，审计默认只在内存保留最近 200 条，限流为单进程 capability 级窗口，没有 per-Session 配额、集中持久审计或凭据轮换。
 
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs`；合同测试见 `tests/backend-v2.test.mjs`。
 

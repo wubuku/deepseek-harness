@@ -56,6 +56,10 @@ export interface BrowserNativeEgressTargets {
   readonly redirect: string
   readonly leak: string
   readonly direct: string
+  readonly pathOutside: string
+  readonly pathBoundary: string
+  readonly methodDenied: string
+  readonly rateLimited: string
 }
 
 /** Allowlist outcomes plus the Worker realm facts that matter for credentials. */
@@ -68,6 +72,10 @@ export interface BrowserNativeEgressReport {
   readonly redirect: BrowserNativeEgressAttempt
   readonly echoedCredential: BrowserNativeEgressAttempt
   readonly directFetch: BrowserNativeEgressAttempt
+  readonly pathOutside: BrowserNativeEgressAttempt
+  readonly pathBoundary: BrowserNativeEgressAttempt
+  readonly methodDenied: BrowserNativeEgressAttempt
+  readonly rateLimited: readonly BrowserNativeEgressAttempt[]
 }
 
 async function proxyAttempt(
@@ -107,6 +115,10 @@ export async function runBrowserNativeEgressProbe(
 ): Promise<BrowserNativeEgressReport> {
   const globals = globalThis as Record<string, unknown>
   const processValue = globals.process as { env?: Record<string, string | undefined> } | undefined
+  const rateLimited: BrowserNativeEgressAttempt[] = []
+  for (let index = 1; index <= 4; index += 1) {
+    rateLimited.push(await proxyAttempt(targets.proxy, `rate-${String(index)}`, { url: targets.rateLimited }))
+  }
   return {
     processEnvKeys: Object.keys(processValue?.env ?? {}).sort(),
     allowlisted: await proxyAttempt(targets.proxy, 'allowlisted', { url: targets.allowed }),
@@ -119,6 +131,13 @@ export async function runBrowserNativeEgressProbe(
     redirect: await proxyAttempt(targets.proxy, 'redirect', { url: targets.redirect }),
     echoedCredential: await proxyAttempt(targets.proxy, 'echoed-credential', { url: targets.leak }),
     directFetch: await attempt('direct-fetch', targets.direct, { mode: 'cors' }),
+    pathOutside: await proxyAttempt(targets.proxy, 'path-outside', { url: targets.pathOutside }),
+    pathBoundary: await proxyAttempt(targets.proxy, 'path-boundary', { url: targets.pathBoundary }),
+    methodDenied: await proxyAttempt(targets.proxy, 'method-denied', {
+      url: targets.methodDenied,
+      method: 'POST',
+    }),
+    rateLimited,
   }
 }
 

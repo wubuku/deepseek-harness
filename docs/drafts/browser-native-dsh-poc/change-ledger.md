@@ -12,6 +12,40 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-071：egress 路径/能力授权、审计与限流
+
+```text
+changeId: BN-P2-071
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/egress-proxy-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-isolation-probe.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/credential-isolation-proxy.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: [凭据隔离原型](credential-isolation-proxy.md)按 origin 放行，同 origin 任意 GET/POST 路径共享同一凭据，且没有审计或限流；origin 级授权无法表达“只允许 provider 的 completions 路径”，也无法解释一次越权尝试为何被拒。
+existingExtensionPointsChecked: 复用 PoC backend 的 `POST /api/browser-native/egress/fetch`、`EgressError`、`sendError` 的 `retryAfterMs` 通道与 Worker egress probe；只改 PoC proxy/probe/test 与文档。未改 DSH 核心、Session format、Web profile 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 路径/方法授权、限流与审计都是运行时决策，必须由 backend 在发出请求前执行；文档只能描述缺口。
+behaviorChange: `egress.allow[]` 现在必须提供唯一的 `capability`、`origin` 与 `pathPrefix`，可选 `methods`、`credential` 与 `rateLimit`。路径按段边界匹配（`/private` 匹配 `/private` 与 `/private/x`，不匹配 `/privatex`），同 origin 多条授权取最长前缀。凭据只在全部匹配后注入。policy 级或 entry 级固定窗口按 capability 计数，超限返回 429 并带 `retryAfterMs`。每次允许或拒绝写一条审计：时间、request id、decision、capability、origin、path（不含 query）、method、code、status、durationMs，允许记录另有 upstreamStatus、credentialInjected、truncated；默认内存环形缓冲 200 条，可注入 sink，从不记录凭据或 query。
+consumersUpdated: backend 返回 `app.egress` 供测试读取审计；backend 合同测试改为 capability/path 配置并新增路径边界、方法、限流、审计与配置校验用例；credential-isolation E2E 改为 `/private` 与 `/limited` 两条授权并新增路径/方法/限流/审计探针；专题文档、PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 64/64。`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs` 通过：路径外与边界各 403 `EGRESS_PATH_NOT_ALLOWED`、上游 0；`POST /private/echo` 405 `EGRESS_METHOD_NOT_ALLOWED`、该路径仍只有 1 次允许请求；`/limited/echo` 四次为 [200,200,429,429]、上游 2 次；13 条审计按 request id 可追溯、无 query/凭据/密钥；原有白名单/拒绝头/scheme/重定向/CSP/脚本 turn 断言保持通过。`build:preview` 通过；未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 若上游 egress 合同变化，重跑上述合同测试与 E2E；若 DSH 核心提供等价的能力授权/审计/限流，优先复用并删除此 PoC 实现。
+deleteCondition: DSH 核心或部署侧提供路径/能力级 egress 授权、持久审计与限流并由 PoC 直接消费后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
+### BN-P2-071：egress 路径/能力授权、审计与限流
+
+```text
+changeId: BN-P2-071
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/egress-proxy-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-isolation-probe.ts; docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/credential-isolation-proxy.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: [凭据隔离原型](credential-isolation-proxy.md)的白名单只按目标 origin 授权，同 origin 上的任意 GET/POST 路径都会获得同一凭据；没有限流与审计，越权路径、超额请求和事后归因都不可判定。本点把授权收窄到 capability + origin + 路径段前缀 + 方法，并在发出前执行 capability 级固定窗口限流、记录可追溯审计。
+existingExtensionPointsChecked: 继续使用既有的 `POST /api/browser-native/egress/fetch` 路由、`EgressError`、worker egress probe 与 `createEgressPolicy`；未改 DSH 核心、Session format、CSP 或页面视图。审计通过 `createEgressPolicy` 的环形缓冲与可选 sink 暴露，backend 返回 `app.egress` 供合同测试读取，不新增公开 HTTP 路由。
+whyDraftOnlyWasInsufficient: 仅记录“按 origin 授权”的缺口不能阻止同 origin 越权路径与超额请求；必须改代理决策与测试观测点才能证明 0 上游请求、审计可追溯、限流生效。
+behaviorChange: `egress.allow` 条目改为必需 `capability`、`origin`、`pathPrefix`，可选 `methods`（默认 GET+POST，全局仍只接受 GET/POST）、`credential` 与 `rateLimit`；路径按段边界匹配（`/private` 不匹配 `/privatex`），同 origin 取最长前缀；超出授权路径返回 `EGRESS_PATH_NOT_ALLOWED`（403），方法超出授权返回 `EGRESS_METHOD_NOT_ALLOWED`（405），固定窗口超限返回 `EGRESS_RATE_LIMITED`（429，含 `retryAfterMs`），三者均在发上游前拒绝。每次允许/拒绝写入 `at`、`requestId`、`decision`、`capability`、`origin`、`path`、`method`、`code`、`status`、`durationMs`（允许时另有 `upstreamStatus`、`credentialInjected`、`truncated`），不记 query/请求头/body，禁止密钥。
+consumersUpdated: `backend-v2.test.mjs` 的 egress 夹具改为 capability/path 授权并新增路径边界、方法、限流、审计与配置校验断言；`credential-isolation.e2e.mjs` 的 allow 配置、targets、断言与报告同步；`browser-native-isolation-probe.ts` 与 worker 测试通道校验新增 4 个 target；专题文档、PoC README、matrix、drafts index 和本账本同步。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs` 通过：`/admin/secret` 与 `/privatex/echo` 均 403 `EGRESS_PATH_NOT_ALLOWED` 且上游 0 请求，`POST /private/echo` 405 且该路径仍 1 次允许请求，`/limited/echo` 连续 4 次为 `[200,200,429,429]` 且上游 2 次，13 条审计可按 request id 追溯路径/方法/限流、无 query 与密钥；`failures`/`pageErrors`/`nonLocalRequests` 为空，turn 完成、Session 19 事件。`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 64/64。preview 重建通过；本项未改 `packages/`，不需要 `build:check`。
+syncReplaySteps: 上游 egress 配置若有 DSH 等价能力，优先改为消费其 capability/path 授权与审计接口；重跑 credential-isolation E2E 与 backend-v2 合同测试。
+deleteCondition: DSH 核心提供等价的 capability 级 egress 授权、可持久化审计与分布式限流并由 PoC 直接消费后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-070：浏览器到 backend 断流的强类型诊断
 
 ```text

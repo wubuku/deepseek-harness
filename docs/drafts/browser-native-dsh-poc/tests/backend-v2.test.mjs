@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
+import { createEgressPolicy } from '../egress-proxy-v2.mjs'
 import { WORKSPACE_BLOB_CHUNK_BYTES } from '../workspace-v2.mjs'
 
 const liveApps = new Set()
@@ -3253,6 +3254,11 @@ describe('browser-native DSH v2 backend', () => {
         response.end()
         return
       }
+      if (request.url === '/limited') {
+        response.writeHead(200, { 'content-type': 'text/plain' })
+        response.end('limited-ok')
+        return
+      }
       response.writeHead(404, { 'content-type': 'text/plain' })
       response.end('missing')
     })
@@ -3260,10 +3266,29 @@ describe('browser-native DSH v2 backend', () => {
     const secret = 'Bearer egress-contract-secret'
     try {
       const dataDir = await temporaryDirectory()
-      const { origin } = await start({
+      const { origin, app } = await start({
         dataDir,
         llmMode: 'scripted',
-        egress: { allow: [{ origin: allowlistedOrigin, credential: { header: 'authorization', value: secret } }] },
+        egress: {
+          allow: [
+            {
+              capability: 'private.echo',
+              origin: allowlistedOrigin,
+              pathPrefix: '/echo',
+              methods: ['GET'],
+              credential: { header: 'authorization', value: secret },
+            },
+            { capability: 'private.leak', origin: allowlistedOrigin, pathPrefix: '/leak',
+              credential: { header: 'authorization', value: secret } },
+            { capability: 'private.redirect', origin: allowlistedOrigin, pathPrefix: '/redirect' },
+            {
+              capability: 'rate.limited',
+              origin: allowlistedOrigin,
+              pathPrefix: '/limited',
+              rateLimit: { windowMs: 60_000, maxRequests: 2 },
+            },
+          ],
+        },
       })
       const postEgress = async (requestId, body) => {
         const response = await fetch(`${origin}/api/browser-native/egress/fetch`, {
@@ -3314,10 +3339,83 @@ describe('browser-native DSH v2 backend', () => {
         'an allowlisted upstream must not be able to void the credential through the response')
       assert.match(leak.value.body, /\[REDACTED\]/)
       assert.equal(leak.value.headers['set-cookie'], undefined, 'upstream cookie headers must be stripped')
+
+      const beforePathDenials = allowlistedRecords.length
+      const pathOutside = await postEgress('egress-path-outside', { url: `${allowlistedOrigin}/admin/secret` })
+      assert.equal(pathOutside.status, 403)
+      assert.equal(pathOutside.value.error.code, 'EGRESS_PATH_NOT_ALLOWED')
+      const pathBoundary = await postEgress('egress-path-boundary', { url: `${allowlistedOrigin}/echox` })
+      assert.equal(pathBoundary.status, 403)
+      assert.equal(pathBoundary.value.error.code, 'EGRESS_PATH_NOT_ALLOWED',
+        'a path prefix must match a path segment boundary, not a string prefix')
+      const methodDenied = await postEgress('egress-method', {
+        url: `${allowlistedOrigin}/echo`,
+        method: 'POST',
+        body: 'denied',
+      })
+      assert.equal(methodDenied.status, 405)
+      assert.equal(methodDenied.value.error.code, 'EGRESS_METHOD_NOT_ALLOWED')
+      assert.equal(allowlistedRecords.length, beforePathDenials,
+        'a denied path or method must not reach the upstream')
+
+      const rateResults = []
+      for (let index = 1; index <= 4; index += 1) {
+        const result = await postEgress(`egress-rate-${index}`, { url: `${allowlistedOrigin}/limited` })
+        rateResults.push({ status: result.status, code: result.value.error?.code,
+          retryAfterMs: result.value.error?.retryAfterMs })
+      }
+      assert.deepEqual(rateResults.map(result => result.status), [200, 200, 429, 429])
+      assert.equal(rateResults[2].code, 'EGRESS_RATE_LIMITED')
+      assert.ok(rateResults[2].retryAfterMs > 0, 'a rate-limited response must report a retry delay')
+      assert.equal(allowlistedRecords.filter(record => record.path === '/limited').length, 2,
+        'the capability rate limit must stop requests before they reach the upstream')
+
+      const audit = app.egress.audit()
+      const auditByRequest = new Map(audit.map(entry => [entry.requestId, entry]))
+      assert.equal(auditByRequest.get('egress-allowed')?.decision, 'allow')
+      assert.equal(auditByRequest.get('egress-allowed')?.capability, 'private.echo')
+      assert.equal(auditByRequest.get('egress-allowed')?.path, '/echo')
+      assert.equal(auditByRequest.get('egress-allowed')?.upstreamStatus, 200)
+      assert.equal(auditByRequest.get('egress-path-outside')?.decision, 'deny')
+      assert.equal(auditByRequest.get('egress-path-outside')?.code, 'EGRESS_PATH_NOT_ALLOWED')
+      assert.equal(auditByRequest.get('egress-path-outside')?.path, '/admin/secret')
+      assert.equal(auditByRequest.get('egress-method')?.code, 'EGRESS_METHOD_NOT_ALLOWED')
+      assert.equal(auditByRequest.get('egress-method')?.capability, 'private.echo')
+      assert.equal(auditByRequest.get('egress-rate-3')?.code, 'EGRESS_RATE_LIMITED')
+      assert.equal(auditByRequest.get('egress-rate-3')?.capability, 'rate.limited')
+      assert.ok(auditByRequest.get('egress-rate-3')?.retryAfterMs > 0)
+      assert.ok(audit.every(entry => typeof entry.at === 'string' && !Number.isNaN(Date.parse(entry.at))),
+        'every audit entry must carry a timestamp')
+      assert.equal(JSON.stringify(audit).includes('egress-contract-secret'), false,
+        'the audit ring must never contain the credential')
     } finally {
       await close(blocked)
       await close(allowlisted)
     }
+  })
+
+  it('requires capability, path prefix and unique grants in the egress policy', () => {
+    assert.throws(() => createEgressPolicy({
+      allow: [{ origin: 'http://127.0.0.1:1', pathPrefix: '/v1' }],
+    }), /capability/)
+    assert.throws(() => createEgressPolicy({
+      allow: [{ capability: 'provider.chat', origin: 'http://127.0.0.1:1' }],
+    }), /pathPrefix/)
+    assert.throws(() => createEgressPolicy({
+      allow: [{ capability: 'provider.chat', origin: 'http://127.0.0.1:1', pathPrefix: '/v1', methods: ['DELETE'] }],
+    }), /GET or POST/)
+    assert.throws(() => createEgressPolicy({
+      allow: [
+        { capability: 'provider.chat', origin: 'http://127.0.0.1:1', pathPrefix: '/v1' },
+        { capability: 'provider.chat', origin: 'http://127.0.0.1:1', pathPrefix: '/v1/chat' },
+      ],
+    }), /duplicate egress capability/)
+    assert.throws(() => createEgressPolicy({
+      allow: [
+        { capability: 'provider.chat', origin: 'http://127.0.0.1:1', pathPrefix: '/v1' },
+        { capability: 'provider.other', origin: 'http://127.0.0.1:1', pathPrefix: '/v1' },
+      ],
+    }), /duplicate egress grant/)
   })
 
   it('does not serve the egress route without an egress policy', async () => {

@@ -2,15 +2,18 @@
  * Server-side egress proxy for the browser-native DSH PoC.
  *
  * Browser code never holds a provider credential and never chooses an
- * arbitrary destination: each request must name an origin in the deployment
- * allowlist, and the proxy injects the credential after the allowlist passes.
- * Responses are redacted so an allowlisted upstream cannot echo the credential
- * back into the Worker, and redirects are never followed.
+ * arbitrary destination: each request must match a deployment allowlist entry
+ * that names a capability, an origin, a path prefix and the allowed methods.
+ * The proxy injects the credential only after that match passes. Responses are
+ * redacted so an allowlisted upstream cannot echo the credential back into the
+ * Worker, and redirects are never followed.
  */
 
 const ALLOWED_METHODS = new Set(['GET', 'POST'])
 const MAX_RESPONSE_BYTES = 64 * 1024
+const AUDIT_LIMIT = 200
 const REQUEST_HEADER_PATTERN = /^[a-z0-9][a-z0-9-]*$/
+const CAPABILITY_PATTERN = /^[a-z][a-z0-9._-]*$/
 const FORBIDDEN_REQUEST_HEADERS = new Set([
   'authorization',
   'cookie',
@@ -47,13 +50,15 @@ export class EgressError extends Error {
    * @param message - Client-safe description.
    * @param status - HTTP status for the proxy response.
    * @param details - Optional non-secret diagnostics such as the rejected host.
+   * @param retryAfterMs - Milliseconds until a rate-limited capability may retry.
    */
-  constructor(code, message, status = 400, details) {
+  constructor(code, message, status = 400, details, retryAfterMs) {
     super(message)
     this.name = 'EgressError'
     this.code = code
     this.status = status
     this.details = details
+    this.retryAfterMs = retryAfterMs
   }
 }
 
@@ -71,16 +76,89 @@ function parseOrigin(value) {
   return origin
 }
 
+function parsePathPrefix(value, label) {
+  if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`)
+  if (!value.startsWith('/') || value.includes('?') || value.includes('#')) {
+    throw new TypeError(`${label} must be a plain URL path starting with /`)
+  }
+  if (new URL(value, 'http://egress.invalid').pathname !== value) {
+    throw new TypeError(`${label} must be a plain URL path starting with /`)
+  }
+  return value === '/' ? '/' : value.replace(/\/+$/, '')
+}
+
+function parseMethods(value, label) {
+  if (value === undefined) return new Set(['GET', 'POST'])
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${label} must be a non-empty array`)
+  const methods = new Set()
+  for (const method of value) {
+    const normalized = String(method).toUpperCase()
+    if (!ALLOWED_METHODS.has(normalized)) throw new TypeError(`${label} may only grant GET or POST`)
+    methods.add(normalized)
+  }
+  return methods
+}
+
+function parseRateLimit(value, label) {
+  if (value === undefined) return undefined
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`)
+  }
+  if (!Number.isSafeInteger(value.windowMs) || value.windowMs <= 0) {
+    throw new TypeError(`${label} windowMs must be a positive safe integer`)
+  }
+  if (!Number.isSafeInteger(value.maxRequests) || value.maxRequests <= 0) {
+    throw new TypeError(`${label} maxRequests must be a positive safe integer`)
+  }
+  return { windowMs: value.windowMs, maxRequests: value.maxRequests }
+}
+
 function assertHeaderName(value, label) {
   const name = String(value).toLowerCase()
   if (!REQUEST_HEADER_PATTERN.test(name)) throw new TypeError(`${label} must be a valid HTTP header name`)
   return name
 }
 
+function matchesPathPrefix(pathname, prefix) {
+  if (prefix === '/') return pathname.startsWith('/')
+  return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+function requestIdOf(body) {
+  return body !== null && typeof body === 'object' && !Array.isArray(body)
+    && typeof body.requestId === 'string' && body.requestId.length > 0 && body.requestId.length <= 200
+    ? body.requestId
+    : null
+}
+
+/**
+ * Describe a client request without reading query parameters, headers or body,
+ * so denied requests can still be audited without carrying secrets.
+ * @param body - Client JSON.
+ * @returns Origin, pathname and method when the URL is parseable; nulls otherwise.
+ */
+function describeRequest(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body) || typeof body.url !== 'string') {
+    return { origin: null, path: null, method: null }
+  }
+  let target
+  try {
+    target = new URL(body.url)
+  } catch {
+    return { origin: null, path: null, method: null }
+  }
+  return {
+    origin: target.origin,
+    path: target.pathname,
+    method: String(body.method ?? 'GET').toUpperCase(),
+  }
+}
+
 /**
  * Build an egress policy from deployment configuration.
- * @param config - `allow` entries with an `origin` and an optional credential to inject.
- * @returns Policy with `allowlist` and `proxy` for validated forwarding.
+ * @param config - `allow` entries with capability, origin, pathPrefix and optional methods,
+ *   credential and rate limit; plus an optional global `rateLimit`, `audit` sink and `timeoutMs`.
+ * @returns Policy with an allowlist summary, decision audit ring and `proxy` for forwarding.
  */
 export function createEgressPolicy(config) {
   if (config === null || typeof config !== 'object' || Array.isArray(config)) {
@@ -90,13 +168,29 @@ export function createEgressPolicy(config) {
   if (config.timeoutMs !== undefined && (!Number.isSafeInteger(config.timeoutMs) || config.timeoutMs <= 0)) {
     throw new TypeError('egress timeoutMs must be a positive safe integer')
   }
-  const entries = new Map()
+  if (config.audit !== undefined && typeof config.audit !== 'function') {
+    throw new TypeError('egress audit must be a function')
+  }
+  const defaultRateLimit = parseRateLimit(config.rateLimit, 'egress rateLimit')
+  const entries = []
+  const capabilities = new Set()
   for (const entry of config.allow) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new TypeError('egress allow entries must be objects')
     }
+    if (typeof entry.capability !== 'string' || !CAPABILITY_PATTERN.test(entry.capability)) {
+      throw new TypeError('egress allow entries need a lowercase capability name')
+    }
+    if (capabilities.has(entry.capability)) {
+      throw new TypeError(`duplicate egress capability ${entry.capability}`)
+    }
+    capabilities.add(entry.capability)
     const origin = parseOrigin(entry.origin)
-    if (entries.has(origin.origin)) throw new TypeError(`duplicate egress allow entry for ${origin.origin}`)
+    const pathPrefix = parsePathPrefix(entry.pathPrefix, 'egress pathPrefix')
+    const methods = parseMethods(entry.methods, 'egress methods')
+    const rateLimit = entry.rateLimit === undefined
+      ? defaultRateLimit
+      : parseRateLimit(entry.rateLimit, `egress rateLimit for ${entry.capability}`)
     let credential
     if (entry.credential !== undefined) {
       if (entry.credential === null || typeof entry.credential !== 'object' || Array.isArray(entry.credential)) {
@@ -109,9 +203,15 @@ export function createEgressPolicy(config) {
       }
       credential = { header, value: entry.credential.value }
     }
-    entries.set(origin.origin, { origin, credential })
+    entries.push({ capability: entry.capability, origin, pathPrefix, methods, credential, rateLimit })
   }
-  if (entries.size === 0) throw new TypeError('egress allow must contain at least one origin')
+  if (entries.length === 0) throw new TypeError('egress allow must contain at least one entry')
+  const byOriginPath = new Set()
+  for (const entry of entries) {
+    const key = `${entry.origin.origin} ${entry.pathPrefix}`
+    if (byOriginPath.has(key)) throw new TypeError(`duplicate egress grant for ${key}`)
+    byOriginPath.add(key)
+  }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   const redact = (text, credential) => {
@@ -119,10 +219,43 @@ export function createEgressPolicy(config) {
     return text.split(credential.value).join(REDACTED)
   }
 
+  const auditEntries = []
+  const record = entry => {
+    auditEntries.push(entry)
+    if (auditEntries.length > AUDIT_LIMIT) auditEntries.splice(0, auditEntries.length - AUDIT_LIMIT)
+    try {
+      config.audit?.(entry)
+    } catch {
+      // An audit sink failure must not change the egress decision.
+    }
+  }
+
+  const rateBuckets = new Map()
+  const checkRateLimit = (entry, now) => {
+    if (entry.rateLimit === undefined) return
+    const { windowMs, maxRequests } = entry.rateLimit
+    const previous = rateBuckets.get(entry.capability)
+    const bucket = previous === undefined || now >= previous.windowStart + windowMs
+      ? { windowStart: now, count: 0 }
+      : previous
+    if (bucket.count >= maxRequests) {
+      const retryAfterMs = bucket.windowStart + windowMs - now
+      throw new EgressError(
+        'EGRESS_RATE_LIMITED',
+        'egress capability rate limit reached',
+        429,
+        { capability: entry.capability, retryAfterMs },
+        retryAfterMs,
+      )
+    }
+    bucket.count += 1
+    rateBuckets.set(entry.capability, bucket)
+  }
+
   /**
-   * Validate a client request against the allowlist.
+   * Validate a client request against the capability allowlist.
    * @param body - Client JSON with `url`, optional `method`, `headers`, and `body`.
-   * @returns Validated upstream request description.
+   * @returns Validated upstream request description bound to its capability.
    */
   const resolve = body => {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -143,14 +276,27 @@ export function createEgressPolicy(config) {
     if (target.username !== '' || target.password !== '') {
       throw new EgressError('EGRESS_URL_CREDENTIALS_REJECTED', 'egress url must not embed credentials')
     }
-    const entry = entries.get(target.origin)
-    if (entry === undefined) {
+    const candidates = entries.filter(entry => entry.origin.origin === target.origin)
+    if (candidates.length === 0) {
       throw new EgressError('EGRESS_HOST_NOT_ALLOWED', 'egress host is not in the allowlist', 403, { host: target.host })
+    }
+    const matched = candidates
+      .filter(entry => matchesPathPrefix(target.pathname, entry.pathPrefix))
+      .sort((left, right) => right.pathPrefix.length - left.pathPrefix.length)[0]
+    if (matched === undefined) {
+      throw new EgressError('EGRESS_PATH_NOT_ALLOWED', 'egress path is not in the capability allowlist', 403,
+        { path: target.pathname })
     }
     const method = String(body.method ?? 'GET').toUpperCase()
     if (!ALLOWED_METHODS.has(method)) {
-      throw new EgressError('EGRESS_METHOD_NOT_ALLOWED', 'egress method must be GET or POST', 405, { method })
+      throw new EgressError('EGRESS_METHOD_NOT_ALLOWED', 'egress method must be GET or POST', 405,
+        { method, capability: matched.capability })
     }
+    if (!matched.methods.has(method)) {
+      throw new EgressError('EGRESS_METHOD_NOT_ALLOWED', 'egress capability does not allow this method', 405,
+        { method, capability: matched.capability })
+    }
+    checkRateLimit(matched, Date.now())
     const headers = {}
     if (body.headers !== undefined) {
       if (body.headers === null || typeof body.headers !== 'object' || Array.isArray(body.headers)) {
@@ -164,7 +310,7 @@ export function createEgressPolicy(config) {
         if (typeof rawValue !== 'string') {
           throw new EgressError('EGRESS_INVALID_REQUEST', 'egress header values must be strings')
         }
-        if (redact(rawValue, entry.credential) !== rawValue) {
+        if (redact(rawValue, matched.credential) !== rawValue) {
           throw new EgressError('EGRESS_FORBIDDEN_HEADER', 'egress request must not carry the credential', 400, { header: name })
         }
         headers[name] = rawValue
@@ -176,14 +322,16 @@ export function createEgressPolicy(config) {
     if (method === 'GET' && body.body !== undefined) {
       throw new EgressError('EGRESS_INVALID_REQUEST', 'egress GET must not carry a body')
     }
-    if (entry.credential !== undefined) headers[entry.credential.header] = entry.credential.value
+    if (matched.credential !== undefined) headers[matched.credential.header] = matched.credential.value
     return {
       url: target.toString(),
       origin: target.origin,
+      path: target.pathname,
+      capability: matched.capability,
       method,
       headers,
-      ...(body.body === undefined ? {} : { body: redact(body.body, entry.credential) }),
-      credential: entry.credential,
+      ...(body.body === undefined ? {} : { body: redact(body.body, matched.credential) }),
+      credential: matched.credential,
     }
   }
 
@@ -193,7 +341,30 @@ export function createEgressPolicy(config) {
    * @returns Status, filtered headers, redacted text body, and credential evidence.
    */
   const proxy = async body => {
-    const request = resolve(body)
+    const startedAt = Date.now()
+    let request
+    try {
+      request = resolve(body)
+    } catch (error) {
+      const described = describeRequest(body)
+      const code = error instanceof EgressError ? error.code : 'EGRESS_INVALID_REQUEST'
+      record({
+        at: new Date(startedAt).toISOString(),
+        requestId: requestIdOf(body),
+        decision: 'deny',
+        capability: error instanceof EgressError ? error.details?.capability ?? null : null,
+        origin: described.origin,
+        path: described.path,
+        method: described.method,
+        code,
+        status: error instanceof EgressError ? error.status : 500,
+        durationMs: Date.now() - startedAt,
+        ...(error instanceof EgressError && error.retryAfterMs !== undefined
+          ? { retryAfterMs: error.retryAfterMs }
+          : {}),
+      })
+      throw error
+    }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     let upstream
@@ -206,9 +377,22 @@ export function createEgressPolicy(config) {
         signal: controller.signal,
       })
     } catch {
-      throw new EgressError('EGRESS_UPSTREAM_UNREACHABLE',
+      const error = new EgressError('EGRESS_UPSTREAM_UNREACHABLE',
         controller.signal.aborted ? 'egress upstream did not respond in time' : 'egress upstream could not be reached',
         502, { host: new URL(request.url).host })
+      record({
+        at: new Date(startedAt).toISOString(),
+        requestId: requestIdOf(body),
+        decision: 'deny',
+        capability: request.capability,
+        origin: request.origin,
+        path: request.path,
+        method: request.method,
+        code: error.code,
+        status: error.status,
+        durationMs: Date.now() - startedAt,
+      })
+      throw error
     } finally {
       clearTimeout(timer)
     }
@@ -220,6 +404,21 @@ export function createEgressPolicy(config) {
     const raw = Buffer.from(await upstream.arrayBuffer())
     const truncated = raw.length > MAX_RESPONSE_BYTES
     const text = redact(raw.subarray(0, MAX_RESPONSE_BYTES).toString('utf8'), request.credential)
+    record({
+      at: new Date(startedAt).toISOString(),
+      requestId: requestIdOf(body),
+      decision: 'allow',
+      capability: request.capability,
+      origin: request.origin,
+      path: request.path,
+      method: request.method,
+      code: null,
+      status: upstream.status,
+      upstreamStatus: upstream.status,
+      durationMs: Date.now() - startedAt,
+      credentialInjected: request.credential !== undefined,
+      truncated,
+    })
     return {
       status: upstream.status,
       origin: request.origin,
@@ -232,5 +431,16 @@ export function createEgressPolicy(config) {
     }
   }
 
-  return { allowlist: [...entries.keys()].sort(), proxy, resolve }
+  return {
+    allowlist: entries.map(entry => ({
+      capability: entry.capability,
+      origin: entry.origin.origin,
+      pathPrefix: entry.pathPrefix,
+      methods: [...entry.methods].sort(),
+      ...(entry.rateLimit === undefined ? {} : { rateLimit: entry.rateLimit }),
+    })),
+    proxy,
+    resolve,
+    audit: () => auditEntries.map(entry => ({ ...entry })),
+  }
 }
