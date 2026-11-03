@@ -1323,6 +1323,10 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 网络面：同源请求返回 200；带 ACAO 的跨源读取成功，无 CORS 的跨源响应为 opaque 或 `TypeError`；Worker 从不附加 `Authorization`，探测中 principal cookie 也未到达跨源端点。CSP `connect-src` 让跨源请求在离开 Worker 前即被拦截（服务端记录 0 次），COOP `same-origin` + COEP `require-corp` 使 `crossOriginIsolated=true` 并拦截缺 CORP 的 `no-cors` 加载，但不影响 CORS 读取。三套响应头下 scripted `bash` turn 均完成。产品结论是浏览器不能充当工具的网络与凭据边界：需要白名单或凭据隔离时，由服务端持有凭据并代理出口，或由部署下发 CSP `connect-src`。
 
+## 性能基线
+
+[性能基线](performance-baseline.md)测量 1 个与 4 个并行 Session 的冷启动、hydrate、首个 scripted turn 与 JavaScript 堆。每个 Session 独立 `BrowserContext` 与 durable OPFS Workspace，因此 4 个 Session 就是 4 个标签页与 4 个 Dedicated Worker。冷启动 `synced` 中位数 2.32 秒（1 个）与 3.08 秒（4 个并行），hydrate 1.94 秒与 2.71 秒；page 堆约 42.7 MB、Worker 每页约 37.2 MB，两种规模下都不增长，单页合计约 79.9 MB。测量前对 page 与每个 Worker 强制 GC，两次独立运行得到相同的堆数字。harness 以 `DSH_POC_PERF_COLD_BUDGET_MS`、`DSH_POC_PERF_HYDRATE_BUDGET_MS`、`DSH_POC_PERF_HEAP_BUDGET_MB` 提供可收紧或放宽的回归阈值。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
