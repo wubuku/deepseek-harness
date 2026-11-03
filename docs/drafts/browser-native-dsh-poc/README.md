@@ -1333,6 +1333,12 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，只在每次 mount 打印 `no context capacity` 警告；`4096` 窗口在第 1 turn 触发，`8192` 在第 5 turn 触发，16 turns 内 `tool/call` 始终为 16，未重复工具。结论是事件日志不需要浏览器端存储 compaction，但产品 profile 必须声明 `contextWindow` 与按窗口缩放的 headroom，否则 128k 模型的 300-turn Session 会在约第 200 turn 才被动等 provider overflow。
 
+## 多 Session 争用上限
+
+[多 Session 争用上限](multi-session-contention.md)让 1、8、16 个独立 `BrowserContext`/Worker 同时提交 scripted turn。单 Session turn 中位数 257 ms、冷启动 2.2 秒、CPU 1.15–1.63 核；8 路为 615 ms / 5.4 秒 / 4.5–5.1 核；16 路为 1,694 ms / 13.8 秒 / 5.3–5.8 核，p95 1,824 ms。页堆在三种规模下都稳定在 46.7 MB，内存不是上限；CPU 在 8 路已接近 5 核、16 路只再涨约 17%，吞吐不再提高。
+
+16 个挂载但只放行 8 个 turn 时，turn 中位数降到 892 ms、p95 1,154 ms，代价是波次差异令 CV 从 0.095 升到 0.199。建议同时执行的 turn 数上限为 8，冷启动并发限制在 4–8；更多 Session 可以挂载，第 9 个及以后的 turn 排队。一次早先 16 路运行出现 3/48 个页面首次 boot payload fetch 失败，整页重载后恢复；正式采样的这一轮为 0/48，失败率未被表征。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
