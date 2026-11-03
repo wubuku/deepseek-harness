@@ -163,6 +163,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 102. [Browser-Native 黄金路径端到端](browser-native-dsh-poc/golden-path-e2e.md)：真实 LongCat-2.5 在预览 UI 完成提问→只读拒绝→审批升级→写工作区→刷新恢复→导出导入。启动 2,267 ms、黄金 turn 70,144 ms、刷新 5,006 ms；审批 `allowed-once`，工作区文件 20 bytes，刷新重建 44 个事件且不增加模型请求，导出 45 事件/33,174 bytes 后以新 id 导入一致。缺口：审批卡不展示参数、依赖精确提示词、导出无 UI 入口。
 103. [Browser-Native 大附件分片上传与取消](browser-native-dsh-poc/chunked-attachment-upload.md)：8 MiB 以上走 begin/chunk/commit/abort，staging 与对象分目录存放；16 MiB scripted Chrome 上传为 4 个 4 MiB 请求，commit 校验整文件 SHA-256。取消测试在第 0 片后暂停，`DELETE` 清空 staging 且不发布对象；错误偏移、提前 commit、摘要失败与坏数据均被拒，启动 sweep 回收超过 1 小时 TTL 的残留并保留已发布对象。缺口：无刷新续传、分片独立摘要、配额与多实例锁。
 104. [Browser-Native 产品可见性](browser-native-dsh-poc/product-visibility.md)：失败码由 `TurnErrorNodeView` 渲染为 `<code>`；`ADMISSION_TIMEOUT` 消息带超时瞬间的 `queue position N`，排队中的 prompt 已可见；第二标签页打开同一 Session 从“空 Session”改为 `session-conflict` 状态条，红色边框并显示 backend 原文。Chrome scripted E2E 断言 `UPSTREAM_LLM_AUTH_FAILED`、`ADMISSION_TIMEOUT` 与冲突状态三类 DOM 输出。缺口：排队无实时位置、冲突不自动恢复、非租约 open 失败无专门文案。
+105. [Browser-Native Worker 内 Session 记忆](browser-native-dsh-poc/browser-native-memory.md)：OPFS provider 按 `(workspaceId, sessionId)` 存 JSON 文件，`memory` 工具是唯一 consumer 且 schema 不暴露 scope；写入先落盘再追加 `memory/entry`，保持模型可见内容可从日志重建。Chrome scripted E2E：跨 Session 读取互斥、文件头篡改 `MEMORY_ISOLATION_VIOLATION`、第二个 `BrowserContext` 0 条；8 条条目写入中位数 1.2 ms、读取 0.5 ms。缺口：关键词检索、上限为模块常量、仅验证 roster 注册、无多 Session 编排与 UI。
 
 ### 需要实现或审查代码时
 

@@ -141,6 +141,9 @@ export async function createRuntimeValidationDist({
     for (const file of ['browser-native-session-persistence.js', 'browser-native-attachments.js', 'browser-native-permission-probe.js', 'browser-native-llm.js', 'browser-native-multi-agent-probe.js', 'browser-native-cpu-contention-probe.js', 'browser-native-session-orchestration-probe.js', 'browser-native-session-continuity-probe.js']) {
       await writeFile(join(home, file), await readFile(new URL(file, here)))
     }
+    // Preset plugins resolve relative entry names against the profile directory.
+    await mkdir(join(home, 'profiles', 'web'), { recursive: true })
+    await writeFile(join(home, 'profiles', 'web', 'browser-native-memory.js'), await readFile(new URL('browser-native-memory.js', here)))
     await writeFile(join(home, 'browser-validation', 'input.txt'), 'runtime=DedicatedWorker\nfixture=VFS_INPUT_READY\n')
     await writeFile(
       join(home, 'browser-validation', 'scale-input.txt'),

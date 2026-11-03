@@ -40,6 +40,8 @@
         name: '@deepseek-ai/dsh-tool-todo'
         config:
           allowParallelInProgress: true
+      - id: tool-memory
+        name: './browser-native-memory.js'
       - id: compaction
         name: cordis:group
         group: true

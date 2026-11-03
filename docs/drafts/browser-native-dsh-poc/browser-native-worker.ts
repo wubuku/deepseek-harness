@@ -85,6 +85,7 @@ import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.t
 import type { DownloadPublicationStage } from './browser-native-workspace-store.ts'
 import { createBrowserNativeBuiltinMemberTrace } from './browser-native-builtin-member-trace.ts'
 import { createBrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
+import type { BrowserNativeMemoryProbe } from './browser-native-memory.ts'
 import { BrowserNativeSessionMountCoordinator } from './browser-native-session-mount.ts'
 import type { BrowserNativeExecutionIdentity, BrowserNativeSessionEvent } from './browser-native-session-adapter.ts'
 import {
@@ -135,6 +136,7 @@ let runtimeProbePromise: Promise<BrowserNativeRuntimeProbeReport> | undefined
 let runtimeProbeReport: BrowserNativeRuntimeProbeReport | undefined
 const capabilityPublication = new BrowserNativeCapabilityPublication()
 const permissionProbe = createBrowserNativePermissionProbe()
+let memoryProbeForTest: BrowserNativeMemoryProbe | undefined
 const cpuContentionProbe = createBrowserNativeCpuContentionProbe(event => {
   if (workspaceTestPort === undefined) throw new Error('CPU contention probe requires the validation MessagePort')
   workspaceTestPort.postMessage(event)
@@ -270,12 +272,14 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly urls?: Readonly<Record<string, string>>
   readonly targets?: BrowserNativeEgressTargets
   readonly sessionId?: string
   readonly childSessionId?: string
+  readonly headerSessionId?: string
+  readonly iterations?: number
   readonly boundary?: number
   readonly provider?: string
   readonly model?: string
@@ -494,7 +498,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && !data.path.split('/').includes('..')
       && typeof data.marker === 'string' && data.marker.length > 0 && data.marker.length <= 256
   }
-  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'multi-agent-status', 'multi-agent-dispose', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'cancel-session', 'agent-inbox', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs'].includes(String(data.action))
+  return ['write', 'write-pattern', 'write-content-workload', 'append', 'mkdir', 'read', 'read-digest', 'read-range', 'usage', 'file-tool-metrics', 'module-trace', 'builtin-member-trace', 'unsupported-builtin-probe', 'permission-state', 'multi-agent-status', 'multi-agent-dispose', 'session-mount-probe', 'session-projection-probe', 'approval-projection-probe', 'cancel-session', 'agent-inbox', 'rename', 'remove', 'stat', 'list', 'chmod', 'write-binary', 'flush-local', 'flush-workspace', 'lease-info', 'lease-timer-probe', 'release-lease', 'abort-next-metadata-transaction', 'quota-next-opfs-write', 'local-save-state', 'release-local-save', 'load-lazy-client-chunk', 'close-vfs', 'memory-current', 'memory-inspect', 'memory-list', 'memory-isolated-write', 'memory-isolated-read', 'memory-tamper-read', 'memory-benchmark'].includes(String(data.action))
 }
 
 function sessionMountProbeIdentity(sessionId: string, workerInstanceId: string, ownerEpoch: number): BrowserNativeExecutionIdentity {
@@ -1737,6 +1741,49 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, permission: permissionProbe.inspect(request.sessionId) })
       return
     }
+    if (request.action.startsWith('memory-')) {
+      const probe = memoryProbeForTest
+      if (probe === undefined) throw new Error('browser-native memory probe: the validation MessagePort is disabled')
+      if (request.action === 'memory-current') {
+        workspaceTestResponse(request.requestId, { ok: true, sessionId: probe.currentSession() })
+        return
+      }
+      if (request.action === 'memory-list') {
+        workspaceTestResponse(request.requestId, { ok: true, files: await probe.list() })
+        return
+      }
+      if (request.sessionId === undefined) throw new Error('browser-native memory probe: sessionId is required')
+      if (request.action === 'memory-inspect') {
+        workspaceTestResponse(request.requestId, { ok: true, memory: await probe.inspect(request.sessionId) })
+        return
+      }
+      if (request.action === 'memory-isolated-write') {
+        if (request.content === undefined) throw new Error('browser-native memory probe: content is required')
+        await probe.writeIsolated(request.sessionId, request.content)
+        workspaceTestResponse(request.requestId, { ok: true })
+        return
+      }
+      if (request.action === 'memory-isolated-read') {
+        workspaceTestResponse(request.requestId, { ok: true, entries: await probe.readIsolated(request.sessionId) })
+        return
+      }
+      if (request.action === 'memory-tamper-read') {
+        if (request.headerSessionId === undefined) throw new Error('browser-native memory probe: headerSessionId is required')
+        workspaceTestResponse(request.requestId, {
+          ok: true,
+          result: await probe.tamperRead(request.sessionId, request.headerSessionId),
+        })
+        return
+      }
+      if (request.action === 'memory-benchmark') {
+        workspaceTestResponse(request.requestId, {
+          ok: true,
+          benchmark: await probe.benchmark(request.sessionId, request.iterations ?? 10),
+        })
+        return
+      }
+      throw new Error(`browser-native memory probe: unsupported action ${request.action}`)
+    }
     if (request.action === 'control-inject') {
       if (request.controlInjection === undefined) throw new Error('browser-native control test: injection kind is required')
       publishBrowserNativeControlTestFrame(request.controlInjection)
@@ -2467,6 +2514,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (data.cpuContention === true) capabilityPublication.enableCpuContentionValidation()
     if (data.forkCut === true) capabilityPublication.enableForkCutValidation()
     if (data.subagent === true) capabilityPublication.enableSubagentValidation()
+    if (data.memoryIsolation === true) capabilityPublication.enableMemoryIsolationValidation()
     workspaceTestPort?.close()
     workspaceTestPort = port
     workspaceTestPort.start()
@@ -2632,6 +2680,9 @@ self.addEventListener('message', (event: MessageEvent) => {
             },
           },
           permissionProbe,
+          workspaceTestPort === undefined ? undefined : {
+            onModuleReady: probe => { memoryProbeForTest = probe },
+          },
         ),
       },
       staticModulePrefixes: REPLACED_PREFIXES,

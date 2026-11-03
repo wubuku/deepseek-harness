@@ -63,6 +63,10 @@ import {
   createBrowserNativeAttachmentModule,
   type BrowserNativeAttachmentTestHooks,
 } from './browser-native-attachments.ts'
+import {
+  createBrowserNativeMemoryModule,
+  type BrowserNativeMemoryTestHooks,
+} from './browser-native-memory.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
@@ -1361,11 +1365,14 @@ export function createBrowserNativeStaticModules(
   publication: BrowserNativeCapabilityPublication,
   attachmentTestHooks?: BrowserNativeAttachmentTestHooks,
   permissionProbe?: BrowserNativePermissionProbe,
+  memoryTestHooks?: BrowserNativeMemoryTestHooks,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
   attachmentTestHooks?.onModuleReady?.(attachments)
+  const memory = createBrowserNativeMemoryModule(workspace, memoryTestHooks)
   return {
     '@deepseek-ai/dsh-browser-native-attachments': attachments.factory,
+    '@deepseek-ai/dsh-browser-native-memory': memory.factory,
     '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(
       workspace, sessionOutbox, publication, attachments.ensureSessionFiles,
     ),

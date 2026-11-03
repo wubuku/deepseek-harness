@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-089：Worker 内 Session 记忆 provider、工具与隔离验证
+
+```text
+changeId: BN-P2-089
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/browser-native-memory.ts; docs/drafts/browser-native-dsh-poc/browser-native-memory.js; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-capability-publication.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/tests/memory-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-native-memory.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 记忆机制研究要求记忆是完整 capability seam，consumer 只能在显式工具里产生可追溯的 durable context；此前 PoC 没有 Worker 侧记忆 provider，也没有证明跨 Session 与跨 BrowserContext 不会泄漏。
+existingExtensionPointsChecked: 复用 `ctx.tools.register()`、`exec.agent.session.append()`、`SessionEventMap` declaration merging、Workspace runtime 的 `getWorkspaceId()`、Worker test MessagePort 与既有 `browser-native-capability-publication` 发布名单；没有修改 DSH Agent Loop、Session format、正式 profile 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 设计要求、OPFS 语义与隔离保证只能在真实 Dedicated Worker 中成立；文件头篡改、跨 BrowserContext 的 storage partition 以及刷新后的持久化都无法用类型或纯单测证明。
+behaviorChange: 新增 validation-only `browser-native-memory` 静态模块，提供 OPFS JSON provider 与 `memory` 工具（write/recall/forget）。scope 由工具内部从 `exec.agent.session.id` 与 Workspace id 派生，schema 不暴露 scope；写入先落盘再追加 `memory/entry`。读取时文件头不符抛出 `MEMORY_ISOLATION_VIOLATION`。`runtime-validation.cordis.patch.yml` 的 preset 以相对名注册该模块，`runtime-validation.mjs` 把 shim 复制到 `home/profiles/web/`；正式 product profile 不注册它。仅在 preview URL `browser-native-test=memory-isolation` 时启用发布名单与 test port。
+directoryOutChangeReason: `apps/web/src/preview.ts` 是 test port 的 URL allowlist 与 host 选项所有者，必须识别 `memory-isolation` 并把 `memoryIsolation` 传给 Worker；改动限于 opt-in 测试参数，默认页面行为不变。
+consumersUpdated: Worker static module map、capability publication、runtime validation image、overlay 构建、PoC README、drafts index 与本 ledger。
+test: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过。`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/memory-isolation.e2e.mjs` 通过：脚本模型真实调用 `memory` write/recall，`memory/entry` 事件与工具结果一致，刷新后 OPFS 仍 1 条；A/B scope 读取互斥，文件头篡改返回 `MEMORY_ISOLATION_VIOLATION`，第二个 BrowserContext 读取 0 条且 `memory-list` 为空；模型请求的工具 schema 不含 `sessionId`。8 条条目合计 1,366 bytes，写入中位数 1.2 ms、读取 0.5 ms，tool turn 158/137 ms；pageErrors 0。
+syncReplaySteps: 上游同步后核对 Cordis preset 相对名解析、`ctx.tools.register` 与 `session.append` 语义、Workspace identity 来源与 Worker test port。复跑 preview build、memory isolation E2E 与相关文档门禁；确认 product profile 仍未注册该工具，避免未发布工具进入普通请求。
+deleteCondition: 正式 Worker memory provider 与 Session-scoped 存储进入产品 profile，并有等价隔离测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-088：已结算 turn 转录窗口
 
 ```text

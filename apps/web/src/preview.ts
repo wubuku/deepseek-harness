@@ -27,7 +27,8 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'subagent'
     || searchParams.get('browser-native-test') === 'session-mount'
     || searchParams.get('browser-native-test') === 'session-projection'
-    || searchParams.get('browser-native-test') === 'approval-integrity')
+    || searchParams.get('browser-native-test') === 'approval-integrity'
+    || searchParams.get('browser-native-test') === 'memory-isolation')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'
@@ -242,6 +243,7 @@ function spawnBrowserNativeWorker(): Worker {
       cpuContention: searchParams.get('browser-native-test') === 'cpu-contention',
       forkCut: searchParams.get('browser-native-test') === 'session-continuity',
       subagent: searchParams.get('browser-native-test') === 'subagent',
+      memoryIsolation: searchParams.get('browser-native-test') === 'memory-isolation',
     }, [channel.port2])
     window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__ = request => new Promise((resolve) => {
       const requestId = browserNativeTestUuid()

@@ -29,6 +29,7 @@ export class BrowserNativeCapabilityPublication {
   private cpuContentionValidation = false
   private forkCutValidation = false
   private subagentValidation = false
+  private memoryIsolationValidation = false
   private readonly degraded = new Set<BrowserNativeCapabilityId>()
   private readonly listeners = new Set<() => void>()
 
@@ -93,6 +94,13 @@ export class BrowserNativeCapabilityPublication {
     this.notify()
   }
 
+  /** Publish the Session memory tool only in the dedicated memory isolation validation profile. */
+  enableMemoryIsolationValidation(): void {
+    if (this.memoryIsolationValidation) return
+    this.memoryIsolationValidation = true
+    this.notify()
+  }
+
   /** Return the tools that are currently eligible for a DSH model request. */
   publishedToolNames(): ReadonlySet<string> {
     const names = publishBrowserNativeTools(BROWSER_NATIVE_PROFILE_MANIFEST, this.capabilities()).map(tool => tool.name)
@@ -100,6 +108,7 @@ export class BrowserNativeCapabilityPublication {
     if (this.cpuContentionValidation) names.push(...CPU_CONTENTION_VALIDATION_TOOLS)
     if (this.forkCutValidation) names.push(...FORK_CUT_VALIDATION_TOOLS)
     if (this.subagentValidation) names.push(...SUBAGENT_VALIDATION_TOOLS)
+    if (this.memoryIsolationValidation) names.push('memory')
     if (this.workspaceStale || this.degraded.size > 0) {
       return new Set(names.filter(name => !this.isWorkspaceTool(name)))
     }
