@@ -1395,6 +1395,12 @@ Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydr
 
 OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL：backend 判定旧 lease 过期并返回 `409 WORKSPACE_OWNERSHIP_LOST`，其他客户端 claim 得到 fencing token 2；恢复后页面进入 `error`、不再发送续租请求、本地拒绝写入，刷新后以 fencing token 3 重新取得写权并成功写入。冻结仅模拟进程挂起，真实 OS 休眠、待决审批/在途工具组合、BFCache 与 Safari 仍未验证。
 
+## 移动端能力探测
+
+[移动端探测](mobile-capability.md)用 `iPhone 15` + WebKit 与 `Pixel 7` + Chromium 设备仿真回答移动端可行性。两个 profile 都有 Dedicated Worker、module worker、`BroadcastChannel`、Web Locks、IndexedDB 与 Service Worker，都没有 `SharedArrayBuffer`。差异在 OPFS：Android Chrome 的 Worker 能创建 sync access handle，durable preview 同步成功、写入回读一致并完成一个 19 事件的 scripted turn；iOS WebKit 的 `getDirectory()` 在页面返回 `UnknownError`、在 Worker 直接失败，boot payload 在 Host 创建前失败，启动门报 `OPFS_SYNC_ACCESS_UNAVAILABLE`。
+
+内存上限只有部分 API：Android 仿真报告 `jsHeapSizeLimit` 约 3.76 GB、`deviceMemory` 32、存储 quota 约 4.1 GB；iOS 没有 `deviceMemory`、`performance.memory` 或 `measureUserAgentSpecificMemory`，只能读到约 1 GB 存储 quota。仿真运行桌面引擎，不能替代真机；iOS 的替代路径（模拟器/真机 WebDriver、异步 OPFS、IDB 兜底、服务端 host）与取舍记在文档中。
+
 ## 刷新与 Worker 崩溃时的在途 turn
 
 [语义决策与证据](reload-crash-recovery-validation.md)定义：刷新会恢复 Session 与页面，但不会继续在途 turn；`agentLoop.resume` 在挂载时追加 `interruptedTurnClosers`，开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放。刷新在 2083 ms 内完成接管与结算（TTL 5000 ms），fencing token 1→2；Session event 从 26 变为 30，只增加三个 closer 和一个 `session/end-seed`，持久化前缀逐项不变，结算期间 0 次模型请求、延迟写入不落地、Workspace revision 不变。
