@@ -72,3 +72,5 @@
     - id: llm-browser-native
       name: './browser-native-llm.js'
       inject: [llm]
+      config:
+        contextWindow: 131072

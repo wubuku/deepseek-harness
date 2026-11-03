@@ -1072,7 +1072,29 @@ function toWireTools(
   }))
 }
 
-function createRemoteLlmAdapterClass(publication: BrowserNativeCapabilityPublication): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
+/**
+ * Read the profile-declared model window for the Browser-Native adapter.
+ * The value is validated here, at the Cordis configuration boundary.
+ * @param config - Raw plugin configuration supplied by the Loader.
+ * @returns The declared positive safe integer, or undefined when the profile omits it.
+ */
+function declaredContextWindow(config: unknown): number | undefined {
+  if (config === undefined) return undefined
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('browser-native LLM plugin config must be an object')
+  }
+  const value = (config as Record<string, unknown>).contextWindow
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('browser-native LLM plugin config.contextWindow must be a positive safe integer')
+  }
+  return value
+}
+
+function createRemoteLlmAdapterClass(
+  publication: BrowserNativeCapabilityPublication,
+  declaredWindow?: number,
+): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
   const Base = runtimeLlm().LlmAdapter
   return class RemoteLlmAdapter extends Base {
     private configPromise: Promise<BrowserNativeConfigResponse> | undefined
@@ -1100,11 +1122,12 @@ function createRemoteLlmAdapterClass(publication: BrowserNativeCapabilityPublica
         return payload
       })()
       const config = await this.configPromise
+      const contextWindow = config.contextWindow ?? declaredWindow
       return {
         provider,
         id: model,
         name: model,
-        ...(config.contextWindow === undefined ? {} : { context: { contextWindow: config.contextWindow } }),
+        ...(contextWindow === undefined ? {} : { context: { contextWindow } }),
       }
     }
 
@@ -1210,8 +1233,10 @@ function createLlmModule(publication: BrowserNativeCapabilityPublication): unkno
   return () => {
     const RemoteLlmAdapter = createRemoteLlmAdapterClass(publication)
     module ??= {
-      default: (ctx: Context): void => {
-        const adapter = new RemoteLlmAdapter()
+      default: (ctx: Context, config: unknown): void => {
+        const declared = declaredContextWindow(config)
+        const Adapter = declared === undefined ? RemoteLlmAdapter : createRemoteLlmAdapterClass(publication, declared)
+        const adapter = new Adapter()
         ctx.effect(() => ctx.llm.registerAdapter(['browser-native'], adapter))
         const controlledAgents = new Set<string>()
         const installAgentControls = (agent: NonNullable<ReturnType<typeof ctx.agents.get>>): void => {

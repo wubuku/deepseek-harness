@@ -58,6 +58,8 @@
         config:
           - id: compaction-basic
             name: '@deepseek-ai/dsh-compaction-basic'
+            config:
+              headroomTokens: 16384
           - id: command-compact
             name: '@deepseek-ai/dsh-command-compact'
           - id: tool-result-pruner
@@ -80,3 +82,5 @@
     - id: llm-browser-native
       name: './browser-native-llm.js'
       inject: [llm]
+      config:
+        contextWindow: 131072

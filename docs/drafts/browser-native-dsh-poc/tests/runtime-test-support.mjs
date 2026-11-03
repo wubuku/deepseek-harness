@@ -59,6 +59,8 @@ export async function openPreview(page, url) {
 export async function waitForPreview(page) {
   await page.waitForSelector('[class*="frame"]', { timeout: 45_000 })
   const notice = page.getByRole('button', { name: /^(Continue|继续)$/ }).first()
+  // The preview notice mounts after the frame; wait briefly so it cannot intercept the picker.
+  await notice.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => {})
   if (await notice.isVisible() && await notice.isEnabled()) await notice.click({ timeout: 15_000 })
   const chooser = page.getByRole('textbox', { name: /^(Choose workspace|选择工作区)$/ }).first()
   if (await chooser.isVisible()) {

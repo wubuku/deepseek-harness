@@ -1331,7 +1331,13 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 [会话规模曲线](session-scale-curve.md)在真实 Chrome 里把同一 Session 从 0 推到 300 turns：每 turn 一次 `read` 工具，每 20 turns 写一个 32 KB 工作区文件。100 turns 为 1,345 事件、1.55 MB durable JSON、hydrate 2.07 秒、page 堆 77.0 MB；300 turns 为 4,017 事件、4.64 MB、hydrate 2.57 秒、page 堆 108.5 MB；浏览器存储不随 turn 增长（IDB 恒为 221 KB，origin 只从 0.38 MB 增到 0.71 MB，增量来自工作区文件），flush 后 outbox 为空，hydrate 不重发模型请求且可继续第 301 turn。
 
-compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，只在每次 mount 打印 `no context capacity` 警告；`4096` 窗口在第 1 turn 触发，`8192` 在第 5 turn 触发，16 turns 内 `tool/call` 始终为 16，未重复工具。结论是事件日志不需要浏览器端存储 compaction，但产品 profile 必须声明 `contextWindow` 与按窗口缩放的 headroom，否则 128k 模型的 300-turn Session 会在约第 200 turn 才被动等 provider overflow。
+compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，只在每次 mount 打印 `no context capacity` 警告；`4096` 窗口在第 1 turn 触发，`8192` 在第 5 turn 触发，16 turns 内 `tool/call` 始终为 16，未重复工具。结论是事件日志不需要浏览器端存储 compaction；产品 profile 已从此前的未声明状态改为显式声明 `contextWindow: 131072` 与 `headroomTokens: 16384`，128k 压力线实测在第 29 turn 触发，见 [contextWindow 声明与 128k compaction](context-window-compaction.md)。
+
+## contextWindow 声明与 128k compaction
+
+[contextWindow 声明与 128k compaction](context-window-compaction.md)把窗口从“adapter 猜测”改为 profile 配置：`llm-browser-native` 声明 `contextWindow: 131072`，`compaction-basic` 声明 `headroomTokens: 16384`，压力线为 `min(0.8 × 131072, 131072 − 16384) = 104,857` tokens。backend 以 scripted 模式启动且不返回窗口，因此这次触发只能由 profile 解释。真实 Chrome 中 42 个 turn 在第 29 turn 首次触发压力 compaction，产生 1 组 start/summary/end，Session 633 个事件、durable 1.78 MB；刷新后 634 个事件全部重建，compaction 事件与最后 assistant marker 保持，第 43 turn 继续完成。`no context capacity` 与 `headroom tokens` 警告均为 0。
+
+解析顺序是 backend 显式模型容量优先、profile 声明兜底、两者都缺时才暴露警告；不合法配置在 Cordis 加载时直接失败。
 
 ## 多 Session 争用上限
 

@@ -1722,3 +1722,20 @@ syncReplaySteps: 上游同步后确认 `AgentRegistry` 创建/销毁语义、Age
 deleteCondition: 正式 Browser Host/Session 服务提供等价的单 Worker 多 Agent 创建、取消隔离、Session event 隔离和生命周期验证；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-027：Browser profile 声明 contextWindow 并验证 128k 压力 compaction
+
+```text
+changeId: BN-P2-027
+upstreamBaseline: research branch; 2026-11-03; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-profile.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/tests/compaction-context-window.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/context-window-compaction.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 上一批会话规模曲线证明产品 profile 未声明 contextWindow 时 128k 模型不会自动 compaction，且每次 mount 打印 `no context capacity`；此前 adapter 的 128k 硬编码已移除，但没有配置项承接容量。
+existingExtensionPointsChecked: 复用正式 `LlmAdapter.resolveModel()` 的 context 元数据、`compaction-basic` 的 headroom 配置、Cordis 插件配置参数与 Browser Worker Host；没有修改正式 DSH package、Agent Loop、Session format 或根依赖。
+whyDraftOnlyWasInsufficient: 配置存在性无法证明 Worker 实际解析并用于压力判断；需要在 backend 不返回窗口的条件下观察 80% 压力线是否真实触发、刷新能否重建摘要与压缩事件、mount 是否仍警告。
+behaviorChange: `llm-browser-native` profile 条目新增 `contextWindow: 131072`；产品 profile 的 `compaction-basic` 新增 `headroomTokens: 16384`。插件在 Cordis 配置边界校验 `contextWindow` 为正安全整数。`resolveModel` 顺序改为 backend 显式容量 > profile 声明 > 无元数据（保留 `no context capacity` 警告）。preview 产物与 product profile overlay 重新构建。
+consumersUpdated: Browser-Native profile、validation profile、LLM adapter、共享 preview 测试 helper（`waitForPreview` 短暂等待预览通知，避免遮挡 workspace 选择）、contextWindow 验证 E2E、PoC README、兼容矩阵、drafts 索引与本 ledger。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 与 overlay 构建通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/compaction-context-window.e2e.mjs` 通过：backend 未返回 `contextWindow`，profile 的 131072/16384 压力线在第 29 turn 触发 1 组 start/summary/end，633 事件、durable 1.78 MB，刷新后 634 事件重建并可继续第 43 turn，`no context capacity`/`headroom tokens` 警告 0、跨源请求 0、pageErrors 0。真实模型 smoke 未运行（本点只改配置解析与 compaction 入口，未改模型请求语义），真实 provider 容量仍须由 backend 显式声明。
+syncReplaySteps: 上游同步后核对 Cordis 插件配置传参、`resolveModel` context 字段、`compaction-basic` 压力公式与 Browser profile overlay 构建；复跑 preview build、overlay 构建、contextWindow E2E 与文档门禁。检查 backend 显式容量仍优先于 profile，缺配置时警告仍可出现。
+deleteCondition: 正式 Browser profile 通过运行时 provider 元数据或用户设置稳定提供模型窗口，并有不依赖 profile 硬值的 compaction 验证；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
