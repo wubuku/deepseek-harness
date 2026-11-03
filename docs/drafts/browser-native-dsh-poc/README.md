@@ -1038,6 +1038,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/durable-host-restart.test.mjs` 2/2（fork 子进程 + `SIGKILL`）：被强杀的 turn 恢复为 `failed`/`DURABLE_HOST_RESTARTED`，8 条事件里 `tool/result` 为 `isError`、`turn/end` reason 为 error；重启后模型请求 0、工具调用 0、Workspace 仍为空、journal 已删除、旧 epoch 1 → 2 且新 claim 成功；下一 turn `completed`/`turn: 2`。第二个用例在 `step/start` 后强杀，恢复补 `step/end` 与 `turn/end`。同批复跑审批、取消、接管、可观测性 4/4。未改 `packages/`。
 
+## 多 host 竞争与租约接管
+
+[多 host 竞争与租约接管](durable-multi-host.md)分两层：`dataDir/.browser-native-backend.lock` 保证只有一个 backend 进程；Session 的 `ownerToken` + `ownerEpoch` 保证只有一个写者，epoch 即 fencing token。两个实例同时启动时一个 ready、另一个退出 1（`BACKEND_ALREADY_RUNNING`）；同一 Session 两个并发写 claim 一个 200、另一个 409 `SESSION_ALREADY_OWNED`（`retryAfterMs` 约 30 000）；旧 token 追加返回 `SESSION_OWNERSHIP_LOST`。durable turn 运行期间浏览器 open/append 都被拒绝，第二个 durable turn 返回 `SESSION_TURN_ACTIVE`；`stop` 结算后租约释放，新 claim 的 epoch 加 1，后续 turn 正常完成。
+
+`tests/durable-multi-host.test.mjs` 2/2：启动竞态 `ready: 1, refused: 1`；并发 claim `[200, 409]`；epoch 1 → 2，重启接管后 3；旧 token 在同进程与重启后都被 `SESSION_OWNERSHIP_LOST` 拒绝；运行中 open 409（`retryAfterMs` 29984）、append 409、第二 turn 409 `SESSION_TURN_ACTIVE`；取消后 open 200、下一 turn `completed`。同批复跑重启恢复、审批、取消、接管、可观测性 6/6。未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

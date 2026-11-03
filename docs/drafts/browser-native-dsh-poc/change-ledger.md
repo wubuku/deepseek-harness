@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-085：多 host 竞争、fencing token 与租约接管验证
+
+```text
+changeId: BN-P2-085
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/durable-multi-host.test.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/durable-backend-process.mjs; docs/drafts/browser-native-dsh-poc/durable-multi-host.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable 生命周期已有重启恢复，但没有证据说明两个 backend 同时指向同一 dataDir、两个写者同时 claim、以及 durable turn 运行期间浏览器尝试接管时分别发生什么；这些路径决定 fencing token 是否真的能阻止双写。
+existingExtensionPointsChecked: 复用 `dataDir` 独占锁、`FormalSessionStore.claim/assertOwner`、`ownerToken`/`ownerEpoch`、`session/open|append|close|flush`、durable host 的 lease claim/release 与 `SESSION_TURN_ACTIVE` turn 校验；未改 backend 或 durable host 行为，仅扩展测试 fixture 增加 `hang-first` 模型模式。
+whyDraftOnlyWasInsufficient: 现有 `workspace-backend-multi-instance-characterization.e2e.mjs` 只覆盖单写者锁与 SIGKILL 恢复，没有同时启动竞态、并发 claim、旧 token 拒绝、durable 运行中接管与结算后接管的可判定输出。
+behaviorChange: 无产品行为变更；新增 `tests/durable-multi-host.test.mjs` 与 fixture `hang-first` 模式，记录两层隔离：dataDir 目录锁与 Session owner lease。
+tests: `node --test tests/durable-multi-host.test.mjs` 2/2：同时启动 `ready: 1, refused: 1`，拒绝码 `BACKEND_ALREADY_RUNNING`、退出码 1；并发 claim 状态 `[200,409]`、`SESSION_ALREADY_OWNED`、`retryAfterMs` 29999；epoch 1 → 2，重启接管后 3；旧 token 在同进程与重启后都为 `SESSION_OWNERSHIP_LOST`；durable 运行中 open 409、append 409、第二 turn 409 `SESSION_TURN_ACTIVE`；stop 后 `cancelled`、open 200、epoch 2、下一 turn `completed`/`turn: 2`。同批 `durable-host-restart`、`durable-approval`、`durable-cancellation`、`durable-tool-attach`、`observability` 回归 6/6。scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供共享存储或分布式 Session 租约，复跑本测试以确认 dataDir 锁与 owner epoch 的等价契约；若引入跨实例 handoff，补充 checkpoint、旧 token 与中途接管用例。
+deleteCondition: 上游提供等价的目录单写者与 Session fence 证据，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-084：durable 重启恢复与运行 journal
 
 ```text

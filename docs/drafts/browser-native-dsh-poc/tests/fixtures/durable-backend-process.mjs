@@ -14,7 +14,8 @@ const app = await createBrowserNativeV2Server({
     scriptedLlmFault: () => {
       modelRequests += 1
       if (modelMode === 'hang') return { kind: 'barrier-text', release: new Promise(() => {}) }
-      if (modelMode === 'text') return { kind: 'text', text: 'RESTART_TURN_DONE' }
+      if (modelMode === 'hang-first' && modelRequests === 1) return { kind: 'barrier-text', release: new Promise(() => {}) }
+      if (modelMode === 'text' || modelMode === 'hang-first') return { kind: 'text', text: 'RESTART_TURN_DONE' }
       toolCalls += 1
       return {
         kind: 'tool-call',
