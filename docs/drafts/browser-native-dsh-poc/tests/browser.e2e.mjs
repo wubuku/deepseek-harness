@@ -103,7 +103,7 @@ describe('browser-native PoC browser loop', () => {
         }
         const created = await request('/api/browser-native/session/create', {
           protocolVersion: 1, requestId: 'seed-create', sessionId: 'browser-tool-result-resume',
-          header: { sessionId: 'browser-tool-result-resume', version: 1, cwd: '/workspace' }, inheritedEventCount: 0,
+          header: { sessionId: 'browser-tool-result-resume', version: 4, cwd: '/workspace' }, inheritedEventCount: 0,
         })
         await request('/api/browser-native/session/append', {
           protocolVersion: 1, requestId: 'seed-append', sessionId: 'browser-tool-result-resume',

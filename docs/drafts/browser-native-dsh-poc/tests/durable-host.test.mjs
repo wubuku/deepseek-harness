@@ -190,7 +190,7 @@ test('durable host replays a turn without executing it twice and releases owners
       cookie: first.session,
       body: {
         sessionId: 'browser-owned',
-        header: { id: 'browser-owned', version: 1, createdAt: Date.now(), cwd: '/workspace' },
+        header: { id: 'browser-owned', version: 4, createdAt: Date.now(), cwd: '/workspace' },
       },
     })
     assert.equal(browserOwned.status, 200)

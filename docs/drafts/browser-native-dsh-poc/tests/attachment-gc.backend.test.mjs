@@ -72,7 +72,7 @@ async function createSessionWithAttachment(origin, identity, sessionId, attachme
       protocolVersion: 1,
       requestId: `${sessionId}-create`,
       sessionId,
-      header: { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' },
+      header: { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' },
       inheritedEventCount: 0,
     }),
   })

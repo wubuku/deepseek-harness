@@ -23,6 +23,8 @@ import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
+/** Logical Session log format read and written here; mirrors `SESSION_FORMAT_VERSION` in packages/core/session/src/types.ts. */
+const SESSION_FORMAT_VERSION = 4
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_WORKSPACE_CHUNK_BODY_BYTES = WORKSPACE_BLOB_CHUNK_BYTES
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
@@ -45,12 +47,13 @@ const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
 const ACCESS_AUDIT_LIMIT = 200
 
 class BackendError extends Error {
-  constructor(code, message, status = 400, retryAfterMs) {
+  constructor(code, message, status = 400, retryAfterMs, details) {
     super(message)
     this.name = 'BackendError'
     this.code = code
     this.status = status
     this.retryAfterMs = retryAfterMs
+    this.details = details
   }
 }
 
@@ -71,6 +74,30 @@ function assertSessionId(value) {
     throw new BackendError('INVALID_REQUEST', 'session id is invalid')
   }
   return value
+}
+
+/**
+ * Refuse a Session log whose header version this backend cannot read.
+ *
+ * The worker writes current-format events only, so an older or newer header
+ * means the log belongs to another harness generation. Reading it anyway could
+ * reconstruct the wrong conversation; this build ships no migration.
+ * @param {string} id - Stored Session identifier.
+ * @param {unknown} storedVersion - Version recorded in the stored header.
+ * @returns {BackendError} Refusal carrying both versions for the client.
+ */
+function unsupportedSessionFormat(id, storedVersion) {
+  const label = Number.isSafeInteger(storedVersion) ? `v${String(storedVersion)}` : 'an unknown version'
+  return new BackendError(
+    'SESSION_FORMAT_UNSUPPORTED',
+    `session "${id}" uses log format ${label}, but this backend reads only v${String(SESSION_FORMAT_VERSION)}`,
+    422,
+    undefined,
+    {
+      ...(Number.isSafeInteger(storedVersion) ? { storedVersion } : {}),
+      expectedVersion: SESSION_FORMAT_VERSION,
+    },
+  )
 }
 
 function assertRecord(value, name) {
@@ -1028,6 +1055,7 @@ class FormalSessionStore {
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
     this.sessions = new Map()
+    this.unsupported = new Map()
     this.locks = new Map()
     this.ownerLeaseMs = ownerLeaseMs
     this.now = now
@@ -1043,6 +1071,11 @@ class FormalSessionStore {
       const id = assertSessionId(raw.id)
       if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
       const principalId = raw.principalId === undefined ? undefined : assertPrincipalId(raw.principalId)
+      if (raw.header.version !== SESSION_FORMAT_VERSION) {
+        this.unsupported.set(id, { principalId, header: clone(raw.header), eventCount: raw.events.length, version: raw.header.version })
+        process.stderr.write(`browser-native backend: session "${id}" uses log format ${String(raw.header.version)}, not v${String(SESSION_FORMAT_VERSION)}; stored but refused until a compatible harness reads it\n`)
+        continue
+      }
       const handoffs = new Map()
       let handoffsMigrated = false
       for (const [handoffId, record] of Object.entries(raw.handoffs ?? {})) {
@@ -1084,14 +1117,25 @@ class FormalSessionStore {
 
   get(id) {
     const session = this.sessions.get(assertSessionId(id))
-    if (session === undefined) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    if (session === undefined) {
+      const unsupported = this.unsupported.get(id)
+      if (unsupported !== undefined) throw unsupportedSessionFormat(id, unsupported.version)
+      throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    }
     return session
   }
 
   getForPrincipal(id, principalId) {
-    const session = this.get(id)
-    if (session.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
-    return session
+    const session = this.sessions.get(assertSessionId(id))
+    if (session !== undefined) {
+      if (session.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      return session
+    }
+    const unsupported = this.unsupported.get(id)
+    if (unsupported === undefined || unsupported.principalId !== principalId) {
+      throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    }
+    throw unsupportedSessionFormat(id, unsupported.version)
   }
 
   create(id, header, inheritedEventCount, principalId) {
@@ -1101,7 +1145,13 @@ class FormalSessionStore {
       if (existing.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
       throw new BackendError('SESSION_ALREADY_EXISTS', 'session already exists', 409)
     }
+    const unsupported = this.unsupported.get(id)
+    if (unsupported !== undefined) {
+      if (unsupported.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      throw unsupportedSessionFormat(id, unsupported.version)
+    }
     if (header.id !== id) throw new BackendError('INVALID_REQUEST', 'header id does not match session id')
+    if (header.version !== SESSION_FORMAT_VERSION) throw unsupportedSessionFormat(id, header.version)
     const session = {
       id,
       principalId,
@@ -4212,7 +4262,7 @@ export async function createBrowserNativeV2Server(options) {
         const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
         const prompt = boundedString(body.prompt, 'prompt', 10_000)
         const header = body.header === undefined
-          ? { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/workspace' }
+          ? { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd: '/workspace' }
           : assertRecord(body.header, 'header')
         const durable = await durableHost.start({ sessionId, principalId, turnId, prompt, header })
         sendJson(response, durable.replayed === true ? 200 : 202, durable)

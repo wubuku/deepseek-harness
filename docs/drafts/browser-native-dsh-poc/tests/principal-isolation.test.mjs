@@ -137,7 +137,7 @@ describe('browser-native principal isolation', () => {
         method: 'POST', path: '/api/browser-native/session/create', headers: { cookie: alice.sessionCookie },
         body: envelope('isolation-create', {
           sessionId,
-          header: { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' },
+          header: { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' },
           inheritedEventCount: 0,
         }),
       })

@@ -85,7 +85,7 @@ try {
   const sessionId = `projection-authority-${randomUUID()}`
   const created = await request(workerPage, 'create', {
     sessionId,
-    header: { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
+    header: { id: sessionId, version: 4, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
     inheritedEventCount: 0,
   })
   assert.equal(created.status, 200, JSON.stringify(created))

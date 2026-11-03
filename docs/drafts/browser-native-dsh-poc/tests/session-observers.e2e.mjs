@@ -40,7 +40,7 @@ try {
   await Promise.all([writer.goto(`${origin}/api/browser-native/health`), observer.goto(`${origin}/api/browser-native/health`)]).then(() => undefined)
 
   const sessionId = 'chrome-observer-session'
-  const header = { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
+  const header = { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' }
   const created = await request(writer, 'create', { sessionId, header, inheritedEventCount: 0 })
   assert.equal(created.status, 200, JSON.stringify(created.body))
   const owner = created.body.owner

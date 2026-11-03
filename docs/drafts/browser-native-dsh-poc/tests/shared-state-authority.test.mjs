@@ -72,7 +72,7 @@ test('two backend instances use one shared Session authority and owner fence', a
     const created = await request(first.origin, '/api/browser-native/session/create', {
       method: 'POST', cookie, body: {
         sessionId,
-        header: { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
+        header: { id: sessionId, version: 4, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
         inheritedEventCount: 0,
       },
     })

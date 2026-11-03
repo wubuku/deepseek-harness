@@ -110,7 +110,7 @@ test('two backends serialize Session create, owner claim, and same-sequence appe
   const [first, second] = cluster.backends
   const user = await identity(first.origin)
   const sessionId = randomUUID()
-  const header = { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/dsh/home/workspace' }
+  const header = { id: sessionId, version: 4, createdAt: Date.now(), cwd: '/dsh/home/workspace' }
   const creates = await Promise.all([first, second].map(backend => post(
     backend.origin,
     '/api/browser-native/session/create',

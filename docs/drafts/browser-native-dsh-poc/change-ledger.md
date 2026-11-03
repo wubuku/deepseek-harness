@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-076：落盘 Session 的格式版本判定
+
+```text
+changeId: BN-P2-076
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/public/worker.js; docs/drafts/browser-native-dsh-poc/tests/session-format-upgrade.test.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/attachment-gc.backend.test.mjs; docs/drafts/browser-native-dsh-poc/tests/cross-store-operation-ledger.test.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-host.test.mjs; docs/drafts/browser-native-dsh-poc/tests/principal-isolation.test.mjs; docs/drafts/browser-native-dsh-poc/tests/session-observers.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/session-projection-authority.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/session-workspace-reconciliation.test.mjs; docs/drafts/browser-native-dsh-poc/tests/shared-authority-concurrency.test.mjs; docs/drafts/browser-native-dsh-poc/tests/shared-state-authority.test.mjs; docs/drafts/browser-native-dsh-poc/tests/browser.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-format-upgrade.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: `FormalSessionStore.load()` 只核对 `header.id` 与 `events` 是否为数组，不检查 `header.version`；durable 路由的默认 header 仍写 `version: 1`，而当前运行时是 `SESSION_FORMAT_VERSION = 4`。新 backend 会把旧代 harness 落盘的日志当作当前格式读取，durable 路由也会写出下一代拒绝的 header。
+existingExtensionPointsChecked: 复用 `packages/session/session-persistence` 已导出的 `SessionFormatUnsupportedError` 与 `sessionFormatVersionRefusal()`，以及 `backend-v2.mjs` 既有的 `BackendError`/`sendError` 错误通道、principal cookie 与 `FormalSessionStore` 的 `get`/`getForPrincipal`/`create`；未改 DSH Agent Loop、Session event schema、Worker profile 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 版本判定必须证明旧文件落盘后经 backend 重启仍被拒绝、且不会覆盖原文件；文档无法替代跨版本读取的真实运行时证据。
+behaviorChange: backend 增加 `SESSION_FORMAT_VERSION = 4` 镜像；load 时非当前版本 header 记录到内存 `unsupported` 表并向 stderr 告警，不进入可读集合；`get`/`getForPrincipal`/`create` 对同 principal 的旧版本抛 `SESSION_FORMAT_UNSUPPORTED`（422，`details` 带 `storedVersion`/`expectedVersion`），非 owner 仍 404；`create` 拒绝任何非当前版本 header 且不覆盖旧文件；`list` 不返回旧会话；durable 默认 header 改为当前版本。Worker `mapSessionError` 映射为 `SessionFormatUnsupportedError`，并用 `sessionFormatVersionRefusal()` 生成方向感知文案；测试内的 Session header 字面量统一为当前版本。
+consumersUpdated: 新增 `tests/session-format-upgrade.test.mjs`；更新 `backend-v2.test.mjs` 等 11 个含 Session header 的测试文件；`browser-native-worker.ts` 与 `public/worker.js` 的创建 header 改为当前版本；新增 `session-format-upgrade.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/session-format-upgrade.test.mjs` 2/2；`node --test` 复跑 `backend-v2`、`durable-host`、`principal-isolation`、`attachment-gc.backend`、`cross-store-operation-ledger`、`shared-state-authority`、`shared-authority-concurrency`、`session-workspace-reconciliation` 共 80/80。未改 `packages/`，无需 `build:artifacts`/`build:check`；未改 LLM 请求语义，无需真实模型 smoke。
+syncReplaySteps: 上游若提供 Session 格式迁移或降级，优先复用并删除本地拒绝路径；重跑 `session-format-upgrade.test.mjs` 与 backend 合同测试。
+deleteCondition: 上游 session-persistence 在 backend 侧提供等价的版本校验与拒绝语义，或 Browser-Native PoC 被移除后删除；或上游新增可用的旧格式迁移路径时替换本批拒绝逻辑。
+status: implemented
+```
+
 ### BN-P2-075：镜像下载有界重试（冷启动 boot payload 可靠性）
 
 ```text

@@ -122,7 +122,7 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
     const { origin } = await start()
     const identity = await workspaceIdentity(origin)
     const sessionId = randomUUID()
-    const header = { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
+    const header = { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' }
     const created = await post(origin, '/api/browser-native/session/create', { sessionId, header, inheritedEventCount: 0 }, identity.sessionCookie)
     assert.equal(created.response.ok, true, JSON.stringify(created.value))
     const ownerToken = created.value.owner.ownerToken
@@ -177,7 +177,7 @@ describe('Browser-Native Session/Workspace reconciliation', () => {
     const sessionId = randomUUID()
     const created = await post(origin, '/api/browser-native/session/create', {
       sessionId,
-      header: { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' },
+      header: { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' },
       inheritedEventCount: 0,
     }, identity.sessionCookie)
     const bytes = Buffer.from('workspace first\n')

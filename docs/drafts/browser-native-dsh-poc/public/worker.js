@@ -133,7 +133,7 @@ async function openOrCreate(id) {
     if (error.code !== 'SESSION_NOT_FOUND') throw error
     return await call('/api/browser-native/session/create', {
       requestId: requestId('create'), sessionId: id,
-      header: { sessionId: id, version: 1, cwd: '/workspace', createdAt: new Date().toISOString() },
+      header: { sessionId: id, version: 4, cwd: '/workspace', createdAt: new Date().toISOString() },
       inheritedEventCount: 0,
     })
   }

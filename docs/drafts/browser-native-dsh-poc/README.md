@@ -980,6 +980,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `packages/experimental/webworker-runtime/src/storage/image-fetch.ts` 为幂等镜像 GET 增加最多 3 次尝试，仅重试 `TypeError` 与 408/429/5xx，退避 250 ms × 尝试序号加 0–250 ms 抖动，4xx 与非 gzip 响应立即失败；懒加载归档共用该下载。`tests/storage/image-fetch.spec.ts` 5/5；`tests/cold-start.e2e.mjs` 在 16 路下注入每个 Worker 首次镜像 abort，每轮 `routedImageRequests=32`、0 失败；无注入 16 路 × 3 轮 48/48。Chromium 内部取消来源未定位，重试只保证失败可恢复；分块校验、断点续传、服务端并发整形与 Windows/Safari 未验证。
 
+## Session 格式升级路径
+
+[Session 格式升级路径](session-format-upgrade.md)记录 backend 对落盘 Session 的版本判定。`FormalSessionStore` 镜像 `SESSION_FORMAT_VERSION = 4`：load 时 header 版本不等于当前值的记录不进入可读集合，只在 stderr 告警并登记到内存 `unsupported` 表，随后 `list` 不返回该会话，`stat`/`open`/`read`/`create` 与 durable turn 返回 422 `SESSION_FORMAT_UNSUPPORTED`，`details` 携带 `storedVersion` 和 `expectedVersion`；非 owner principal 仍得到 404，不泄露旧日志存在。`create` 拒绝任何非当前版本 header 且不覆盖旧文件。Worker 把该错误映射为正式 `SessionFormatUnsupportedError`，并用 `sessionFormatVersionRefusal()` 生成方向感知文案。durable 路由的默认 header 从 `version: 1` 改为当前版本。
+
+`tests/session-format-upgrade.test.mjs` 2/2：旧版本（`version: 3`）会话落盘后重启 backend，`stat`/`open` 422 且 `details = { storedVersion: 3, expectedVersion: 4 }`，另一 principal 404，同 id 当前版本 `create` 仍被拒且文件字节不变；`version: 1` 的 `create` 被 422 拒绝，当前版本 `create`/`stat`/`list` 正常。既有 8 个 backend 合同测试文件复跑 80/80。本构建不提供迁移或降级，旧日志原样保留；未模拟旧版浏览器 OPFS/cache 数据、跨主机 `dataDir` 或并发多实例版本竞争。未改 `packages/`，无需 `build:check`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

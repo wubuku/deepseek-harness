@@ -83,7 +83,7 @@ async function failureWithCookie(origin, path, body, cookie) {
 }
 
 function header(id) {
-  return { id, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' }
+  return { id, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' }
 }
 
 function sessionEvent(seq, type, data, extra = {}) {

@@ -165,7 +165,7 @@ describe('cross-store checkpoint and receipt ledger', () => {
     await ledgerPost(origin, identityValue, 'business', { operationId, payload })
     const session = await post(origin, '/api/browser-native/session/create', {
       sessionId,
-      header: { id: sessionId, version: 1, createdAt: 1_700_000_000_000, cwd: '/workspace' },
+      header: { id: sessionId, version: 4, createdAt: 1_700_000_000_000, cwd: '/workspace' },
       inheritedEventCount: 0,
     }, identityValue.sessionCookie)
     assert.equal(session.response.ok, true, JSON.stringify(session.value))

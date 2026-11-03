@@ -827,7 +827,7 @@ async function runCrossStoreProbe(request: BrowserNativeWorkspaceTestRequest): P
   const sessionId = request.sessionId ?? crypto.randomUUID()
   const session = await browserNativeJson('/api/browser-native/session/create', {
     sessionId,
-    header: { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
+    header: { id: sessionId, version: 4, createdAt: Date.now(), cwd: '/dsh/home/workspace' },
     inheritedEventCount: 0,
   })
   const owner = session.owner

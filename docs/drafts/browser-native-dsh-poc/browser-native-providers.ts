@@ -111,7 +111,12 @@ export async function flushBrowserNativeSession(sessionId: string): Promise<{
 }
 
 interface ErrorPayload {
-  readonly error?: { readonly code?: string; readonly message?: string; readonly retryAfterMs?: number }
+  readonly error?: {
+    readonly code?: string
+    readonly message?: string
+    readonly retryAfterMs?: number
+    readonly details?: Record<string, unknown>
+  }
 }
 
 interface SessionResponse {
@@ -150,6 +155,8 @@ interface RuntimePersistenceModule {
   readonly SessionOwnershipLostError: typeof import('@deepseek-ai/dsh-session-persistence').SessionOwnershipLostError
   readonly SessionPersistenceNotFoundError: typeof import('@deepseek-ai/dsh-session-persistence').SessionPersistenceNotFoundError
   readonly SessionReadOnlyError: typeof import('@deepseek-ai/dsh-session-persistence').SessionReadOnlyError
+  readonly SessionFormatUnsupportedError: typeof import('@deepseek-ai/dsh-session-persistence').SessionFormatUnsupportedError
+  readonly sessionFormatVersionRefusal: typeof import('@deepseek-ai/dsh-session-persistence').sessionFormatVersionRefusal
 }
 
 interface RuntimeLlmModule {
@@ -218,11 +225,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function responseError(value: ErrorPayload, fallback: string): { code: string; message: string; retryAfterMs?: number } {
+function responseError(value: ErrorPayload, fallback: string): { code: string; message: string; retryAfterMs?: number; details?: Record<string, unknown> } {
   return {
     code: value.error?.code ?? 'REMOTE_ERROR',
     message: value.error?.message ?? fallback,
     ...(value.error?.retryAfterMs === undefined ? {} : { retryAfterMs: value.error.retryAfterMs }),
+    ...(value.error?.details === undefined ? {} : { details: value.error.details }),
   }
 }
 
@@ -252,7 +260,7 @@ async function sessionRequest(
   const payload = await readJson(response)
   if (!response.ok) {
     const error = responseError(payload, `browser-native Session ${operation} failed`)
-    throw Object.assign(new Error(error.message), { code: error.code, retryAfterMs: error.retryAfterMs })
+    throw Object.assign(new Error(error.message), { code: error.code, retryAfterMs: error.retryAfterMs, details: error.details })
   }
   return payload
 }
@@ -270,7 +278,26 @@ function mapSessionError(error: unknown, id: SessionId, operation: string): neve
   if (code === 'SESSION_NOT_FOUND') throw new module.SessionPersistenceNotFoundError(id)
   if (code === 'SESSION_OWNERSHIP_LOST') throw new module.SessionOwnershipLostError(id)
   if (code === 'READ_ONLY') throw new module.SessionReadOnlyError(id, operation)
+  if (code === 'SESSION_FORMAT_UNSUPPORTED') throw new module.SessionFormatUnsupportedError(sessionFormatRefusal(error, id))
   throw error
+}
+
+/**
+ * Rebuild the persisted-format refusal with the version direction the runtime
+ * knows, so a user sees whether to upgrade the harness or accept that the log
+ * belongs to an older generation.
+ * @param error - Backend refusal carrying `details.storedVersion` when known.
+ * @param id - Session id the refusal concerns.
+ * @returns Refusal text naming both the stored and supported versions.
+ */
+function sessionFormatRefusal(error: unknown, id: SessionId): string {
+  const module = runtimePersistence()
+  const details = isRecord(error) && isRecord(error.details) ? error.details : undefined
+  const storedVersion = details !== undefined && typeof details.storedVersion === 'number' ? details.storedVersion : undefined
+  if (storedVersion !== undefined) return module.sessionFormatVersionRefusal(String(id), storedVersion)
+  return isRecord(error) && typeof error.message === 'string'
+    ? error.message
+    : `session "${String(id)}" uses an unsupported log format`
 }
 
 class RemoteSessionHandle implements BrowserNativeSessionHandle {
