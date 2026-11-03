@@ -121,6 +121,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 60. [Browser-Native CDP 页面隐藏/冻结能力](browser-native-dsh-poc/cdp-freeze-capability.md)：Chrome 156 自动化会话无法用 `setPageVisibilityOverride`、`setWebLifecycleState` 或虚拟时间暂停制造 hidden/frozen 页面；`Page.setWebLifecycleState('frozen')` 只是 no-op，Worker lease 继续续租，因此不能替代后台标签自然节流的证据。
 61. [Browser-Native 跨标签 lease 与审批组合](browser-native-dsh-poc/cross-tab-lease-approval-validation.md)：Session 归属与 Workspace writer lease 正交；并发前台标签无 writer token 且不触达后端，后台 owner 保持 lease 并获批写入 Workspace revision 1，owner 关闭后接管取得新 fencing token，待决审批只结算一次且不重放。
 62. [Browser-Native 标签页关闭后的后台 Agent 语义](browser-native-dsh-poc/tab-close-background-agent-semantics.md)：关闭标签即回收 Dedicated Worker，不提供后台续跑；Session 控制权与 writer lease 在 pagehide 释放（2949 ms 接管，TTL 5000 ms），关闭后无 Session event、模型请求或延迟写入；接管时开放工具结算一次 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次 `interrupted`，不重放。
+63. [Browser-Native WebKit/Safari 与 OS 级挂起能力](browser-native-dsh-poc/webkit-os-suspend-capability.md)：Playwright WebKit 26.4 的 OPFS `getDirectory()` 在页面与 Worker 均失败且无 sync access handle，preview 在 boot payload 阶段不可用、durable 明确报 `OPFS_SYNC_ACCESS_UNAVAILABLE`；同一 harness 在 Chromium 147 完成 durable/ephemeral 与 turn 对照。Safari 26.6.2 因未开启 `Allow remote automation` 无法建立 WebDriver 会话，落档为环境不可测。`SIGSTOP` Chrome renderer 超过 4 秒 lease TTL 后，backend 判定 `WORKSPACE_OWNERSHIP_LOST`、接管 fencing token 递增；恢复后页面不再续租、拒绝写入，刷新以新 token 恢复。
 
 ### 需要实现或审查代码时
 

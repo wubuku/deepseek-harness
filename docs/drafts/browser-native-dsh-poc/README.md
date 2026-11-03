@@ -1281,7 +1281,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 [语义与证据](tab-close-background-agent-semantics.md)定义：标签关闭即回收 Dedicated Worker，没有后台续跑；Session 控制权与 Workspace writer lease 在 pagehide 阶段释放，失败时按 TTL 到期；在途 turn 不在关闭时伪造终态，下一次拥有者打开时把开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放也不自动续跑。Chrome E2E 在 `bash sleep 8` 执行期关闭标签：关闭后 1 秒 Session event 数不变、无新模型请求、延迟写入不落地、Workspace revision 不变；存活标签在 2949 ms（TTL 5000 ms）内接管并取得新 fencing token，随后新 prompt 正常完成。
 
-未覆盖强杀进程、浏览器崩溃、OS 休眠、pagehide 超时后的后台写回、真实模型在途工具、多实例接管与 Safari。
+未覆盖强杀进程、浏览器崩溃、真实 OS 休眠、pagehide 超时后的后台写回、真实模型在途工具与多实例接管；进程挂起的 lease 语义见[能力结论](webkit-os-suspend-capability.md)，Safari 见同文。
 
 ## 附件 GC 与增量 hydrate
 
@@ -1290,6 +1290,12 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 定时 sweep 每 `attachmentGcSweepIntervalMs`（默认 5 分钟，0 关闭）枚举 `attachments-v1` 下的 workspace，沿用同一宽限期与代守卫；测试通过 `testHooks.attachmentGcNow` 注入时钟，在不等待 5 分钟的情况下证明年轻孤儿保留、超期孤儿删除、在用对象保留，并由 10 ms interval 触发同一闭环。第二实例因 dataDir 锁返回 `BACKEND_ALREADY_RUNNING`，sweeper 不能跨实例并发。
 
 Worker 以 hash 缓存已校验对象的 `size` 与 `lastModified`，重复 hydrate 命中缓存时只比较这两个值。Chrome E2E 证明 GC 后在用附件仍可下载且内容一致、孤儿 404；同一 Worker 连续 hydrate 均为缓存命中；清空 OPFS 后重新挂载仍会下载并校验对象。真正的跨实例共享存储 GC、分布式 fencing、容量配额、Session 删除保留策略和 Safari OPFS 行为未验证。
+
+## WebKit/Safari 与 OS 级挂起
+
+[能力结论](webkit-os-suspend-capability.md)记录当前环境的可判定结果。Playwright WebKit 26.4 中 `navigator.storage.getDirectory()` 在页面与 Dedicated Worker 都返回 `UnknownError`，且没有 OPFS sync access handle；preview 在 boot payload 阶段即失败，durable 模式明确报 `OPFS_SYNC_ACCESS_UNAVAILABLE`。同一 harness 在 Chromium 147 上完成 ephemeral/durable Workspace 写入回读与 scripted turn，说明差异来自浏览器实现。Safari 26.6.2 因未开启 `Allow remote automation`，WebDriver 会话被拒绝，落档为环境不可测；启用需要交互式授权。
+
+OS 级挂起用 `SIGSTOP` 冻结 Chrome renderer 超过 4 秒 writer lease TTL：backend 判定旧 lease 过期并返回 `409 WORKSPACE_OWNERSHIP_LOST`，其他客户端 claim 得到 fencing token 2；恢复后页面进入 `error`、不再发送续租请求、本地拒绝写入，刷新后以 fencing token 3 重新取得写权并成功写入。冻结仅模拟进程挂起，真实 OS 休眠、待决审批/在途工具组合、BFCache 与 Safari 仍未验证。
 
 ## Scope
 
