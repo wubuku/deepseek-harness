@@ -1528,7 +1528,11 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 ## Worker 内 Session 记忆
 
-[Worker 内 Session 记忆](browser-native-memory.md)把记忆研究里的 capability seam 落进 Worker：OPFS provider 按 `(workspaceId, sessionId)` 存 JSON 文件，`memory` 工具是唯一 consumer，写入先落盘再追加 `memory/entry` Session 事件，模型可见内容因此可从日志重建。工具 schema 不暴露 scope，scope 由工具内部从 `exec.agent.session.id` 派生。Chrome scripted E2E 证明跨 Session 读取互斥、文件头篡改返回 `MEMORY_ISOLATION_VIOLATION`、第二个 `BrowserContext` 读到 0 条；8 条条目写入中位数 1.2 ms、读取 0.5 ms。缺口：检索只是关键词包含、上限是模块常量、只在验证 roster 注册。
+[Worker 内 Session 记忆](browser-native-memory.md)把记忆研究里的 capability seam 落进 Worker：OPFS provider 按 `(workspaceId, sessionId)` 存 JSON 文件，`memory` 工具是唯一 consumer，写入先落盘再追加 `memory/entry` Session 事件，模型可见内容因此可从日志重建。工具 schema 不暴露 scope，scope 由工具内部从 `exec.agent.session.id` 派生。Chrome scripted E2E 证明跨 Session 读取互斥、文件头篡改返回 `MEMORY_ISOLATION_VIOLATION`、第二个 `BrowserContext` 读到 0 条；8 条条目写入中位数 1.2–1.7 ms、读取 0.5–0.6 ms。缺口：检索只是关键词包含、上限是模块常量、只在验证 roster 注册。
+
+## 工具能力矩阵与降级
+
+[浏览器端工具能力矩阵](tool-capability-matrix.md)按 `fs`、`shell`、`web`、`subagent`、`browser-use` 以及 `memory`/`todo` 记录 Worker 可用性、限制、模型可见性与不可用时的表现。验证 roster 的模型请求恰好是 `edit`、`glob`、`grep`、`read`、`todo_write`、`working_directory`、`write`；`bash`/`pwsh`/`web_search`/`web_fetch`/`subagent`/`job_run`/`read_image` 与所有 `browser_*` 都不出现。脚本模型显式调用未注册的 `bash` 得到 `unknown tool "bash"`、`isError: true`、零 Workspace commit；同一轮 `read` 读回 VFS fixture。`shell` 只在产品 profile 可用且受固定命令表限制，`subagent` 只在专用 roster 验证到 `maxDepth: 1`，`web` 与 `browser-use` 需要更换执行位置。
 
 ## Scope
 

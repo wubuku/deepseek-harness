@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-090：工具能力矩阵、未知工具降级与验证 roster 记忆门控
+
+```text
+changeId: BN-P2-090
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.cordis.patch.yml; docs/drafts/browser-native-dsh-poc/tests/memory-isolation.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/tool-capability-matrix.e2e.mjs; docs/drafts/browser-native-dsh-poc/tool-capability-matrix.md; docs/drafts/browser-native-dsh-poc/browser-native-memory.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 产品需要知道 fs/shell/web/subagent/browser-use 在浏览器 Worker 的可用性、受限项与降级表现；同时上一提交把 `tool-memory` 写进共享验证 preset，导致未启用发布名单的其余 roster 在首个 turn 因 `tool schema "memory" is not currently published` 失败。
+existingExtensionPointsChecked: 复用 `createRuntimeValidationDist` 的 roster 配置修补、`browser-native-capability-publication` 发布名单、`ctx.tools` 未注册工具执行路径与既有 Worker test port；没有新增工具、没有修改 `packages/`、正式 profile 或 Agent Loop。
+whyDraftOnlyWasInsufficient: “能力不可用时模型看到什么”只能由真实 Worker 的首个 LLM 请求与执行管线证明；静态配置表无法区分 schema 缺失、`unknown tool` 兜底与工具执行失败。
+behaviorChange: `tool-memory` 从共享 `runtime-validation.cordis.patch.yml` 移入 `createRuntimeValidationDist({ memoryIsolation: true })` 的按需注入，只有 memory 验证启用该工具与发布名单，其余 roster 的模型请求恢复原 roster。新增 `tool-capability-matrix.e2e.mjs`：断言验证 roster 恰为 `edit`/`glob`/`grep`/`read`/`todo_write`/`working_directory`/`write`，`bash`/`pwsh`/`web_search`/`web_fetch`/`subagent`/`job_run`/`read_image`/`browser_*` 不出现；脚本模型调用未注册 `bash` 得到 `unknown tool "bash"`、`isError: true`、零 Workspace commit，同轮 `read` 读回 `VFS_INPUT_READY`。
+consumersUpdated: memory isolation E2E 显式传入 `memoryIsolation: true`；新增能力矩阵文档、PoC README 与 drafts index 106；更新 ledger。
+test: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/tool-capability-matrix.e2e.mjs` 通过；回归 `memory-isolation.e2e.mjs`、`browser-native-file-tools.e2e.mjs`、`product-visibility.e2e.mjs` 均通过；`pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 通过；`pnpm exec oxlint` 对改动 TS/JS 0 告警。
+syncReplaySteps: 上游同步后核对 preset 插件注入顺序、发布名单与 `ctx.tools` 未注册工具的错误文本；复跑能力矩阵、memory isolation、文件工具与产品可见性 E2E。
+deleteCondition: 产品需要运行时 capability manifest 或正式工具选择 UI；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-089：Worker 内 Session 记忆 provider、工具与隔离验证
 
 ```text

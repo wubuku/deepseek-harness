@@ -29,11 +29,11 @@ function findPluginEntry(value, id) {
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number, memoryIsolation?: boolean}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap; memoryIsolation adds the Session memory tool that only the memory validation publishes.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
-  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens,
+  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens, memoryIsolation = false,
 } = {}) {
   if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent'].includes(roster)) {
     throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, or browser-subagent')
@@ -65,9 +65,14 @@ export async function createRuntimeValidationDist({
       ? 'runtime-validation.cordis.patch.yml'
       : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
-    if (timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent') {
+    if (memoryIsolation || timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent') {
       const entries = load(profilePatch)
       if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
+      if (memoryIsolation) {
+        const preset = entries.find(entry => entry?.id === 'preset-standard')
+        if (!Array.isArray(preset?.config?.plugins)) throw new Error('validation profile has no preset-standard plugin list')
+        preset.config.plugins.push({ id: 'tool-memory', name: './browser-native-memory.js' })
+      }
       if (contextWindow !== undefined) {
         const llm = findPluginEntry(entries, 'llm-browser-native')
         if (llm === undefined) throw new Error('validation profile has no llm-browser-native entry')

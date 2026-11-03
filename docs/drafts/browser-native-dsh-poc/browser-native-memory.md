@@ -22,13 +22,13 @@
 
 ## 成本
 
-最近一次 Chrome scripted 运行（同一 Worker 内 8 次写入 + 8 次读取）：
+最近一次 Chrome scripted 运行（同一 Worker 内 8 次写入 + 8 次读取；两次运行的写入中位数为 1.2–1.7 ms，读取 0.5–0.6 ms）：
 
 ```json
 {"scope":{"kind":"workspace+session+opfs-file","headerTamper":"MEMORY_ISOLATION_VIOLATION"},"persistence":{"eventsAfterReload":1,"bytes":320},"isolation":{"sessionA":{"entries":1,"hasA":true,"hasB":false},"sessionB":{"entries":1,"hasA":false,"hasB":true},"files":["memory-isolated-53048ef3-507e-44d8-b6ec-b64c228e024d.json","session-34a4f255-dc7c-4886-bee3-19886cb04cda.json"],"crossContext":{"entries":0,"files":[]}},"cost":{"writeMs":{"median":1.2,"max":1.3},"readMs":{"median":0.5,"max":0.6},"bytes":1366,"entries":8,"toolTurnMs":{"write":158,"recall":137}}}
 ```
 
-8 条 48 字符条目合计 1,366 bytes。单次 OPFS 写入中位数 1.2 ms、读取 0.5 ms，均不含工具调度与模型往返；脚本模型的 tool turn 为 158 ms / 137 ms，其中绝大部分是 turn 与 stream 的固定开销。写入成本随条目数线性增长的部分来自整文件重写的 `writeEntry`。
+8 条 48 字符条目合计 1,366 bytes。单次 OPFS 写入中位数 1.2–1.7 ms、读取 0.5–0.6 ms，均不含工具调度与模型往返；脚本模型的 tool turn 为 137–256 ms，其中绝大部分是 turn 与 stream 的固定开销。写入成本随条目数线性增长的部分来自整文件重写的 `writeEntry`。
 
 ## 验证
 
@@ -38,7 +38,7 @@ pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/memory-isolation.e2e.mjs
 ```
 
-测试资产：`runtime-validation.cordis.patch.yml` 的 preset 只在验证 roster 里注册 `tool-memory`；`runtime-validation.mjs` 把 `browser-native-memory.js` 同时放进 home 根与 `home/profiles/web/`，因为 preset 的相对名按 profile 目录解析。Worker 只有在 preview URL 带 `browser-native-test=memory-isolation` 时才启用 `enableMemoryIsolationValidation()`，把这个工具加入发布名单；正式 `browser-native-profile.cordis.patch.yml` 不注册它，避免未发布的工具进入普通 preview 的模型请求。
+测试资产：`createRuntimeValidationDist({ memoryIsolation: true })` 才把 `tool-memory` 注入验证 preset，`runtime-validation.mjs` 把 `browser-native-memory.js` 放进 `home/profiles/web/`，因为 preset 的相对名按 profile 目录解析。Worker 只有在 preview URL 带 `browser-native-test=memory-isolation` 时才启用 `enableMemoryIsolationValidation()`，把这个工具加入发布名单。两者必须同时开启：否则模型请求会因未发布的工具 schema 直接失败，而不是静默跳过。正式 `browser-native-profile.cordis.patch.yml` 不注册它。
 
 ## 缺口
 

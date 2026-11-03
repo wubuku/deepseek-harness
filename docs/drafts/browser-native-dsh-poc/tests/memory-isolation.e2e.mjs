@@ -95,7 +95,7 @@ function toolEvents(session, type) {
 }
 
 try {
-  image = await createRuntimeValidationDist({ roster: 'browser' })
+  image = await createRuntimeValidationDist({ roster: 'browser', memoryIsolation: true })
   app = await createBrowserNativeV2Server({
     dataDir,
     distRoot: image.distRoot,
