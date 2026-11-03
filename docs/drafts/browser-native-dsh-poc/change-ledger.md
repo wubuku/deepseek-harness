@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-092：验证 roster 的 Session/租户 token 预算与 provider 用量对照
+
+```text
+changeId: BN-P2-092
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-token-budget.ts; docs/drafts/browser-native-dsh-poc/browser-native-token-budget.js; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 需要验证 Session 与租户的输入/输出 token 计量是否与真实 provider 一致，以及超预算能否在发出下一次上游请求前显式中止并留下可追溯告警；既有无预算执行点，token-meter 只提供 projection。
+existingExtensionPointsChecked: 复用 Token-meter `tokenUsage` projection、`session/event`、Browser-Native LLM adapter 的 `stream()` 入口、`LlmError` 与 turn error 渲染、SessionEventMap declaration merging、validation MessagePort；没有修改 packages/、Agent Loop 或 Session format。
+whyDraftOnlyWasInsufficient: 计量是否与 provider 逐值一致只能对照真实上游 usage；请求前阻断需要真实 fetch 次数对照，静态检查无法证明。
+behaviorChange: 新增 validation-only `browser-native-token-budget` 静态模块与 `browser-budget` roster（profile 配置 tenantId/sessionLimit/tenantLimit）。插件按 Session 读取 tokenUsage projection 并汇总租户；LLM adapter 在 fetch 前调用 `canRequest`，越界抛 `TOKEN_BUDGET_EXCEEDED`；每个 (session, scope) 追加一条 `budget/exceeded` 审计。test port 新增 `budget-state`、`budget-set`。PoC backend 在转发上游 SSE 时独立记录原始 usage，真实模式新增 `GET /api/browser-native/usage-audit`。
+consumersUpdated: Worker static module map、runtime validation image shim 拷贝、PoC README、drafts index 108 与本 ledger；正式 profile 与发布名单未注册。
+test: `DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs` 通过：profile 限额读出正确；插件 meter 与 backend 独立记录的 provider usage 均为 2346 输入/16 输出；Session 限额 2361 时 turn 2 在 fetch 前失败、上游请求数保持 1、`budget/exceeded` scope=session 一条、客户端渲染 `token budget exceeded (session)`；租户限额 2361 时 turn 3 同样在 fetch 前失败、scope=tenant 审计一条；pageerror 为 0。`pnpm exec tsc -p apps/web/tsconfig.json --noEmit` 与 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过。
+syncReplaySteps: 上游同步后核对 Token-meter projection 字段、`session/event` 顺序与 LLM adapter `stream()` 入口；复跑 preview build 与 token budget E2E，确认正式 profile 仍未启用预算。
+deleteCondition: 正式产品提供 Session/租户预算执行、用量 UI 与费用换算；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-091：验证 roster 的 profile 工具策略（allow/ask/deny）与审计
 
 ```text

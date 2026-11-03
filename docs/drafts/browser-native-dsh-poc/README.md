@@ -425,6 +425,15 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/golden-path.e2e.mjs
 ```
 
+## Token 预算与计量
+
+[token 预算验证](token-budget-metering.md)用真实模型对照 PoC backend 独立记录的上游 usage：Session 计量 2346 输入 / 16 输出与 provider 完全一致。Session 限额压到已用量以下后，下一 turn 在 `fetch` 之前被拒绝，`turn/end` 为 `TOKEN_BUDGET_EXCEEDED`、上游请求数不增、`budget/exceeded` 一条且客户端显示错误；租户限额压到已用量以下后同样在请求前阻断，租户 scope 审计一条。预算来自验证 roster 的 profile `config`，正式 profile 未启用。
+
+```sh
+DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs
+```
+
 ## 审批策略与工具决策
 
 [profile 工具策略验证](approval-policy-configuration.md)用真实模型在同一个 Session 内验证 `write` 的 ask→deny→allow→ask 变更即时生效。deny 由 `ctx.tools.guard` 单调执行：即使先注册一个 prepended `allow` 监听器，模型仍收到 `tool "write" is denied by the profile tool policy`，文件不存在，且该调用没有进入审批。三次决策分别在 `tool-policy/decided` 审计中留下一条 `deny`/`allow`/`ask`，ask 路径同时产生 `approval/asked` + `allowed-once`。策略来自验证 roster 的 profile `config`，正式 product profile 未注册该插件。

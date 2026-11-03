@@ -4236,7 +4236,7 @@ function createAnthropicStream(response) {
   }
 }
 
-async function realLlm(response, request, config, body) {
+async function realLlm(response, request, config, body, recordUsage = () => {}) {
   const controller = new AbortController()
   let clientClosed = false
   let timedOut = false
@@ -4253,6 +4253,21 @@ async function realLlm(response, request, config, body) {
   }, config.timeoutMs)
   request.on('aborted', abortForClient)
   response.on('close', abortForResponseClose)
+  let auditInput
+  let auditOutput
+  let auditRecorded = false
+  const flushAudit = () => {
+    if (auditRecorded) return
+    auditRecorded = true
+    if (!Number.isSafeInteger(auditInput) || !Number.isSafeInteger(auditOutput)) return
+    recordUsage({
+      requestId: body.requestId,
+      sessionId: body.sessionId,
+      ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
+      inputTokens: auditInput,
+      outputTokens: auditOutput,
+    })
+  }
   try {
     let upstream
     try {
@@ -4284,9 +4299,25 @@ async function realLlm(response, request, config, body) {
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim()
         buffer = buffer.slice(newline + 1)
-        if (line.startsWith('data:') && stream.consume(line.slice(5).trim())) {
-          response.end()
-          return
+        if (line.startsWith('data:')) {
+          const data = line.slice(5).trim()
+          if (data !== '[DONE]') {
+            try {
+              const item = JSON.parse(data)
+              const usage = item.usage ?? item.message?.usage
+              const input = usage?.prompt_tokens ?? usage?.input_tokens
+              const output = usage?.completion_tokens ?? usage?.output_tokens
+              if (Number.isSafeInteger(input)) auditInput = input
+              if (Number.isSafeInteger(output)) auditOutput = output
+            } catch {
+              // A provider heartbeat line that is not JSON carries no usage.
+            }
+          }
+          if (stream.consume(data)) {
+            response.end()
+            flushAudit()
+            return
+          }
         }
         newline = buffer.indexOf('\n')
       }
@@ -4297,6 +4328,7 @@ async function realLlm(response, request, config, body) {
       else if (!stream.finishAtEof()) writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
     }
     if (!response.writableEnded) response.end()
+    flushAudit()
   } catch (error) {
     if (clientClosed) return
     if (timedOut && response.headersSent) {
@@ -4312,6 +4344,7 @@ async function realLlm(response, request, config, body) {
     clearTimeout(timeout)
     request.off('aborted', abortForClient)
     response.off('close', abortForResponseClose)
+    flushAudit()
   }
 }
 
@@ -4706,6 +4739,7 @@ export async function createBrowserNativeV2Server(options) {
   let servedOrigin
   const startedAt = Date.now()
   const metrics = createMetricsRegistry()
+  const usageAudit = []
   const durableHost = createDurableTurnHost({
     store,
     admission,
@@ -4868,6 +4902,17 @@ export async function createBrowserNativeV2Server(options) {
           model: llm.model,
           ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
           ...(llm.contextWindow === undefined ? {} : { contextWindow: llm.contextWindow }),
+        })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/usage-audit') {
+        if (llm.mode !== 'real') {
+          sendJson(response, 404, { error: 'usage audit is available only in real-LLM mode' })
+          return
+        }
+        const sessionId = url.searchParams.get('sessionId')
+        sendJson(response, 200, {
+          entries: sessionId === null ? usageAudit : usageAudit.filter(entry => entry.sessionId === sessionId),
         })
         return
       }
@@ -5458,7 +5503,7 @@ export async function createBrowserNativeV2Server(options) {
                 response.off('close', onClose)
               }
             } else {
-              await realLlm(response, request, llm, body)
+              await realLlm(response, request, llm, body, entry => usageAudit.push(entry))
             }
           }, waitMs => { modelQueueWaitMs = waitMs })
         } catch (error) {

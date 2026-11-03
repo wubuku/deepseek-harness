@@ -72,6 +72,7 @@ import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
 import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
 import type { BrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
 import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
+import type { BrowserNativeTokenBudgetProbe } from './browser-native-token-budget.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -1153,6 +1154,7 @@ function declaredContextWindow(config: unknown): number | undefined {
 
 function createRemoteLlmAdapterClass(
   publication: BrowserNativeCapabilityPublication,
+  budget?: BrowserNativeTokenBudgetProbe,
   declaredWindow?: number,
 ): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
   const Base = runtimeLlm().LlmAdapter
@@ -1192,6 +1194,11 @@ function createRemoteLlmAdapterClass(
     }
 
     override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+      const blocked = budget?.canRequest(options.sessionId === undefined ? undefined : String(options.sessionId))
+      if (blocked !== undefined) {
+        const { LlmError } = runtimeLlm()
+        throw new LlmError(blocked, 'TOKEN_BUDGET_EXCEEDED')
+      }
       const request = requestId()
       const response = await fetch(LLM_ROUTE, {
       method: 'POST',
@@ -1311,14 +1318,14 @@ function createSessionModule(
   }
 }
 
-function createLlmModule(publication: BrowserNativeCapabilityPublication): unknown {
+function createLlmModule(publication: BrowserNativeCapabilityPublication, budget?: BrowserNativeTokenBudgetProbe): unknown {
   let module: unknown
   return () => {
-    const RemoteLlmAdapter = createRemoteLlmAdapterClass(publication)
+    const RemoteLlmAdapter = createRemoteLlmAdapterClass(publication, budget)
     module ??= {
       default: (ctx: Context, config: unknown): void => {
         const declared = declaredContextWindow(config)
-        const Adapter = declared === undefined ? RemoteLlmAdapter : createRemoteLlmAdapterClass(publication, declared)
+        const Adapter = declared === undefined ? RemoteLlmAdapter : createRemoteLlmAdapterClass(publication, budget, declared)
         const adapter = new Adapter()
         ctx.effect(() => ctx.llm.registerAdapter(['browser-native'], adapter))
         const controlledAgents = new Set<string>()
@@ -1368,6 +1375,7 @@ export function createBrowserNativeStaticModules(
   permissionProbe?: BrowserNativePermissionProbe,
   memoryTestHooks?: BrowserNativeMemoryTestHooks,
   toolPolicy?: BrowserNativeToolPolicyProbe,
+  tokenBudget?: BrowserNativeTokenBudgetProbe,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
   attachmentTestHooks?.onModuleReady?.(attachments)
@@ -1378,12 +1386,15 @@ export function createBrowserNativeStaticModules(
     '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(
       workspace, sessionOutbox, publication, attachments.ensureSessionFiles,
     ),
-    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication),
+    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication, tokenBudget),
     ...(permissionProbe === undefined ? {} : {
       '@deepseek-ai/dsh-browser-native-permission-probe': permissionProbe.factory,
     }),
     ...(toolPolicy === undefined ? {} : {
       '@deepseek-ai/dsh-browser-native-tool-policy': toolPolicy.factory,
+    }),
+    ...(tokenBudget === undefined ? {} : {
+      '@deepseek-ai/dsh-browser-native-token-budget': tokenBudget.factory,
     }),
   }
 }
