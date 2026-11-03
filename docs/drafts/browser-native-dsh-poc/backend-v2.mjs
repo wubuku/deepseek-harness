@@ -19,6 +19,7 @@ import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-t
 import { CrossStoreLedgerError, CrossStoreOperationLedger } from './cross-store-operation-ledger.mjs'
 import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
 import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
+import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -894,7 +895,7 @@ function assertLocalRequest(request, url, internal) {
 
 function sendError(response, error) {
   const detail = error instanceof BackendError || error instanceof WorkspaceError || error instanceof CrossStoreLedgerError
-    || error instanceof EgressError || error instanceof AdmissionError
+    || error instanceof EgressError || error instanceof AdmissionError || error instanceof DurableTurnError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -3806,6 +3807,16 @@ export async function createBrowserNativeV2Server(options) {
     boundedInteger(limit ?? ACCESS_AUDIT_LIMIT, 'accessAudit limit', ACCESS_AUDIT_LIMIT)
     return accessAuditEntries.slice(-(limit ?? ACCESS_AUDIT_LIMIT)).map(clone)
   }
+  const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
+    ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
+  let servedOrigin
+  const durableHost = createDurableTurnHost({
+    store,
+    admission,
+    model: llm.model,
+    originOf: () => servedOrigin,
+    timeoutMs: durableTurnTimeoutMs,
+  })
   const server = createServer(async (request, response) => {
     let url
     for (const [name, value] of Object.entries(responseHeaders)) response.setHeader(name, value)
@@ -4193,6 +4204,26 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, { authorized: true, ownerEpoch: session.ownerEpoch })
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/durable') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = assertSessionId(body.sessionId)
+        const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        const prompt = boundedString(body.prompt, 'prompt', 10_000)
+        const header = body.header === undefined
+          ? { id: sessionId, version: 1, createdAt: Date.now(), cwd: '/workspace' }
+          : assertRecord(body.header, 'header')
+        const durable = await durableHost.start({ sessionId, principalId, turnId, prompt, header })
+        sendJson(response, durable.replayed === true ? 200 : 202, durable)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/durable') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        sendJson(response, 200, durableHost.status({ turnId, principalId }))
+        return
+      }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
@@ -4301,6 +4332,7 @@ export async function createBrowserNativeV2Server(options) {
     egress,
     accessAudit,
     sweepAttachments,
+    durableHost,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {
         await releaseDataDirLock().catch(() => {})
@@ -4310,7 +4342,8 @@ export async function createBrowserNativeV2Server(options) {
       server.listen(port, host, () => {
         server.off('error', onError)
         const address = server.address()
-        resolveListen(`http://${host}:${address.port}`)
+        servedOrigin = `http://${host}:${address.port}`
+        resolveListen(servedOrigin)
       })
     }),
     close: async () => {

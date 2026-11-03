@@ -966,6 +966,14 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 
 修复前后探针可判定：伪造 Origin 读取 manifest 由 200 变为 403 `ORIGIN_FORBIDDEN`，伪造 Origin 调用 `/llm` 由 200 变为 403，`Host: attacker.example` 由 200 变为 403 `HOST_FORBIDDEN`，`?access_token=` 由 200 变为 400 `CREDENTIAL_IN_QUERY`；同源 `/llm` 仍为 200。合同测试 5/5、既有 backend 合同 64/64，真实 Chrome scripted E2E 完成 1 个 turn。同机其它进程、预览 origin 内 XSS、生产身份授权、Safari/WebKit 和 HTTPS 代理仍属未覆盖范围。
 
+## 服务端 durable turn host（最小原型）
+
+[durable host 进度](durable-host-progress.md)记录跨关页 turn 的服务端持有原型。`durable-host-v2.mjs` 以 `turnId` 为幂等键，在 `POST /api/browser-native/session/durable` 内创建或接管空闲 Session，追加 `turn/start`、`user/message`、`step/start` 并 flush 后返回 202；模型经同源 `/llm` 完成文本 turn，再追加 `assistant/message`、`step/end`、`turn/end` 并 flush，最后释放 owner 与 admission mount。
+
+Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签仍读到相同 3 个开场事件且状态为 running；释放 barrier 后读到 6 个事件、1 个 `turn/end`、`durableThroughSeq=5`。重复提交同一 `turnId` 返回既有状态且不再次请求模型；第二 turn 独立完成；重开标签可 `session/open {access:'write'}` 接管；另一 principal 查询状态返回 404 `TURN_NOT_FOUND`。Node 合同测试与既有 backend 合同 70/70 通过，`LongCat-2.5` 真实模型 smoke 完成 `DURABLE_REAL_SMOKE_OK`。
+
+原型只执行文本 turn，tool-call 以 `DURABLE_TOOL_UNSUPPORTED` 错误结算；运行记录仅在内存，backend 重启后的未结算 turn 需要恢复流程；产品 Worker 尚无只读挂载服务端 Session 的聊天 UI；审批、取消、附件、Workspace 工具、多 backend/HA 与 Safari/WebKit 未闭环。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

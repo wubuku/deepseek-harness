@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-074：最小服务端 durable turn host
+
+```text
+changeId: BN-P2-074
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-host.test.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-host.e2e.mjs; docs/drafts/browser-native-dsh-poc/durable-host-progress.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有结论是跨页面关闭的 turn 必须由服务端持有，但 PoC 的 Agent Loop 只在浏览器 Worker 内运行；关页会留下没有 `turn/end` 的 Session，重开标签无法证明服务端继续执行或不会重复执行。
+existingExtensionPointsChecked: 复用 FormalSessionStore 的 `exclusive`/`create`/`claim`/`assertOwner`/`flush`、既有同源 `/api/browser-native/llm`、Session principal cookie 与回环 Host/Origin 准入、admission 的 mount/release；未改 DSH Agent Loop、Session format、Worker、profile 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 服务端持有 turn 需要在运行期占用 Session owner、发起模型请求、在关页后继续结算并持久化事件；文档无法替代事件顺序、幂等和跨 principal 拒绝的运行时证据。
+behaviorChange: 新增 `durable-host-v2.mjs` 与 `POST/GET /api/browser-native/session/durable`。服务端以 `turnId` 为幂等键：首次请求创建或接管空闲 Session，追加 `turn/start`、`user/message`、`step/start` 并 flush 后返回 202；模型经同源 LLM 路由完成文本 turn，再追加 `assistant/message`、`step/end`、`turn/end` 并 flush，随后释放 owner 与 admission mount。运行中或完成后重复提交返回既有状态且不再次请求模型；同一 turnId 绑定其它 Session/principal 返回 409 `TURN_CONFLICT`；跨 principal 查询返回 404 `TURN_NOT_FOUND`；模型返回 tool-call 时以 `DURABLE_TOOL_UNSUPPORTED` 结算错误，不执行工具。turn 只在内存运行记录中，进程重启不恢复。
+consumersUpdated: 新增 Node 合同测试与 Chrome E2E；`backend-v2.test.mjs`、`local-request-guard.test.mjs`、`principal-isolation.test.mjs` 复跑；durable host 进度文档、PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/durable-host.test.mjs` 通过：`modelCalls=["primary","primary-released","second"]`，运行中/完成后重放均未新增模型请求，turn 1 事件 6 个、`durableThroughSeq=5`，跨 principal 404，复用 turnId 409，浏览器已持有 Session 时服务端接管 409 `SESSION_ALREADY_OWNED`，结算后可写权接管。`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/durable-host.e2e.mjs` Chrome 156.0.8078.79 通过：关页前 3 事件，关页 400 ms 后重开标签仍读 3 事件且状态 running，释放模型 barrier 后 6 事件、1 个 `turn/end`、`durableThroughSeq=5`，重放不新增模型请求，第二 turn 完成，重开标签接管写权，另一 principal 404，`pageErrors=0`。真实模型 `LongCat-2.5` smoke 完成文本 turn（4.1 s，`DURABLE_REAL_SMOKE_OK`）；`gpt-5.6-sol` 因上游 `insufficient_quota` 403 被正确结算为 turn 错误。既有合同测试 70/70。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 上游若提供正式 durable Agent host，优先复用其 turn 幂等、所有权与恢复接口并删除本原型；重跑 durable host 合同测试、Chrome 关页/重开 E2E、既有 backend 合同测试与真实模型 smoke。
+deleteCondition: DSH 核心或部署侧提供服务端持久 Agent host（含工具、取消、审批、重启恢复与多实例幂等）并由 PoC 直接消费后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-073：跨 principal 拒绝审计
 
 ```text
