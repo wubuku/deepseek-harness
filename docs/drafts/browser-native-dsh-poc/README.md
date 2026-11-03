@@ -1367,6 +1367,14 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs`。
 
+## 准入控制：并发 turn 上限与挂载租约
+
+[准入控制](admission-control.md)把“同时执行几个 turn、同时挂载几个 Session”从调用方自觉改成 backend 的跨标签页权威：同时执行的模型 turn 上限 8（`--max-concurrent-turns`），第 9 个起按 FIFO 排队，30 秒未放行返回 `503 ADMISSION_TIMEOUT`；同时挂载上限 16（`--max-mounted-sessions`），第 17 个 `session/create` 或 `open('write')` 返回 `429 SESSION_MOUNT_LIMIT`。挂载是随 owner lease 续期的租约，页面关闭或过期即回收。`GET /api/browser-native/admission` 暴露 active/queued/mounts、队列位置与累计计数器。
+
+真实 Chrome 156 用 16 个独立 `BrowserContext`/Worker 验证：阶段 A 用 `barrier-text` 固定 admitted turn，确定观测到 8 active、18–22 queued，位置连续，排队 turn 属于不同 Session，释放后 16 个 turn 全完成、`timedOut=0`、`maxQueueWaitMs` 213–425 ms；第 17 个挂载被拒。阶段 B 只保留固定 200 ms 模型延迟，16 路 turn 中位数 875–1,272 ms（默认挂载租约下 907/994）、p95 906–1,278 ms（907/1,011），对照上一批无上限的 1,694/1,824 ms 与客户端放行 8 的 892/1,154 ms。后端准入卡住的是模型请求，16 个页面仍同时提交与渲染，因此没有回到 8 路本身的 615 ms；严格达到 8 路延迟仍需 Worker 级 turn gate。
+
+合同测试见 `tests/backend-v2.test.mjs`（63/63），浏览器 E2E 见 `tests/admission-control.e2e.mjs`。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

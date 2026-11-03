@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-068：跨标签页 turn 准入与挂载租约
+
+```text
+changeId: BN-P2-068
+upstreamBaseline: research checkout at batch start; 2026-11-03; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/admission-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/run-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/admission-control.e2e.mjs; docs/drafts/browser-native-dsh-poc/admission-control.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 多 Session 争用验证显示 16 路并发会让 turn 延迟与 p95 越界，但此前“同时执行 8 个 turn、同时挂载 16 个 Session”只是建议，跨标签页没有任何执行权威，也没有队列可见性。
+existingExtensionPointsChecked: 复用既有同源 backend HTTP 路由、`sendError` 错误信封、Session owner lease（renew 续期）与 E2E 测试 hook；新增 `GET /api/browser-native/admission` 与两个 CLI 参数。未改 Agent Loop、Session format、Web profile、Desktop/Headless profile 或任何 package。
+whyDraftOnlyWasInsufficient: 只写结论无法证明超限行为、排队公平性、饥饿保护和队列可见性；准入必须落在跨标签页共享的 backend 才有意义。
+behaviorChange: backend 默认限制同时执行 8 个模型 turn（FIFO 排队，30 秒超时返回 `503 ADMISSION_TIMEOUT`）与同时挂载 16 个 Session（超出返回 `429 SESSION_MOUNT_LIMIT`）；`admission: false` 可关闭。既有 Session/Workspace 协议与事件格式不变。
+directoryOutChangeReason: 无目录外改动。
+consumersUpdated: run-v2 launcher 参数与用法、PoC README、operational compatibility matrix、drafts index 和本账本。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 63/63 通过（含排队顺序、挂载上限、关闭后释放与关闭准入时 404）；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/admission-control.e2e.mjs` 两次通过：8 active/21–22 queued、位置连续、16 turn 全完成、`timedOut=0`、`maxQueueWaitMs` 276/425 ms、第 17 个挂载 429、16 路中位数 875/1,272 ms。
+syncReplaySteps: 上游若改变 `/llm` 请求路径、Session owner lease 续期或错误信封，重跑 backend 合同测试与浏览器 E2E；若引入正式多实例 backend，把内存队列替换为共享权威后重跑同一 harness。
+deleteCondition: 正式 DSH 提供跨实例 turn 调度与 Session 挂载配额后删除；或移除 Browser-Native DSH PoC。
+status: implemented-as-draft
+```
+
 ### BN-P2-067：正式 SQLite KV 的故障注入测试
 
 ```text

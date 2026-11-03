@@ -18,6 +18,7 @@ import { WORKSPACE_BLOB_CHUNK_BYTES, WORKSPACE_CONTENT_LAYOUT, WorkspaceError, W
 import { SESSION_APPEND_MAX_BYTES, SESSION_APPEND_MAX_EVENTS } from './session-transport-limits.mjs'
 import { CrossStoreLedgerError, CrossStoreOperationLedger } from './cross-store-operation-ledger.mjs'
 import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
+import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -817,7 +818,7 @@ async function queryExternalBusiness(origin, operationId, principalId) {
 
 function sendError(response, error) {
   const detail = error instanceof BackendError || error instanceof WorkspaceError || error instanceof CrossStoreLedgerError
-    || error instanceof EgressError
+    || error instanceof EgressError || error instanceof AdmissionError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -828,6 +829,48 @@ function sendError(response, error) {
       ...(detail.details === undefined ? {} : { details: detail.details }),
     },
   })
+}
+
+/**
+ * Run one model request while holding an admission slot for its whole stream.
+ * A browser that disconnects while queued cancels its place instead of leaking it.
+ * @param {import('node:http').ServerResponse} response - Response the request will stream into.
+ * @param {object|undefined} admission - Admission controller, or undefined when disabled.
+ * @param {object} body - LLM request body carrying requestId, sessionId and purpose.
+ * @param {() => Promise<void>} run - Streams the model response.
+ * @returns {Promise<void>} Resolves after the slot is released or the client disconnected.
+ */
+async function withAdmission(response, admission, body, run) {
+  if (admission === undefined) {
+    await run()
+    return
+  }
+  const abort = new AbortController()
+  const onClose = () => {
+    if (!response.writableEnded) abort.abort()
+  }
+  response.on('close', onClose)
+  let lease
+  try {
+    lease = await admission.acquireTurn({
+      requestId: body.requestId,
+      sessionId: body.sessionId,
+      purpose: body.purpose,
+    }, abort.signal)
+  } catch (error) {
+    if (error instanceof AdmissionError && error.code === 'ADMISSION_ABORTED') {
+      response.destroy()
+      return
+    }
+    throw error
+  } finally {
+    response.off('close', onClose)
+  }
+  try {
+    await run()
+  } finally {
+    lease.release()
+  }
 }
 
 function revisionOf(session) {
@@ -1160,7 +1203,7 @@ function sessionResponse(session, extra = {}) {
   }
 }
 
-async function sessionOperation(store, operation, body, principalId, testHooks = {}) {
+async function sessionOperation(store, operation, body, principalId, testHooks = {}, admission) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -1196,15 +1239,29 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
   return store.exclusive(id, async () => {
     await testHooks.beforeSessionOperation?.(operation, body)
     if (operation === 'create') {
-      const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0, principalId)
-      const owner = store.claim(session)
-      return sessionResponse(session, { owner })
+      admission?.mountSession(id)
+      try {
+        const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0, principalId)
+        const owner = store.claim(session)
+        return sessionResponse(session, { owner })
+      } catch (error) {
+        admission?.releaseMount(id)
+        throw error
+      }
     }
     const session = store.getForPrincipal(id, principalId)
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
-      const owner = body.access === 'write' ? store.claim(session, body.ownerToken, body.ownerEpoch) : undefined
-      return sessionResponse(session, owner === undefined ? {} : { owner })
+      if (body.access === 'write') {
+        admission?.mountSession(id)
+        try {
+          return sessionResponse(session, { owner: store.claim(session, body.ownerToken, body.ownerEpoch) })
+        } catch (error) {
+          admission?.releaseMount(id)
+          throw error
+        }
+      }
+      return sessionResponse(session)
     }
     if (operation === 'stat') return sessionResponse(session)
     if (operation === 'read') {
@@ -1232,6 +1289,7 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
         : undefined
       session.ownerToken = undefined
       session.ownerExpiresAt = 0
+      admission?.releaseMount(id)
       return sessionResponse(session, {
         closed: true,
         durable: true,
@@ -1278,7 +1336,10 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
       }
     }
     store.assertOwner(session, body.ownerToken, body.ownerEpoch)
-    if (operation === 'renew') return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
+    if (operation === 'renew') {
+      admission?.renewMount(id)
+      return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
+    }
     if (operation === 'append') {
       if (testHooks.failSessionAppend?.(body) === true) {
         throw new BackendError('E2E_INJECTED_SESSION_APPEND_FAILURE', 'E2E injected Session append failure', 503)
@@ -3613,6 +3674,14 @@ export async function createBrowserNativeV2Server(options) {
   const workspaceDownloads = new Map()
   const responseHeaders = options.responseHeaders ?? {}
   const egress = options.egress === undefined ? undefined : createEgressPolicy(options.egress)
+  const admission = options.admission === false ? undefined : createAdmissionController({
+    maxConcurrentTurns: 8,
+    maxMountedSessions: 16,
+    queueTimeoutMs: 30_000,
+    mountLeaseMs: options.ownerLeaseMs ?? DEFAULT_OWNER_LEASE_MS,
+    now: options.testHooks?.now,
+    ...options.admission,
+  })
   if (responseHeaders === null || typeof responseHeaders !== 'object' || Array.isArray(responseHeaders)) {
     throw new TypeError('responseHeaders must be an object')
   }
@@ -4021,7 +4090,7 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, principalId, options.testHooks)
+        const result = await sessionOperation(store, operation, body, principalId, options.testHooks, admission)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return
@@ -4054,30 +4123,32 @@ export async function createBrowserNativeV2Server(options) {
         if (options.testHooks?.failLlmRequest?.(body) === true) {
           throw new BackendError('E2E_INJECTED_LLM_FAILURE', 'E2E injected model request failure', 400)
         }
-        if (llm.mode === 'scripted') {
-          response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
-          let clientClosed = false
-          const onClose = () => {
-            if (response.writableEnded) return
-            clientClosed = true
-            options.testHooks?.onLlmClientClose?.(body)
+        await withAdmission(response, admission, body, async () => {
+          if (llm.mode === 'scripted') {
+            response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
+            let clientClosed = false
+            const onClose = () => {
+              if (response.writableEnded) return
+              clientClosed = true
+              options.testHooks?.onLlmClientClose?.(body)
+            }
+            response.on('close', onClose)
+            try {
+              await scriptedLlm(
+                response,
+                body.messages,
+                body.tools,
+                options.testHooks?.scriptedLlmFault?.(body),
+                () => clientClosed,
+                body.purpose,
+              )
+            } finally {
+              response.off('close', onClose)
+            }
+          } else {
+            await realLlm(response, request, llm, body)
           }
-          response.on('close', onClose)
-          try {
-            await scriptedLlm(
-              response,
-              body.messages,
-              body.tools,
-              options.testHooks?.scriptedLlmFault?.(body),
-              () => clientClosed,
-              body.purpose,
-            )
-          } finally {
-            response.off('close', onClose)
-          }
-        } else {
-          await realLlm(response, request, llm, body)
-        }
+        })
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/egress/fetch') {
@@ -4085,6 +4156,11 @@ export async function createBrowserNativeV2Server(options) {
         const body = await readBody(request)
         assertProtocol(body)
         sendJson(response, 200, await egress.proxy(body))
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/admission') {
+        if (admission === undefined) throw new BackendError('NOT_FOUND', 'route not found', 404)
+        sendJson(response, 200, { protocolVersion: PROTOCOL_VERSION, ...admission.snapshot() })
         return
       }
       if (request.method === 'GET') {

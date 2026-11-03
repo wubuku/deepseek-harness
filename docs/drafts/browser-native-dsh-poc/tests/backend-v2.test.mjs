@@ -3330,4 +3330,119 @@ describe('browser-native DSH v2 backend', () => {
     })
     assert.equal(response.status, 404)
   })
+
+  it('queues model turns above the concurrency limit in arrival order', async () => {
+    const dataDir = await temporaryDirectory()
+    let releaseGate
+    const gate = new Promise(resolveGate => { releaseGate = resolveGate })
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      testHooks: {
+        scriptedLlmFault: body => ({ kind: 'barrier-text', text: `ADMISSION_${body.requestId}`, release: gate }),
+      },
+    })
+    const sessions = []
+    for (let index = 0; index < 12; index += 1) {
+      const id = `admission-session-${index}`
+      const created = await post(origin, '/api/browser-native/session/create', envelope(`admission-create-${index}`, {
+        sessionId: id,
+        header: header(id),
+      }))
+      sessions.push({ id, ownerToken: created.owner.ownerToken, requestId: `admission-llm-${index}` })
+    }
+
+    const responses = sessions.map(session => fetch(`${origin}/api/browser-native/llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope(session.requestId, {
+        sessionId: session.id,
+        ownerToken: session.ownerToken,
+        provider: 'browser-native',
+        model: 'browser-native',
+        messages: [{ role: 'user', content: `ADMISSION_PROMPT_${session.requestId}` }],
+      })),
+    }))
+    const queued = await waitForAdmission(origin, state => state.activeTurns === 8 && state.queuedTurns === 4)
+    assert.deepEqual(queued.queue.map(waiter => waiter.position), [1, 2, 3, 4])
+    assert.equal(queued.mounts.active, 12, 'all created Sessions hold a mount lease')
+
+    releaseGate()
+    const settledResponses = await Promise.all(responses)
+    const items = await Promise.all(settledResponses.map(readNdjson))
+    assert.equal(items.every(result => result.at(-1).chunk.type === 'finish'), true,
+      'every admitted model request must stream to completion')
+
+    const settled = await (await fetch(`${origin}/api/browser-native/admission`)).json()
+    assert.equal(settled.counters.admitted, 12)
+    assert.equal(settled.counters.completed, 12)
+    assert.equal(settled.counters.maxActiveTurns, 8)
+    assert.equal(settled.counters.timedOut, 0)
+    assert.equal(settled.activeTurns, 0)
+    assert.equal(settled.queuedTurns, 0)
+    assert.deepEqual(
+      settled.recentAdmitted.slice(-queued.queue.length).map(entry => entry.requestId),
+      queued.queue.map(waiter => waiter.requestId),
+      'queued requests must be admitted in the order they became visible',
+    )
+    assert.equal(settled.counters.maxQueueWaitMs >= 0, true)
+  })
+
+  it('limits simultaneously mounted Sessions and releases the lease on close', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const created = []
+    for (let index = 0; index < 16; index += 1) {
+      const id = `mount-session-${index}`
+      created.push({
+        id,
+        owner: (await post(origin, '/api/browser-native/session/create', envelope(`mount-create-${index}`, {
+          sessionId: id,
+          header: header(id),
+        }))).owner,
+      })
+    }
+    const overflow = await failure(origin, '/api/browser-native/session/create', envelope('mount-17', {
+      sessionId: 'mount-session-16',
+      header: header('mount-session-16'),
+    }))
+    assert.equal(overflow.code, 'SESSION_MOUNT_LIMIT')
+    assert.equal(overflow.status, 429)
+    assert.equal(overflow.retryAfterMs > 0, true)
+
+    const state = await (await fetch(`${origin}/api/browser-native/admission`)).json()
+    assert.equal(state.mounts.active, 16)
+    assert.equal(state.mounts.limit, 16)
+    assert.equal(state.limits.maxConcurrentTurns, 8)
+    assert.equal(state.mounts.sessionIds.length, 16)
+
+    await post(origin, '/api/browser-native/session/close', envelope('mount-close', {
+      sessionId: created[0].id,
+      ownerToken: created[0].owner.ownerToken,
+    }))
+    const replaced = await post(origin, '/api/browser-native/session/create', envelope('mount-17-retry', {
+      sessionId: 'mount-session-16',
+      header: header('mount-session-16'),
+    }))
+    assert.equal(replaced.owner.ownerToken.length > 0, true)
+    const afterClose = await (await fetch(`${origin}/api/browser-native/admission`)).json()
+    assert.equal(afterClose.mounts.active, 16)
+  })
+
+  it('does not serve the admission route when admission is disabled', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted', admission: false })
+    const response = await fetch(`${origin}/api/browser-native/admission`)
+    assert.equal(response.status, 404)
+  })
 })
+
+async function waitForAdmission(origin, predicate, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const state = await (await fetch(`${origin}/api/browser-native/admission`)).json()
+    if (predicate(state)) return state
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 10))
+  }
+  assert.fail('admission state did not reach the expected queue depth')
+}

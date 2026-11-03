@@ -42,6 +42,8 @@ Options:
   --model <name>        Override the configured real-provider model
   --llm-timeout-ms <n>  Upstream model request deadline (default: 60000)
   --owner-lease-ms <n>  Write lease duration in milliseconds (default: 30000)
+  --max-concurrent-turns <n>  Model turns allowed at once; later turns queue (default: 8)
+  --max-mounted-sessions <n>  Mounted Sessions allowed at once (default: 16)
   --state-authority-origin <url>  PoC shared Session/Workspace authority
   --state-authority-token <token> Internal token for the shared authority
   --help                Show this message
@@ -106,6 +108,16 @@ function parseArgs(argv) {
       values.ownerLeaseMs = Number(requiredValue(argv, index, option))
       if (!Number.isSafeInteger(values.ownerLeaseMs) || values.ownerLeaseMs < 300) throw new Error('--owner-lease-ms must be an integer of at least 300')
       index += 1
+    } else if (option === '--max-concurrent-turns') {
+      const value = Number(requiredValue(argv, index, option))
+      if (!Number.isSafeInteger(value) || value < 1) throw new Error('--max-concurrent-turns must be a positive safe integer')
+      values.admission = { ...(values.admission ?? {}), maxConcurrentTurns: value }
+      index += 1
+    } else if (option === '--max-mounted-sessions') {
+      const value = Number(requiredValue(argv, index, option))
+      if (!Number.isSafeInteger(value) || value < 1) throw new Error('--max-mounted-sessions must be a positive safe integer')
+      values.admission = { ...(values.admission ?? {}), maxMountedSessions: value }
+      index += 1
     } else if (option === '--state-authority-origin') {
       values.stateAuthorityOrigin = requiredValue(argv, index, option)
       index += 1
@@ -131,6 +143,7 @@ const previewUrl = `${origin}/preview.html?browser-native=1&preview-fixture=none
 process.stdout.write(`browser-native dsh v2 listening at ${origin}\n`)
 process.stdout.write(`browser-native preview: ${previewUrl}\n`)
 process.stdout.write(`llm mode: ${app.llm.mode}; model: ${app.llm.model}\n`)
+process.stdout.write(`admission: ≤${String(options.admission?.maxConcurrentTurns ?? 8)} concurrent turns, ≤${String(options.admission?.maxMountedSessions ?? 16)} mounted Sessions\n`)
 process.stdout.write(`session data: ${resolve(options.dataDir)}\n`)
 
 let closing
