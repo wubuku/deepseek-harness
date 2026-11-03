@@ -1311,6 +1311,12 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 正式 `storage-sqlite` 新增四类注入测试（4/4 通过）：页预算耗尽以 `database or disk is full` 拒绝且不部分提交，恢复预算后同一记录写入成功；只复制主文件会丢失仅存在于 WAL 的提交，带 `-wal`/`-shm` 的快照可完整恢复；损坏库打开被拒且文件字节不变；只读库打开成功但首次写显式失败，主文件与 `-shm` 均可写后既有记录完好并写入成功。限制是配额与页预算均为注入而非真实磁盘耗尽，WAL 用文件副本而非断电，只读用例在 Windows 跳过，正式 Session JSONL 故障注入仍由既有 `DURABILITY_UNKNOWN` 测试拥有。
 
+## 后台常驻可行性
+
+[后台常驻结论](background-residency-feasibility.md)用独立 harness 探测 Service Worker 能否在标签关闭后维持或接管 Agent 循环。能力面：Service Worker 没有 `self.document`、`self.Worker` 构造器，OPFS handle 没有 `createSyncAccessHandle`，只有异步 OPFS 与 Web Locks；因此现有 Host/runtime 与 Workspace 同步写路径无法在其中实例化。
+
+生命周期面：三次关页短作业都在零 window client 下完成（约 2.0–2.2 秒），Background Sync 在离线注册、关页、恢复在线后以 `clients=0` 启动并完成事件；但同一 harness 的早期运行出现过作业冻结到新页面打开才继续，所以后台推进是可能而非保证。`ServiceWorker.stopAllWorkers` 后作业停在 2/12 步，重开页面不恢复。产品结论是需要跨关页存活的 turn 仍由服务端常驻 host 持有；Service Worker 只能承担短的、幂等的后台任务与唤醒事件。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。
