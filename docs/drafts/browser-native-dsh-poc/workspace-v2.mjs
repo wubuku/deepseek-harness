@@ -589,6 +589,14 @@ export class WorkspaceStore {
     await atomicWrite(this.workspacePath(workspace.id), JSON.stringify(value))
   }
 
+  workspaceIdForPrincipal(principalId) {
+    const workspaceId = this.identities.get(principalId)
+    if (workspaceId === undefined) {
+      throw new WorkspaceError('UNAUTHENTICATED', 'workspace identity is missing or expired', 401)
+    }
+    return workspaceId
+  }
+
   principalFromRequest(request, cookieName = COOKIE_NAME) {
     const principalId = parseCookies(request.headers.cookie).get(cookieName)
     if (principalId === undefined || !this.identities.has(principalId)) {

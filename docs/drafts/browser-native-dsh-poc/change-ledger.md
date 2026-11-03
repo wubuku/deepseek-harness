@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-080：durable 工具执行、事件流接管与 finish reason 漏读
+
+```text
+changeId: BN-P2-080
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-tool-attach.test.mjs; docs/drafts/browser-native-dsh-poc/durable-tool-continuation.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable host 只执行文本 turn，模型返回 tool-call 即以 `DURABLE_TOOL_UNSUPPORTED` 结算，关页后已开始的工具步骤无法继续；重开标签只能轮询 `status` 与 `session/read`，没有可接管的事件流。探测还发现 `parseCompletion` 只识别顶层 `finish` 行，而实际 wire 是 `chunk.type === "finish"`，文本 turn 靠非空文本掩盖，tool-call turn 误判为 `DURABLE_EMPTY_RESPONSE`；turn 起始三个事件未进入订阅通道，`fromSeq=0` 会漏掉它们。
+existingExtensionPointsChecked: 复用既有 Workspace blob 上传与 commit 路径、`WorkspaceStore.principalFromRequest` 的 cookie 约定、`store.exclusive`/`claim`/`assertOwner`/`flush`、既有 `DURABLE_*` 错误通道与 8 并发/16 挂载准入；新增 `workspaceIdForPrincipal` 只读查询；未新增工具注册表、未改 DSH Agent Loop 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 必须证明无客户端读取时工具真的在后端执行并提交、接管流与落盘日志逐字段一致、重放不重复执行、lease 在运行中确实阻止接管；这些需要真实 socket 与事件顺序证据。
+behaviorChange: durable turn 向模型声明并执行 `read`/`write` 两个 Workspace 工具（1 MiB 写、2 MiB 读上限，8 步上限），事件经 `appendEvents` 统一 `publish`；新增 `GET /session/durable/stream?turnId=&fromSeq=` NDJSON 接管（先回放后推送，结算后写 settled 行，其他 principal 404）；`parseCompletion` 识别 `chunk.type === "finish"`；起始事件也进入订阅通道。工具失败以 `isError` 文本返回，未知工具同样返回文本而非中断。
+consumersUpdated: 新增 `tests/durable-tool-attach.test.mjs`；新增 `durable-tool-continuation.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/durable-tool-attach.test.mjs` 1/1：客户端不读 turn 时两条 `tool/result` 完成，`write` 提交 38 字节文件、`read` 返回原文；接管流 16 条事件与 `session/read` 逐字段相等、seq 0–15 连续；`fromSeq=9` 仅收 7 条；模型请求 3 次且重放 turnId 不新增；运行中 open write 409 `SESSION_ALREADY_OWNED`、结算后 200；其他 principal attach 404。同批 `durable-host`、`resource-limits`、`path-boundary`、`prompt-injection-boundaries` 回归 14/14。使用 scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供服务端工具执行与事件流 API，优先复用并删除本地补丁；重跑 `durable-tool-attach.test.mjs` 与上述回归。
+deleteCondition: 上游宿主提供服务端工具执行、事件流接管与正确 finish reason 解析，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-079：HTTP 并发准入、客户端超时与 durable 流式 body 超时
 
 ```text

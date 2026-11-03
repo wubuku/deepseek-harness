@@ -1004,6 +1004,16 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 `tests/resource-limits.test.mjs` 4/4：9 MiB body 返回 413 后 `/health` 仍 200；并发上限 2 时第三个请求 503 `SERVER_BUSY`，慢请求销毁后恢复；1.5 s 请求超时的慢客户端在 2 017 ms 关闭；1.2 s durable 超时下模型延迟 5 s 仍在 1 281 ms 结算为 `failed`/`DURABLE_LLM_TIMEOUT`。内存上界按路径推算（64 路满额 JSON body 约 1–1.5 GiB），未采集 RSS；磁盘容量无配额。未改 LLM 请求语义，无需真实模型 smoke；未改 `packages/`。
 
+## durable 工具执行与中途接管
+
+[durable 工具执行与中途接管](durable-tool-continuation.md)把 durable host 从纯文本 turn 扩展到 `read`/`write` 两个 Workspace 工具：模型返回 tool-call 后由 backend 以 turn 的 principal 执行并提交，关页不再中断已开始的工具步骤。单个 turn 最多 8 个模型步骤；每次事件追加都经 `store.exclusive` + `assertOwner`，工具结果 2 MiB 读、1 MiB 写上限。
+
+新增 `GET /api/browser-native/session/durable/stream?turnId=&fromSeq=`，以 NDJSON 回放 `seq >= fromSeq` 的事件并持续推送至结算。接管只读，不触发模型或工具；运行中 lease 未释放，open write 409 `SESSION_ALREADY_OWNED`，结算后 200。
+
+`tests/durable-tool-attach.test.mjs` 1/1：客户端完全不读 turn 时两条 `tool/result` 仍完成并写入 38 字节文件；接管流 16 条事件与 Session 日志逐字段相等且 `seq` 连续；`fromSeq=9` 的第二个标签只收到 seq 9–15；模型请求恰好 3 次且重放 turnId 不新增；其他 principal 接管 404。
+
+本轮修复两处真实缺陷：`parseCompletion` 未识别 `chunk.type === "finish"`，导致 tool-call turn 误判 `DURABLE_EMPTY_RESPONSE`；turn 起始三个事件未进入订阅通道，`fromSeq=0` 会漏掉它们。未跑真实 provider；未改 `packages/`。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

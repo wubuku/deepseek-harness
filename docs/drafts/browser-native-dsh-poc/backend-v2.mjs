@@ -3864,6 +3864,105 @@ export async function createBrowserNativeV2Server(options) {
     boundedInteger(limit ?? ACCESS_AUDIT_LIMIT, 'accessAudit limit', ACCESS_AUDIT_LIMIT)
     return accessAuditEntries.slice(-(limit ?? ACCESS_AUDIT_LIMIT)).map(clone)
   }
+  const MAX_DURABLE_TOOL_WRITE_BYTES = 1 * 1024 * 1024
+  const MAX_DURABLE_TOOL_READ_BYTES = 2 * 1024 * 1024
+  const DURABLE_WORKSPACE_ROOT = '/dsh/home/workspace/'
+  const DURABLE_TOOL_DEFINITIONS = [
+    {
+      type: 'function',
+      function: {
+        name: 'write',
+        description: 'Write a UTF-8 text file into the caller Workspace. The path is workspace-relative or under /dsh/home/workspace/.',
+        parameters: {
+          type: 'object',
+          properties: { file_path: { type: 'string' }, content: { type: 'string' } },
+          required: ['file_path', 'content'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read',
+        description: 'Read a UTF-8 text file from the caller Workspace. The path is workspace-relative or under /dsh/home/workspace/.',
+        parameters: {
+          type: 'object',
+          properties: { file_path: { type: 'string' } },
+          required: ['file_path'],
+          additionalProperties: false,
+        },
+      },
+    },
+  ]
+  const workspaceToolPath = value => {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 1_000) {
+      throw new DurableTurnError('DURABLE_TOOL_INVALID', 'file_path must be a non-empty string of at most 1000 characters', 400)
+    }
+    if (value.startsWith(DURABLE_WORKSPACE_ROOT)) return value.slice(DURABLE_WORKSPACE_ROOT.length)
+    if (value.startsWith('/')) {
+      throw new DurableTurnError('DURABLE_TOOL_PATH_FORBIDDEN', `durable tools can only reach ${DURABLE_WORKSPACE_ROOT}`, 403)
+    }
+    return value
+  }
+  /**
+   * Execute one advertised Workspace tool against the caller's own Workspace.
+   *
+   * The durable turn runs without an HTTP request of its own, so the executor
+   * synthesizes the same principal cookie the workspace routes read. A tool
+   * failure returns `isError` text to the model instead of aborting the turn.
+   * @param {{principalId: string, name: string, arguments: string}} call - Tool name, raw JSON arguments, and the principal that owns the turn.
+   * @returns {Promise<{text: string, isError?: boolean}>} Tool result text.
+   */
+  const executeDurableTool = async ({ principalId, name, arguments: raw }) => {
+    let input
+    try {
+      input = JSON.parse(raw)
+    } catch {
+      return { text: `tool ${name} received arguments that are not valid JSON`, isError: true }
+    }
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+      return { text: `tool ${name} requires a JSON object argument`, isError: true }
+    }
+    if (name !== 'read' && name !== 'write') {
+      return { text: `the durable host does not implement tool ${name}`, isError: true }
+    }
+    const request = { headers: { cookie: `dsh-browser-native-principal=${principalId}` } }
+    try {
+      const workspaceId = workspaces.workspaceIdForPrincipal(principalId)
+      const path = workspaceToolPath(input.file_path ?? input.path)
+      if (name === 'read') {
+        const snapshot = workspaces.manifest(request, workspaceId)
+        const entry = snapshot.entries.find(candidate => candidate.path === path && candidate.kind === 'file')
+        if (entry === undefined) return { text: `no readable file at ${path}`, isError: true }
+        if (entry.bytes > MAX_DURABLE_TOOL_READ_BYTES) {
+          return { text: `file ${path} is ${String(entry.bytes)} bytes, above the readable limit`, isError: true }
+        }
+        const bytes = await workspaces.getBlob(request, workspaceId, entry.hash)
+        return { text: bytes.toString('utf8') }
+      }
+      if (typeof input.content !== 'string') return { text: 'write requires a string content argument', isError: true }
+      const bytes = Buffer.from(input.content, 'utf8')
+      if (bytes.byteLength > MAX_DURABLE_TOOL_WRITE_BYTES) {
+        return { text: `content is ${String(bytes.byteLength)} bytes, above the writable limit`, isError: true }
+      }
+      const hash = createHash('sha256').update(bytes).digest('hex')
+      await workspaces.putBlob(request, workspaceId, hash, bytes)
+      const { revision } = workspaces.revision(request, workspaceId)
+      await workspaces.commit(request, {
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: randomUUID(),
+        workspaceId,
+        operationId: randomUUID(),
+        baseRevision: revision,
+        changes: [{ path, kind: 'file', hash, bytes: bytes.byteLength, mode: 0o644 }],
+      })
+      return { text: `wrote ${path} (${String(bytes.byteLength)} bytes)` }
+    } catch (error) {
+      if (error instanceof DurableTurnError) throw error
+      return { text: `tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`, isError: true }
+    }
+  }
   const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
     ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
   const requestTimeoutMs = timeoutMs(options.requestTimeoutMs ?? 30_000, 'requestTimeoutMs')
@@ -3880,6 +3979,8 @@ export async function createBrowserNativeV2Server(options) {
     model: llm.model,
     originOf: () => servedOrigin,
     timeoutMs: durableTurnTimeoutMs,
+    tools: DURABLE_TOOL_DEFINITIONS,
+    executeTool: executeDurableTool,
   })
   const server = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs }, async (request, response) => {
     let url
@@ -4301,6 +4402,30 @@ export async function createBrowserNativeV2Server(options) {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)
         sendJson(response, 200, durableHost.status({ turnId, principalId }))
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/durable/stream') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        const fromSeqParam = url.searchParams.get('fromSeq')
+        const fromSeq = fromSeqParam === null ? 0 : boundedInteger(Number(fromSeqParam), 'fromSeq', 1_000_000)
+        const abort = new AbortController()
+        response.on('close', () => abort.abort())
+        const subscription = durableHost.subscribe({ turnId, principalId, fromSeq, signal: abort.signal })
+        response.writeHead(200, {
+          'content-type': 'application/x-ndjson',
+          'cache-control': 'no-store',
+          'x-accel-buffering': 'no',
+        })
+        while (!abort.signal.aborted && !response.writableEnded) {
+          const event = await subscription.next()
+          if (event === undefined) break
+          response.write(`${JSON.stringify({ kind: 'event', ...event })}\n`)
+        }
+        if (!abort.signal.aborted && !response.writableEnded) {
+          response.write(`${JSON.stringify({ kind: 'settled', ...subscription.status() })}\n`)
+          response.end()
+        }
         return
       }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
