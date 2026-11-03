@@ -960,6 +960,12 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 
 真实 LLM smoke 验证 Browser Worker、普通文件工具、Session 和 Workspace refresh recovery，不是 A/B 两身份真实模型测试。多 backend、正式 SaaS identity/authorization、自然 eviction、OS crash、静态存储加密和 Safari/WebKit 未验证。
 
+## 本地后端请求准入
+
+[本地后端请求准入与凭据位置](local-backend-hardening.md)记录回环 HTTP 服务的攻击面验证。backend 在路由前要求回环 Host、API 同源 `Origin`/`Sec-Fetch-Site`，并拒绝查询串中的凭据；身份 cookie 保持 `HttpOnly` + `SameSite=Strict` + Path 限定，owner/GC/egress 凭据只走 JSON body 或服务端 header。
+
+修复前后探针可判定：伪造 Origin 读取 manifest 由 200 变为 403 `ORIGIN_FORBIDDEN`，伪造 Origin 调用 `/llm` 由 200 变为 403，`Host: attacker.example` 由 200 变为 403 `HOST_FORBIDDEN`，`?access_token=` 由 200 变为 400 `CREDENTIAL_IN_QUERY`；同源 `/llm` 仍为 200。合同测试 5/5、既有 backend 合同 64/64，真实 Chrome scripted E2E 完成 1 个 turn。同机其它进程、预览 origin 内 XSS、生产身份授权、Safari/WebKit 和 HTTPS 代理仍属未覆盖范围。
+
 ## 跨存储 checkpoint 与业务副作用对账
 
 [跨存储 checkpoint 与 receipt 对账计划](cross-store-checkpoint-reconciliation-plan.md)及[实施进度](cross-store-checkpoint-reconciliation-progress.md)把 Workspace commit、Session receipt 和业务 API 副作用放入同一 `operationId` ledger 查询，但不把它们伪装成一个事务。backend intent/receipt/query API 校验 principal、完整工具调用身份和 payload digest；重复 operation 返回原记录，改 payload 或改身份被拒；业务 mock endpoint 只在第一次确认时增加 effect count。

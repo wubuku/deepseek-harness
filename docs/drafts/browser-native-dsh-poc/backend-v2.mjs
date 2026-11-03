@@ -38,6 +38,9 @@ const DEFAULT_OWNER_LEASE_MS = 30_000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
 const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
 const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|api[-_]?key|access[-_]?key)/i
+const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
 
 class BackendError extends Error {
   constructor(code, message, status = 400, retryAfterMs) {
@@ -429,6 +432,7 @@ function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
     'x-browser-native-protocol': String(PROTOCOL_VERSION),
     ...headers,
   })
@@ -440,6 +444,7 @@ function sendBytes(response, bytes, headers = {}) {
     'content-type': 'application/octet-stream',
     'content-length': String(bytes.byteLength),
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
     'x-browser-native-protocol': String(PROTOCOL_VERSION),
     ...headers,
   })
@@ -814,6 +819,58 @@ async function queryExternalBusiness(origin, operationId, principalId) {
       typeof error?.message === 'string' ? error.message : 'external business status query failed', response.status)
   }
   return value
+}
+
+/**
+ * Refuse requests a foreign web page could author against the loopback API.
+ *
+ * The Host header must name a loopback host: a DNS-rebinding page reaches the
+ * server with its own hostname and is refused before any credential is read.
+ * API requests additionally require a same-origin `Origin`/`Sec-Fetch-Site`,
+ * and credential-shaped query parameters are refused so tokens never enter URL
+ * history, Referer headers, or access logs. Server-to-server requests carrying
+ * the shared state token bypass the browser-origin checks but not the Host rule.
+ * @param {import('node:http').IncomingMessage} request - Incoming request.
+ * @param {URL} url - Parsed request URL.
+ * @param {boolean} internal - The request proved the shared state token.
+ * @returns {void} Throws a 403 or 400 BackendError when the request is refused.
+ */
+function assertLocalRequest(request, url, internal) {
+  const host = request.headers.host
+  if (typeof host !== 'string' || host.length === 0) throw new BackendError('HOST_FORBIDDEN', 'request host is required', 403)
+  let selfOrigin
+  try {
+    selfOrigin = new URL(`http://${host}`)
+  } catch {
+    throw new BackendError('HOST_FORBIDDEN', 'request host is invalid', 403)
+  }
+  if (!LOOPBACK_HOSTNAMES.has(selfOrigin.hostname)) {
+    throw new BackendError('HOST_FORBIDDEN', 'browser-native is reachable only through a loopback host', 403)
+  }
+  if (!url.pathname.startsWith('/api/browser-native/')) return
+  if (!internal) {
+    const site = request.headers['sec-fetch-site']
+    if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site)) {
+      throw new BackendError('ORIGIN_FORBIDDEN', 'cross-site requests are not allowed', 403)
+    }
+    const origin = request.headers.origin
+    if (typeof origin === 'string') {
+      let declaredOrigin
+      try {
+        declaredOrigin = new URL(origin).origin
+      } catch {
+        throw new BackendError('ORIGIN_FORBIDDEN', 'request origin is invalid', 403)
+      }
+      if (declaredOrigin !== selfOrigin.origin) {
+        throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
+      }
+    }
+  }
+  for (const name of url.searchParams.keys()) {
+    if (CREDENTIAL_QUERY_NAME.test(name)) {
+      throw new BackendError('CREDENTIAL_IN_QUERY', 'credentials must not be sent in the request URL', 400)
+    }
+  }
 }
 
 function sendError(response, error) {
@@ -3484,7 +3541,12 @@ async function serveStatic(response, root, pathname) {
         : file.endsWith('.json') ? 'application/json; charset=utf-8'
           : file.endsWith('.gz') ? 'application/gzip'
             : 'application/octet-stream'
-  response.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store' })
+  response.writeHead(200, {
+    'content-type': contentType,
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  })
   response.end(body)
 }
 
@@ -3696,6 +3758,7 @@ export async function createBrowserNativeV2Server(options) {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
+      assertLocalRequest(request, url, internalStateRequest)
       if (sharedStateOrigin !== undefined && !internalStateRequest && isSharedStatePath(url.pathname)) {
         await proxySharedStateRequest(request, response, sharedStateOrigin, sharedStateToken)
         return
