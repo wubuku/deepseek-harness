@@ -148,6 +148,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 87. [Browser-Native 资源耗尽防护](browser-native-dsh-poc/resource-limits.md)：8 MiB body 上限、并发请求 64/连接 128、30 s 请求与 15 s 头超时、5 s keep-alive、1 s 连接检查；durable 模型超时覆盖响应体读取。9 MiB body 413、并发超出 503 `SERVER_BUSY`、慢 body 2 017 ms 关闭、durable 1 281 ms 结算 `DURABLE_LLM_TIMEOUT`。新测试 4/4；内存上界按路径推算，未采集 RSS，磁盘容量无配额。
 88. [Browser-Native durable 工具执行与中途接管](browser-native-dsh-poc/durable-tool-continuation.md)：durable host 在无客户端读取时执行 `read`/`write` Workspace 工具，重开标签可从任意 `fromSeq` 接管 NDJSON 事件流；16 条事件与 Session 日志逐字段相等、模型请求 3 次且重放不重复执行、运行中 lease 拒绝接管。新测试 1/1；修复 finish reason 漏读与起始事件未发布；未跑真实 provider。
 89. [Browser-Native 可观测性](browser-native-dsh-poc/observability.md)：`/observability/metrics` 导出 HTTP/模型/队列/租约/durable turn 指标与 Prometheus 文本，`/observability/failure` 给出单 turn 证据包；401/404 分类、空白 completion 归类为 turn 失败、证据不含 prompt、跨 principal 404。新测试 1/1，同批回归 15/15；指标仅进程内存，重启归零。
+90. [Browser-Native durable 取消](browser-native-dsh-poc/durable-cancellation.md)：`POST /session/durable/stop` 中止在途模型请求并以 `aborted`/`user` 结算，释放租约、计入 `cancelled` 指标；模型只请求 1 次、事件 `seq` 连续、attach 回放一致、重复 stop 幂等、跨 principal 404。新测试 1/1，同批回归 7/7；取消在 step 边界生效，重启后无法取消。
 
 ### 需要实现或审查代码时
 

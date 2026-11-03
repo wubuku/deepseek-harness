@@ -26,7 +26,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 - `model`：`requests`、`failures`、`failuresByCode`、`durationMs`、`queueWaitMs`。
 - `queue`：`activeTurns`、`queuedTurns`、`limits`、`mountedSessions`、`counters`（`admitted`/`completed`/`timedOut`/`aborted`/`maxQueueWaitMs`/`maxActiveTurns`）。
 - `leases`：`sessions`、`held`、`expired`、`writeBlocked`、`unsupportedFormats`。
-- `durableTurns`：`version`、`total`、`running`、`completed`、`failed`、`runningTurns`（最近 16 条，仅 `turnId`/`sessionId`/`startedAt`/`elapsedMs`/`step`）、`recentSettled`（最近 12 条，含 `status`、`errorCode`、`elapsedMs`）。
+- `durableTurns`：`version`、`total`、`running`、`completed`、`failed`、`cancelled`、`runningTurns`（最近 16 条，仅 `turnId`/`sessionId`/`startedAt`/`elapsedMs`/`step`）、`recentSettled`（最近 12 条，含 `status`、`errorCode`、`elapsedMs`）。
 
 直方图结构为 `{count, sumMs, buckets:[{le, count}]}`，桶边界固定为 5、10、25、50、100、250、500、1 000、2 500、5 000、10 000、30 000、60 000、120 000 ms 与 `+Inf`，计数为累计值。
 
@@ -48,7 +48,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 | `model_request_duration_ms_bucket`、`model_queue_wait_ms_bucket` | counter | `le` |
 | `admission_active_turns`、`admission_queued_turns`、`admission_mounted_sessions`、`admission_max_queue_wait_ms` | gauge | 无 |
 | `sessions_total`、`session_leases_held`、`session_leases_expired`、`sessions_write_blocked` | gauge | 无 |
-| `durable_turns_running`、`durable_turns_completed`、`durable_turns_failed` | gauge | 无 |
+| `durable_turns_running`、`durable_turns_completed`、`durable_turns_failed`、`durable_turns_cancelled` | gauge | 无 |
 | `process_rss_bytes`、`process_heap_used_bytes`、`uptime_ms` | gauge | 无 |
 
 标签值转义反斜线、双引号与换行；每行以换行结束。一次 scrape 看不到自己：当前 scrape 的请求只在下一个快照中出现。
@@ -73,7 +73,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 
 ```text
 ✔ structured metrics classify failures and export a minimal evidence bundle for one turn (168.1ms)
-{"result":"passed","scope":"observability","failureCodes":{"NOT_FOUND":1,"UNAUTHENTICATED":1},"modelRequests":2,"durableTurns":{"failed":1,"completed":1},"failedElapsedMs":25,"evidenceEvents":4,"evidenceBytes":5651,"prometheusLines":222}
+{"result":"passed","scope":"observability","failureCodes":{"NOT_FOUND":1,"UNAUTHENTICATED":1},"modelRequests":2,"durableTurns":{"failed":1,"completed":1},"failedElapsedMs":25,"evidenceEvents":4,"evidenceBytes":5666,"prometheusLines":225}
 ```
 
 | 断言 | 观测 |
@@ -82,7 +82,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 | turn 延迟 | 失败 turn 的 `elapsedMs` 为 25 ms；成功 turn 计入 `durable_turns_completed`，失败计入 `durable_turns_failed` |
 | 模型请求 | `model.requests` 为 2；空白 completion 是 turn 失败而非模型失败，`model.failures` 为 0 |
 | 队列与租约 | 结算后 `queue.activeTurns`/`queuedTurns` 为 0，`leases.sessions` 为 1、`held` 为 0 |
-| 导出 | Prometheus 文本 222 行，含 `dsh_browser_native_http_requests_total`、`failures_total{code="NOT_FOUND"}`、`durable_turns_failed 1`、`process_rss_bytes` |
+| 导出 | Prometheus 文本 225 行，含 `dsh_browser_native_http_requests_total`、`failures_total{code="NOT_FOUND"}`、`durable_turns_failed 1`、`process_rss_bytes` |
 | 证据包 | 失败 turn 证据 `status=failed`、`error.code=DURABLE_EMPTY_RESPONSE`、末条事件为 `turn/end` 且 `reason=error`、`lease.held=false`；JSON 中不含 prompt 文本 |
 | 越权 | 其他 principal 取同一 turn 返回 404 `TURN_NOT_FOUND`，未知 `turnId` 404，匿名 401；成功 turn 的证据末条 `reason=completed` |
 

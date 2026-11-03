@@ -9,9 +9,11 @@
  *
  * The host also executes the Workspace `read`/`write` tool calls it advertises
  * to the model, so a tool step started before the tab closed still finishes on
- * the backend. Approvals, cancellation, process-restart recovery, and every
- * other tool are not implemented: an unsupported or missing tool result settles
- * the turn as an explicit error instead of replaying or fabricating a value.
+ * the backend. A page can cancel a running turn: the in-flight model request is
+ * aborted and the turn settles as `aborted` after at most one tool call. Approvals,
+ * process-restart recovery, and every other tool are not implemented: an
+ * unsupported or missing tool result settles the turn as an explicit error
+ * instead of replaying or fabricating a value.
  *
  * A reopened page can attach to the turn's event stream from any sequence number.
  * The stream replays persisted events and then follows appends until the turn
@@ -222,9 +224,11 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
   const requestCompletion = async (run, messages, owner) => {
     const origin = originOf()
     if (typeof origin !== 'string') throw new DurableTurnError('DURABLE_HOST_NOT_READY', 'the durable host has no served origin', 503)
-    const controller = new AbortController()
+    const controller = run.abortController
     const timer = setTimeout(() => controller.abort(), timeoutMs)
-    const timedOut = () => new DurableTurnError('DURABLE_LLM_TIMEOUT', `the model did not answer within ${String(timeoutMs)}ms`, 504)
+    const aborted = () => run.stopRequested
+      ? new DurableTurnError('DURABLE_TURN_CANCELLED', 'the turn was cancelled while the model was answering', 409)
+      : new DurableTurnError('DURABLE_LLM_TIMEOUT', `the model did not answer within ${String(timeoutMs)}ms`, 504)
     try {
       let response
       try {
@@ -243,7 +247,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
           signal: controller.signal,
         })
       } catch (error) {
-        if (controller.signal.aborted) throw timedOut()
+        if (controller.signal.aborted) throw aborted()
         throw new DurableTurnError('DURABLE_LLM_UNAVAILABLE', `the model route could not be reached: ${String(error)}`, 502)
       }
       if (!response.ok || response.body === null) {
@@ -258,7 +262,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       try {
         return await parseCompletion(response.body)
       } catch (error) {
-        if (controller.signal.aborted) throw timedOut()
+        if (controller.signal.aborted) throw aborted()
         throw error
       }
     } finally {
@@ -292,6 +296,9 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     const messages = [{ role: 'user', content: prompt }]
     let step = 1
     while (step <= MAX_DURABLE_STEPS) {
+      if (run.stopRequested) {
+        throw new DurableTurnError('DURABLE_TURN_CANCELLED', 'the turn was cancelled before the next step', 409)
+      }
       run.step = step
       const completion = await requestCompletion(run, messages, owner)
       const calls = completion.blocks.filter(block => block.type === 'tool-call')
@@ -388,17 +395,20 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       const events = []
       if (!hasStepEnd) events.push({ type: 'step/end', data: { turn: run.turn, step } })
       if (!hasTurnEnd) {
+        const cancelled = typeof error?.code === 'string' && error.code === 'DURABLE_TURN_CANCELLED'
         events.push({
           type: 'turn/end',
           data: {
             turn: run.turn,
-            reason: {
-              kind: 'error',
-              error: {
-                code: typeof error?.code === 'string' ? error.code : 'DURABLE_TURN_FAILED',
-                message: typeof error?.message === 'string' ? error.message : String(error),
-              },
-            },
+            reason: cancelled
+              ? { kind: 'aborted', reason: { kind: 'user' } }
+              : {
+                  kind: 'error',
+                  error: {
+                    code: typeof error?.code === 'string' ? error.code : 'DURABLE_TURN_FAILED',
+                    message: typeof error?.message === 'string' ? error.message : String(error),
+                  },
+                },
           },
         })
       }
@@ -498,10 +508,12 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       phaseOne: Promise.withResolvers(),
       channelEvents: [],
       channelWaiters: new Set(),
+      abortController: new AbortController(),
+      stopRequested: false,
     }
     runs.set(turnId, run)
     void execute(run, prompt, header).catch(error => {
-      run.status = 'failed'
+      run.status = typeof error?.code === 'string' && error.code === 'DURABLE_TURN_CANCELLED' ? 'cancelled' : 'failed'
       run.error = {
         code: typeof error?.code === 'string' ? error.code : 'DURABLE_TURN_FAILED',
         message: typeof error?.message === 'string' ? error.message : String(error),
@@ -535,6 +547,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     let running = 0
     let completed = 0
     let failed = 0
+    let cancelled = 0
     const runningTurns = []
     const now = Date.now()
     for (const run of runs.values()) {
@@ -548,6 +561,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
           step: run.step ?? 1,
         })
       } else if (run.status === 'completed') completed += 1
+      else if (run.status === 'cancelled') cancelled += 1
       else failed += 1
     }
     return {
@@ -556,9 +570,34 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       running,
       completed,
       failed,
+      cancelled,
       runningTurns: runningTurns.slice(-16),
       recentSettled: [...settledRuns].reverse().slice(0, 12),
     }
+  }
+
+  /**
+   * Request cancellation of a running turn.
+   *
+   * Cancellation aborts the in-flight model request, settles the turn with an
+   * `aborted` Session reason, and releases the Session lease. It is idempotent:
+   * a settled turn is returned unchanged, and a turn cancelled mid-tool-step
+   * settles after the current tool call returns. A turn bound to another
+   * principal is reported as absent.
+   * @param {{turnId: string, principalId: string}} request - Turn identity and requesting principal.
+   * @returns {object} Current run status plus whether cancellation was requested.
+   */
+  const cancel = ({ turnId, principalId }) => {
+    assertBoundedText(turnId, 'turnId', MAX_TURN_ID_LENGTH)
+    const run = runs.get(turnId)
+    if (run === undefined || run.principalId !== principalId) {
+      throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
+    }
+    if (run.status === 'running' && !run.stopRequested) {
+      run.stopRequested = true
+      run.abortController.abort()
+    }
+    return { ...runStatus(run), cancelRequested: run.stopRequested }
   }
 
   /**
@@ -617,5 +656,5 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     return { status: () => runStatus(run), next }
   }
 
-  return { start, status, subscribe, snapshot, version: 1 }
+  return { start, status, cancel, subscribe, snapshot, version: 1 }
 }

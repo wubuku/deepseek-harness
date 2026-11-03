@@ -218,6 +218,7 @@ export function createMetricsRegistry() {
       gauge('dsh_browser_native_durable_turns_running', 'Durable turns currently executing.', [], view.durableTurns.running)
       gauge('dsh_browser_native_durable_turns_completed', 'Durable turns settled completed.', [], view.durableTurns.completed)
       gauge('dsh_browser_native_durable_turns_failed', 'Durable turns settled failed.', [], view.durableTurns.failed)
+      gauge('dsh_browser_native_durable_turns_cancelled', 'Durable turns settled cancelled.', [], view.durableTurns.cancelled)
     }
     if (view.process.rssBytes !== undefined) {
       gauge('dsh_browser_native_process_rss_bytes', 'Resident set size of the backend process.', [], view.process.rssBytes)

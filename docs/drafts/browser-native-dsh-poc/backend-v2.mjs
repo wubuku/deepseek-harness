@@ -4453,6 +4453,15 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, durableHost.status({ turnId, principalId }))
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/durable/stop') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        const cancelRequested = durableHost.cancel({ turnId, principalId })
+        sendJson(response, 202, { protocolVersion: PROTOCOL_VERSION, ...cancelRequested })
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/durable/stream') {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)

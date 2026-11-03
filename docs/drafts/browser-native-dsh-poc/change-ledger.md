@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-082：durable turn 取消与租约释放
+
+```text
+changeId: BN-P2-082
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/observability-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-cancellation.test.mjs; docs/drafts/browser-native-dsh-poc/tests/observability.test.mjs; docs/drafts/browser-native-dsh-poc/durable-cancellation.md; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable turn 一旦开始就没有停止入口，关页后只能等超时或模型结束；用户无法收回在途请求，租约和模型费用只能耗尽。
+existingExtensionPointsChecked: 复用 `durable-host-v2.mjs` 的 run 状态机、`settleFailure`、`store.exclusive`、`admission.releaseMount`，以及既有 `turn/end` 的 `aborted`/`user` 原因；新增 `run.abortController`/`stopRequested` 与 `cancel()`，未改 Agent Loop、审批或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 需要证明 abort 真的终止 fetch 并使 backend 观察到断开、事件序列不以 error 结算、重复 stop 不重复执行、租约确实释放；只能通过真实 socket 与模型钩子验证。
+behaviorChange: `durable-host-v2.mjs` 的 `requestCompletion` 使用 run 级 `AbortController`，超时与取消共用并在中止时按 `stopRequested` 区分 `DURABLE_LLM_TIMEOUT`/`DURABLE_TURN_CANCELLED`；`driveTurn` 在 step 边界检查取消；`settleFailure` 对取消写 `{kind:"aborted",reason:{kind:"user"}}`；`status` 增加 `cancelled`；`snapshot()` 增加 `cancelled` 计数；导出 `cancel()`。`backend-v2.mjs` 新增 `POST /api/browser-native/session/durable/stop`（202）。`observability-v2.mjs` 增加 `durable_turns_cancelled`。
+consumersUpdated: 新增 `tests/durable-cancellation.test.mjs`；`observability.test.mjs` 随新增 gauge 更新输出数字（225 行、5 666 字节）；新增 `durable-cancellation.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test tests/durable-cancellation.test.mjs` 1/1：状态 `cancelled`、`error.code=DURABLE_TURN_CANCELLED`；5 条事件 `seq` 0–4 连续、末条 `aborted`/`user`、无 assistant 消息；模型请求 1 次、客户端断开 1 次；attach 回放与 Session deepEqual；重复 stop 与 replay 返回 `cancelled` 且不追加；其他 principal 404、未知 404、匿名 401；结算后写租约 200；`durableTurns.cancelled=1`、Prometheus `durable_turns_cancelled 1`。同批 `durable-host`、`durable-tool-attach`、`resource-limits`、`observability` 回归 7/7。scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供取消/abort 契约，复用其错误码与 `turn/end` 原因并删除本地补丁；重跑 `durable-cancellation.test.mjs` 与上述回归。
+deleteCondition: 上游 durable turn 提供等价取消与租约释放，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-081：结构化指标、Prometheus 导出与失败证据包
 
 ```text

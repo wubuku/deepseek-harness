@@ -1018,7 +1018,13 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 [可观测性](observability.md)新增 `GET /api/browser-native/observability/metrics`（JSON 或 `?format=prometheus`）与 `GET /api/browser-native/observability/failure?turnId=`（principal 校验的失败证据包）。指标覆盖 HTTP 请求数与失败码、模型请求耗时与准入等待、队列深度、Session 租约状态、durable turn 运行/结算与进程 RSS/堆；路由与错误码标签做标识符归一并封顶 48 个键。
 
-`tests/observability.test.mjs` 1/1：401 与 404 分别落入 `UNAUTHENTICATED`/`NOT_FOUND`；两个 durable turn 各请求模型一次，空白 completion 记为 `DURABLE_EMPTY_RESPONSE`（模型失败数为 0）；Prometheus 文本 222 行；失败证据包给出 `status`/`error.code`、末条 `turn/end.reason=error`、lease 与最近事件，且不含 prompt；跨 principal 404、匿名 401。同批回归 15/15。未改 `packages/`。
+`tests/observability.test.mjs` 1/1：401 与 404 分别落入 `UNAUTHENTICATED`/`NOT_FOUND`；两个 durable turn 各请求模型一次，空白 completion 记为 `DURABLE_EMPTY_RESPONSE`（模型失败数为 0）；Prometheus 文本 225 行；失败证据包给出 `status`/`error.code`、末条 `turn/end.reason=error`、lease 与最近事件，且不含 prompt；跨 principal 404、匿名 401。同批回归 15/15。未改 `packages/`。
+
+## durable 取消
+
+[durable 取消](durable-cancellation.md)新增 `POST /api/browser-native/session/durable/stop`：中止在途模型 fetch，以 `turn/end {kind:"aborted", reason:{kind:"user"}}` 结算，状态返回 `cancelled` 与 `DURABLE_TURN_CANCELLED`，释放 Session 租约并把 turn 计入 `durableTurns.cancelled`。取消在 step 边界生效；正在执行的工具先完成再结算。
+
+`tests/durable-cancellation.test.mjs` 1/1：模型仅请求 1 次、backend 记录 1 次客户端断开；5 条事件 `seq` 0–4 连续、末条 `aborted/user`；attach 流回放与 Session 日志 deepEqual；重复 stop 与 replay 均返回 `cancelled` 且不新增模型请求；其他 principal 404、匿名 401；结算后写租约 200；Prometheus `durable_turns_cancelled 1`。同批回归 7/7。未改 `packages/`。
 
 ## 跨存储 checkpoint 与业务副作用对账
 
