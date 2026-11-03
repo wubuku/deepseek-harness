@@ -411,6 +411,17 @@ node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
 DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
 ```
 
+## 黄金路径端到端
+
+[黄金路径回归](golden-path-e2e.md)用真实 LongCat-2.5 在预览 UI 走完整链路：提问、Read Only 下 `write` 被拒、按拒绝指引升级到 workspace-write、审批卡 Allow once、写工作区、刷新恢复、导出导入。
+
+单次运行：启动 2,267 ms，黄金 turn 70,144 ms（含两次模型请求），审批 `allowed-once`，工作区文件 20 bytes；刷新 5,006 ms 重建 44 个事件且 LLM 请求数不增加；导出 45 事件/33,174 bytes，以新 id 导入后事件与 `durableThroughSeq` 一致。页面错误与跨源请求为 0。审批卡在本次运行没有展示文件路径，这是已知可见性缺口。
+
+```sh
+DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/golden-path.e2e.mjs
+```
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。
