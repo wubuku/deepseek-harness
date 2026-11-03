@@ -169,12 +169,13 @@ export function createAdmissionController({
       }
       waiter.timer = setTimeout(() => {
         counters.timedOut += 1
+        const queuePosition = waiters.indexOf(waiter) + 1
         cancel(new AdmissionError(
           'ADMISSION_TIMEOUT',
-          `no model turn slot became available within ${String(queueTimeoutMs)} ms`,
+          `no model turn slot became available within ${String(queueTimeoutMs)} ms (queue position ${String(queuePosition)})`,
           503,
           Math.floor(queueTimeoutMs / 4),
-          { queuePosition: waiters.indexOf(waiter) + 1 },
+          { queuePosition },
         ))
       }, queueTimeoutMs)
       waiters.push(waiter)

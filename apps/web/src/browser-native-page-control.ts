@@ -277,7 +277,8 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
       || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable'
-      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' || notice.state === 'stale' ? '#f87171'
+      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' || notice.state === 'stale'
+      || notice.state === 'session-conflict' ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
     if ((notice.workspaceId !== undefined && (notice.state === 'conflict' || notice.state === 'error'))
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'

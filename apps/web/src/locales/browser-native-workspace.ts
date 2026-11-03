@@ -1,6 +1,7 @@
 type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict'
   | 'recovery-unavailable' | 'identity-missing' | 'identity-mismatch' | 'read-only' | 'stale'
+  | 'session-conflict'
 
 const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   en: {
@@ -19,6 +20,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'identity-mismatch': 'Local Workspace data does not match the current browser identity',
     'read-only': 'Workspace is read-only while another tab owns write access',
     stale: 'Workspace changed; this read-only snapshot is stale',
+    'session-conflict': 'This Session is open in another tab',
   },
   zh: {
     loading: '工作区：正在恢复…',
@@ -36,6 +38,7 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
     'identity-mismatch': '本地工作区数据与当前浏览器身份不匹配',
     'read-only': '另一个标签页持有写权限，当前工作区为只读',
     stale: '工作区已变化；当前只读快照已过期',
+    'session-conflict': '该会话已在另一个标签页打开',
   },
 }
 

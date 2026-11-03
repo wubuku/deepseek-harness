@@ -300,6 +300,6 @@ try {
   const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
     || workspaceStatus === 'local-newer-version' || workspaceStatus === 'recovery-conflict'
     || workspaceStatus === 'recovery-unavailable' || workspaceStatus === 'identity-missing'
-    || workspaceStatus === 'identity-mismatch')
+    || workspaceStatus === 'identity-mismatch' || workspaceStatus === 'session-conflict')
   if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
 }

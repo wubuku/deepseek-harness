@@ -1522,6 +1522,10 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 合同测试见 `tests/backend-v2.test.mjs`（63/63），浏览器 E2E 见 `tests/admission-control.e2e.mjs`。
 
+## 产品可见性
+
+[产品可见性](product-visibility.md)检查失败码、准入排队位置与 Session 租约冲突是否到达 preview。`TurnErrorNodeView` 已把 `turn/end` 的 `error.code` 渲染为 `<code>`；`ADMISSION_TIMEOUT` 消息新增超时瞬间的 `queue position N`，排队中的 prompt 本身立即可见。第二个标签页打开同一 Session 原先只得到空 Session，现发布 `session-conflict` 状态条，显示“该会话已在另一个标签页打开”与 backend 原文。Chrome scripted E2E 同时断言三类 DOM 输出。缺口：排队期间无实时位置或预计等待，冲突状态不自动恢复。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

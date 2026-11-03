@@ -45,7 +45,7 @@ import type {
   SessionPersistenceSnapshot,
   SessionPersistenceStatOptions,
 } from '@deepseek-ai/dsh-session-persistence'
-import { publishBrowserNativeOwner, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
+import { publishBrowserNativeOwner, publishBrowserNativeWorkspaceStatus, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
 import {
   BrowserNativeFileToolError,
   assertBrowserNativeEditSafe,
@@ -270,6 +270,19 @@ function required<T>(value: T | undefined, name: string): T {
   return value
 }
 
+/**
+ * Report a Session write-lease conflict on the preview status surface.
+ * @param message - Backend explanation naming the conflicting Session.
+ */
+function publishSessionConflict(message: string): void {
+  publishBrowserNativeWorkspaceStatus({
+    type: 'workspace',
+    state: 'session-conflict',
+    dirtyCount: 0,
+    message,
+  })
+}
+
 function mapSessionError(error: unknown, id: SessionId, operation: string): never {
   const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
   const module = runtimePersistence()
@@ -363,6 +376,9 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
           sessionId: String(this.id),
           message: error instanceof Error ? error.message : String(error),
         })
+        if (this.ownershipLost) {
+          publishSessionConflict(`session ${String(this.id)} write ownership was lost: ${error instanceof Error ? error.message : String(error)}`)
+        }
         this.scheduleRenewal()
       })
     }, this.owner.renewAfterMs)
@@ -1007,6 +1023,9 @@ function createRemoteSessionPersistenceClass(
         }
       } catch (error) {
         publishBrowserNativeOwner({ type: 'unavailable', sessionId: String(id), message: error instanceof Error ? error.message : String(error) })
+        if (isRecord(error) && error.code === 'SESSION_ALREADY_OWNED') {
+          publishSessionConflict(error instanceof Error ? error.message : String(error))
+        }
         mapSessionError(error, id, 'open')
       }
     }
