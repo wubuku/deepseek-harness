@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-081：结构化指标、Prometheus 导出与失败证据包
+
+```text
+changeId: BN-P2-081
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/observability-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/observability.test.mjs; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 失败只能从 stderr、Session 日志和分散的 `snapshot()` 手工拼证据；请求失败码、模型耗时、准入队列、Session 租约与 durable turn 结算没有统一导出，无法判断一次失败是模型传输、turn 语义还是恢复阻塞。
+existingExtensionPointsChecked: 复用既有 `admission.snapshot()`、`FormalSessionStore` 的 owner-lease 字段与新增只读 `leaseSnapshot()`、`durableHost.snapshot()`、`process.memoryUsage()`、既有 `BackendError`/`DurableTurnError` 错误码与 `accessAuditEntries`；未新增中间件框架、未改 DSH Agent Loop 或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 需要证明失败码在真实 401/404 路径被分类、Prometheus 文本可被解析器接受、证据包不含 prompt 且跨 principal 不可读；这些必须通过真实 socket 与序列化输出验证。
+behaviorChange: 新增 `observability-v2.mjs`（路由标签归一、48 键封顶、固定直方图桶、JSON 快照、Prometheus 文本）；`backend-v2.mjs` 在 `finish`/`close` 记录请求与耗时、在 catch 记录失败码、在 LLM 路由记录模型结果与准入等待（`withAdmission` 新增 `onWait`）；新增 `GET /observability/metrics`（JSON 或 `?format=prometheus`）与 `GET /observability/failure?turnId=`（principal 校验）；`FormalSessionStore` 新增 `leaseSnapshot()`；`durable-host-v2.mjs` 新增 `settledRuns` 与 `snapshot()`。
+consumersUpdated: 新增 `tests/observability.test.mjs`；新增 `observability.md`，PoC README、matrix、drafts index 与本账本同步。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/observability.test.mjs` 1/1：失败码 `{NOT_FOUND:1,UNAUTHENTICATED:1}`；2 次模型请求、0 次模型失败；durable turn failed=1/completed=1；失败 turn 25 ms 结算；Prometheus 222 行含 `failures_total{code="NOT_FOUND"}`、`durable_turns_failed 1`、`process_rss_bytes`；证据包 4 条事件、5 651 字节、末条 `turn/end` 且 `reason=error`、`lease.held=false`、不含 prompt；跨 principal 404、匿名 401。同批 `durable-host`、`durable-tool-attach`、`resource-limits`、`path-boundary`、`prompt-injection-boundaries` 回归 15/15。使用 scripted 模型，未调用真实 provider；未改 `packages/`，无需 `build:artifacts`/`build:check`。
+syncReplaySteps: 上游若提供结构化指标或失败证据 API，优先复用并删除本地补丁；重跑 `observability.test.mjs` 与上述回归。
+deleteCondition: 上游宿主提供等价指标导出与失败证据包，或 Browser-Native PoC 被移除后删除。
+status: implemented
+```
+
 ### BN-P2-080：durable 工具执行、事件流接管与 finish reason 漏读
 
 ```text

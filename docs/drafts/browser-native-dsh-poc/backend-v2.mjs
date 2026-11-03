@@ -20,6 +20,7 @@ import { CrossStoreLedgerError, CrossStoreOperationLedger } from './cross-store-
 import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
 import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
+import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -942,9 +943,10 @@ function sendError(response, error) {
  * @param {object|undefined} admission - Admission controller, or undefined when disabled.
  * @param {object} body - LLM request body carrying requestId, sessionId and purpose.
  * @param {() => Promise<void>} run - Streams the model response.
+ * @param {(waitMs: number) => void} [onWait] - Called with the admission wait once a slot is granted.
  * @returns {Promise<void>} Resolves after the slot is released or the client disconnected.
  */
-async function withAdmission(response, admission, body, run) {
+async function withAdmission(response, admission, body, run, onWait) {
   if (admission === undefined) {
     await run()
     return
@@ -954,6 +956,7 @@ async function withAdmission(response, admission, body, run) {
     if (!response.writableEnded) abort.abort()
   }
   response.on('close', onClose)
+  const queuedAt = Date.now()
   let lease
   try {
     lease = await admission.acquireTurn({
@@ -961,6 +964,7 @@ async function withAdmission(response, admission, body, run) {
       sessionId: body.sessionId,
       purpose: body.purpose,
     }, abort.signal)
+    onWait?.(Date.now() - queuedAt)
   } catch (error) {
     if (error instanceof AdmissionError && error.code === 'ADMISSION_ABORTED') {
       response.destroy()
@@ -1136,6 +1140,31 @@ class FormalSessionStore {
       throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
     }
     throw unsupportedSessionFormat(id, unsupported.version)
+  }
+
+  /**
+   * Summarize owner-lease and recovery state for operator metrics.
+   * @returns {{sessions: number, held: number, expired: number, writeBlocked: number, unsupportedFormats: number}} Lease counts without owner credentials.
+   */
+  leaseSnapshot() {
+    const now = this.now()
+    let held = 0
+    let expired = 0
+    let writeBlocked = 0
+    for (const session of this.sessions.values()) {
+      if (session.ownerToken !== undefined) {
+        if (session.ownerExpiresAt > now) held += 1
+        else expired += 1
+      }
+      if (session.writeBlocked) writeBlocked += 1
+    }
+    return {
+      sessions: this.sessions.size,
+      held,
+      expired,
+      writeBlocked,
+      unsupportedFormats: this.unsupported.size,
+    }
   }
 
   create(id, header, inheritedEventCount, principalId) {
@@ -3973,6 +4002,8 @@ export async function createBrowserNativeV2Server(options) {
   const connectionsCheckingIntervalMs = timeoutMs(options.connectionsCheckingIntervalMs ?? 1_000, 'connectionsCheckingIntervalMs')
   let activeRequests = 0
   let servedOrigin
+  const startedAt = Date.now()
+  const metrics = createMetricsRegistry()
   const durableHost = createDurableTurnHost({
     store,
     admission,
@@ -3992,16 +4023,34 @@ export async function createBrowserNativeV2Server(options) {
       activeRequests -= 1
     }
     response.on('close', release)
+    const requestStartedAt = Date.now()
+    let routeLabel = 'unmatched'
+    let metricRecorded = false
+    const recordRequestMetric = () => {
+      if (metricRecorded) return
+      metricRecorded = true
+      metrics.recordRequest({
+        route: routeLabel,
+        method: request.method ?? 'GET',
+        status: response.statusCode,
+        durationMs: Date.now() - requestStartedAt,
+        aborted: !response.writableFinished,
+      })
+    }
+    response.on('finish', recordRequestMetric)
+    response.on('close', recordRequestMetric)
     for (const [name, value] of Object.entries(responseHeaders)) response.setHeader(name, value)
     try {
       if (activeRequests > maxConcurrentRequests) {
         release()
+        metrics.recordFailure({ code: 'SERVER_BUSY' })
         sendJson(response, 503, {
           error: { code: 'SERVER_BUSY', message: `the backend already handles ${String(maxConcurrentRequests)} concurrent requests` },
         }, { 'retry-after': '1' })
         return
       }
       url = new URL(request.url ?? '/', 'http://browser-native.invalid')
+      routeLabel = metricRoute(url.pathname)
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
       assertLocalRequest(request, url, internalStateRequest)
@@ -4476,32 +4525,50 @@ export async function createBrowserNativeV2Server(options) {
         if (options.testHooks?.failLlmRequest?.(body) === true) {
           throw new BackendError('E2E_INJECTED_LLM_FAILURE', 'E2E injected model request failure', 400)
         }
-        await withAdmission(response, admission, body, async () => {
-          if (llm.mode === 'scripted') {
-            response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
-            let clientClosed = false
-            const onClose = () => {
-              if (response.writableEnded) return
-              clientClosed = true
-              options.testHooks?.onLlmClientClose?.(body)
+        const modelStartedAt = Date.now()
+        let modelOutcome = 'completed'
+        let modelQueueWaitMs
+        let modelStarted = false
+        try {
+          await withAdmission(response, admission, body, async () => {
+            modelStarted = true
+            if (llm.mode === 'scripted') {
+              response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
+              let clientClosed = false
+              const onClose = () => {
+                if (response.writableEnded) return
+                clientClosed = true
+                options.testHooks?.onLlmClientClose?.(body)
+              }
+              response.on('close', onClose)
+              try {
+                await scriptedLlm(
+                  response,
+                  body.messages,
+                  body.tools,
+                  options.testHooks?.scriptedLlmFault?.(body),
+                  () => clientClosed,
+                  body.purpose,
+                )
+              } finally {
+                response.off('close', onClose)
+              }
+            } else {
+              await realLlm(response, request, llm, body)
             }
-            response.on('close', onClose)
-            try {
-              await scriptedLlm(
-                response,
-                body.messages,
-                body.tools,
-                options.testHooks?.scriptedLlmFault?.(body),
-                () => clientClosed,
-                body.purpose,
-              )
-            } finally {
-              response.off('close', onClose)
-            }
-          } else {
-            await realLlm(response, request, llm, body)
+          }, waitMs => { modelQueueWaitMs = waitMs })
+        } catch (error) {
+          modelOutcome = typeof error?.code === 'string' ? error.code : 'MODEL_FAILED'
+          throw error
+        } finally {
+          if (modelStarted || modelOutcome !== 'completed') {
+            metrics.recordModelRequest({
+              outcome: modelOutcome,
+              durationMs: Date.now() - modelStartedAt,
+              ...(modelQueueWaitMs === undefined ? {} : { queueWaitMs: modelQueueWaitMs }),
+            })
           }
-        })
+        }
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/egress/fetch') {
@@ -4516,12 +4583,84 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, { protocolVersion: PROTOCOL_VERSION, ...admission.snapshot() })
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/metrics') {
+        const view = metrics.snapshot({
+          startedAt,
+          activeRequests,
+          admission: admission === undefined ? undefined : admission.snapshot(),
+          leases: store.leaseSnapshot(),
+          durable: durableHost.snapshot(),
+        })
+        if (url.searchParams.get('format') === 'prometheus') {
+          response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8', 'cache-control': 'no-store' })
+          response.end(metrics.prometheus(view))
+          return
+        }
+        sendJson(response, 200, view)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/failure') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)
+        const turn = durableHost.status({ turnId, principalId })
+        const session = store.getForPrincipal(turn.sessionId, principalId)
+        const now = Date.now()
+        const turnEvents = session.events.filter(event => event.data?.turn === turn.turn)
+        const principalDigest = createHash('sha256').update(principalId).digest('hex').slice(0, 16)
+        sendJson(response, 200, {
+          evidenceVersion: 1,
+          capturedAt: now,
+          turn: {
+            turnId: turn.turnId,
+            sessionId: turn.sessionId,
+            status: turn.status,
+            model: turn.model,
+            ...(turn.turn === undefined ? {} : { turn: turn.turn }),
+            startedAt: turn.startedAt,
+            ...(turn.settledAt === undefined ? {} : { settledAt: turn.settledAt, elapsedMs: turn.elapsedMs }),
+            ...(turn.error === undefined ? {} : { error: turn.error }),
+            ...(turn.startSeqs === undefined ? {} : { startSeqs: turn.startSeqs, endSeqs: turn.endSeqs, nextSeq: turn.nextSeq }),
+          },
+          events: turnEvents.slice(-12).map(event => ({
+            seq: event.seq,
+            type: event.type,
+            ...(typeof event.data?.step === 'number' ? { step: event.data.step } : {}),
+            ...(typeof event.data?.reason?.kind === 'string' ? { reason: event.data.reason.kind } : {}),
+            ...(typeof event.data?.reason?.error?.code === 'string' ? { errorCode: event.data.reason.error.code } : {}),
+            ...(typeof event.data?.callId === 'string' ? { callId: event.data.callId, tool: event.data.name } : {}),
+            ...(typeof event.data?.message?.toolCallId === 'string'
+              ? { toolCallId: event.data.message.toolCallId, isError: event.data.message.isError === true }
+              : {}),
+          })),
+          lease: {
+            held: session.ownerToken !== undefined && session.ownerExpiresAt > now,
+            expiresInMs: session.ownerToken === undefined ? 0 : Math.max(0, session.ownerExpiresAt - now),
+            writeBlocked: session.writeBlocked === true,
+            eventCount: session.events.length,
+            durableThroughSeq: session.durableThroughSeq,
+          },
+          accessDenials: accessAuditEntries
+            .filter(entry => entry.principalDigest === principalDigest)
+            .slice(-8)
+            .map(clone),
+          metrics: metrics.snapshot({
+            startedAt,
+            activeRequests,
+            admission: admission === undefined ? undefined : admission.snapshot(),
+            leases: store.leaseSnapshot(),
+            durable: durableHost.snapshot(),
+            now,
+          }),
+        })
+        return
+      }
       if (request.method === 'GET') {
         await serveStatic(response, distRoot, url.pathname)
         return
       }
       throw new BackendError('NOT_FOUND', 'route not found', 404)
     } catch (error) {
+      metrics.recordFailure({ code: typeof error?.code === 'string' ? error.code : 'INTERNAL' })
       if (url !== undefined) recordAccessDenial(url, request, error)
       if (!response.headersSent && !response.destroyed) sendError(response, error)
       else response.destroy()

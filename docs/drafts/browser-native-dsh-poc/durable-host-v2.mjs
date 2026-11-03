@@ -180,6 +180,19 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
   if (!Array.isArray(tools)) throw new TypeError('durable host tools must be an array')
   if (tools.length > 0 && typeof executeTool !== 'function') throw new TypeError('durable host tools require an executeTool function')
   const runs = new Map()
+  const settledRuns = []
+
+  const recordSettled = run => {
+    settledRuns.push({
+      turnId: run.turnId,
+      sessionId: run.sessionId,
+      status: run.status,
+      ...(run.error === undefined ? {} : { errorCode: run.error.code }),
+      elapsedMs: (run.settledAt ?? Date.now()) - run.startedAt,
+      settledAt: run.settledAt ?? Date.now(),
+    })
+    if (settledRuns.length > 20) settledRuns.shift()
+  }
 
   const wakeChannel = run => {
     for (const done of run.channelWaiters) done()
@@ -357,6 +370,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
       run.endSeqs = written.map(event => event.seq)
       run.status = 'completed'
       run.settledAt = Date.now()
+      recordSettled(run)
       wakeChannel(run)
       return
     }
@@ -493,6 +507,7 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
         message: typeof error?.message === 'string' ? error.message : String(error),
       }
       run.settledAt = Date.now()
+      recordSettled(run)
       wakeChannel(run)
     })
     const phase = await run.phaseOne.promise
@@ -503,9 +518,47 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
         message: typeof phase.error.message === 'string' ? phase.error.message : String(phase.error),
       }
       run.settledAt = Date.now()
+      recordSettled(run)
       throw new DurableTurnError(run.error.code, run.error.message, typeof phase.error.status === 'number' ? phase.error.status : 409)
     }
     return runStatus(run)
+  }
+
+  /**
+   * Summarize durable turn count, latency, and failure classification.
+   *
+   * The snapshot contains no prompts, tool output, owner tokens, or principal
+   * identifiers, so it is safe to export to an operator surface.
+   * @returns {object} Versioned gauge and recent-settlement summary.
+   */
+  const snapshot = () => {
+    let running = 0
+    let completed = 0
+    let failed = 0
+    const runningTurns = []
+    const now = Date.now()
+    for (const run of runs.values()) {
+      if (run.status === 'running') {
+        running += 1
+        runningTurns.push({
+          turnId: run.turnId,
+          sessionId: run.sessionId,
+          startedAt: run.startedAt,
+          elapsedMs: now - run.startedAt,
+          step: run.step ?? 1,
+        })
+      } else if (run.status === 'completed') completed += 1
+      else failed += 1
+    }
+    return {
+      version: 1,
+      total: runs.size,
+      running,
+      completed,
+      failed,
+      runningTurns: runningTurns.slice(-16),
+      recentSettled: [...settledRuns].reverse().slice(0, 12),
+    }
   }
 
   /**
@@ -564,5 +617,5 @@ export function createDurableTurnHost({ store, admission, model, originOf, timeo
     return { status: () => runStatus(run), next }
   }
 
-  return { start, status, subscribe, version: 1 }
+  return { start, status, subscribe, snapshot, version: 1 }
 }
