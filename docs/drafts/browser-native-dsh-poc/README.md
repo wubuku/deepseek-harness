@@ -1317,6 +1317,12 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 生命周期面：三次关页短作业都在零 window client 下完成（约 2.0–2.2 秒），Background Sync 在离线注册、关页、恢复在线后以 `clients=0` 启动并完成事件；但同一 harness 的早期运行出现过作业冻结到新页面打开才继续，所以后台推进是可能而非保证。`ServiceWorker.stopAllWorkers` 后作业停在 2/12 步，重开页面不恢复。产品结论是需要跨关页存活的 turn 仍由服务端常驻 host 持有；Service Worker 只能承担短的、幂等的后台任务与唤醒事件。
 
+## Worker 隔离与安全
+
+[隔离与安全结论](worker-isolation-and-security.md)在三套响应头下探测 Worker 内工具执行的可达面。realm 面：没有 `document`、`window`、`localStorage`、`sessionStorage`、`CookieStore` 与 CommonJS `require`；`process` 是 polyfill，`process.env` 只有 `DSH_HOME` 与 `HOME`，不含 provider 凭据；`IndexedDB` 可用，因此工具代码可以写入 Workspace 与 Session 审计之外的数据。
+
+网络面：同源请求返回 200；带 ACAO 的跨源读取成功，无 CORS 的跨源响应为 opaque 或 `TypeError`；Worker 从不附加 `Authorization`，探测中 principal cookie 也未到达跨源端点。CSP `connect-src` 让跨源请求在离开 Worker 前即被拦截（服务端记录 0 次），COOP `same-origin` + COEP `require-corp` 使 `crossOriginIsolated=true` 并拦截缺 CORP 的 `no-cors` 加载，但不影响 CORS 读取。三套响应头下 scripted `bash` turn 均完成。产品结论是浏览器不能充当工具的网络与凭据边界：需要白名单或凭据隔离时，由服务端持有凭据并代理出口，或由部署下发 CSP `connect-src`。
+
 ## Scope
 
 backend 使用目录内的 JSON 文件作为 PoC durability store。`append` 后事件对当前 backend 可见；成功的 `flush` 通过临时文件、文件和父目录同步以及原子替换写入 durable file；若 rename 已完成但目录同步失败，backend 将结果报告为 `DURABILITY_UNKNOWN` 并封锁该 Session 的写入，重启后再按实际文件恢复。handoff receipt 不保存 raw bearer token；owner token 只在 backend 进程内有效，重启后由新 Worker 重新 `open('write')`。v2 scripted mode 返回确定性的文本 stream，不执行旧版独立协议中的 `browser_echo`；real mode 将受限消息转换为 OpenAI-compatible Chat Completions request，解析上游 SSE，再转换为 DSH `StreamChunk`。历史 `run.mjs`、`public/` 和旧测试中的 `browser_echo` 只属于旧协议实验。

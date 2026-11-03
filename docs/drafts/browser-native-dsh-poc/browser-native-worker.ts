@@ -35,6 +35,7 @@ import type { BrowserNativeSessionOrchestrationRuntime } from './browser-native-
 import { createBrowserNativeSessionContinuityProbe } from './browser-native-session-continuity-probe.ts'
 import type { BrowserNativeSessionContinuityRuntime } from './browser-native-session-continuity-probe.ts'
 import { createBrowserNativeCpuContentionProbe } from './browser-native-cpu-contention-probe.ts'
+import { runBrowserNativeIsolationProbe } from './browser-native-isolation-probe.ts'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -268,8 +269,9 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
+  readonly urls?: Readonly<Record<string, string>>
   readonly sessionId?: string
   readonly childSessionId?: string
   readonly boundary?: number
@@ -469,6 +471,12 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && typeof data.ownerId === 'string' && data.ownerId.length > 0
       && typeof data.handoffId === 'string' && data.handoffId.length > 0
       && (data.terminateAfter === undefined || typeof data.terminateAfter === 'boolean')
+  }
+  if (data.action === 'isolation-probe') {
+    if (data.urls === undefined || typeof data.urls !== 'object' || data.urls === null) return false
+    return Object.entries(data.urls).every(([key, value]) =>
+      ['sameOrigin', 'cors', 'noCors', 'cookie', 'corp', 'noCorp'].includes(key)
+      && typeof value === 'string' && value.startsWith('http'))
   }
   if (data.action === 'pause-local-save') return data.stage === 'before' || data.stage === 'after'
   if (data.action === 'node-fs-read') {
@@ -2152,6 +2160,13 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     if (request.action === 'flush-local') {
       await workspaceRuntime.flushLocalWorkspace()
       workspaceTestResponse(request.requestId, { ok: true })
+      return
+    }
+    if (request.action === 'isolation-probe') {
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        ...await runBrowserNativeIsolationProbe(request.urls ?? {}),
+      })
       return
     }
     if (request.action === 'flush-workspace') {

@@ -2750,6 +2750,26 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const isolationToolMarker = 'BROWSER_NATIVE_ISOLATION_TOOL_E2E'
+  if (latestUserText.includes(isolationToolMarker) && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(isolationToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-isolation-bash',
+        name: 'bash',
+        arguments: {
+          command: "printf 'BROWSER_NATIVE_ISOLATION_TOOL_OK\\n'",
+          description: 'Verify Worker tool dispatch under response security headers.',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${isolationToolMarker}_DONE`)
+    return
+  }
+
   const quotaReloadRetryMarker = 'BROWSER_NATIVE_QUOTA_RELOAD_RETRY_E2E'
   if (latestUserText.includes(quotaReloadRetryMarker) && hasTool(tools, 'write')) {
     const markerIndex = messages.findLastIndex(message => message.role === 'user'
@@ -3538,7 +3558,17 @@ export async function createBrowserNativeV2Server(options) {
   const llm = await createLlmConfig(options)
   const distRoot = resolve(options.distRoot ?? join(HERE, '../../../apps/web/dist'))
   const workspaceDownloads = new Map()
+  const responseHeaders = options.responseHeaders ?? {}
+  if (responseHeaders === null || typeof responseHeaders !== 'object' || Array.isArray(responseHeaders)) {
+    throw new TypeError('responseHeaders must be an object')
+  }
+  for (const [name, value] of Object.entries(responseHeaders)) {
+    if (typeof name !== 'string' || name.length === 0 || typeof value !== 'string') {
+      throw new TypeError('responseHeaders must map non-empty header names to string values')
+    }
+  }
   const server = createServer(async (request, response) => {
+    for (const [name, value] of Object.entries(responseHeaders)) response.setHeader(name, value)
     try {
       const url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       const internalStateRequest = sharedStateToken !== undefined
