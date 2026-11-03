@@ -2720,6 +2720,27 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const tabCloseToolMarker = 'BROWSER_NATIVE_TAB_CLOSE_DURING_TOOL_E2E'
+  if (latestUserText.includes(tabCloseToolMarker) && hasTool(tools, 'bash')) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(tabCloseToolMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    if (toolResults.length === 0) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-tab-close-bash',
+        name: 'bash',
+        arguments: {
+          command: "sleep 8; printf 'BROWSER_NATIVE_TAB_CLOSE_RESIDUAL\\n' > /dsh/home/workspace/tab-close-residual.txt",
+          description: 'Write after a delay so the tab can close during execution.',
+          sandbox_permissions: 'workspace-write',
+        },
+      })
+      return
+    }
+    scriptedText(response, `${tabCloseToolMarker}_DONE`)
+    return
+  }
+
   const permissionApprovalMarker = [
     'BROWSER_NATIVE_PERMISSION_APPROVAL_RECOVERY_E2E',
     'BROWSER_NATIVE_PERMISSION_APPROVAL_E2E',

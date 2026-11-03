@@ -120,6 +120,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 59. [Browser-Native 附件安全 GC 与增量 hydrate](browser-native-dsh-poc/attachment-gc-validation-plan.md)及[进度](browser-native-dsh-poc/attachment-gc-validation-progress.md)：确定 durable Session `FileBlock` 是唯一引用权威、孤儿需过宽限期、上传代守卫扫描窗口；backend 合同测试与 Chrome E2E 证明在用附件不被删除、孤儿被回收、`scan-stale` 与复用保护生效，重复 hydrate 复用校验结果。
 60. [Browser-Native CDP 页面隐藏/冻结能力](browser-native-dsh-poc/cdp-freeze-capability.md)：Chrome 156 自动化会话无法用 `setPageVisibilityOverride`、`setWebLifecycleState` 或虚拟时间暂停制造 hidden/frozen 页面；`Page.setWebLifecycleState('frozen')` 只是 no-op，Worker lease 继续续租，因此不能替代后台标签自然节流的证据。
 61. [Browser-Native 跨标签 lease 与审批组合](browser-native-dsh-poc/cross-tab-lease-approval-validation.md)：Session 归属与 Workspace writer lease 正交；并发前台标签无 writer token 且不触达后端，后台 owner 保持 lease 并获批写入 Workspace revision 1，owner 关闭后接管取得新 fencing token，待决审批只结算一次且不重放。
+62. [Browser-Native 标签页关闭后的后台 Agent 语义](browser-native-dsh-poc/tab-close-background-agent-semantics.md)：关闭标签即回收 Dedicated Worker，不提供后台续跑；Session 控制权与 writer lease 在 pagehide 释放（2949 ms 接管，TTL 5000 ms），关闭后无 Session event、模型请求或延迟写入；接管时开放工具结算一次 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次 `interrupted`，不重放。
 
 ### 需要实现或审查代码时
 

@@ -1267,7 +1267,7 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 
 [语义决策与验证计划](subagent-stop-propagation-validation-plan.md)及[实施进度](subagent-stop-propagation-validation-progress.md)确定：用户停止顶层 Session 时必须递归取消其活动子 Agent，子 Agent 的 Session 保留为可继续，其结算通知只入父 Agent inbox 而不唤醒已停止的 turn；定向中断单个 child 不传播到其后代，非用户原因的结束也不传播。
 
-实现位于 `packages/subagent/subagent/src`：`stopDescendants()` 沿 `ancestry` 取消 local/durable Activation，`stoppedByAncestor` 抑制 settlement 唤醒，监听挂在 `ctx.root` 并只接受顶层 `turn/end: aborted/user`。Chrome E2E 用 `spawn` subagent 的双 barrier 证明 parent `aborted/user`、child `aborted/parent`、停止后无新模型请求、通知在下一轮输入前回放；真实模型另在流式文本和 `bash sleep` 执行中 Stop，均只结算一个 `aborted` turn，cut 工具记录 `Error: tool call aborted`，后续 turn 不重放命令。跨标签 Stop、进程外 provider、页面关闭后的后台 Agent、Safari 和 OS crash 未验证。
+实现位于 `packages/subagent/subagent/src`：`stopDescendants()` 沿 `ancestry` 取消 local/durable Activation，`stoppedByAncestor` 抑制 settlement 唤醒，监听挂在 `ctx.root` 并只接受顶层 `turn/end: aborted/user`。Chrome E2E 用 `spawn` subagent 的双 barrier 证明 parent `aborted/user`、child `aborted/parent`、停止后无新模型请求、通知在下一轮输入前回放；真实模型另在流式文本和 `bash sleep` 执行中 Stop，均只结算一个 `aborted` turn，cut 工具记录 `Error: tool call aborted`，后续 turn 不重放命令。跨标签 Stop、进程外 provider、Safari 和 OS crash 未验证；页面关闭时的执行去向见[标签页关闭语义](tab-close-background-agent-semantics.md)。
 
 ## 跨标签审批归属
 
@@ -1276,6 +1276,12 @@ DSH_POC_PLAYWRIGHT_MODULE=/path/to/deepseek-harness/node_modules/.pnpm/playwrigh
 [lease 与审批组合验证](cross-tab-lease-approval-validation.md)同时开启 `browser-native-workspace-lease=1`：并发前台标签不持有 writer token，后台 owner 保持 `active` 且续租，获批工具在 owner 的 writer lease 下写入并推进 Workspace revision；owner 关闭后接管标签取得新 fencing token，待决审批仍只结算一次且不改写 Workspace。
 
 未提供实时只读观察者标签；若未来开放观察者审批，必须先有 durable 的原子 claim。真实模型审批、observer 写工具审批、lease TTL 与待决审批重叠、跨设备接管和 Safari 未验证。
+
+## 标签页关闭后的后台 Agent 语义
+
+[语义与证据](tab-close-background-agent-semantics.md)定义：标签关闭即回收 Dedicated Worker，没有后台续跑；Session 控制权与 Workspace writer lease 在 pagehide 阶段释放，失败时按 TTL 到期；在途 turn 不在关闭时伪造终态，下一次拥有者打开时把开放工具结算一次为 `TOOL_OUTCOME_UNKNOWN`、turn 结算一次为 `interrupted`，不重放也不自动续跑。Chrome E2E 在 `bash sleep 8` 执行期关闭标签：关闭后 1 秒 Session event 数不变、无新模型请求、延迟写入不落地、Workspace revision 不变；存活标签在 2949 ms（TTL 5000 ms）内接管并取得新 fencing token，随后新 prompt 正常完成。
+
+未覆盖强杀进程、浏览器崩溃、OS 休眠、pagehide 超时后的后台写回、真实模型在途工具、多实例接管与 Safari。
 
 ## 附件 GC 与增量 hydrate
 
