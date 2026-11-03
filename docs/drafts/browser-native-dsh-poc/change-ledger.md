@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-088：已结算 turn 转录窗口
+
+```text
+changeId: BN-P2-088
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: packages/client/ui-chat/src/client/chat/chat-window.ts; packages/client/ui-chat/src/client/chat/ChatFlow.tsx; packages/client/ui-chat/src/client/chat/ChatView.tsx; packages/client/ui-chat/src/client/chat/ChatView.module.css; packages/client/ui-chat/src/client/contract/slots.ts; packages/client/ui-chat/src/client/locale.ts; packages/client/ui-chat/tests/chat-window.client.spec.ts; packages/client/ui-chat/tests/chat-view.client.spec.tsx; docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/long-transcript-rendering.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/operational-compatibility-matrix.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 长转录实测把必须引入虚拟化的触发线定为 300 turns / 16,000 DOM / 75,000 可见字符；300 turns 时滚动与 12k 字符流式追加的成本随历史线性增长，追加出现 8 个长任务、单帧 695 ms。上一轮只修了流式落地，没有减少已挂载规模。
+existingExtensionPointsChecked: 只改 `conversation.chat.flow` 槽位的 owner props 与现有 `ChatView` 滚动/导航状态；未改 agent-loop、Session 事件、持久化或 `ChatViewport` 的测量契约。窗口按根行所属 turn 切分，`data-chat-flow-kind`、`data-chat-flow-key` 与 `data-chat-turn` 语义保留在已挂载行上；边界行不携带 `data-chat-turn`。
+whyDraftOnlyWasInsufficient: 触发线来自真实 Chrome 的 DOM、滚动与追加样本；不实现挂载裁剪就无法把 300 turns 的成本压回可用区间，也无法用预算断言防止回退。
+behaviorChange: `ui-chat` 在跟随尾部时最多挂载最近 150 个 turn；更早的已加载 turn 由一行 `data-chat-window-boundary` 代替，显示隐藏 turn 数并可一页页展开。读者离开尾部后 floor 冻结；带保存锚点恢复时不窗口化；TurnNavigator 跳转与“加载更早”先展开 floor 再落地。`ChatFlowOwnerProps` 新增 `windowFloorTurn` 与 `onShowEarlier`，`planChatWindow` 为纯函数。
+test: `pnpm exec vitest run packages/client/ui-chat/tests` 852/852（`chat-window` 7 例、ChatView 窗口行为 1 例）；`build:artifacts` + `build:check` 通过。真实 Chrome 156.0.8078.79、1440×1000、300 turns scripted E2E：`result: passed`，DOM 15,830 → 8,182、flow item 1,200 → 600、assistant step 300 → 150、隐藏 150 turn；20 步滚动 423.5 → 146.2 ms，12k 字符追加 787.4 → 332.1 ms、长任务 1 个/73 ms → 0、单帧 629.1 → 209 ms、turn 637 → 366 ms，`pageErrors: []`、`nonLocalRequests: []`。harness 默认预算收紧为 DOM ≤ 20,000、滚动 ≤ 350 ms、追加 ≤ 500 ms，并断言每个检查点 `data-chat-window-hidden === turns − 150`。
+consumersUpdated: `ChatView` 是 flow 槽位唯一调用方，同批传入新 owner props；`chat-view.client.spec.tsx` 的 harness 通过 owner 透传，无需另改消费者。文档同步 `long-transcript-rendering.md`、PoC README、matrix 与 drafts index。
+syncReplaySteps: `build:artifacts` → `build:check` → `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` → `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs`。镜像构建改为逐项复制 dist，以避开 backend 静态路径的 `realpath` 校验。
+deleteCondition: 逐行窗口化虚拟列表替代 turn 级窗口，或 `ChatView` 不再承载 `conversation.chat.flow` 时删除。
+```
+
 ### BN-P2-087：durable 附件不适用与已提交 Workspace 写入恢复一致性
 
 ```text

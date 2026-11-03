@@ -1461,9 +1461,9 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 [长转录渲染成本与主线程占用](long-transcript-rendering.md)用真实 composer 跑到 300 turns，在 50/150/300 三个检查点测量 20 步全文滚动、DOM 规模、长任务和一条 12,000 字符消息的两段流式追加。滚动在 300 turns 内仍可接受（20 步主线程 423.5 ms、无 >50 ms 长任务、最大帧 76.4 ms）；流式追加最先恶化（150 turns 391 ms、0 个长任务 → 300 turns 909.6 ms、8 个长任务、最长 80 ms、单帧 695 ms）。
 
-据此把必须引入转录虚拟化的触发线定为 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符，或任意单条消息追加出现 >100 ms 长任务；建议先做已结算 turn 的折叠/分页，再做窗口化虚拟列表。测量中还修正了 `submitPrompt` 的读取方式：原实现从 `offset: 0` 轮询整段 Session，超过读页字节预算后看不到最新 `turn/end`，现改为读取最后 64 个事件并按事件 `seq` 判定。
+据此把必须引入转录虚拟化的触发线定为 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符，或任意单条消息追加出现 >100 ms 长任务。本批按这条线实现了“已结算 turn 分页”：`ui-chat` 始终保留最近 150 个 turn，更早的已加载 turn 由 `data-chat-window-boundary` 行代替，只在跟随尾部时前进，TurnNavigator 跳转与“加载更早”先展开 floor。同一 300 turns 转录的 DOM 15,830 → 8,182、flow item 1,200 → 600、assistant step 300 → 150，20 步滚动 423.5 → 146.2 ms，12k 字符追加 787.4 → 332.1 ms、长任务 1 个/73 ms → 0、单帧 629.1 → 209 ms；harness 预算收紧为 DOM ≤ 20,000、滚动 ≤ 350 ms、追加 ≤ 500 ms，并断言隐藏 turn 数等于 `turns − 150`。逐行虚拟列表仍未实现，单个超大 turn 不受窗口保护。测量中还修正了 `submitPrompt` 的读取方式：原实现从 `offset: 0` 轮询整段 Session，超过读页字节预算后看不到最新 `turn/end`，现改为读取最后 64 个事件并按事件 `seq` 判定。
 
-本批在该触发线内做了最小修复（仍不实现虚拟化）：`ChatViewport.scrollToBottom` 不再重复测量，流式增长时的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，避免每次 DOM 变更后强制一次全文档布局。交替构建前后的 300 turns 追加对照：长任务 4–5 → 1 个、长任务总时长 261 → 96 ms、turn 535 → 454 ms、单帧 487 → 450 ms；原 harness 复测 300 turns 时追加主线程 909.6 → 787.4 ms、长任务 8 个/476 ms → 1 个/73 ms、单帧 695.4 → 629.1 ms。剩余瓶颈是列上的 `:nth-last-child(of :has())` 选择器引起的全列样式重算，折叠/窗口化仍是把单次布局降到 1 ms 量级的唯一路径。
+流式修复本身仍保留：`ChatViewport.scrollToBottom` 不再重复测量，流式增长时的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，避免每次 DOM 变更后强制一次全文档布局。交替构建前后的 300 turns 追加对照：长任务 4–5 → 1 个、长任务总时长 261 → 96 ms、turn 535 → 454 ms、单帧 487 → 450 ms；原 harness 复测 300 turns 时追加主线程 909.6 → 787.4 ms、长任务 8 个/476 ms → 1 个/73 ms、单帧 695.4 → 629.1 ms。窗口化后同一 harness 的追加为 332.1 ms、0 长任务、单帧 209 ms。剩余瓶颈是列上的 `:nth-last-child(of :has())` 选择器引起的全列样式重算；窗口把列规模压到 150 turns，但要把单次布局再降到 1 ms 量级仍需逐行虚拟化或改写该选择器。
 
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs`。
 

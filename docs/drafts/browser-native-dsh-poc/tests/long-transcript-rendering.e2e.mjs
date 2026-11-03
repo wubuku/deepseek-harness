@@ -32,8 +32,10 @@ const checkpoints = String(process.env.DSH_POC_RENDER_TURNS ?? '50,150')
   .split(',').map(value => Number(value.trim()))
 const scrollSteps = Number(process.env.DSH_POC_RENDER_SCROLL_STEPS ?? 20)
 const longTaskBudgetMs = Number(process.env.DSH_POC_RENDER_LONG_TASK_BUDGET_MS ?? 100)
-const domNodeBudget = Number(process.env.DSH_POC_RENDER_DOM_BUDGET ?? 60_000)
-const scrollBurstBudgetMs = Number(process.env.DSH_POC_RENDER_SCROLL_BURST_MS ?? 800)
+const domNodeBudget = Number(process.env.DSH_POC_RENDER_DOM_BUDGET ?? 20_000)
+const scrollBurstBudgetMs = Number(process.env.DSH_POC_RENDER_SCROLL_BURST_MS ?? 350)
+const appendTaskBudgetMs = Number(process.env.DSH_POC_RENDER_APPEND_BUDGET_MS ?? 500)
+const windowTurns = Number(process.env.DSH_POC_RENDER_WINDOW_TURNS ?? 150)
 const longStreamCharacters = Number(process.env.DSH_POC_RENDER_LONG_STREAM_CHARS ?? 12_000)
 const previewUrl = origin => `${origin}/preview.html?browser-native=1&browser-native-durable=1&browser-native-test=workspace-recovery&preview-fixture=none`
 
@@ -108,11 +110,13 @@ async function readLongTasks(page) {
 async function domStats(page) {
   return await page.evaluate(() => {
     const flowItems = document.querySelectorAll('[data-chat-flow-kind]')
+    const boundary = document.querySelector('[data-chat-window-boundary]')
     return {
       nodes: document.getElementsByTagName('*').length,
       flowItems: flowItems.length,
       assistantSteps: document.querySelectorAll('[data-chat-flow-kind="assistant-step"]').length,
       textLength: document.body.innerText.length,
+      windowHiddenTurns: boundary === null ? 0 : Number(boundary.getAttribute('data-chat-window-hidden') ?? '0'),
     }
   })
 }
@@ -279,7 +283,10 @@ async function run() {
 
     const failures = []
     const check = (condition, label) => { if (!condition) failures.push(label) }
-    for (const checkpoint of checkpointsOut) {
+    for (const [index, checkpoint] of checkpointsOut.entries()) {
+      const expectedHidden = Math.max(0, checkpoints[index] - windowTurns)
+      check(checkpoint.dom.windowHiddenTurns === expectedHidden,
+        `${checkpoint.label}: window hides ${String(checkpoint.dom.windowHiddenTurns)} Turns, expected ${String(expectedHidden)}`)
       check(checkpoint.dom.nodes <= domNodeBudget,
         `${checkpoint.label}: DOM nodes ${String(checkpoint.dom.nodes)} exceed ${String(domNodeBudget)}`)
       check(checkpoint.scroll.longTasks.longestMs <= longTaskBudgetMs,
@@ -293,6 +300,8 @@ async function run() {
       `${afterLongScroll.label}: longest task ${String(afterLongScroll.scroll.longTasks.longestMs)} ms exceeds ${String(longTaskBudgetMs)} ms`)
     check(longAppend.longTasks.longestMs <= longTaskBudgetMs,
       `long append: longest task ${String(longAppend.longTasks.longestMs)} ms exceeds ${String(longTaskBudgetMs)} ms`)
+    check(longAppend.taskMs <= appendTaskBudgetMs,
+      `long append: main thread ${String(Math.round(longAppend.taskMs))} ms exceeds ${String(appendTaskBudgetMs)} ms`)
     check(recorder.pageErrors.length === 0, 'the page must not report errors')
     check(recorder.nonLocalRequests.length === 0, 'the browser must not issue any non-local request')
 
@@ -301,7 +310,10 @@ async function run() {
       browser: browserChannel,
       checkpoints,
       viewport: { width: 1440, height: 1000 },
-      budgets: { longTaskMs: longTaskBudgetMs, domNodes: domNodeBudget, scrollBurstMs: scrollBurstBudgetMs, scrollSteps },
+      budgets: {
+        longTaskMs: longTaskBudgetMs, domNodes: domNodeBudget, scrollBurstMs: scrollBurstBudgetMs,
+        appendTaskMs: appendTaskBudgetMs, windowTurns, scrollSteps,
+      },
       turns: {
         completed: turnDurations.length,
         medianMs: median(turnDurations),

@@ -4432,4 +4432,21 @@ describe('ChatView', () => {
     act(() => { h.setSession({ running: false }) })
     expect(column.querySelector('[data-chat-running]')).toBeNull()
   })
+
+  it('keeps a bounded Turn window mounted while following the tail and reveals earlier Turns', () => {
+    const nodes: ConversationNode[] = Array.from({ length: 200 }, (_, index) => {
+      const turn = index + 1
+      return [userInTurn(turn * 2 - 1, `q${turn}`, turn), assistant(turn * 2, `a${turn}`, turn)]
+    }).flat()
+    const h = makeHarness({ chat: chatSnapshotFixture({ nodes }) })
+    const view = render(<h.ChatView {...h.props} />)
+    const boundary = view.container.querySelector('[data-chat-window-boundary]') as HTMLElement
+    expect(boundary.textContent).toBe('显示更早的 50 轮')
+    // The followed tail keeps the last 150 Turns; Turns 1–50 stay out of the document.
+    expect(view.container.querySelectorAll('[data-chat-flow-kind="user"]')).toHaveLength(150)
+    expect(view.container.querySelector('[data-chat-turn="1"]')).toBeNull()
+    fireEvent.click(within(boundary).getByRole('button'))
+    expect(view.container.querySelector('[data-chat-window-boundary]')).toBeNull()
+    expect(view.container.querySelectorAll('[data-chat-flow-kind="user"]')).toHaveLength(200)
+  })
 })

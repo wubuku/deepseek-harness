@@ -1,16 +1,18 @@
 ---
-description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚动、DOM 与 12k 字符流式追加曲线和虚拟化触发阈值。"
+description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚动、DOM 与 12k 字符流式追加曲线，以及已结算 turn 窗口的实现与前后对比。"
 ---
 
 # 长转录渲染成本与主线程占用
 
 ## Summary
 
-[long-transcript-rendering.e2e.mjs](tests/long-transcript-rendering.e2e.mjs) 在真实 Chrome 156.0.8078.79、1440×1000 视口下用真实 composer 跑 300 个 scripted turn，在 50/150/300 turns 三个检查点测量 DOM 规模、一次 20 步全文滚动的 `TaskDuration`/`ScriptDuration`/`LayoutDuration`、`PerformanceObserver` 长任务，以及一条 12,000 字符助理消息分两段流式追加的成本。UI 没有虚拟化：300 turns 时 1,200 个 flow item、300 个 assistant step、15,830 个 DOM 节点、73,485 可见字符全部在文档里。
+[long-transcript-rendering.e2e.mjs](tests/long-transcript-rendering.e2e.mjs) 在真实 Chrome 156.0.8078.79、1440×1000 视口下用真实 composer 跑 300 个 scripted turn，在 50/150/300 turns 三个检查点测量 DOM 规模、一次 20 步全文滚动的 `TaskDuration`/`ScriptDuration`/`LayoutDuration`、`PerformanceObserver` 长任务，以及一条 12,000 字符助理消息分两段流式追加的成本。无窗口基线（本批实现前）：300 turns 时 1,200 个 flow item、300 个 assistant step、15,830 个 DOM 节点、73,485 可见字符全部在文档里。
 
-可判定结论：**滚动在 300 turns 内仍可接受**（20 步总主线程 423.5 ms、约 21 ms/步，没有超过 50 ms 的长任务，最大帧间隔 76.4 ms）；**流式追加是最先恶化的路径**（150 turns 时主线程 391 ms、0 个长任务；300 turns 时 909.6 ms、8 个长任务共 476 ms、最长 80 ms，单帧间隔 695 ms）。因此把**必须引入转录虚拟化的触发线定在 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符**：再翻一倍时按 150→300 的 2.3 倍增长，长任务会越过 100 ms 的单任务预算。
+可判定结论：**滚动在 300 turns 的完整转录内仍可接受**（20 步总主线程 423.5 ms、约 21 ms/步，没有超过 50 ms 的长任务，最大帧间隔 76.4 ms）；**流式追加是最先恶化的路径**（150 turns 时主线程 391 ms、0 个长任务；300 turns 时 909.6 ms、8 个长任务共 476 ms、最长 80 ms，单帧间隔 695 ms）。因此把**必须引入转录虚拟化的触发线定在 300 turns / 约 16,000 DOM 节点 / 约 75,000 可见字符**：再翻一倍时按 150→300 的 2.3 倍增长，长任务会越过 100 ms 的单任务预算。
 
-本批按该触发线做了一次最小修复：把流式追加的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，同一 harness 下 300 turns 追加的长任务从 8 个/476 ms 降到 1 个/73 ms、单帧 695.4 → 629.1 ms，详见[流式追加性能修复](#流式追加性能修复)。虚拟化本身仍未实现。
+本批先按该触发线做了一次最小修复：把流式追加的尾部落地从 commit 内的同步测量改为由 `ResizeObserver` 在 layout 之后落地，同一 harness 下 300 turns 追加的长任务从 8 个/476 ms 降到 1 个/73 ms、单帧 695.4 → 629.1 ms，详见[流式追加性能修复](#流式追加性能修复)。
+
+随后落地了[已结算 turn 窗口](#转录窗口已实现)：始终保留最近 150 个 turn，更早的已加载 turn 由一个可点击的边界行代替。同一 harness 的 300 turns 从 15,830 降到 8,182 个 DOM 节点、1,200 降到 600 个 flow item、300 降到 150 个 assistant step，窗口边界报告隐藏 150 个 turn；滚动主线程 423.5 → 148–152 ms，12,000 字符追加 787.4 → 316–359 ms、长任务 1 个/73 ms → 0，单帧 629.1 → 191–240 ms。逐行虚拟列表仍未实现，剩余成本见[边界与剩余成本](#边界与剩余成本)。
 
 ## 测量方法
 
@@ -18,9 +20,11 @@ description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚�
 - 长任务：页面内 `PerformanceObserver({ entryTypes: ['longtask'] })`，每个检查点前清空，读 count/totalMs/longestMs。
 - DOM 规模：`document.getElementsByTagName('*').length`、`[data-chat-flow-kind]`、`assistant-step` 数量与 `body.innerText` 长度。
 - 流式追加：`sendTurn` 的 `captureStream` 逐帧记录 assistant-step 文本变化；120 ms 延迟后写入后半段，模拟两段流式到达。
-- 预算：长任务 ≤ 100 ms、20 步滚动 ≤ 800 ms、DOM ≤ 60,000 节点；超预算先写 JSON 再断言。
+- 预算：长任务 ≤ 100 ms、20 步滚动 ≤ 350 ms、DOM ≤ 20,000 节点、12k 字符追加主线程 ≤ 500 ms，且每个检查点的 `data-chat-window-hidden` 必须等于 `turns − 150`；超预算先写 JSON 再断言。
 
 ## 滚动与 DOM 曲线
+
+下表是**无窗口基线**（虚拟化实现前的同一 harness）：
 
 | turns | DOM 节点 | flow items | assistant steps | 可见字符 | 20 步滚动主线程 | Script | Layout | 长任务（>50 ms） | 最大帧间隔 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -43,8 +47,59 @@ description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚�
 
 - **可接受**：≤ 150 turns（≤ 8,200 DOM 节点、≤ 37,000 可见字符）的会话，滚动与 12k 字符流式追加都没有长任务；这是当前 UI 的“无感”区间。
 - **可用但降级**：150–300 turns。滚动仍无长任务，但长消息流式追加已产生 80 ms 长任务与 0.7 s 单帧；应避免在该区间播放超长流式文本。
-- **必须虚拟化**：≥ 300 turns、或 DOM ≥ 16,000、或可见字符 ≥ 75,000、或任意单条消息流式追加出现 > 100 ms 长任务。理由是按 150→300 的 2.3 倍增长，600 turns 时的长任务会越过 100 ms 的单任务预算；触发线放在 300 turns 留出约一倍余量。
-- **建议的浏览器端策略**：先做“已结算 turn 折叠/分页”（保留最近 N 个 turn 的完整转录，更早的折叠为摘要行），再考虑窗口化虚拟列表；虚拟化需要保留 `data-chat-flow-kind` 语义与滚动锚点，否则会破坏现有测试与工具卡片定位。
+- **必须虚拟化**：≥ 300 turns、或 DOM ≥ 16,000、或可见字符 ≥ 75,000、或任意单条消息流式追加出现 > 100 ms 长任务。理由是按 150→300 的 2.3 倍增长，600 turns 时的长任务会越过 100 ms 的单任务预算；触发线放在 300 turns 留出约一倍余量。本批已按这条线实现窗口，见[转录窗口（已实现）](#转录窗口已实现)。
+- **已实现的浏览器端策略**：“已结算 turn 分页”——保留最近 150 个 turn 的完整转录，更早的已加载 turn 折叠成一行可点击的边界；`data-chat-flow-kind`、`data-chat-turn` 与滚动锚点语义都保留在已挂载的行上。逐行窗口化虚拟列表未实现，见[边界与剩余成本](#边界与剩余成本)。
+
+## 转录窗口（已实现）
+
+窗口在 `packages/client/ui-chat` 落地：`chat-window.ts` 是纯函数，按每个根行所属的 turn 计算窗口起点与隐藏范围；`ChatFlow.tsx` 只挂载 `turn >= floor` 的行，并在顶部渲染边界行；`ChatView.tsx` 持有 floor。
+
+- **窗口大小**：150 turns，等于上文“无感”区间的上限。300 turns 的会话因此只保留 151–300 turn 的完整转录，DOM 回到 150-turn 水平。
+- **只在跟随尾部时前进**：新 turn 到达且读者在尾部时，floor 前进到 `latest − 149`；读者一旦离开尾部就冻结 floor，避免在阅读中途卸载其上方的行造成跳动。
+- **恢复的读者不窗口化**：带保存滚动锚点重开时 `followingTail` 为假，floor 保持 null，先完成锚点恢复；回到尾部后才启用窗口。
+- **导航先展开**：TurnNavigator 跳到 floor 以下的 turn 时，先把 floor 降到该 turn，再在挂载后的 layout effect 里落地滚动；“加载更早”也同时把 floor 下移一页。
+- **边界行**：文本为 `显示更早的 {count} 轮`，带 `data-chat-window-boundary` 与 `data-chat-window-hidden`；点击后一次展开一页。边界行不携带 `data-chat-turn`，避免阅读位置与 turn 导航把它误认成目标 turn。
+
+同一 harness、同一 300 turns 转录、同一 12,000 字符两段追加，本批前后对照（“本批前”是仅含流式修复的构建）：
+
+| 指标（300 turns） | 本批前 | 窗口化后 |
+| --- | --- | --- |
+| DOM 节点 | 15,830 | 8,182 |
+| flow items / assistant steps | 1,200 / 300 | 600 / 150 |
+| 20 步滚动主线程 | 423.5 ms | 148.1–151.5 ms |
+| 滚动长任务 / 最大帧 | 0 / 76.4 ms | 0 / 50.3–51.7 ms |
+| 12k 字符追加主线程 | 787.4 ms | 316–359 ms |
+| 追加长任务（>50 ms） | 1 个 / 73 ms | 0 |
+| 追加最大帧间隔 | 629.1 ms | 190.7–239.7 ms |
+| turn 总时长 | 637 ms | 345–392 ms |
+| 追加后再次滚动 | 179.8 ms | 165.5–165.6 ms |
+
+窗口化后 300 turns 的滚动与追加都回到 150-turn 水平：主线程成本不再随历史线性增长，长任务消失。剩余的最大单帧仍是追加期间的 190–240 ms，来自两段式流式到达之间的等待与列上的昂贵选择器，而不是窗口本身。
+
+窗口决策：
+
+| 问题 | 决定 | 理由 |
+| --- | --- | --- |
+| 窗口按什么切 | turn 边界，不按行数或像素 | 折叠必须保持一个 turn 的用户输入、过程与结果同时可见；按行切会切断 turn。 |
+| 为什么是 150 | 取“无感”区间上限 | 150 turns 实测无长任务；300 turns 的会话只需隐藏前 150 个已结算 turn。 |
+| 读者离开尾部时是否继续前进 | 不前进 | 前进会卸载读者上方内容并造成滚动跳动；冻结后窗口只随重新回到尾部而收敛。 |
+| 重开时是否立即窗口化 | 不立即 | 保存的滚动锚点可能落在旧 turn；先恢复再启用，避免锚点行不存在。 |
+| 跳转到窗口外 turn | 先展开再跳转 | 不展开时 `scrollToTurn` 找不到锚点，会落到最近已挂载行，等于错误导航。 |
+| 未声明 turn 的会话级行 | 跟随前一个 turn | 这类行没有 turn 归属；归入前一段保证不会被单独切在窗口外。 |
+
+可回归断言：harness 默认预算收紧为 DOM ≤ 20,000 节点、20 步滚动 ≤ 350 ms、12k 字符追加 ≤ 500 ms、单任务 ≤ 100 ms，并在每个检查点断言 `data-chat-window-hidden === turns − 150`（150 turns 及以下为 0、无边界行）。本批前的构建会因滚动 423.5 ms、追加 787.4 ms 与边界缺失而失败。
+
+harness 的镜像构建同时从“符号链接原 dist”改为逐项复制：backend 的静态路径校验按 `realpath` 拒绝越出 root 的读取，符号链接镜像会让 `preview.html` 直接 404；复制后 300 turns 运行正常，页面错误与外部请求均为 0。
+
+## 边界与剩余成本
+
+窗口把已挂载规模固定在 150 turns，代价与未覆盖项如下：
+
+- **不是逐行虚拟列表**：窗口只在 turn 边界整体卸载；单个超大 turn（大量工具卡片或超长输出）仍会一次性挂载，DOM 上限取决于那一个 turn。
+- **隐藏的 turn 不可直接滚动到**：只能通过边界行分页或 TurnNavigator 跳转；浏览器页内查找不会命中已卸载的 turn。边界行与 TurnNavigator 都不携带 `data-chat-turn`，因此阅读位置、滚动锚点与现有 E2E 的 turn 归属不会被边界行污染。
+- **昂贵选择器仍在**：`ChatView.module.css` 的 `:nth-last-child(2 of :not(...):has(...))` 仍让每次 DOM 变更触发全列样式重算；窗口把列规模降到 150 turns 后这部分成本随之下降，但没有消失。要降到 1 ms 量级的单次布局，需要逐行窗口化或改写该选择器。
+- **只验证到 300 turns**：600/1000 turns 时窗口规模不变，预期保持 150-turn 成本；这是外推，未实测。
+- **窗口状态不持久化**：展开到哪一页只存在于当前页面；重开时按“恢复的读者不窗口化”重新开始。
 
 ## 流式追加性能修复
 
@@ -74,7 +129,7 @@ description: "长转录渲染成本与主线程占用：50/150/300 turns 的滚�
 - **阈值虚拟化（`content-visibility: auto` + `contain-intrinsic-size`）**：在 150 turns 的追加里反而更慢（主线程 759 ms、`UpdateLayoutTree` 470 次），追加期间可见性切换本身触发大量样式重算；`contain: layout paint` 在 300 turns 只把长任务降到 4 个/240 ms，单次约 41 ms 的全文档布局仍在。
 - **rAF 合并追加**：测试里的两段追加相隔 120 ms，不落在同一帧；真正可合并的是同一帧内的多次 commit 落地，交给 `ResizeObserver` 即可，不需要额外的事件循环。
 
-剩余瓶颈是列上的昂贵选择器（`ChatView.module.css` 的 `:nth-last-child(2 of :not(...):has(...))`）：每次 DOM 变更仍触发全列样式重算，`UpdateLayoutTree` 仍有 25 次、约 160 ms。要把单次布局从约 15 ms 降到 1 ms 量级，仍需“已结算 turn 折叠/窗口化”，触发线见上一节。
+剩余瓶颈是列上的昂贵选择器（`ChatView.module.css` 的 `:nth-last-child(2 of :not(...):has(...))`）：每次 DOM 变更仍触发全列样式重算，`UpdateLayoutTree` 仍有 25 次、约 160 ms。本批的窗口已把列规模降到 150 turns，但要让单次布局从约 15 ms 降到 1 ms 量级，仍需逐行窗口化或改写该选择器，见[边界与剩余成本](#边界与剩余成本)。
 
 复跑：
 
@@ -92,16 +147,20 @@ DSH_POC_BROWSER=chrome DSH_POC_RENDER_TURNS=300 node docs/drafts/browser-native-
 ## 证据
 
 ```json
-{"result":"passed","browser":"chrome","checkpoints":[150,300],"viewport":{"width":1440,"height":1000},
- "budgets":{"longTaskMs":100,"domNodes":60000,"scrollBurstMs":800,"scrollSteps":20},
- "turns":{"completed":300,"medianMs":686,"maxMs":1392},
- "measurements":[{"label":"150-turns","dom":{"nodes":8180,"flowItems":600,"assistantSteps":150,"textLength":36885},
-   "scroll":{"taskMs":195.0,"scriptMs":28.1,"longTasks":{"count":0,"longestMs":0},"maxFrameMs":52.6}},
-  {"label":"300-turns","dom":{"nodes":15830,"flowItems":1200,"assistantSteps":300,"textLength":73485},
-   "scroll":{"taskMs":423.5,"scriptMs":74.6,"longTasks":{"count":0,"longestMs":0},"maxFrameMs":76.4}}],
- "longAppend":{"appendedCharacters":12000,"deltaNodes":43,"taskMs":909.6,"scriptMs":131.4,"layoutMs":17.4,
-   "longTasks":{"count":8,"totalMs":476,"longestMs":80},"maxFrameMs":695.4,"turnMs":736},
- "afterLongScroll":{"scroll":{"taskMs":179.8,"longTasks":{"count":0,"longestMs":0},"maxFrameMs":73.6}},
+{"result":"passed","browser":"chrome","checkpoints":[300],"viewport":{"width":1440,"height":1000},
+ "budgets":{"longTaskMs":100,"domNodes":20000,"scrollBurstMs":350,"appendTaskMs":500,
+   "windowTurns":150,"scrollSteps":20},
+ "turns":{"completed":300,"medianMs":660,"maxMs":1394},
+ "measurements":[{"label":"300-turns","scroller":{"overflow":38409,"clientHeight":924},
+   "dom":{"nodes":8182,"flowItems":600,"assistantSteps":150,"textLength":36963,"windowHiddenTurns":150},
+   "scroll":{"steps":20,"taskMs":146.2,"scriptMs":27.7,"layoutMs":1.2,
+     "medianFrameMs":33.0,"maxFrameMs":50.9,"longTasks":{"count":0,"totalMs":0,"longestMs":0}}}],
+ "longAppend":{"appendedCharacters":12000,"deltaNodes":-7,"taskMs":332.1,"scriptMs":50.3,"layoutMs":8.2,
+   "streamSamples":4,"maxFrameMs":209,"longTasks":{"count":0,"totalMs":0,"longestMs":0},"turnMs":366},
+ "afterLongScroll":{"label":"300-turns-after-long-append","scroller":{"overflow":41147,"clientHeight":924},
+   "dom":{"nodes":8182,"flowItems":600,"assistantSteps":150,"textLength":48822,"windowHiddenTurns":151},
+   "scroll":{"steps":20,"taskMs":160.5,"scriptMs":24.6,"layoutMs":1.5,
+     "medianFrameMs":33.3,"maxFrameMs":51.5,"longTasks":{"count":0,"totalMs":0,"longestMs":0}}},
  "pageErrors":[],"nonLocalRequests":[],"failures":[]}
 ```
 
@@ -113,12 +172,13 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
   node docs/drafts/browser-native-dsh-poc/tests/long-transcript-rendering.e2e.mjs
 ```
 
-检查点与预算可用 `DSH_POC_RENDER_TURNS`、`DSH_POC_RENDER_SCROLL_STEPS`、`DSH_POC_RENDER_LONG_TASK_BUDGET_MS`、`DSH_POC_RENDER_DOM_BUDGET`、`DSH_POC_RENDER_SCROLL_BURST_MS`、`DSH_POC_RENDER_LONG_STREAM_CHARS` 覆盖。
+检查点与预算可用 `DSH_POC_RENDER_TURNS`、`DSH_POC_RENDER_SCROLL_STEPS`、`DSH_POC_RENDER_LONG_TASK_BUDGET_MS`、`DSH_POC_RENDER_DOM_BUDGET`、`DSH_POC_RENDER_SCROLL_BURST_MS`、`DSH_POC_RENDER_APPEND_BUDGET_MS`、`DSH_POC_RENDER_WINDOW_TURNS`、`DSH_POC_RENDER_LONG_STREAM_CHARS` 覆盖。
 
 ## 限制
 
-- 模型响应由 scripted 后端生成，turn 间隔中位数 686 ms 包含测试轮询节奏，不代表真实模型的流式速率或 token 分布。
+- 模型响应由 scripted 后端生成，turn 间隔中位数 660 ms 包含测试轮询节奏，不代表真实模型的流式速率或 token 分布。
 - 流式追加只有两段（前缀 + 120 ms 后的后缀），不是真实 token 级高频 delta；真实 provider 的小 chunk 高频追加可能更容易触发更多小任务。
 - 只测桌面 1440×1000 视口，没有移动端、缩放、系统字体回退或辅助功能树的影响。
 - 没有测量滚动锚点、搜索跳转、折叠状态或工具卡片展开的额外成本，也没有做真实 `requestAnimationFrame` 掉帧统计。
-- 300 turns 结束后才做长追加；没有测更长历史（600/1000 turns），虚拟化触发线是外推而非实测。
+- 300 turns 结束后才做长追加；没有测更长历史（600/1000 turns），窗口后的平坦曲线是外推而非实测。
+- 窗口按 turn 粒度切分，单个超大 turn（大量工具卡片或超长输出）不受窗口保护；逐行虚拟列表未实现，页内查找不会命中已卸载的 turn。

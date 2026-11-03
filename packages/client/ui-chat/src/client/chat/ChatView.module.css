@@ -229,7 +229,14 @@
   justify-content: center;
 }
 
-.older button {
+/* Older loaded Turns stay unmounted above the followed tail; this row reveals a page. */
+.windowBoundary {
+  display: flex;
+  justify-content: center;
+}
+
+.older button,
+.windowBoundary button {
   border: none;
   border-radius: var(--dsw-radius-sm);
   padding: 4px 12px;

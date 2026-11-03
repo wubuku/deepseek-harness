@@ -1,7 +1,7 @@
 // An enclosing `[data-conversation-scroll]` owns scrolling when present;
 // otherwise this view owns it. Each row subscribes to one stable node key.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   NodeKey, RenderEntry,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -14,7 +14,8 @@ import { isAtOrOutside } from '../contract/group-tree.ts'
 import type { ChatFlowHookContext, ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { TurnNavigator } from './TurnNavigator.tsx'
-import { mergeTurnRailItems } from './turn-rail-items.ts'
+import { mergeTurnRailItems, type TurnRailItem } from './turn-rail-items.ts'
+import { TRANSCRIPT_WINDOW_TURNS } from './chat-window.ts'
 import { useChatScroll } from './use-chat-scroll.ts'
 import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import css from './ChatView.module.css'
@@ -73,6 +74,10 @@ export function ChatView({
   // both the data and its change signal: the array identity moves only when a
   // Turn enters, leaves, or changes its preview.
   const turnNavigationItems = useChat(s => s.navigation.items())
+  const latestTurn = turnNavigationItems.at(-1)?.turn ?? null
+  // Earlier settled Turns stay out of the document once the followed tail passes
+  // the measured window; the reader reveals them a page at a time.
+  const [windowFloorTurn, setWindowFloorTurn] = useState<number | null>(null)
   // Host-computed whole-log outline; the merge is view-layer only (the
   // conversation snapshot never carries projection values).
   const turnOutline = useProjection('turnOutline')
@@ -193,6 +198,56 @@ export function ChatView({
     transcriptView,
   })
   const flowContext = useMemo<ChatFlowHookContext>(() => ({ motion: scroll.motion }), [scroll.motion])
+  // A followed tail windows synchronously, so the first commit never mounts the
+  // whole transcript. A restored reader keeps everything until it returns to the tail.
+  const followedFloorTurn = scroll.followingTail && latestTurn !== null
+    ? Math.max(1, latestTurn - TRANSCRIPT_WINDOW_TURNS + 1)
+    : null
+  const windowFloor = windowFloorTurn === null
+    ? followedFloorTurn
+    : followedFloorTurn === null ? windowFloorTurn : Math.min(windowFloorTurn, followedFloorTurn)
+  const windowSession = useRef(sessionId)
+  const windowDerivedTurn = useRef<number | null>(null)
+  // Advance the floor only while the tail is followed and only when a new Turn
+  // arrives, so returning to the bottom never re-hides Turns the reader revealed.
+  useLayoutEffect(() => {
+    const sessionChanged = windowSession.current !== sessionId
+    if (sessionChanged) {
+      windowSession.current = sessionId
+      windowDerivedTurn.current = null
+      setWindowFloorTurn(null)
+    }
+    if (!scroll.followingTail || latestTurn === null) return
+    if (!sessionChanged && windowDerivedTurn.current === latestTurn) return
+    windowDerivedTurn.current = latestTurn
+    const floor = Math.max(1, latestTurn - TRANSCRIPT_WINDOW_TURNS + 1)
+    setWindowFloorTurn(current => current === null || floor > current ? floor : current)
+  }, [sessionId, latestTurn, scroll.followingTail])
+  const showEarlierTurns = useCallback(() => {
+    if (windowFloor === null) return
+    setWindowFloorTurn(Math.max(1, windowFloor - TRANSCRIPT_WINDOW_TURNS))
+  }, [windowFloor])
+  const pendingTurnJump = useRef<TurnRailItem | null>(null)
+  // A Turn below the floor has no anchor row: reveal it first, then land after
+  // the commit that mounted it.
+  const navigateToTurn = useCallback((item: TurnRailItem) => {
+    if (windowFloor !== null && item.turn < windowFloor) {
+      pendingTurnJump.current = item
+      setWindowFloorTurn(item.turn)
+      return
+    }
+    scroll.navigateToTurn(item)
+  }, [scroll.navigateToTurn, windowFloor])
+  useLayoutEffect(() => {
+    const pending = pendingTurnJump.current
+    if (pending === null) return
+    pendingTurnJump.current = null
+    scroll.navigateToTurn(pending)
+  }, [scroll.navigateToTurn, windowFloor])
+  const loadEarlier = useCallback(() => {
+    showEarlierTurns()
+    scroll.loadEarlier()
+  }, [scroll.loadEarlier, showEarlierTurns])
 
   return (
     <div className={css.frame}>
@@ -201,7 +256,7 @@ export function ChatView({
           items={railItems}
           activeTurn={scroll.activeTurn}
           busyTurn={scroll.busyTurn}
-          onNavigate={scroll.navigateToTurn}
+          onNavigate={navigateToTurn}
           t={t}
         />
       )}
@@ -218,7 +273,7 @@ export function ChatView({
             )}
             {hasMore && (
               <div className={css.older}>
-                <button type="button" disabled={loadingOlder} onClick={scroll.loadEarlier}>
+                <button type="button" disabled={loadingOlder} onClick={loadEarlier}>
                   {loadingOlder ? t('loading') : t('chat.loadOlder')}
                 </button>
               </div>
@@ -226,6 +281,7 @@ export function ChatView({
             <MarkdownDelegateProvider openFile={requestOpenFile} openExternalLink={openExternalLink} fileImages={fileImages}>
               {renderSlot('conversation.chat.flow', {
                 entries, pendingInputs, lastInputTurn, deferCollapse,
+                windowFloorTurn: windowFloor, onShowEarlier: showEarlierTurns,
                 cwd, openFile: requestOpenFile, inspectCall, forkAt, loadImage, fileMentions,
               }, { hookContext: flowContext })}
             </MarkdownDelegateProvider>

@@ -335,6 +335,10 @@ export interface ChatFlowOwnerProps extends Pick<ChatNodeOwnerProps,
   readonly pendingInputs: readonly (PendingSubmission | InboxState['next-step'][number])[]
   readonly lastInputTurn: number | undefined
   readonly deferCollapse: boolean
+  /** Earliest Turn kept mounted; null renders every row. */
+  readonly windowFloorTurn: number | null
+  /** Reveal the next page of rows above the window floor. */
+  readonly onShowEarlier: () => void
 }
 
 /** Full props of the Chat-owned flow renderer. */
