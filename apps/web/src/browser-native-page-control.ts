@@ -10,6 +10,7 @@ import {
   browserNativeWorkspaceRefreshCopy,
   browserNativeWorkspaceRetryCopy,
   browserNativeWorkspaceStatusCopy,
+  browserNativeWorkspaceSwitcherCopy,
 } from './locales/browser-native-workspace.ts'
 import {
   BrowserNativeRecoveryLocks,
@@ -48,6 +49,20 @@ interface RecoveryBlob {
   readonly base64: string
   readonly actualHash: string
   readonly hashMatches: boolean
+}
+
+interface WorkspaceListEntry {
+  readonly workspaceId: string
+  readonly revision: number
+  readonly fileCount: number
+  readonly active: boolean
+}
+
+interface WorkspaceSwitcherElements {
+  readonly root: HTMLElement
+  readonly select: HTMLSelectElement
+  readonly create: HTMLButtonElement
+  readonly status: HTMLElement
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -248,7 +263,10 @@ async function downloadSessionBundle(workspaceId: string, sessionId: string): Pr
  * @param options - Lifecycle options for the page-owned Worker.
  * @returns A promise for a disposer that detaches listeners and closes the page port. It keeps locks; detach does not stop the Worker.
  */
-export async function connectBrowserNativePageControl(worker: Worker, options: { readonly durable?: boolean } = {}): Promise<() => void> {
+export async function connectBrowserNativePageControl(
+  worker: Worker,
+  options: { readonly durable?: boolean; readonly apiOrigin?: string } = {},
+): Promise<() => void> {
   const channel = new MessageChannel()
   const receiver = new BrowserNativeControlReceiver()
   const owners = new Map<string, string>()
@@ -324,7 +342,10 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       notice.message,
     )
     workspaceStatus.dataset.state = notice.state
-    if (notice.workspaceId !== undefined) workspaceId = notice.workspaceId
+    if (notice.workspaceId !== undefined) {
+      workspaceId = notice.workspaceId
+      void refreshWorkspaceSwitcher()
+    }
     applyLiveRegion(workspaceStatus, isBlockingWorkspaceState(notice.state) ? 'alert' : 'status')
     workspaceStatus.style.borderColor = isBlockingWorkspaceState(notice.state)
       ? '#f87171'
@@ -500,6 +521,163 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     exportControl ??= createExportControl()
     const available = owners.size > 0 && workspaceId !== undefined
     exportControl.root.hidden = !available
+  }
+  const workspaceApiUrl = (path: string): string => `${options.apiOrigin ?? ''}${path}`
+  const reloadAfterWorkspaceChange = (): void => {
+    try {
+      window.sessionStorage.clear()
+    } catch (error) {
+      console.warn('browser-native DSH: sessionStorage could not be cleared before switching Workspace', error)
+    }
+    window.location.reload()
+  }
+  let workspaceSwitcherLoaded = false
+  const createWorkspaceSwitcher = (): WorkspaceSwitcherElements => {
+    const copy = browserNativeWorkspaceSwitcherCopy(document.documentElement.lang)
+    const root = document.createElement('div')
+    root.setAttribute('data-browser-native-workspace-switcher', '')
+    Object.assign(root.style, {
+      position: 'fixed',
+      left: '16px',
+      bottom: '64px',
+      zIndex: '2147483000',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px',
+      maxWidth: 'min(360px, calc(100vw - 32px))',
+      font: '500 13px/1.4 system-ui, sans-serif',
+    })
+    const select = document.createElement('select')
+    select.setAttribute('data-browser-native-workspace-select', '')
+    select.setAttribute('aria-label', copy.label)
+    Object.assign(select.style, {
+      minWidth: '220px',
+      padding: '7px 10px',
+      border: '1px solid #526174',
+      borderRadius: '7px',
+      background: '#111827',
+      color: '#f9fafb',
+      font: '500 13px/1.3 system-ui, sans-serif',
+    })
+    const create = document.createElement('button')
+    create.type = 'button'
+    create.setAttribute('data-browser-native-workspace-create', '')
+    create.textContent = copy.create
+    Object.assign(create.style, {
+      padding: '7px 12px',
+      border: '1px solid #526174',
+      borderRadius: '7px',
+      background: '#111827',
+      color: '#f9fafb',
+      cursor: 'pointer',
+      font: '500 13px/1.3 system-ui, sans-serif',
+    })
+    const status = document.createElement('span')
+    status.setAttribute('data-browser-native-workspace-switcher-status', '')
+    applyLiveRegion(status, 'status')
+    status.style.color = '#f9fafb'
+    root.append(select, create, status)
+    document.body.append(root)
+    select.addEventListener('change', () => { void selectWorkspace(select.value) })
+    create.addEventListener('click', () => { void createWorkspace() })
+    return { root, select, create, status }
+  }
+  let workspaceSwitcher: ReturnType<typeof createWorkspaceSwitcher> | undefined
+  async function refreshWorkspaceSwitcher(force = false): Promise<void> {
+    const switcher = workspaceSwitcher ??= createWorkspaceSwitcher()
+    if (workspaceSwitcherLoaded && !force) return
+    const copy = browserNativeWorkspaceSwitcherCopy(document.documentElement.lang)
+    switcher.select.disabled = true
+    switcher.create.disabled = true
+    try {
+      const response = await fetch(workspaceApiUrl('/api/browser-native/workspace/list?protocolVersion=1'), {
+        credentials: 'include',
+        cache: 'no-store',
+      })
+      if (!response.ok) throw new Error(`Workspace list failed with HTTP ${String(response.status)}`)
+      const raw: unknown = await response.json()
+      if (!isRecord(raw) || !Array.isArray(raw.workspaces) || typeof raw.activeWorkspaceId !== 'string') {
+        throw new Error('Workspace list response is invalid')
+      }
+      const workspaces = raw.workspaces.filter((workspace): workspace is WorkspaceListEntry => isRecord(workspace)
+        && typeof workspace.workspaceId === 'string' && Number.isSafeInteger(workspace.revision)
+        && Number.isSafeInteger(workspace.fileCount) && typeof workspace.active === 'boolean')
+      switcher.select.replaceChildren()
+      if (workspaces.length === 0) {
+        const option = document.createElement('option')
+        option.value = ''
+        option.textContent = copy.empty
+        switcher.select.append(option)
+        switcher.select.disabled = true
+      } else {
+        for (const workspace of workspaces) {
+          const option = document.createElement('option')
+          option.value = workspace.workspaceId
+          option.textContent = `${workspace.workspaceId.slice(0, 8)} · ${copy.fileCount(workspace.fileCount)} · r${String(workspace.revision)}`
+          switcher.select.append(option)
+        }
+        switcher.select.value = raw.activeWorkspaceId
+      }
+      switcher.status.textContent = ''
+      workspaceSwitcherLoaded = true
+    } catch (error) {
+      switcher.status.textContent = copy.loadFailed
+      console.warn('browser-native DSH: Workspace switcher could not load its list', error)
+    } finally {
+      if (workspaceSwitcherLoaded && switcher.select.options.length > 0) switcher.select.disabled = false
+      switcher.create.disabled = false
+    }
+  }
+  async function selectWorkspace(targetWorkspaceId: string): Promise<void> {
+    if (targetWorkspaceId.length === 0 || targetWorkspaceId === workspaceId) return
+    const switcher = workspaceSwitcher
+    if (switcher === undefined) return
+    const copy = browserNativeWorkspaceSwitcherCopy(document.documentElement.lang)
+    switcher.select.disabled = true
+    switcher.create.disabled = true
+    try {
+      const response = await fetch(workspaceApiUrl('/api/browser-native/workspace/select'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: globalThis.crypto.randomUUID(),
+          workspaceId: targetWorkspaceId,
+        }),
+      })
+      if (!response.ok) throw new Error(`Workspace select failed with HTTP ${String(response.status)}`)
+      reloadAfterWorkspaceChange()
+    } catch (error) {
+      switcher.status.textContent = copy.switchFailed
+      console.warn('browser-native DSH: Workspace could not be selected', error)
+      await refreshWorkspaceSwitcher(true)
+    }
+  }
+  async function createWorkspace(): Promise<void> {
+    const switcher = workspaceSwitcher
+    if (switcher === undefined) return
+    const copy = browserNativeWorkspaceSwitcherCopy(document.documentElement.lang)
+    switcher.select.disabled = true
+    switcher.create.disabled = true
+    try {
+      const response = await fetch(workspaceApiUrl('/api/browser-native/workspace/create'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: globalThis.crypto.randomUUID(),
+        }),
+      })
+      if (!response.ok) throw new Error(`Workspace create failed with HTTP ${String(response.status)}`)
+      reloadAfterWorkspaceChange()
+    } catch (error) {
+      switcher.status.textContent = copy.createFailed
+      console.warn('browser-native DSH: a new Workspace could not be created', error)
+      switcher.select.disabled = false
+      switcher.create.disabled = false
+    }
   }
   const publishLocalStatus = (state: BrowserNativeWorkspaceStatus['state'], message?: string): void => {
     const notice: BrowserNativeWorkspaceStatus = {
@@ -755,5 +933,6 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     workspaceStatus?.remove()
     queueStatus?.remove()
     exportControl?.root.remove()
+    workspaceSwitcher?.root.remove()
   }
 }

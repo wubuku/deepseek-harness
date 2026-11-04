@@ -145,6 +145,12 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。事实核查进一步说明：VFS、结构化 command provider、WASI adapter 和 Shell/VM runtime 是不同层，当前 PoC 只验证前两层。
 
+## 多 Workspace 管理
+
+浏览器原生模式的左下角提供 Workspace 切换器：列出当前 principal 拥有的 Workspace（短 id、文件数、revision），可新建或切换。切换沿用同一 principal cookie，只更新服务端记录的 active Workspace，然后刷新页面；刷新前清空本标签页的 `sessionStorage` 恢复记录，避免旧 Workspace 的 lease/receipt 被新 Worker 恢复。每个 Worker 启动时只读取 active Workspace 的 manifest，切换前后的文件与 Session 不共享；backend 仍按 `workspaceId` 的 owner 授权，跨 principal 的显式 Workspace id 返回 403/404，writer lease 仍按 Workspace 独立计量。
+
+证据：`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 覆盖列表、创建、切换、文件数、跨 principal 隔离与切换后旧 Workspace 不含新文件；`node docs/drafts/browser-native-dsh-poc/tests/workspace-switching.e2e.mjs` 在 Chrome 中通过点击“新建工作区”得到空 Workspace、再切回原 Workspace 并恢复其文件，输出 `{"result":"passed","firstWorkspaceId":"...","secondWorkspaceId":"...","switchedBack":true}`。
+
 ## 完整性与生命周期验证
 
 [本地写权与代际计划](local-writer-fencing-validation-plan.md)及[实际进度](local-writer-fencing-validation-progress.md)验证多 Worker 的共享 OPFS/IndexedDB 安全：snapshot 具有独立本地 generation，writer 具有一次性实例身份和 epoch，接管后旧实例不能通过 load 恢复权限。远端 lease 模式在取得本地操作锁后重新核对服务端写权；observer 不接管本地 metadata。本地写权不替代 backend lease 或身份授权。

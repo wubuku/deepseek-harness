@@ -352,7 +352,11 @@ async function bootBrowserNativePreview(): Promise<void> {
     if (!browserNative || !pageLifecycle.unloading) {
       const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
       const apiOrigin = browserNative ? await browserNativeApiOrigin() : undefined
-      if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
+      if (browserNative) {
+        await connectBrowserNativePageControl(currentWorker, apiOrigin === undefined
+          ? { durable: browserNativeDurable }
+          : { durable: browserNativeDurable, apiOrigin })
+      }
       if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker, apiOrigin)
       if (browserNative && prepared === undefined) markBoot('workerProbed')
       markBoot('hostConnectStart')

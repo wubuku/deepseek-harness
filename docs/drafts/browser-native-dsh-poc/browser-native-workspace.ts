@@ -295,7 +295,10 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
       if (typeof identity.workspaceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(identity.workspaceId)) {
         throw new Error('browser-native workspace: identity response omitted a workspace id')
       }
-      if (hasLocalWorkspaceData && !localWorkspaceIds.includes(identity.workspaceId)) {
+      const workspaceIds = Array.isArray(identity.workspaceIds)
+        ? identity.workspaceIds.filter(value => typeof value === 'string')
+        : [identity.workspaceId]
+      if (hasLocalWorkspaceData && !localWorkspaceIds.some(id => workspaceIds.includes(id))) {
         throw new WorkspaceIdentityError('identity-mismatch', 'The local Workspace cache belongs to a different browser identity')
       }
       this.workspaceId = identity.workspaceId

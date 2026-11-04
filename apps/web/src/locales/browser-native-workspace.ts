@@ -44,6 +44,31 @@ const messages: Record<'en' | 'zh', Record<WorkspaceState, string>> = {
   },
 }
 
+/** Format the Workspace switcher labels for the page language.
+ * @param language - Page language tag.
+ * @returns Localized label, create action, file-count formatter, and failure text.
+ */
+export function browserNativeWorkspaceSwitcherCopy(language: string): {
+  readonly label: string
+  readonly create: string
+  readonly empty: string
+  readonly loadFailed: string
+  readonly createFailed: string
+  readonly switchFailed: string
+  readonly fileCount: (count: number) => string
+} {
+  const zh = language.startsWith('zh')
+  return {
+    label: zh ? '工作区' : 'Workspace',
+    create: zh ? '新建工作区' : 'New workspace',
+    empty: zh ? '没有可用工作区' : 'No workspaces available',
+    loadFailed: zh ? '无法加载工作区列表' : 'Could not load workspaces',
+    createFailed: zh ? '无法创建工作区' : 'Could not create a workspace',
+    switchFailed: zh ? '无法切换工作区' : 'Could not switch workspace',
+    fileCount: count => zh ? `${String(count)} 个文件` : `${String(count)} files`,
+  }
+}
+
 /** Format the opt-in preview's Workspace sync notice for the page language.
  * @param state - Current synchronization state.
  * @param language - Page language tag.

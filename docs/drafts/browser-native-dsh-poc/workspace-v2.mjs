@@ -633,11 +633,80 @@ export class WorkspaceStore {
     const cookieOptions = `Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
     return {
       workspaceId,
+      workspaceIds: this.ownedWorkspaceIds(principalId),
       cookies: [
         `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; ${cookieOptions}`,
         `${SESSION_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session; ${cookieOptions}`,
       ],
     }
+  }
+
+  ownedWorkspaceIds(principalId) {
+    return [...this.workspaces.values()]
+      .filter(workspace => workspace.owner === principalId)
+      .map(workspace => workspace.id)
+      .sort()
+  }
+
+  workspaceSummary(workspace) {
+    const activeWorkspaceId = this.identities.get(workspace.owner)
+    return {
+      workspaceId: workspace.id,
+      revision: workspace.revision,
+      fileCount: [...workspace.entries.values()].filter(entry => entry.kind === 'file').length,
+      active: workspace.id === activeWorkspaceId,
+    }
+  }
+
+  /**
+   * List every Workspace owned by the browser principal.
+   * @param {object} request - Request carrying the browser principal cookie.
+   * @returns {object} Active workspace id plus per-workspace revision, file count, and active flag.
+   */
+  listWorkspaces(request) {
+    const principalId = this.principalFromRequest(request)
+    return {
+      activeWorkspaceId: this.workspaceIdForPrincipal(principalId),
+      workspaces: [...this.workspaces.values()]
+        .filter(workspace => workspace.owner === principalId)
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(workspace => this.workspaceSummary(workspace)),
+    }
+  }
+
+  async createWorkspace(request) {
+    const principalId = this.principalFromRequest(request)
+    const workspaceId = randomUUID()
+    await this.exclusive('identities', async () => {
+      const workspace = {
+        id: workspaceId, owner: principalId, revision: 0,
+        entries: new Map(), operations: new Map(), uploadedHashes: new Set(), uploadedAt: new Map(),
+        writerEpoch: 0, writerToken: undefined, writerExpiresAt: 0,
+      }
+      const identities = new Map(this.identities).set(principalId, workspaceId)
+      await this.persistWorkspace(workspace)
+      await this.writeIdentities(identities)
+      this.workspaces.set(workspaceId, workspace)
+      this.identities = identities
+    })
+    return { activeWorkspaceId: workspaceId, workspace: this.workspaceSummary(this.workspaces.get(workspaceId)) }
+  }
+
+  async selectWorkspace(request, workspaceId) {
+    const principalId = this.principalFromRequest(request)
+    assertId(workspaceId, 'workspaceId')
+    const workspace = this.workspaces.get(workspaceId)
+    if (workspace === undefined || workspace.owner !== principalId) {
+      throw new WorkspaceError('WORKSPACE_NOT_FOUND', 'workspace does not exist', 404)
+    }
+    if (this.identities.get(principalId) !== workspaceId) {
+      await this.exclusive('identities', async () => {
+        const identities = new Map(this.identities).set(principalId, workspaceId)
+        await this.writeIdentities(identities)
+        this.identities = identities
+      })
+    }
+    return { activeWorkspaceId: workspaceId, workspace: this.workspaceSummary(workspace) }
   }
 
   lookupIdentity(request) {
@@ -646,17 +715,15 @@ export class WorkspaceStore {
     if (workspaceId === undefined) {
       throw new WorkspaceError('UNAUTHENTICATED', 'existing workspace identity is missing or expired', 401)
     }
-    return { workspaceId }
+    return { workspaceId, workspaceIds: this.ownedWorkspaceIds(principalId) }
   }
 
   requireWorkspace(principalId, workspaceId) {
     assertId(workspaceId, 'workspaceId')
-    if (this.identities.get(principalId) !== workspaceId) {
-      throw new WorkspaceError('WORKSPACE_FORBIDDEN', 'workspace is not available to this browser identity', 403)
-    }
     const workspace = this.workspaces.get(workspaceId)
-    if (workspace === undefined || workspace.owner !== principalId) {
-      throw new WorkspaceError('WORKSPACE_NOT_FOUND', 'workspace does not exist', 404)
+    if (workspace === undefined) throw new WorkspaceError('WORKSPACE_NOT_FOUND', 'workspace does not exist', 404)
+    if (workspace.owner !== principalId) {
+      throw new WorkspaceError('WORKSPACE_FORBIDDEN', 'workspace is not available to this browser identity', 403)
     }
     return workspace
   }

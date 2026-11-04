@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-113：多 Workspace 列表、创建与切换
+
+```text
+changeId: BN-P2-113
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-switching.e2e.mjs; apps/web/src/browser-native-page-control.ts; apps/web/src/preview.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: browser-native 模式每个 principal 只有一个隐式 Workspace，无法分区不同项目，也无法验证切换时数据、Session 与 lease 是否隔离。
+existingExtensionPointsChecked: 复用既有 principal cookie、Workspace owner 授权、manifest/commit/lease、Worker identity 与页面状态条；未改变 Session 格式、upload 协议或 Workspace blob 布局。
+whyDraftOnlyWasInsufficient: 单 Workspace identity 无法表达“owned workspace 集合”和 active 选择；仅前端切换会继续把旧 Workspace 的本地缓存当成本地身份。
+behaviorChange: 新增 `GET /workspace/list`、`POST /workspace/create`、`POST /workspace/select`；principal 可拥有多个 Workspace，显式 `workspaceId` 按 owner 授权（同 owner 的 inactive Workspace 可访问，跨 owner 仍 403）。`/workspace/identity` 增加 `workspaceIds`；Worker 的本地缓存身份检查改为“本地记录中至少一个 Workspace 属于当前 principal”。页面左下角新增 Workspace 列表、新建与切换控件，切换后清空本标签页 sessionStorage 再刷新。
+consumersUpdated: `BrowserNativePageControl` 接收 `apiOrigin` 以便分源时调用 API；新增本地化 switcher 文案；README 增加多 Workspace 管理说明。
+decision: 采用“同一 principal 多 Workspace + 单一 active 指针”，不做独立账号体系。切换通过整页刷新重建 Worker，避免在同一 Worker 内热替换 VFS 与 Session；lease 仍按 Workspace id 独立持有，切换不迁移 lease。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 66 项通过，新增 list/create/select、文件计数、切回后旧文件不可见、跨 principal 列表隔离与 404 用例；`node docs/drafts/browser-native-dsh-poc/tests/workspace-switching.e2e.mjs` 通过：新建 Workspace 为空、切回原 Workspace 恢复 `notes/only-in-first.txt` 与 revision；`node docs/drafts/browser-native-dsh-poc/tests/browser-native-v2.e2e.mjs` 通过（请求含 `/workspace/list`）。
+syncReplaySteps: 上游同步后重跑上述三条命令；若改变 active/owned 语义，同步更新 README 与本文。
+deleteCondition: 引入真正的多用户 Workspace 分区或账号切换后，重新设计 principal 与 Workspace 关系。
+status: implemented
+```
+
 ### BN-P2-112：Workspace 冷同步分页与 blob 批量
 
 ```text

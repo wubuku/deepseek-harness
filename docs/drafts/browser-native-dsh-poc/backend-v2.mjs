@@ -5033,7 +5033,23 @@ export async function createBrowserNativeV2Server(options) {
           return
         }
         const identity = await workspaces.openIdentity(request, request.socket.encrypted === true)
-        sendJson(response, 200, { workspaceId: identity.workspaceId }, { 'set-cookie': identity.cookies })
+        sendJson(response, 200, { workspaceId: identity.workspaceId, workspaceIds: identity.workspaceIds }, { 'set-cookie': identity.cookies })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/list') {
+        sendJson(response, 200, workspaces.listWorkspaces(request))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/create') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.createWorkspace(request))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/select') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.selectWorkspace(request, body.workspaceId))
         return
       }
       const attachmentMatch = url.pathname.match(/^\/api\/browser-native\/workspace\/attachments\/([a-f0-9]{64})$/)

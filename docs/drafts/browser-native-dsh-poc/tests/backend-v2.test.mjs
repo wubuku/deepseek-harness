@@ -1715,6 +1715,65 @@ describe('browser-native DSH v2 backend', () => {
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes)
   })
 
+  it('lists, creates, and switches Workspaces without mixing their data', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const created = await fetch(`${origin}/api/browser-native/workspace/create`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: identity.cookie },
+      body: JSON.stringify(envelope('workspace-create', {})),
+    })
+    const createdBody = await created.json()
+    assert.equal(created.status, 200, JSON.stringify(createdBody))
+    assert.notEqual(createdBody.activeWorkspaceId, identity.workspaceId)
+    const second = { ...identity, workspaceId: createdBody.activeWorkspaceId }
+    const content = Buffer.from('second workspace only\n')
+    const uploaded = await uploadWorkspaceBlob(origin, second, content)
+    const committed = await postWorkspace(origin, second, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes: [{ path: 'only-in-second.txt', kind: 'file', hash: uploaded.hash, bytes: uploaded.bytes, mode: 0o600 }],
+    })
+    assert.equal(committed.response.status, 200, JSON.stringify(committed.value))
+
+    const listResponse = await fetch(`${origin}/api/browser-native/workspace/list?protocolVersion=1`, {
+      headers: { cookie: identity.cookie },
+    })
+    const list = await listResponse.json()
+    assert.equal(listResponse.status, 200)
+    assert.equal(list.activeWorkspaceId, second.workspaceId)
+    assert.equal(list.workspaces.length, 2)
+    assert.deepEqual(list.workspaces.map(workspace => workspace.active).sort(), [false, true])
+    assert.equal(list.workspaces.find(workspace => workspace.workspaceId === second.workspaceId).fileCount, 1)
+    assert.equal(list.workspaces.find(workspace => workspace.workspaceId === identity.workspaceId).fileCount, 0)
+
+    const switched = await fetch(`${origin}/api/browser-native/workspace/select`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: identity.cookie },
+      body: JSON.stringify(envelope('workspace-select', { workspaceId: identity.workspaceId })),
+    })
+    assert.equal(switched.status, 200)
+    assert.equal((await switched.json()).activeWorkspaceId, identity.workspaceId)
+    const firstManifest = await (await fetch(
+      `${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${identity.workspaceId}`,
+      { headers: { cookie: identity.cookie } },
+    )).json()
+    assert.equal(firstManifest.entries.some(entry => entry.path === 'only-in-second.txt'), false)
+
+    const otherIdentity = await openWorkspaceIdentity(origin)
+    const otherList = await (await fetch(`${origin}/api/browser-native/workspace/list?protocolVersion=1`, {
+      headers: { cookie: otherIdentity.cookie },
+    })).json()
+    assert.deepEqual(otherList.workspaces.map(workspace => workspace.workspaceId), [otherIdentity.workspaceId])
+    const foreignSelect = await fetch(`${origin}/api/browser-native/workspace/select`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: otherIdentity.cookie },
+      body: JSON.stringify(envelope('workspace-select-foreign', { workspaceId: identity.workspaceId })),
+    })
+    assert.equal(foreignSelect.status, 404)
+  })
+
   it('pages the workspace manifest and returns referenced blobs in one batch', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })
