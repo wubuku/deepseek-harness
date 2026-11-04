@@ -1049,6 +1049,8 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-own
 
 Chrome 155.0.8059.85 在同一 browser context 中执行 A→B→A 身份切换，不清除 OPFS/IndexedDB。A 和 B 使用不同 Workspace ID，在相同路径写入不同内容；B 的 Session catalog、已知 A Session、Workspace manifest 与 DSH 文件读取均不能访问 A 的数据。A、B 各自刷新后都恢复自己的 Session、manifest 与 Worker 文件缓存，Workspace revision/hash 相互独立。当前身份来自 PoC 自动签发 endpoint，不是登录或生产租户授权；不能抵御 XSS、同源恶意代码、身份签发滥用或 Cookie 窃取。
 
+backend 接受可选的 `hostedAuth`（HS256 JWT，校验 issuer、audience、exp、nbf，共享密钥至少 32 字节）。`POST /api/browser-native/auth/exchange` 把已验证 token 的 `sha256(issuer\nsub)` 映射为 UUID 形状的 principal，首次换取为其 provision Workspace 并设置两个 Path-scoped HttpOnly cookie，重复换取复用同一 Workspace。请求带 `Authorization` 时只认 bearer，token 无效直接 401 且不回退 cookie；未 exchange 的 token 访问 API 仍为 401。Workspace 列表、manifest、commit、Session、附件与 lease 继续按该 principal 授权，拒绝审计记录到映射后的 principal digest。合同测试见 `tests/backend-v2.test.mjs` 的 `hosted multi-user authentication` 用例。
+
 复跑身份隔离与真实模型回归：
 
 ```sh

@@ -6,7 +6,7 @@
  * or an OpenAI-compatible upstream. Credentials are loaded only in this Node
  * process and are never included in responses or logs.
  */
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { createServer } from 'node:http'
 import { chmod, link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -4407,6 +4407,104 @@ async function serveStatic(response, root, pathname) {
   response.end(body)
 }
 
+const HOSTED_TOKEN_MAX_BYTES = 8_192
+const HOSTED_SECRET_MIN_BYTES = 32
+const HOSTED_CLOCK_TOLERANCE_SECONDS = 30
+
+function unauthenticated(message) {
+  return new WorkspaceError('UNAUTHENTICATED', message, 401)
+}
+
+function decodeHostedSegment(segment) {
+  try {
+    const parsed = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'))
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Map a token subject to a stable UUID-shaped principal id.
+ * The shape keeps the existing Workspace/Session persistence validation intact
+ * while never storing the raw subject in cookies or on disk.
+ * @param {string} issuer - Verified issuer claim.
+ * @param {string} subject - Verified subject claim.
+ * @returns {string} UUID-shaped principal id.
+ */
+function hostedPrincipalId(issuer, subject) {
+  const hex = createHash('sha256').update(`${issuer}\n${subject}`).digest('hex')
+  const variant = ((Number.parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`
+}
+
+function audienceMatches(audience, expected) {
+  if (typeof audience === 'string') return audience === expected
+  return Array.isArray(audience) && audience.includes(expected)
+}
+
+/**
+ * Verify HS256 JWTs carrying issuer, audience, subject, and expiry claims.
+ * A request without an Authorization header stays anonymous; anything else
+ * fails closed with 401 before the cookie path is considered.
+ * @param {{issuer: string, audience: string, secret: string, clockToleranceSeconds?: number, now?: () => number}} options - Verifier configuration.
+ * @returns {{principalFromRequest: (request: object) => string | undefined}} Authenticator.
+ */
+function createHostedAuthenticator(options) {
+  if (options === null || typeof options !== 'object') throw new TypeError('hostedAuth must be an object')
+  if (typeof options.issuer !== 'string' || options.issuer.length === 0) {
+    throw new TypeError('hostedAuth.issuer must be a non-empty string')
+  }
+  if (typeof options.audience !== 'string' || options.audience.length === 0) {
+    throw new TypeError('hostedAuth.audience must be a non-empty string')
+  }
+  if (typeof options.secret !== 'string' || Buffer.byteLength(options.secret) < HOSTED_SECRET_MIN_BYTES) {
+    throw new TypeError(`hostedAuth.secret must contain at least ${String(HOSTED_SECRET_MIN_BYTES)} bytes`)
+  }
+  const toleranceSeconds = options.clockToleranceSeconds ?? HOSTED_CLOCK_TOLERANCE_SECONDS
+  if (!Number.isSafeInteger(toleranceSeconds) || toleranceSeconds < 0 || toleranceSeconds > 3_600) {
+    throw new TypeError('hostedAuth.clockToleranceSeconds must be an integer from 0 through 3600')
+  }
+  const toleranceMs = toleranceSeconds * 1_000
+  const now = options.now ?? Date.now
+  return {
+    principalFromRequest(request) {
+      const header = request.headers.authorization
+      if (header === undefined) return undefined
+      const match = /^Bearer ([^ ]+)$/.exec(header)
+      if (match === null) throw unauthenticated('authorization header must contain one Bearer token')
+      const token = match[1]
+      if (Buffer.byteLength(token) > HOSTED_TOKEN_MAX_BYTES) throw unauthenticated('hosted token is too large')
+      const segments = token.split('.')
+      if (segments.length !== 3) throw unauthenticated('hosted token is not a compact JWT')
+      const [head, payload, signature] = segments
+      const tokenHeader = decodeHostedSegment(head)
+      if (tokenHeader?.alg !== 'HS256' || (tokenHeader.typ !== undefined && tokenHeader.typ !== 'JWT')) {
+        throw unauthenticated('hosted token must use the HS256 algorithm')
+      }
+      const expected = createHmac('sha256', options.secret).update(`${head}.${payload}`).digest()
+      const actual = Buffer.from(signature, 'base64url')
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+        throw unauthenticated('hosted token signature is invalid')
+      }
+      const claims = decodeHostedSegment(payload)
+      if (claims === undefined || claims.iss !== options.issuer) throw unauthenticated('hosted token issuer is invalid')
+      if (!audienceMatches(claims.aud, options.audience)) throw unauthenticated('hosted token audience is invalid')
+      if (typeof claims.sub !== 'string' || claims.sub.length === 0 || claims.sub.length > 256) {
+        throw unauthenticated('hosted token subject is invalid')
+      }
+      if (!Number.isSafeInteger(claims.exp)) throw unauthenticated('hosted token expiry is missing')
+      const current = now()
+      if (current > claims.exp * 1_000 + toleranceMs) throw unauthenticated('hosted token has expired')
+      if (claims.nbf !== undefined
+        && (!Number.isSafeInteger(claims.nbf) || current < claims.nbf * 1_000 - toleranceMs)) {
+        throw unauthenticated('hosted token is not valid yet')
+      }
+      return hostedPrincipalId(options.issuer, claims.sub)
+    },
+  }
+}
+
 /**
  * Create the PoC server. Verified downloads require explicit chunk-object mode.
  * @param {object} options - Server configuration; workspaceVerifiedDownloads defaults
@@ -4415,6 +4513,7 @@ async function serveStatic(response, root, pathname) {
  * Reader limits include verification; deadlines include verification and transmission.
  * Cancellation destroys the connection immediately; in-progress descriptor/chunk
  * verification finishes before its returned reader can be closed and its slot released.
+ * `hostedAuth` maps verified HS256 JWTs to stable principals; it is off by default.
  * @returns {Promise<object>} Server and stores; close waits for download cleanup.
  */
 export async function createBrowserNativeV2Server(options) {
@@ -4563,12 +4662,14 @@ export async function createBrowserNativeV2Server(options) {
     failFlushAfterRename: options.testHooks?.failSessionFlushAfterRename,
   })
   await store.load()
+  const hostedAuth = options.hostedAuth === undefined ? undefined : createHostedAuthenticator(options.hostedAuth)
   const workspaces = new WorkspaceStore(options.dataDir, {
     writerLeaseMs: options.testHooks?.workspaceWriterLeaseMs,
     now: options.testHooks?.workspaceNow ?? options.testHooks?.now,
     pendingUploadTtlMs: options.pendingUploadTtlMs,
     blobStore: options.workspaceBlobStore,
     chunkObjects: options.workspaceChunkObjects === true,
+    hostedAuth,
   })
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
@@ -4629,8 +4730,7 @@ export async function createBrowserNativeV2Server(options) {
   const accessAuditEntries = []
   const recordAccessDenial = (url, request, error) => {
     const status = typeof error.status === 'number' ? error.status : 500
-    const principal = requestCookie(request.headers.cookie, 'dsh-browser-native-principal')
-      ?? requestCookie(request.headers.cookie, 'dsh-browser-native-session-principal')
+    const principal = workspaces.auditPrincipal(request)
     if (!(status === 401 || status === 403 || (status === 404 && principal !== undefined))) return
     const entry = {
       at: Date.now(),
@@ -5025,6 +5125,19 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, {
           entries: sessionId === null ? usageAudit : usageAudit.filter(entry => entry.sessionId === sessionId),
         })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/auth/exchange') {
+        const principalId = workspaces.hostedPrincipalFor(request)
+        if (principalId === undefined) {
+          throw new WorkspaceError('UNAUTHENTICATED', 'token exchange requires a Bearer token', 401)
+        }
+        const identity = await workspaces.bindHostedPrincipal(principalId, request.socket.encrypted === true)
+        sendJson(response, 200, {
+          principalId,
+          workspaceId: identity.workspaceId,
+          workspaceIds: identity.workspaceIds,
+        }, { 'set-cookie': identity.cookies })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/identity') {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -3659,6 +3659,181 @@ describe('browser-native DSH v2 backend', () => {
     const { origin } = await start({ dataDir, llmMode: 'scripted', admission: false })
     const response = await fetch(`${origin}/api/browser-native/admission`)
     assert.equal(response.status, 404)
+  })
+})
+
+describe('hosted multi-user authentication', () => {
+  const issuer = 'https://idp.example/dsh'
+  const audience = 'dsh-browser-native'
+  const secret = 'hosted-test-secret-0123456789abcdef'
+
+  function hostedToken(subject, claims = {}) {
+    const current = Math.floor(Date.now() / 1_000)
+    const head = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+    const payload = Buffer.from(JSON.stringify({
+      iss: issuer, aud: audience, sub: subject, iat: current, exp: current + 300, ...claims,
+    })).toString('base64url')
+    return `${head}.${payload}.${createHmac('sha256', secret).update(`${head}.${payload}`).digest('base64url')}`
+  }
+
+  const bearer = token => ({ authorization: `Bearer ${token}` })
+
+  async function exchange(origin, token) {
+    const response = await fetch(`${origin}/api/browser-native/auth/exchange`, { method: 'POST', headers: bearer(token) })
+    const body = await response.json()
+    assert.equal(response.status, 200, JSON.stringify(body))
+    const cookies = response.headers.getSetCookie()
+    assert.equal(cookies.length, 2)
+    return { ...body, cookie: cookies[0].split(';', 1)[0], sessionCookie: cookies[1].split(';', 1)[0] }
+  }
+
+  it('maps tokens to isolated principals across workspace, session, attachment, lease, and audit boundaries', async () => {
+    const dataDir = await temporaryDirectory()
+    const denials = []
+    const { origin } = await start({
+      dataDir,
+      llmMode: 'scripted',
+      hostedAuth: { issuer, audience, secret },
+      accessAuditSink: entry => denials.push(entry),
+    })
+    const alice = await exchange(origin, hostedToken('alice'))
+    const bob = await exchange(origin, hostedToken('bob'))
+    assert.notEqual(alice.principalId, bob.principalId)
+    assert.notEqual(alice.workspaceId, bob.workspaceId)
+    assert.match(alice.principalId,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      'the mapped principal keeps the persisted UUID shape')
+    const repeated = await exchange(origin, hostedToken('alice'))
+    assert.equal(repeated.principalId, alice.principalId)
+    assert.equal(repeated.workspaceId, alice.workspaceId)
+
+    for (const invalid of [
+      `${hostedToken('alice').slice(0, -6)}forged`,
+      hostedToken('alice', { exp: Math.floor(Date.now() / 1_000) - 120 }),
+      hostedToken('alice', { aud: 'another-service' }),
+      hostedToken('alice', { iss: 'https://evil.example' }),
+      hostedToken('alice', { nbf: Math.floor(Date.now() / 1_000) + 120 }),
+    ]) {
+      const response = await fetch(`${origin}/api/browser-native/auth/exchange`, {
+        method: 'POST', headers: bearer(invalid),
+      })
+      assert.equal(response.status, 401)
+    }
+    const withoutToken = await fetch(`${origin}/api/browser-native/auth/exchange`, { method: 'POST' })
+    assert.equal(withoutToken.status, 401, 'token exchange must not mint an anonymous principal')
+
+    const listFor = async token => await (await fetch(`${origin}/api/browser-native/workspace/list`, {
+      headers: bearer(token),
+    })).json()
+    assert.deepEqual((await listFor(hostedToken('alice'))).workspaces.map(workspace => workspace.workspaceId),
+      [alice.workspaceId])
+    assert.deepEqual((await listFor(hostedToken('bob'))).workspaces.map(workspace => workspace.workspaceId),
+      [bob.workspaceId])
+    const carol = hostedToken('carol')
+    const unprovisioned = await fetch(`${origin}/api/browser-native/workspace/list`, { headers: bearer(carol) })
+    assert.equal(unprovisioned.status, 401, 'a verified token still needs exchange before API access')
+
+    const content = 'hosted principal isolation\n'
+    const hash = createHash('sha256').update(content).digest('hex')
+    const blob = await fetch(`${origin}/api/browser-native/workspace/blob/${hash}`, {
+      method: 'PUT',
+      headers: {
+        ...bearer(hostedToken('alice')),
+        'x-browser-native-protocol': '1',
+        'x-workspace-id': alice.workspaceId,
+        'x-request-id': randomUUID(),
+        'content-type': 'application/octet-stream',
+      },
+      body: Buffer.from(content),
+    })
+    assert.equal(blob.status, 200, await blob.text())
+    const commit = await fetch(`${origin}/api/browser-native/workspace/commit`, {
+      method: 'POST',
+      headers: { ...bearer(hostedToken('alice')), 'content-type': 'application/json' },
+      body: JSON.stringify(envelope(randomUUID(), {
+        workspaceId: alice.workspaceId,
+        operationId: randomUUID(),
+        baseRevision: 0,
+        changes: [{ kind: 'file', path: 'notes/hosted-only.txt', hash, bytes: Buffer.byteLength(content), mode: 0o644 }],
+      })),
+    })
+    assert.equal(commit.status, 200, await commit.text())
+    const aliceManifest = await fetch(
+      `${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${alice.workspaceId}`,
+      { headers: bearer(hostedToken('alice')) })
+    assert.equal(aliceManifest.status, 200)
+    const bobManifest = await fetch(
+      `${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${alice.workspaceId}`,
+      { headers: bearer(hostedToken('bob')) })
+    assert.equal(bobManifest.status, 403)
+    const aliceManifestByCookie = await fetch(
+      `${origin}/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${alice.workspaceId}`,
+      { headers: { cookie: alice.cookie } })
+    assert.equal(aliceManifestByCookie.status, 200, 'exchanged cookies must keep working')
+
+    const aliceSession = { sessionId: 'hosted-alice-session', header: header('hosted-alice-session') }
+    const created = await postWithCookie(origin, '/api/browser-native/session/create',
+      envelope(randomUUID(), aliceSession), alice.sessionCookie)
+    const tokenSession = { sessionId: 'hosted-alice-token-session', header: header('hosted-alice-token-session') }
+    const createdWithToken = await fetch(`${origin}/api/browser-native/session/create`, {
+      method: 'POST',
+      headers: { ...bearer(hostedToken('alice')), 'content-type': 'application/json' },
+      body: JSON.stringify(envelope(randomUUID(), tokenSession)),
+    })
+    assert.equal(createdWithToken.status, 200, await createdWithToken.text())
+    const bobStat = await fetch(`${origin}/api/browser-native/session/stat`, {
+      method: 'POST',
+      headers: { ...bearer(hostedToken('bob')), 'content-type': 'application/json' },
+      body: JSON.stringify(envelope(randomUUID(), { sessionId: aliceSession.sessionId })),
+    })
+    assert.equal(bobStat.status, 404, 'foreign Sessions stay invisible under hosted auth')
+    assert.equal(created.sessionId, aliceSession.sessionId)
+
+    const begin = await fetch(
+      `${origin}/api/browser-native/workspace/attachments/${hash}/uploads?workspaceId=${alice.workspaceId}&name=hosted.txt`,
+      {
+        method: 'POST',
+        headers: { ...bearer(hostedToken('alice')), 'content-type': 'application/json' },
+        body: JSON.stringify({ bytes: Buffer.byteLength(content) }),
+      })
+    const begun = await begin.json()
+    assert.equal(begin.status, 200, JSON.stringify(begun))
+    const uploadId = begun.uploadId
+    const chunk = await fetch(
+      `${origin}/api/browser-native/workspace/attachments/${hash}/uploads/${uploadId}/chunks/0?workspaceId=${alice.workspaceId}`,
+      {
+        method: 'PUT',
+        headers: { ...bearer(hostedToken('alice')), 'content-type': 'application/octet-stream' },
+        body: Buffer.from(content),
+      })
+    assert.equal(chunk.status, 200, await chunk.text())
+    const bobAttachment = await fetch(
+      `${origin}/api/browser-native/workspace/attachments/${hash}?workspaceId=${alice.workspaceId}`,
+      { headers: bearer(hostedToken('bob')) })
+    assert.equal(bobAttachment.status, 403, 'attachments follow Workspace ownership')
+
+    const leaseBody = envelope(randomUUID(), { workspaceId: alice.workspaceId, operation: 'claim', holderId: 'hosted-alice-holder' })
+    const claim = await fetch(`${origin}/api/browser-native/workspace/lease`, {
+      method: 'POST',
+      headers: { ...bearer(hostedToken('alice')), 'content-type': 'application/json' },
+      body: JSON.stringify(leaseBody),
+    })
+    const claimed = await claim.json()
+    assert.equal(claim.status, 200, JSON.stringify(claimed))
+    assert.equal(claimed.fencingToken, 1)
+    const bobLease = await fetch(`${origin}/api/browser-native/workspace/lease`, {
+      method: 'POST',
+      headers: { ...bearer(hostedToken('bob')), 'content-type': 'application/json' },
+      body: JSON.stringify(envelope(randomUUID(), { workspaceId: alice.workspaceId, operation: 'claim', holderId: 'hosted-bob-holder' })),
+    })
+    assert.equal(bobLease.status, 403, 'a foreign principal cannot take the writer lease')
+
+    const bobDigest = createHash('sha256').update(bob.principalId).digest('hex').slice(0, 16)
+    const denial = denials.find(entry => entry.route === '/api/browser-native/workspace/manifest' && entry.status === 403)
+    assert.equal(denial?.principalDigest, bobDigest, 'denials are attributed to the mapped principal')
+    const unauthenticatedDenial = denials.find(entry => entry.status === 401)
+    assert.equal(unauthenticatedDenial?.principalDigest, null, 'invalid tokens are audited without a principal digest')
+    assert.ok(denials.some(entry => entry.route === '/api/browser-native/auth/exchange' && entry.status === 401))
   })
 })
 

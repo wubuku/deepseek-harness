@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-115：托管多用户认证的 token 到 principal 映射
+
+```text
+changeId: BN-P2-115
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有 principal 由 backend 匿名签发，无法验证托管身份（OIDC/JWT）映射后的 Workspace、Session、附件、lease 与审计是否仍按 principal 隔离。
+existingExtensionPointsChecked: 复用既有 principal cookie 路径、Workspace owner 授权、Session principal 校验、附件与 lease 边界、`recordAccessDenial` 审计；未改变 Session 格式、传输协议或 Workspace blob 布局。
+whyDraftOnlyWasInsufficient: 匿名签发的 principal 没有外部 token 语义；只有真实 Authorization header 才能暴露 bearer 与 cookie 同时存在时的降级风险、未 provision token 的越权路径和审计归属错误。
+behaviorChange: `hostedAuth` 配置启用 HS256 JWT 校验（issuer/audience/exp/nbf，共享密钥至少 32 字节，容差默认 30 秒）；token 的 `sha256(issuer\nsub)` 映射为保持 UUID 形状的 principal id。`POST /auth/exchange` 首次调用为已验证 principal 建立 Workspace 并设置两个 Path-scoped 身份 cookie，重复换取复用同一 Workspace。请求带 Authorization 时只认 bearer：无效 token 直接 401，不回退 cookie；未 exchange 的 token 访问 API 仍是 401。审计拒绝记录改用 `auditPrincipal`，bearer 无效时记录为空 digest。
+consumersUpdated: `WorkspaceStore` 新增 `hostedPrincipalFor`、`auditPrincipal`、`bindHostedPrincipal`，`principalFromRequest`/`lookupIdentity` 优先使用 bearer；`createBrowserNativeV2Server` 接受 `hostedAuth` 并暴露 exchange 路由；backend 合同测试覆盖跨 principal 边界。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 67 项通过（新增 1 项托管认证用例）：错误签名/过期/错误 audience/issuer/nbf 均 401，无 token 的 exchange 401；alice 与 bob 的 principal/Workspace 不同且重复 exchange 稳定；bearer 列表互相隔离、未 exchange 的 carol 401；alice 可写 blob/commit/manifest，bob manifest 403；exchange 得到的 cookie 仍可读 manifest；alice 用 cookie 与 bearer 各建一个 Session，bob stat 404；alice 附件 begin/chunk 200、bob GET 403；alice 取得 lease 且 `fencingToken=1`、bob claim 403；403 审计 digest 等于 sha256(bob principal) 前 16 位，401 审计 digest 为 null，exchange 401 也入审计。
+syncReplaySteps: 上游同步后核对 `principalFromRequest`/`lookupIdentity` 的 bearer 优先级、`UUID_PATTERN` 与 `assertPrincipalId` 对映射 id 的接受，以及 `recordAccessDenial` 的 principal 解析；复跑上述 backend 合同测试并重建 preview 后复跑 principal 隔离 E2E。
+deleteCondition: 正式 DSH Host 引入托管身份提供方并把 token 校验、principal 映射与审计归属下沉到产品服务；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-114：220 Session 的会话列表分页、搜索、排序与请求成本
 
 ```text

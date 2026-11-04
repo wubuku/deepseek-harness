@@ -494,6 +494,10 @@ export class WorkspaceStore {
     this.writerLeaseMs = options.writerLeaseMs ?? DEFAULT_WRITER_LEASE_MS
     this.now = options.now ?? (() => Date.now())
     this.pendingUploadTtlMs = options.pendingUploadTtlMs ?? UPLOAD_EXPIRY_MS
+    this.hostedAuth = options.hostedAuth
+    if (this.hostedAuth !== undefined && typeof this.hostedAuth.principalFromRequest !== 'function') {
+      throw new TypeError('hostedAuth must expose principalFromRequest')
+    }
     if (!Number.isSafeInteger(this.writerLeaseMs) || this.writerLeaseMs < 300) {
       throw new TypeError('workspace writer lease must be an integer of at least 300 ms')
     }
@@ -600,7 +604,41 @@ export class WorkspaceStore {
     return workspaceId
   }
 
+  /**
+   * Resolve the principal a hosted token maps to, or undefined when the
+   * request carries no Authorization header.
+   * @param {object} request - Incoming request carrying an optional Bearer token.
+   * @returns {string | undefined} Mapped principal id.
+   */
+  hostedPrincipalFor(request) {
+    return this.hostedAuth?.principalFromRequest(request)
+  }
+
+  /**
+   * Principal id used for access-denial auditing without changing authorization.
+   * @param {object} request - Request whose Authorization header or cookies may identify a principal.
+   * @returns {string | undefined} Mapped hosted principal, cookie principal, or undefined.
+   */
+  auditPrincipal(request) {
+    if (request.headers.authorization !== undefined) {
+      try {
+        return this.hostedPrincipalFor(request)
+      } catch {
+        return undefined
+      }
+    }
+    const cookiePrincipal = parseCookies(request.headers.cookie).get(COOKIE_NAME)
+    return cookiePrincipal !== undefined && this.identities.has(cookiePrincipal) ? cookiePrincipal : undefined
+  }
+
   principalFromRequest(request, cookieName = COOKIE_NAME) {
+    const hostedPrincipal = this.hostedPrincipalFor(request)
+    if (hostedPrincipal !== undefined) {
+      if (!this.identities.has(hostedPrincipal)) {
+        throw new WorkspaceError('UNAUTHENTICATED', 'hosted principal is not provisioned; exchange the token first', 401)
+      }
+      return hostedPrincipal
+    }
     const principalId = parseCookies(request.headers.cookie).get(cookieName)
     if (principalId === undefined || !this.identities.has(principalId)) {
       throw new WorkspaceError('UNAUTHENTICATED', 'workspace identity is missing or expired', 401)
@@ -609,6 +647,8 @@ export class WorkspaceStore {
   }
 
   async openIdentity(request, secure) {
+    const hostedPrincipal = this.hostedPrincipalFor(request)
+    if (hostedPrincipal !== undefined) return await this.bindHostedPrincipal(hostedPrincipal, secure)
     const existing = parseCookies(request.headers.cookie).get(COOKIE_NAME)
     let principalId = existing !== undefined && this.identities.has(existing) ? existing : undefined
     if (principalId === undefined) {
@@ -630,15 +670,47 @@ export class WorkspaceStore {
     }
     const workspaceId = this.identities.get(principalId)
     if (workspaceId === undefined) throw new WorkspaceError('IDENTITY_NOT_FOUND', 'workspace identity does not exist', 401)
-    const cookieOptions = `Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
-    return {
-      workspaceId,
-      workspaceIds: this.ownedWorkspaceIds(principalId),
-      cookies: [
-        `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; ${cookieOptions}`,
-        `${SESSION_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session; ${cookieOptions}`,
-      ],
+    return { workspaceId, workspaceIds: this.ownedWorkspaceIds(principalId), cookies: this.identityCookies(principalId, secure) }
+  }
+
+  /**
+   * Provision the Workspace for a verified hosted principal and return its cookies.
+   * Repeating the call for the same principal reuses the provisioned Workspace.
+   * @param {string} principalId - Principal id mapped from a verified token.
+   * @param {boolean} secure - Whether to mark the identity cookies Secure.
+   * @returns {Promise<{workspaceId: string, workspaceIds: string[], cookies: string[]}>} Active Workspace and cookies.
+   */
+  async bindHostedPrincipal(principalId, secure) {
+    if (typeof principalId !== 'string' || !UUID_PATTERN.test(principalId)) {
+      throw new WorkspaceError('UNAUTHENTICATED', 'hosted principal id is invalid', 401)
     }
+    if (!this.identities.has(principalId)) {
+      await this.exclusive('identities', async () => {
+        if (this.identities.has(principalId)) return
+        const workspaceId = randomUUID()
+        const workspace = {
+          id: workspaceId, owner: principalId, revision: 0,
+          entries: new Map(), operations: new Map(), uploadedHashes: new Set(), uploadedAt: new Map(),
+          writerEpoch: 0, writerToken: undefined, writerExpiresAt: 0,
+        }
+        const identities = new Map(this.identities).set(principalId, workspaceId)
+        await this.persistWorkspace(workspace)
+        await this.writeIdentities(identities)
+        this.workspaces.set(workspaceId, workspace)
+        this.identities = identities
+      })
+    }
+    const workspaceId = this.identities.get(principalId)
+    if (workspaceId === undefined) throw new WorkspaceError('IDENTITY_NOT_FOUND', 'workspace identity does not exist', 401)
+    return { workspaceId, workspaceIds: this.ownedWorkspaceIds(principalId), cookies: this.identityCookies(principalId, secure) }
+  }
+
+  identityCookies(principalId, secure) {
+    const cookieOptions = `Max-Age=${String(COOKIE_MAX_AGE_SECONDS)}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
+    return [
+      `${COOKIE_NAME}=${principalId}; Path=/api/browser-native/workspace; ${cookieOptions}`,
+      `${SESSION_COOKIE_NAME}=${principalId}; Path=/api/browser-native/session; ${cookieOptions}`,
+    ]
   }
 
   ownedWorkspaceIds(principalId) {
@@ -710,7 +782,8 @@ export class WorkspaceStore {
   }
 
   lookupIdentity(request) {
-    const principalId = parseCookies(request.headers.cookie).get(COOKIE_NAME)
+    const hostedPrincipal = this.hostedPrincipalFor(request)
+    const principalId = hostedPrincipal ?? parseCookies(request.headers.cookie).get(COOKIE_NAME)
     const workspaceId = principalId === undefined ? undefined : this.identities.get(principalId)
     if (workspaceId === undefined) {
       throw new WorkspaceError('UNAUTHENTICATED', 'existing workspace identity is missing or expired', 401)
