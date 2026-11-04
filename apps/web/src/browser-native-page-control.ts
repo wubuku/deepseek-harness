@@ -721,15 +721,9 @@ export async function connectBrowserNativePageControl(
     if (state !== 'failed') panel.root.setAttribute('aria-live', 'polite')
   }
   const submitComposerPrompt = async (prompt: string): Promise<void> => {
-    const composer = [...document.querySelectorAll<HTMLElement>('[data-composer-input][contenteditable="true"]')].at(-1)
+    const composer = composerElement()
     if (composer === undefined) throw new Error('the composer is unavailable')
-    composer.focus()
-    const selection = window.getSelection()
-    const range = document.createRange()
-    range.selectNodeContents(composer)
-    selection?.removeAllRanges()
-    selection?.addRange(range)
-    if (!document.execCommand('insertText', false, prompt)) throw new Error('the composer rejected the retry prompt')
+    insertComposerText(composer, prompt)
     const deadline = Date.now() + 2_000
     const retained = (): boolean => ((composer.innerText ?? '').trim() === prompt.trim())
     while (!retained() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
