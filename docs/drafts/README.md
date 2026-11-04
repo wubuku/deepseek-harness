@@ -169,6 +169,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 108. [Browser-Native token 预算与计量](browser-native-dsh-poc/token-budget-metering.md)：真实模型 Session 计量 2346 输入/16 输出与 backend 独立解析的 provider usage 逐值相等；Session 限额压到已用量以下后下一 turn 在 fetch 前被拒绝并渲染 `TOKEN_BUDGET_EXCEEDED`，上游请求数不增，`budget/exceeded` 一条；租户限额路径同样在请求前阻断并写租户审计。预算插件仅在验证 roster，跨 Session 汇总阻断与费用换算未覆盖。
 109. [Browser-Native 会话检索与规模上限](browser-native-dsh-poc/session-query-browser-scale.md)：120 个持久化 Session 下 `session-query` 列表 3.2 ms、cwd 精确过滤 2.6 ms 且 60/60 命中，全文检索 60/60 无重复、单 Session 内 1 条。验证镜像把 `openAt` 改为 `first-search` 后索引仍因 Worker 无 `node:sqlite.DatabaseSync` 无法打开，退化为线性扫描 255.8 ms；列表与精确过滤可留在 Worker，排名/大语料检索必须有服务端依赖。同轮修复持久化 `list()` 只取第一页 50 条的问题，改为按 `hasMore` 翻页。
 110. [Browser-Native 16 Session 仪表盘 UI](browser-native-dsh-poc/session-dashboard-16.md)：17 行（16 个持久化种子 + preview 自身）下 reload 到可交互 4,971 ms（Worker 冷启动主导）、首屏增量 2 ms、折叠展开 96 ms、打开 70 ms、切换 74 ms、后台 turn 中切换 75 ms、失败后切换 38 ms，均在落定上限内。默认折叠为 5 行 + `Show N more sessions`；种子行显示 `Untitled`，idle 行无状态文案，后台 turn 完成后出现 `Completed`。排队没有实时位置 UI，只有超时后的 `ADMISSION_TIMEOUT`（含 `queue position 1`）；失败码 `DASHBOARD_INJECTED_FAILURE` 渲染为 `<code>`，列表仍可交互且 `pageerror` 为 0。
+111. [Browser-Native 产品就绪度 go/no-go](browser-native-dsh-poc/product-readiness-go-no-go.md)：一页汇总全部已落档结论与缺口，结论为“有条件 GO”：真实 Host/Agent Loop、Session 持久化、Workspace 恢复、审批 deny、token 计量、8 turn/16 挂载、检索与 16 Session UI 均有证据；但纯浏览器无法承担 Session 权威、全文检索排名、租户预算/费用、egress 与关页后执行，必须由服务端提供。明确列出自然后台节流不可测、Safari/iOS 未验证、跨主机 HA 未验证，以及立项前五项必做。
 
 ### 需要实现或审查代码时
 

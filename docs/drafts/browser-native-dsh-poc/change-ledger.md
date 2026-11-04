@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-095：产品就绪度 go/no-go 汇总
+
+```text
+changeId: BN-P2-095
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/product-readiness-go-no-go.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已落档的验证结论分散在 110 份记录中，缺少一页可供正式立项的 go/no-go、环境限制与必须的服务端依赖；决策者无法从单篇记录判断整体状态。
+existingExtensionPointsChecked: 只读汇总既有记录与代码行为；未修改 packages/、apps/、Agent Loop、Session format、profile 或测试；结论引用本目录已提交的 E2E/合同测试数字与已知缺口，不新增未验证声明。
+whyDraftOnlyWasInsufficient: 立项需要把“已验证能力、不可测项、环境限制、服务端依赖”放在同一判断中，并给出明确的 GO/NO-GO；单点验证记录无法表达跨能力的取舍。
+behaviorChange: 新增产品就绪度文档，按能力表给出 GO/有条件 GO/NO/未验证，列出七项必须服务端依赖、五类环境限制与不可测项、立项前五项必做；PoC README 增加“产品就绪度”入口，drafts index 111 与本 ledger 同步。
+consumersUpdated: PoC README、drafts index 与本 ledger；无产品代码、profile 或发布面变更。
+test: `pnpm run test:docs` 通过（文档门禁）；结论引用既有 E2E 与合同测试，未新增运行依赖。
+syncReplaySteps: 上游同步后核对本文件引用的能力数字仍与对应记录一致；任何能力状态变化先更新单项记录，再回写本页判定。
+deleteCondition: 立项决策完成并形成独立的正式就绪度文档，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-094：16 Session 仪表盘 UI 渲染与交互成本验证
 
 ```text

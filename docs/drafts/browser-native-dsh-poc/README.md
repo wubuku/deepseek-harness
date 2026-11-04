@@ -4,6 +4,10 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 # Browser-native DSH PoC
 
+## 产品就绪度
+
+[产品就绪度 go/no-go](product-readiness-go-no-go.md)汇总本 PoC 已落档的验证结论、环境限制与必须的服务端依赖，按能力给出判定与立项前必做项。结论是“有条件 GO”：浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担；纯浏览器零服务端依赖不成立。
+
 ## Summary
 
 本目录包含多个阶段的研究材料。旧版是协议级独立 loop 实验；当前 v2 已经把现有 DSH Web UI、Cordis 插件组合和真实 `ctx.agentLoop` 放进 Dedicated Worker，并通过同源 backend 提供正式 Session persistence 和 LLM proxy。实施规格见 [browser-native-dsh-plan-v2.md](browser-native-dsh-plan-v2.md)，原始实施进度见 [browser-native-dsh-progress-v2.md](browser-native-dsh-progress-v2.md)。真实运行时验证命令见[运行时验证说明](runtime-validation-manual.md)，已验证结果、失败和未验证边界见[运行时验证报告](runtime-validation-report.md)，上一批验证计划与进度见[下一轮验证计划](next-validation-plan.md)及[进度记录](next-validation-progress.md)。云端 Workspace 增量同步的规划、文件变更矩阵、真实 Chrome/LLM、OS backend 重启与协议并发证据见[云端 Workspace 同步 PoC 规划](cloud-backed-workspace-sync-plan.md)及[实施进度](cloud-backed-workspace-sync-progress.md)；其自动化入口为 `tests/workspace-sync.e2e.mjs` 和 `tests/workspace-durability.test.mjs`。本批次 durable Workspace 的规划和进度见[规划](durable-workspace-plan.md)及[进度](durable-workspace-progress.md)。最新 P0 验证的计划、实际实现和限制见[下一批 P0 计划](next-high-value-validation-plan.md)及[实施进度](next-high-value-validation-progress.md)；随后离线 retry、CAS conflict 和过期 writer lease 的真实 Chrome 验证见[进阶恢复计划](advanced-recovery-validation-plan.md)及[进度记录](advanced-recovery-validation-progress.md)。再后的 OPFS quota 错误恢复、backend 重启租约 fencing 与同源身份存储隔离见[存储隔离计划](storage-isolation-and-restart-validation-plan.md)及[实测进度](storage-isolation-and-restart-validation-progress.md)。文件工具 durable 确认与易失状态隔离见[持久化确认计划](durable-tool-ack-validation-plan.md)、[持久化确认进度](durable-tool-ack-validation-progress.md)、[易失状态隔离计划](volatile-workspace-isolation-plan.md)和[隔离验证进度](volatile-workspace-isolation-progress.md)：本地保存失败会阻止 Agent 后续读写与搜索未确认的 Worker 内存文件，刷新后可在同 Session 显式重试。可写 chunk-backed 编辑原型、64 MiB OPFS 资源证据和当前 DSH `edit` materialize 对照见[验证计划](chunk-backed-edit-validation-plan.md)及[实施进度](chunk-backed-edit-validation-progress.md)。v2 的启动入口是 `run-v2.mjs`；旧 `run.mjs` 只属于历史协议实验。
