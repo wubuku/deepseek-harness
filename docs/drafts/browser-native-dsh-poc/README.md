@@ -451,6 +451,14 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-query-scale.e2e.mjs
 ```
 
+## 16 Session 下的仪表盘 UI
+
+[16 Session 仪表盘验证](session-dashboard-16.md)在 17 行（16 个持久化种子 + preview 自身）规模下测量侧边栏：reload 到可交互 5.0 秒（Worker 冷启动主导），首屏增量 2 ms，折叠展开 96 ms，打开 70 ms，切换 74 ms，后台 turn 运行中切换 75 ms，失败后切换 38 ms，均在落定上限内，无需修改 UI。默认只渲染 5 行并显示 `Show N more sessions`；种子行显示 `Untitled`，idle 行无状态文案，后台 turn 完成后出现 `Completed`。排队没有实时位置 UI，唯一的可观察状态是 `queueTimeoutMs` 到期后的 `ADMISSION_TIMEOUT`（消息带 `queue position 1`）；失败码 `DASHBOARD_INJECTED_FAILURE` 渲染为 `<code>`，列表保持可交互。
+
+```sh
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs
+```
+
 ## 文件工具下一批验证
 
 [计划](browser-file-tools-next-validation-plan.md)和[进度](browser-file-tools-next-validation-progress.md)记录了目录显式栈遍历、`glob` 结果上限、pattern/brace 预算、跨 chunk UTF-8 与二进制拒绝。随后发现仅对命中行限制长度仍允许超长无换行内容在 matcher 前累积；[正则隔离验证](browser-file-search-isolation-validation-plan.md)和[进度](browser-file-search-isolation-validation-progress.md)记录当前修正：所有超过 64 KiB 的行在正则匹配前拒绝，包括不匹配行。内容 grep、grep `include` 和 glob 路径匹配在可终止的嵌套 Worker 中执行，每批最多 1 秒、整次搜索最多 30 秒；超时不会返回部分结果。

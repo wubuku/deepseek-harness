@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-094：16 Session 仪表盘 UI 渲染与交互成本验证
+
+```text
+changeId: BN-P2-094
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-dashboard-16.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 需要验证 16 个持久化 Session（后端挂载上限）下会话侧边栏的列表、折叠展开、打开、切换、后台 turn 中切换、排队与失败态的实际渲染与交互成本，并给出可接受上限；既有记录没有同类规模证据。
+existingExtensionPointsChecked: 复用后端 Session `create`/`append`/`close` 与 16 挂载槽释放、真实 preview Worker/DSH Host、`data-row-key="session:<id>"` 行定位、`Show N more sessions` 折叠按钮、`admission.maxConcurrentTurns`/`queueTimeoutMs`、`scriptedLlmFault` 的 `barrier-text`/`error`、`ADMISSION_TIMEOUT` 与 turn error `<code>` 渲染；未修改 packages/、Agent Loop、Session format 或 UI 组件。
+whyDraftOnlyWasInsufficient: 折叠行为、行状态文案、admission 排队与失败渲染只能在真实 preview DOM 中观察；静态检查无法给出交互时延或证明列表在 17 行下仍可交互。
+behaviorChange: 新增 scripted Chrome E2E：预置 16 个 Session（每 Session 一条 user/message，append 后 close 释放槽），reload 后测量 reload/首屏/展开/打开/切换/后台 turn 中切换/失败后切换时延；用 barrier turn 占住唯一 admission 槽并验证排队只体现为 3 秒后的 `ADMISSION_TIMEOUT`（含 `queue position 1`），再注入 `DASHBOARD_INJECTED_FAILURE` 验证失败代码可见、列表仍为 17 行且可切换；未改动产品代码。
+consumersUpdated: PoC README 新增“16 Session 下的仪表盘 UI”一节、drafts index 110 与本 ledger；正式 UI、profile 与发布名单未变更。
+test: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs` 通过：17 行（16 种子 + preview）；reload 4,971 ms、首屏增量 2 ms、展开 96 ms、打开 70 ms、切换 74 ms、后台 turn 中切换 75 ms、失败后 38 ms；默认 5 行 + `Show N more sessions`；idle 行无状态文案，后台完成行出现 `Completed`；`pageerror` 为 0。
+syncReplaySteps: 上游同步后核对侧边栏折叠阈值与 `data-row-key` 格式、`sessionStatuses` 的 idle 行为、admission 排队超时消息与 turn error `<code>` 渲染；复跑本 E2E。
+deleteCondition: 产品 UI 改以不同方式呈现列表/排队/失败态，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-093：会话检索规模验证、列表翻页修复与 preview test flag
 
 ```text
