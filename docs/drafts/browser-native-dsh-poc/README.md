@@ -64,7 +64,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
-| 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用) |
+| 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[横向扩展可行性](multi-instance-feasibility.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
@@ -1387,6 +1387,22 @@ env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u AL
 ```
 
 真实模型凭据只由 Node backend 从本机 `docs/drafts/.env` 读取。Chrome smoke 另观察到 Worker compaction context capacity warning 和 preview API 404；这些诊断没有使该次 smoke 失败，但本批不验证 warning 的根因。自然 eviction、OS/浏览器进程崩溃、Safari/WebKit、生产共享数据库和后台 Agent 未验证。
+
+## 横向扩展可行性
+
+[横向扩展可行性判定](multi-instance-feasibility.md)给出的结论是：当前实现不能支撑多实例共享外置 store。唯一已验证的多实例形态是同机若干 backend 把 Session、Workspace、operation 与 LLM owner 校验转发给一个 `stateAuthorityOrigin`；authority 自身是单进程，状态仍在本地 `dataDir`。
+
+单节点约束包括：`dataDir` 单写者锁、Session/Workspace/身份/durable 记录都在本地文件、owner lease 与 fencing 只在 authority 进程内裁决、用量与审计账本按进程、authority 无冗余、operation ledger 不是跨实例事务、浏览器身份绑定签发它的 `dataDir`。
+
+新增的 `tests/multi-instance-feasibility.test.mjs` 2/2 给出两条直接证据：两个独立 `dataDir` 之间身份重放返回 401 `UNAUTHENTICATED`、Session 读返回 404 `SESSION_NOT_FOUND`、Workspace 列表互不包含、leases 计数分别为 1 与 0；同一 `dataDir` 上的第二个 authority 以 `BACKEND_ALREADY_RUNNING` 被拒绝，而两个 backend 经同一 authority 可以读同一 Session，且 Session 文件只出现在 authority 的 `dataDir`。
+
+复跑：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.test.mjs
+```
+
+文中同时给出触发扩展的可测量条件：跨主机同 Session 写入、恢复时间超 RTO、`activeRequests` 接近准入上限或出现 admission 拒绝、`store.load()` 启动耗时随 Session 数线性增长、RPO = 0 的节点故障要求、按租户独立存储边界。未满足这些条件时继续单节点，不按“多实例 HA”宣称。
 
 ## 权限预设与审批生命周期
 

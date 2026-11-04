@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-131：横向扩展可行性判定与单节点约束证据
+
+```text
+changeId: BN-P2-131
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.test.mjs; docs/drafts/browser-native-dsh-poc/multi-instance-feasibility.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 此前只有单条路径的 dataDir 锁与共享 authority 证据，没有把“多实例共享外置 store 是否可行”作为独立判定，也没有列出触发横向扩展的可测量条件；试点交付需要明确单节点约束，避免把同机多 backend 误写成多实例 HA。
+existingExtensionPointsChecked: 复用现有 dataDir 锁、`stateAuthorityOrigin` 转发、Session/Workspace 本地存储与 observability 指标；未改 Agent Loop、Session 事件类型、Session format、模型/工具协议、正式 DSH package 或任何运行时代码。
+whyDraftOnlyWasInsufficient: “不同 dataDir 之间是否共享身份、Session 与 Workspace”和“authority 自身是否可重复启动”只能在真实进程中观察；判定需要可复跑的拒绝码、HTTP 状态与文件位置，阅读代码不足以支撑结论。
+behaviorChange: 新增 `tests/multi-instance-feasibility.test.mjs` 2/2。第一个用例启动两个独立 dataDir 的 backend，断言 Workspace id 不同、身份重放 401 `UNAUTHENTICATED`、跨实例 Session 读 404 `SESSION_NOT_FOUND`、Workspace 列表互不包含、leases 1/0，且 Session 文件只在拥有者的 `sessions/`。第二个用例启动一个 authority 与两个 backend，断言同一 dataDir 的第二个 authority 被 `BACKEND_ALREADY_RUNNING` 拒绝、跨 backend 可读同一 Session、Session 文件只在 authority 的 `dataDir`。新增判定文档列出单节点约束与扩展触发条件。没有产品运行时行为变化。
+consumersUpdated: PoC README 导航与“横向扩展可行性”章节新增入口与结论摘要；本 ledger 登记；未新增生产入口。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.test.mjs` 2/2 通过，诊断输出 `independent-dataDirs-share-nothing`（`crossRead.status=404`、`replayedIdentity.status=401`、`leases.nodeA=1`、`leases.nodeB=0`）与 `shared-authority-single-writer`（`duplicateAuthority=BACKEND_ALREADY_RUNNING`、`crossBackendRead.status=200`、`sessionFiles={authority:true,backendA:false,backendB:false}`）。同批复跑 `shared-authority-concurrency.test.mjs` 3/3 与 `durable-multi-host.test.mjs` 2/2。
+syncReplaySteps: 上游同步后复跑同一命令；确认 `acquireDataDirLock` 仍使用 `dataDir/.browser-native-backend.lock`、`isSharedStatePath` 仍覆盖 workspace/session 前缀、`identities.json`/`sessions/`/`workspaces/` 仍位于 `dataDir`。
+deleteCondition: 出现受支持的外置 store 适配层与跨实例租约后重写本文判定；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-130：从页面导出严格脱敏的单 Session 支持包
 
 ```text
