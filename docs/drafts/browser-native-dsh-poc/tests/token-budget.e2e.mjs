@@ -37,6 +37,8 @@ for (const name of ['OPENAI_BASE_URL', 'OPENAI_MODEL', 'OPENAI_API_KEY']) {
 }
 
 const PROFILE_BUDGET = { tenantId: 'poc-tenant', sessionLimit: 10_000, tenantLimit: 20_000 }
+const GUARD_FILE = '/dsh/home/workspace/budget-guard.txt'
+const GUARD_MARKER = 'BUDGET_GUARD'
 const llmTimeoutMs = Number(process.env.DSH_POC_BUDGET_LLM_TIMEOUT_MS ?? 240_000)
 
 const dataDir = await mkdtemp(join(tmpdir(), 'dsh-browser-token-budget-'))
@@ -187,6 +189,43 @@ try {
   assert.equal(budgetAudit(tenantLog, 'tenant').length, 1, JSON.stringify(budgetAudit(tenantLog, 'tenant')))
   assert.equal(budgetAudit(tenantLog, 'tenant')[0].data.tenantId, PROFILE_BUDGET.tenantId)
   assert.equal((await usageAudit(sessionA)).length, tenantBefore, 'a tenant-blocked request must not reach the provider')
+
+  // Tool-execution guard: skip the adapter preflight, lower the Session limit
+  // below the meter, and let the model request a write. The backend performs no
+  // budget check, so the Worker guard alone must refuse the call.
+  const guardLimits = await testAction({
+    action: 'budget-set',
+    budgetLimits: {
+      sessionLimit: Math.max(1, sessionState.inputTokens + sessionState.outputTokens - 1),
+      tenantLimit: 100_000,
+    },
+  })
+  assert.equal(guardLimits?.ok, true, JSON.stringify(guardLimits))
+  const noPreflight = await testAction({ action: 'budget-request-check', enabled: false })
+  assert.equal(noPreflight?.ok, true, JSON.stringify(noPreflight))
+  assert.equal(noPreflight.requestCheck.enabled, false)
+
+  const guardTurn = await submitPrompt({
+    page, origin, requests, sessionId: sessionA,
+    prompt: `${GUARD_MARKER}: use the write tool exactly once with these JSON arguments: ${JSON.stringify({ file_path: GUARD_FILE, content: `${GUARD_MARKER}_SHOULD_NOT_EXIST\n` })}. After the tool result, reply with exactly ${GUARD_MARKER}_DONE and nothing else.`,
+    timeout: llmTimeoutMs + 60_000,
+  })
+  const guardCall = guardTurn.session.events.find(event => event.type === 'tool/call' && event.data.name === 'write')
+  assert.ok(guardCall, `the model must attempt the write through the bypassed preflight: ${JSON.stringify({
+    calls: guardTurn.session.events.filter(event => event.type === 'tool/call').map(event => event.data.name),
+    results: guardTurn.session.events.filter(event => event.type === 'tool/result').map(event => event.data.message.isError),
+    end: guardTurn.session.events.findLast(event => event.type === 'turn/end')?.data.reason,
+  })}`)
+  const guardResult = guardTurn.session.events.find(event => event.type === 'tool/result'
+    && String(event.data.message.toolCallId) === String(guardCall.data.callId))
+  assert.equal(guardResult?.data.message.isError, true, JSON.stringify(guardResult?.data.message))
+  assert.match(JSON.stringify(guardResult.data.message.content), /token budget exceeded \(session\)/)
+  const guardFile = await testAction({ action: 'read', path: GUARD_FILE })
+  assert.notEqual(guardFile?.ok, true, `the guard must refuse before execution: ${JSON.stringify(guardFile)}`)
+  const guardLog = await readSession(sessionA)
+  assert.ok(budgetAudit(guardLog, 'session').length >= 1, JSON.stringify(budgetAudit(guardLog, 'session')))
+  assert.equal(budgetAudit(guardLog, 'session').at(-1).data.limit, guardLimits.budget.limits.sessionLimit)
+
   assert.equal(pageErrors.length, 0, pageErrors.join('\n'))
   console.log(JSON.stringify({
     scope: 'real-model-token-budget-session-tenant',
@@ -205,6 +244,13 @@ try {
       providerRequestsAfter: tenantBefore,
     },
     audit: { sessionScope: budgetAudit(sessionLog, 'session').length, tenantScope: budgetAudit(tenantLog, 'tenant').length },
+    toolGuard: {
+      preflightSkipped: true,
+      turn: guardTurn.turn,
+      denied: guardResult.data.message.isError,
+      reason: guardResult.data.message.content,
+      fileCreated: guardFile?.ok === true,
+    },
     visibleAlert: 'token budget exceeded (session) rendered in the turn error',
   }, null, 2))
 } finally {

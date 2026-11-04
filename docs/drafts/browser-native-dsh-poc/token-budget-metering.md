@@ -10,9 +10,9 @@ description: "Browser-Native PoC 的 Session/租户 token 预算验证：计量�
 
 验证 roster `browser-budget` 在 `runtime-validation.mjs` 里插入 `browser-native-token-budget` 静态模块，profile `config` 为 `tenantId: poc-tenant`、`sessionLimit: 10000`、`tenantLimit: 20000`。插件 [browser-native-token-budget.ts](browser-native-token-budget.ts) 只存在于验证镜像。
 
-插件订阅 `session/event` 并记录见过的 Session，用 Token-meter 的 `tokenUsage` projection 读取每个 Session 的 `uncachedInputTokens`、`cacheReadTokens`、`cacheWriteTokens` 与 `outputTokens`；租户总量是这些 Session 的和。执行点不是事后取消：`browser-native-providers.ts` 里的 LLM adapter 在每次上游 `fetch` 之前调用 `canRequest(sessionId)`，超限时抛 `LlmError(..., 'TOKEN_BUDGET_EXCEEDED')`，Agent Loop 因此把 turn 结束为 `error`，客户端渲染现有错误行。
+插件订阅 `session/event` 并记录见过的 Session，用 Token-meter 的 `tokenUsage` projection 读取每个 Session 的 `uncachedInputTokens`、`cacheReadTokens`、`cacheWriteTokens` 与 `outputTokens`；租户总量是这些 Session 的和。执行点不是事后取消：`browser-native-providers.ts` 里的 LLM adapter 在每次上游 `fetch` 之前调用 `canRequest(sessionId)`，超限时抛 `LlmError(..., 'TOKEN_BUDGET_EXCEEDED')`，Agent Loop 因此把 turn 结束为 `error`，客户端渲染现有错误行。插件同时注册 `ctx.tools.guard`：任何工具执行前都复核同一 meter，超限时返回 `token budget exceeded (...)` 并拒绝调用。该 guard 是工具执行层就地拦截，LLM 前置检查被跳过时仍然生效。
 
-每次实际阻断会向该 Session 追加一条 `budget/exceeded` 事件，包含 `scope`、`tenantId`、`sessionId`、当前输入/输出 token 与实际限额。每个 `(sessionId, scope)` 只记一次，避免重复告警。
+每次实际阻断会向该 Session 追加一条 `budget/exceeded` 事件，包含 `scope`、`tenantId`、`sessionId`、当前输入/输出 token 与实际限额。同一 meter 状态下重复拒绝只记一次；拒绝之间用量继续增长时按新的 meter 状态再记一次。
 
 计量对照不依赖 Worker 自己的日志：PoC backend 在转发上游 SSE 时独立解析 provider 原始 usage 字段，按 `requestId`/`sessionId` 记录到 `usageAudit`，并追加到 `<dataDir>/observability/usage.jsonl`；真实模式通过 `GET /api/browser-native/usage-audit?sessionId=...` 暴露，重启后 `GET /api/browser-native/observability/reconciliation` 报告恢复的 usage 条数与上一次 metrics 快照。E2E 用这个记录与插件 meter 对照，而不是用同一份 Session 日志自证。
 
@@ -25,28 +25,35 @@ description: "Browser-Native PoC 的 Session/租户 token 预算验证：计量�
   "tenantId": "poc-tenant",
   "profileLimits": { "sessionLimit": 10000, "tenantLimit": 20000 },
   "meterVsProvider": {
-    "sessionA": { "inputTokens": 2346, "outputTokens": 16 },
-    "providerA": { "inputTokens": 2346, "outputTokens": 16 },
+    "sessionA": { "inputTokens": 2346, "outputTokens": 23 },
+    "providerA": { "inputTokens": 2346, "outputTokens": 23 },
     "exact": true
   },
   "sessionBlock": {
     "turn": 2,
     "code": "TOKEN_BUDGET_EXCEEDED",
-    "message": "token budget exceeded (session): 2362/2361 tokens",
+    "message": "token budget exceeded (session): 2369/2368 tokens",
     "providerRequestsAfter": 1
   },
   "tenantBlock": {
     "turn": 3,
     "code": "TOKEN_BUDGET_EXCEEDED",
-    "message": "token budget exceeded (tenant poc-tenant): 2362/2361 tokens",
+    "message": "token budget exceeded (tenant poc-tenant): 2369/2368 tokens",
     "providerRequestsAfter": 1
   },
   "audit": { "sessionScope": 1, "tenantScope": 1 },
+  "toolGuard": {
+    "preflightSkipped": true,
+    "turn": 4,
+    "denied": true,
+    "reason": [{ "type": "text", "text": "Error: token budget exceeded (session): 4923/2368 tokens" }],
+    "fileCreated": false
+  },
   "visibleAlert": "token budget exceeded (session) rendered in the turn error"
 }
 ```
 
-启动 turn 的上游用量 2346 输入 + 16 输出与插件 meter 完全一致，租户汇总也相等。随后通过 test port 把 Session 限额降到 2361（低于已用的 2362），下一个 turn 在请求前被拒绝：上游请求数保持 1 条不变，turn 以 `TOKEN_BUDGET_EXCEEDED` 结束，`budget/exceeded` 恰好一条，错误文案出现在客户端。再把 Session 限额放大、租户限额降到 2361，同一 Session 的下一次请求同样在 fetch 前被拒绝，租户 scope 审计恰好一条，页面无异常。
+启动 turn 的上游用量 2346 输入 + 23 输出与插件 meter 完全一致，租户汇总也相等。随后通过 test port 把 Session 限额降到 2368（低于已用的 2369），下一个 turn 在请求前被拒绝：上游请求数保持 1 条不变，turn 以 `TOKEN_BUDGET_EXCEEDED` 结束，`budget/exceeded` 恰好一条，错误文案出现在客户端。再把 Session 限额放大、租户限额降到 2368，同一 Session 的下一次请求同样在 fetch 前被拒绝，租户 scope 审计恰好一条，页面无异常。最后把 Session 限额降到 2368 并关闭 LLM 前置检查（模拟该层被绕过），模型仍然请求 `write`；Worker 的工具 guard 拒绝执行，工具结果是 `token budget exceeded (session): 4923/2368 tokens`，目标文件不存在，后端全程没有预算拒绝逻辑。
 
 运行命令：
 
@@ -57,7 +64,7 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 ## 残余缺口
 
-- 阻断粒度是“上游请求之前”，没有按预估输入 token 的预检；单次请求本身仍可能跨过限额，证据中的 2362/2361 就是请求完成后才越界。
+- 阻断粒度是“上游请求之前”与“工具执行之前”，没有按预估输入 token 的预检；单次请求本身仍可能跨过限额，证据中的 2369/2368 就是请求完成后才越界。工具 guard 在超限后拒绝所有工具调用，直到限额上调或打开新 turn。
 - 租户汇总是本 Worker 内已见过 Session 的和；真实模型这次只在一个 Session 内执行了租户阻断，第二次 UI Session 的发送按钮在该流程中不可用，因此“跨 Session 聚合后阻断”的端到端路径未覆盖。插件代码按 Session 集合求和，没有持久化租户账本。
 - 租户只由 profile `tenantId` 标识，不是认证身份；Worker 没有租户凭据，跨 Worker 或跨设备不共享计量。
 - 没有费用/价格换算，只有 token；provider 的 cache 命中字段若将来出现在原始 usage 中，backend 审计只记录 `prompt_tokens` 总量，插件 meter 按 projection 分桶，二者可能不再逐值相等。

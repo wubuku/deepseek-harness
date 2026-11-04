@@ -329,6 +329,8 @@ interface BrowserNativeWorkspaceTestRequest {
   readonly headerSessionId?: string
   readonly toolPolicy?: { readonly tools?: Readonly<Record<string, string>>; readonly default?: string }
   readonly budgetLimits?: { readonly sessionLimit?: number; readonly tenantLimit?: number }
+  /** Whether the budget request preflight still refuses; `false` proves the tool guard alone. */
+  readonly enabled?: boolean
   readonly query?: string
   readonly cwd?: string
   readonly limit?: number
@@ -461,6 +463,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
   if (data.action === 'permission-state') return typeof data.sessionId === 'string' && data.sessionId.length > 0
   if (data.action === 'tool-policy-state' || data.action === 'tool-policy-rogue-allow') return true
   if (data.action === 'budget-state') return true
+  if (data.action === 'budget-request-check') return typeof data.enabled === 'boolean'
   if (data.action === 'budget-set') {
     if (data.budgetLimits === null || typeof data.budgetLimits !== 'object') return false
     const limit = value => typeof value === 'number' && Number.isSafeInteger(value) && value > 0
@@ -1825,10 +1828,15 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       workspaceTestResponse(request.requestId, { ok: true, permission: permissionProbe.inspect(request.sessionId) })
       return
     }
-    if (request.action === 'budget-state' || request.action === 'budget-set') {
+    if (request.action === 'budget-state' || request.action === 'budget-set' || request.action === 'budget-request-check') {
       if (workspaceTestPort === undefined) throw new Error('browser-native token budget test: the validation MessagePort is disabled')
       if (request.action === 'budget-state') {
         workspaceTestResponse(request.requestId, { ok: true, budget: tokenBudgetProbe.state() })
+        return
+      }
+      if (request.action === 'budget-request-check') {
+        if (request.enabled === undefined) throw new Error('browser-native token budget test: enabled is required')
+        workspaceTestResponse(request.requestId, { ok: true, requestCheck: tokenBudgetProbe.setRequestCheck(request.enabled) })
         return
       }
       if (request.budgetLimits?.sessionLimit === undefined || request.budgetLimits.tenantLimit === undefined) {

@@ -49,8 +49,8 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | 能否写 Session | 提议 append | 校验 owner token/epoch、seq 与 `durableThroughSeq` | 已实现，[durable host 重启](durable-host-restart.md) |
 | 能否读 Session | 请求读取 | 按 principal 404 化拒绝 | 已实现 |
 | 能否发上游请求 | Worker 直接调用同源 `/llm` | 持 key、代理上游、解析 usage | key 仅在服务端；预算判定在 Worker（见 T7） |
-| 花费多少 | 上报 meter | 独立解析 provider usage 并记账 | 记账已实现；判定未迁移（见 T7） |
-| 能否调用工具 | 在 Worker 内执行 | durable host 复核 `write` 审批 | 常规 turn 策略在 Worker（见 T6） |
+| 花费多少 | 上报 meter | 独立解析 provider usage 并记账 | 记账已实现；判定在 Worker 两处（请求前与工具执行前），服务端只记账（见 T7） |
+| 能否调用工具 | 在 Worker 内执行 | durable host 复核 `write` 审批 | 常规 turn 策略与 budget guard 在 Worker 工具执行层（见 T6） |
 | 能否访问外部服务 | 提议 egress 请求 | capability 白名单、限流、脱敏、不跟随重定向 | 已实现，[凭据隔离](credential-isolation-proxy.md) |
 | 写什么审计 | 不能写 | append-only journal、重启恢复 | 已实现，[可观测性](observability.md#持久记录与重启对账) |
 
@@ -63,8 +63,8 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | T3 | 凭据经 URL 查询串进入日志 | 页面或工具把 key 拼进 query | 查询名匹配 token、secret、key 等敏感名时拒绝 | 同上 | 无 |
 | T4 | 同机其它进程冒充浏览器 | 本机任意用户进程可访问回环端口；启动脚本默认端口 4185/4186 | 无进程互认证；identity 端点可自签 principal | 本页新增 `threat-model-invariants` 只证明凭据不回显 | **未闭环**：可消耗本机模型额度、运行工具；读不到其它 principal 的 Session |
 | T5 | 预览页内 XSS 取得同源全部权限 | 同源预览页加载恶意脚本；模型输出进入 HTML 路径 | React 默认转义；Markdown 代码块只消费 shiki 生成的静态 span 树；HTML 文档在无 `allow-same-origin` 的 Blob iframe 内运行，写入文档首位带严格 CSP，静态模式额外经 DOMPurify 清理；`--api-port` 可把 `/api/browser-native/*` 移到独立 origin | `apps/web/tests/document-preview.e2e.ts` 注入脚本断言 cookie、Web storage、OPFS 与同源 API 均被拒；`html-bootstrap` 单测断言 CSP 位置与指令；`tests/preview-api-origin-split.e2e.mjs` 断言分离部署下 API 请求只落在 API origin | **部分闭环**：预览内容已隔离，分离部署可用；默认启动仍让预览页与 API 同源，页面脚本仍持完整权限 |
-| T6 | 提示注入让模型越过工具策略 | 工具结果或文件内容含指令 | 工具策略与 guard 在 Worker 内；durable host 对 `write` 要求页面审批；路径/大小限制 | [提示注入边界](prompt-injection-boundaries.md) | **部分未闭环**：被篡改的 Worker 可跳过常规 turn 的策略与审批 |
-| T7 | 篡改客户端绕过预算 | 修改 Worker 中的 meter 或跳过 fetch 前判定 | backend 独立解析 usage 并记账；超限事件与账本可对账 | [token 预算](token-budget-metering.md) | **未闭环**：阻断发生在 Worker；服务端目前只记账不拒绝 |
+| T6 | 提示注入让模型越过工具策略 | 工具结果或文件内容含指令 | 工具策略与 `ctx.tools.guard` 在 Worker 工具执行层；`deny` 是后验单调 guard，审批通过也不能绕过；durable host 对 `write` 要求页面审批；路径/大小限制 | [提示注入边界](prompt-injection-boundaries.md)；`tests/approval-policy.e2e.mjs` 在 rogue allow listener 存在时仍拒绝 `write` | **部分未闭环**：被篡改的 Worker 可跳过常规 turn 的策略与审批 |
+| T7 | 篡改客户端绕过预算 | 修改 Worker 中的 meter 或跳过 fetch 前判定 | backend 独立解析 usage 并记账；Worker 在 LLM 请求前与工具执行前各复核一次 meter；超限事件与账本可对账 | [token 预算](token-budget-metering.md)；`tests/token-budget.e2e.mjs` 在关闭 LLM 前置检查后仍由工具 guard 拒绝 `write` | **部分未闭环**：服务端仍只记账不拒绝，被篡改的 Worker 可跳过本地判定 |
 | T8 | 伪造或重放 owner token | 旧标签页或用旧 token 写入 | 服务端 owner token/epoch、单调 epoch、seq 校验 | [重启 epoch 与租约](durable-host-restart.md) | 跨实例未验证（单实例范围） |
 | T9 | 跨 principal 读写 Session/Workspace | 换 cookie 或猜 id | 每个资源按 principal 404；错误不区分存在性 | [principal 隔离](principal-scoped-session-isolation-progress.md) | 侧信道时序未测 |
 | T10 | egress 绕过白名单或把 key 转发出去 | 工具直接 fetch 或滥用代理 | capability 的 origin/path/method 校验、不跟随重定向、响应脱敏、固定窗口限流 | `tests/credential-isolation.e2e.mjs` | Worker 自身仍可访问任意 CORS 站点；需部署方 CSP `connect-src` |
@@ -79,7 +79,7 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | --- | --- | --- | --- |
 | 预览页内 XSS | 高 | HTML 预览内容已在无同源权限的 sandbox 与严格 CSP 下隔离，注入脚本读不到 cookie、OPFS 与同源 API；`--api-port` 可把 API 移到独立 origin，e2e 已验证分离路径；默认启动预览页仍与 API 同源 | 默认启动也分离到不同 origin，或预览页只读且 API 要求不可伪造的 per-tab token；用注入脚本用例断言 API 拒绝 |
 | 同机进程互认证 | 高 | 回环端口对同机任意进程开放，identity 端点自签 principal | 每次启动生成 0600 启动令牌，所有路由要求该令牌，且令牌不经 HTTP 暴露；用第二个进程无令牌请求断言 401 |
-| 工具策略/预算执行在客户端 | 高 | 常规 turn 的策略、审批与预算阻断在 Worker 内 | 服务端在发出上游请求前复核预算，并在工具执行前复核策略；用篡改客户端跳过判定的用例断言服务端拒绝 |
+| 工具策略/预算执行在客户端 | 高 | 常规 turn 的 `deny` 由工具执行层 guard 拒绝；超预算同时在 LLM 前置与工具执行前复核，关闭 LLM 前置后工具 guard 仍拒 `write`；服务端只记账 | 服务端在发出上游请求前复核预算，并在工具执行前复核策略（防被篡改的 Worker）；用篡改客户端跳过本地判定的用例断言服务端拒绝 |
 | 审计完整性 | 中 | JSONL 可被同机同用户进程改写，无签名 | 只追加卷、文件完整性签名或外部采集；用篡改文件后重启对账断言报告不一致 |
 
 ## 本轮新增验证
@@ -137,6 +137,23 @@ all /api/browser-native/ requests observed on apiOrigin: true
 node docs/drafts/browser-native-dsh-poc/tests/preview-api-origin-split.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs
 ```
+
+## 策略与预算在工具执行层拦截
+
+`deny` 由 `ctx.tools.guard` 在工具执行层单调拒绝：`tests/approval-policy.e2e.mjs` 在一个 rogue `tools/pre-execute` allow listener 存在时仍拒绝 `write`，审批通过也不能放行。预算除 LLM 请求前的 `canRequest` 外，`browser-native-token-budget` 还注册同一工具执行层 guard；`tests/token-budget.e2e.mjs` 先把 Session 限额降到已用量以下，再关闭 LLM 前置检查（模拟该层被绕过），真实模型请求 `write` 后由 guard 就地拒绝：
+
+```json
+{
+  "toolGuard": {
+    "preflightSkipped": true,
+    "denied": true,
+    "reason": [{ "type": "text", "text": "Error: token budget exceeded (session): 4923/2368 tokens" }],
+    "fileCreated": false
+  }
+}
+```
+
+Node backend 全程没有策略或预算拒绝逻辑，因此该拒绝来自 Worker 自己；服务端记账与对账仍按 [token 预算](token-budget-metering.md) 执行。
 
 既有证据复用：[Worker 隔离与安全](worker-isolation-and-security.md)（Chrome 156，三套响应头，`crossOriginAuthorizationHeaders=0`、CSP 使跨源请求数为 0）、[凭据隔离](credential-isolation-proxy.md)（Worker 无 key、白名单外拒绝、不跟随重定向）、[提示注入边界](prompt-injection-boundaries.md)（工具结果不能提升权限）、[principal 隔离](principal-scoped-session-isolation-progress.md)（跨 principal 一律 404）。
 

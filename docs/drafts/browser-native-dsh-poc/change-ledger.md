@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-106：预算在 Worker 工具执行层就地拦截
+
+```text
+changeId: BN-P2-106
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-token-budget.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 威胁模型 T7 与未闭环表记录“阻断发生在 Worker 的 LLM 前置检查；服务端只记账”。用户要求 deny 与超预算在工具执行层就地拦截，并在服务端兜底被绕过时仍拒绝；原实现只有请求前判定，工具执行路径没有预算检查。
+existingExtensionPointsChecked: 已有 `ctx.tools.guard`（`browser-native-tool-policy.ts` 的 deny 后验）与 `canRequest`（`browser-native-providers.ts` 的请求前判定）；只在既有 guard 与 probe 上扩展，不改工具注册表、Agent Loop、Session 格式或 wire。
+whyDraftOnlyWasInsufficient: 请求前判定被跳过时（测试用 probe 关闭它，等价于该层被绕过），工具仍会执行；只有把量程检查注册进工具执行层，才能在本地拒绝。
+behaviorChange: `browser-native-token-budget` 新增 `ctx.tools.guard`：任何工具执行前按 Session/租户 meter 复核，超限时返回 `token budget exceeded (...)`，不产生工具结果、不改文件；同一 meter 状态重复拒绝只写一条 `budget/exceeded`，用量继续增长后按新 meter 状态再记一条。test probe 增加 `budget-request-check`，用于关闭请求前判定以单独验证 guard。
+consumersUpdated: token-budget e2e（真实模型第四 turn）、token-budget-metering 证据、威胁模型 T7/判定表/未闭环表；无 SDK、CLI、profile 或生产 roster 变更。
+test: `pnpm run typecheck` 通过；`build:preview` 成功；`tests/token-budget.e2e.mjs` 真实模型通过：meter 2346/23 与 provider 完全一致，Session 与租户请求前阻断各一条审计，关闭 LLM 前置检查后真实模型请求 `write` 被工具 guard 拒绝（`token budget exceeded (session): 4923/2368 tokens`），目标文件不存在，页面无异常；`tests/approval-policy.e2e.mjs` 已覆盖 rogue allow listener 下 `deny` 仍拒绝。
+syncReplaySteps: 上游同步后重跑 `build:preview` 与 token-budget e2e；若 `ctx.tools.guard` 签名或 `ToolExecution` 字段变化，同步更新 guard 参数与 probe。
+deleteCondition: 服务端在请求前与工具执行前复核策略/预算后，可把该 guard 降级为观测；正式产品 profile 启用预算插件时重新评估拒绝文案与限额配置。
+status: implemented
+```
+
 ### BN-P2-105：预览与 API 分离源部署与跨 origin Worker 路由
 
 ```text

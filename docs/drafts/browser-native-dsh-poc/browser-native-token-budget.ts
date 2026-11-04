@@ -4,16 +4,18 @@
  * The plugin meters durable provider usage through Token-meter's `tokenUsage`
  * projection, sums the sessions of one profile-configured tenant, and appends
  * one `budget/exceeded` audit event per session/scope crossing. Enforcement
- * happens in the Browser-Native LLM adapter before each upstream request: the
- * adapter asks {@link BrowserNativeTokenBudgetProbe.canRequest}, throws a
- * typed budget error when a limit is crossed, and the turn ends visibly with
- * that error instead of sending another provider request.
+ * happens in two places inside the Worker: the Browser-Native LLM adapter asks
+ * {@link BrowserNativeTokenBudgetProbe.canRequest} before each upstream request,
+ * and a monotonic `ctx.tools.guard` refuses tool execution once a limit is
+ * crossed. The guard is the tool-execution-layer stop: it still refuses when the
+ * request preflight is skipped or a caller bypasses the adapter.
  *
- * The probe is test-only. It reads the live counters and replaces the limits
- * without reloading the profile.
+ * The probe is test-only. It reads the live counters, replaces the limits, and
+ * toggles the request preflight without reloading the profile.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
+import type { ToolExecution } from '../../../packages/core/tools/src/index.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -65,6 +67,13 @@ export interface BrowserNativeTokenBudgetProbe {
    * @returns `undefined` to proceed, otherwise a user-visible budget reason.
    */
   canRequest(sessionId: string | undefined): string | undefined
+  /**
+   * Toggle the adapter's pre-request check, so a test can prove the tool
+   * execution guard refuses on its own.
+   * @param enabled - whether {@link BrowserNativeTokenBudgetProbe.canRequest} still refuses.
+   * @returns the applied toggle state.
+   */
+  setRequestCheck(enabled: boolean): { readonly enabled: boolean }
 }
 
 declare module '@deepseek-ai/dsh-session' {
@@ -115,6 +124,9 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
   let config: TokenBudgetConfig | undefined
   const sessions = new Map<string, Session>()
   const exceeded = new Set<string>()
+  /** Meter states already audited, so several refusals at one usage append once. */
+  const audited = new Set<string>()
+  let requestCheck = true
 
   const meterOf = (session: Session): { inputTokens: number; outputTokens: number } => {
     const state = ctx?.sessionProjections.stateOf(session, 'tokenUsage')
@@ -139,8 +151,12 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
     if (config === undefined) return
     const meter = meterOf(session)
     const key = `${String(session.id)}:${scope}`
-    if (exceeded.has(key)) return
     exceeded.add(key)
+    // Usage that grew after the first refusal is a new crossing, so record it
+    // once for that meter state; identical totals stay deduplicated.
+    const meterKey = `${key}:${meter.inputTokens}:${meter.outputTokens}`
+    if (audited.has(meterKey)) return
+    audited.add(meterKey)
     session.append('budget/exceeded', {
       scope,
       tenantId: config.tenantId,
@@ -156,16 +172,37 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
     return sessions.get(sessionId)
   }
 
+  const reasonFor = (session: Session | undefined): string | undefined => {
+    if (config === undefined) return undefined
+    const totals = tenantTotals()
+    if (session !== undefined) {
+      const meter = meterOf(session)
+      if (meter.inputTokens + meter.outputTokens > config.sessionLimit) {
+        audit(session, 'session')
+        return `token budget exceeded (session): ${meter.inputTokens + meter.outputTokens}/${config.sessionLimit} tokens`
+      }
+    }
+    if (totals.inputTokens + totals.outputTokens > config.tenantLimit) {
+      if (session !== undefined) audit(session, 'tenant')
+      return `token budget exceeded (tenant ${config.tenantId}): ${totals.inputTokens + totals.outputTokens}/${config.tenantLimit} tokens`
+    }
+    return undefined
+  }
+
   const module = {
     default: {
       name: 'browser-native-token-budget',
-      inject: ['sessionProjections'],
+      inject: ['sessionProjections', 'tools'],
       apply(applyCtx: Context, raw?: unknown): void {
         ctx = applyCtx
         config = parseConfig(raw)
         ctx.on('session/event', (session) => {
           sessions.set(String(session.id), session)
         })
+        // Tool execution is the in-place stop: it holds even when the request
+        // preflight is skipped, so a bypassed adapter cannot execute a call.
+        ctx.effect(() => ctx.tools.guard((exec: Readonly<ToolExecution>) => reasonFor(exec.agent?.session)),
+          'browser-native token budget guard')
       },
     },
   }
@@ -193,6 +230,7 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
         tenantLimit: positiveInteger(limits.tenantLimit, 'tenantLimit'),
       }
       exceeded.clear()
+      audited.clear()
       return {
         tenantId: config.tenantId,
         limits: { sessionLimit: config.sessionLimit, tenantLimit: config.tenantLimit },
@@ -202,22 +240,10 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
         exceeded: [],
       }
     },
-    canRequest: (sessionId) => {
-      if (config === undefined) return undefined
-      const session = resolveSession(sessionId)
-      const totals = tenantTotals()
-      if (session !== undefined) {
-        const meter = meterOf(session)
-        if (meter.inputTokens + meter.outputTokens > config.sessionLimit) {
-          audit(session, 'session')
-          return `token budget exceeded (session): ${meter.inputTokens + meter.outputTokens}/${config.sessionLimit} tokens`
-        }
-      }
-      if (totals.inputTokens + totals.outputTokens > config.tenantLimit) {
-        if (session !== undefined) audit(session, 'tenant')
-        return `token budget exceeded (tenant ${config.tenantId}): ${totals.inputTokens + totals.outputTokens}/${config.tenantLimit} tokens`
-      }
-      return undefined
+    canRequest: (sessionId) => requestCheck ? reasonFor(resolveSession(sessionId)) : undefined,
+    setRequestCheck: (enabled) => {
+      requestCheck = enabled
+      return { enabled: requestCheck }
     },
   }
 }
