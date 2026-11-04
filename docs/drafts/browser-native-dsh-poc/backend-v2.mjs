@@ -21,6 +21,7 @@ import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
 import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
+import { createObservabilityJournal } from './observability-journal.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -4617,6 +4618,7 @@ export async function createBrowserNativeV2Server(options) {
     try {
       options.accessAuditSink?.(structuredClone(entry))
     } catch {} // A failing sink must not change the denial the client already received.
+    void observabilityJournal.appendAccessDenial(structuredClone(entry))
   }
   /**
    * Read denial evidence for unauthorized or cross-principal requests.
@@ -4740,6 +4742,13 @@ export async function createBrowserNativeV2Server(options) {
   const startedAt = Date.now()
   const metrics = createMetricsRegistry()
   const usageAudit = []
+  const observabilityJournal = createObservabilityJournal({ dataDir: options.dataDir })
+  const observabilityRestore = await observabilityJournal.restore()
+  accessAuditEntries.push(...observabilityRestore.accessDenials)
+  if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) {
+    accessAuditEntries.splice(0, accessAuditEntries.length - ACCESS_AUDIT_LIMIT)
+  }
+  usageAudit.push(...observabilityRestore.usage)
   const durableHost = createDurableTurnHost({
     store,
     admission,
@@ -4753,6 +4762,30 @@ export async function createBrowserNativeV2Server(options) {
     journalPath: join(options.dataDir, 'durable-runs.json'),
   })
   const durableRecovery = await durableHost.recover()
+  const metricsView = () => metrics.snapshot({
+    startedAt,
+    activeRequests,
+    admission: admission === undefined ? undefined : admission.snapshot(),
+    leases: store.leaseSnapshot(),
+    durable: durableHost.snapshot(),
+  })
+  const metricsSnapshotTimer = setInterval(() => {
+    void observabilityJournal.persistMetrics(metricsView())
+  }, 10_000)
+  metricsSnapshotTimer.unref()
+  const observabilityReconciliation = {
+    processStartedAt: new Date(startedAt).toISOString(),
+    recoveredTurns: durableRecovery.recovered,
+    durableJournalHealthy: durableRecovery.journalHealthy,
+    restored: {
+      accessDenials: observabilityRestore.accessDenials.length,
+      usageEntries: observabilityRestore.usage.length,
+      truncated: observabilityRestore.truncated,
+      invalidLines: observabilityRestore.invalidLines,
+      ...(observabilityRestore.metricsError === undefined ? {} : { metricsError: observabilityRestore.metricsError }),
+    },
+    previousProcess: observabilityRestore.metrics ?? null,
+  }
 
   /**
    * Serialize a Session and the attachments its log references from one Workspace.
@@ -5505,7 +5538,10 @@ export async function createBrowserNativeV2Server(options) {
                 response.off('close', onClose)
               }
             } else {
-              await realLlm(response, request, llm, body, entry => usageAudit.push(entry))
+              await realLlm(response, request, llm, body, entry => {
+                usageAudit.push(entry)
+                void observabilityJournal.appendUsage(entry)
+              })
             }
           }, waitMs => { modelQueueWaitMs = waitMs })
         } catch (error) {
@@ -5535,19 +5571,30 @@ export async function createBrowserNativeV2Server(options) {
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/metrics') {
-        const view = metrics.snapshot({
-          startedAt,
-          activeRequests,
-          admission: admission === undefined ? undefined : admission.snapshot(),
-          leases: store.leaseSnapshot(),
-          durable: durableHost.snapshot(),
-        })
+        const view = metricsView()
+        void observabilityJournal.persistMetrics(view)
         if (url.searchParams.get('format') === 'prometheus') {
           response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8', 'cache-control': 'no-store' })
           response.end(metrics.prometheus(view))
           return
         }
         sendJson(response, 200, view)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/reconciliation') {
+        workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const { healthy, writeFailures } = observabilityJournal.status()
+        sendJson(response, 200, {
+          protocolVersion: PROTOCOL_VERSION,
+          capturedAt: Date.now(),
+          ...observabilityReconciliation,
+          journal: { healthy, writeFailures },
+          current: {
+            usageEntries: usageAudit.length,
+            accessDenials: accessAuditEntries.length,
+            metrics: metricsView(),
+          },
+        })
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/failure') {
@@ -5648,13 +5695,20 @@ export async function createBrowserNativeV2Server(options) {
     close: async () => {
       try {
         if (attachmentGcSweepTimer !== undefined) clearInterval(attachmentGcSweepTimer)
+        clearInterval(metricsSnapshotTimer)
         for (const controller of workspaceDownloads.values()) controller.abort()
         await new Promise((resolveClose, reject) => {
           server.closeAllConnections()
           server.close(error => error ? reject(error) : resolveClose())
         })
       } finally {
-        try { await Promise.allSettled([...workspaceDownloads.keys()]) } finally { await releaseDataDirLock() }
+        try {
+          await observabilityJournal.persistMetrics(metricsView())
+          await observabilityJournal.close()
+          await Promise.allSettled([...workspaceDownloads.keys()])
+        } finally {
+          await releaseDataDirLock()
+        }
       }
     },
   }

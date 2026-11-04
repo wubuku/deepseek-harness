@@ -50,14 +50,14 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 - 未覆盖 Safari/WebKit 真机、iOS 真机、IME/输入法、移动窄视口与软键盘；Safari 与移动浏览器由[支持矩阵](browser-support-matrix.md)排除，门禁在启动前拒绝。
 - 内容检索的超时是“每批 1 秒、整次 30 秒”的 PoC CPU 预算，不构成完整 ReDoS 或通用 CPU quota；正则语义不等于 ripgrep。
 - 未覆盖真实模型自主并发多 Agent、任意工具可抢占、600+ turns、单个超大 turn、页内查找与逐行虚拟列表。
-- 指标与审计默认只在进程内存，重启归零；跨 principal 拒绝审计保留 200 条且不含原始凭据。
+- 指标计数在进程内存，重启归零；拒绝访问审计、provider usage 与最后一次 metrics 快照跨重启恢复，但拒绝审计仍限最近 200 条且不含原始凭据。
 
 ## 立项前的必做项
 
 1. 把 Session 权威、检索索引、租户预算与费用结算、egress 代理、durable host 定为服务端交付物，并给出单实例/多实例边界。已完成：见[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)。
 2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI；审批卡现在对无 `command` 的工具展示完整参数，`session-conflict` 状态条提供重载恢复按钮，持有写租约后页面提供本地化导出下载（见[产品可见性](product-visibility.md)）；排队已在 `output[data-browser-native-queue-status]` 上显示实时位次并验证 2→1 变化（见[16 Session 仪表盘](session-dashboard-16.md)），但仍需并入正式 composer/会话状态区。
 3. 明确浏览器支持矩阵：如果 Safari/iOS 是目标，先解决 iOS OPFS 不可用；否则限定 Chromium 桌面试点。已完成：试点限定 Chromium 桌面，Safari/Firefox/移动浏览器由启动门禁拒绝，见[浏览器支持矩阵](browser-support-matrix.md)。
-4. 把 observability、审计与预算记录迁到持久存储，并定义重启后的对账口径。
+4. 把 observability、审计与预算记录迁到持久存储，并定义重启后的对账口径。已完成：拒绝访问、provider usage 与最后一次 metrics 快照写入 `<dataDir>/observability`，`GET /api/browser-native/observability/reconciliation` 报告恢复条数、轮转/坏行、journal 健康与上进程快照（见[可观测性](observability.md#持久记录与重启对账)）。
 5. 以“客户端执行、服务端权威”的安全模型做一次威胁建模；浏览器内 XSS、同机进程互认证与 preview origin 仍是已知未闭环项。
 
 ## 证据索引

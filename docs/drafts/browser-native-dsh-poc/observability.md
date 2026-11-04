@@ -15,8 +15,19 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 | `GET /api/browser-native/observability/metrics` | 无（同源 loopback） | JSON 快照 |
 | `GET /api/browser-native/observability/metrics?format=prometheus` | 无（同源 loopback） | Prometheus 文本，`text/plain; version=0.0.4` |
 | `GET /api/browser-native/observability/failure?turnId=...` | session principal cookie | 单次 durable turn 的证据包 |
+| `GET /api/browser-native/observability/reconciliation` | session principal cookie | 重启恢复记录与当前进程状态 |
 
-指标据在进程内累积；backend 重启后归零。Prometheus 文本按 scrape 时的快照渲染，gauge 直接取当前值，counter 与 histogram 取累计值。
+指标在进程内累积；backend 重启后计数归零，但拒绝访问审计、provider usage 与最后一次 metrics 快照写入 `<dataDir>/observability`，重启时读回用于对账。Prometheus 文本按 scrape 时的快照渲染，gauge 直接取当前值，counter 与 histogram 取累计值。
+
+## 持久记录与重启对账
+
+- `observability/access-denials.jsonl`：每条拒绝访问一行，与证据包的 `accessDenials` 同源；重启恢复最近 200 条。
+- `observability/usage.jsonl`：real 模式下每次 provider 调用的 usage 一行；重启恢复最近 1 000 条。
+- `observability/metrics.json`：指标快照，每 10 秒与每次 metrics scrape 原子重写；崩溃后丢失最多 10 秒。
+- 写失败不改变已返回给客户端的响应：journal 记录 `healthy=false` 与累计 `writeFailures`，由 `reconciliation` 暴露。
+- JSONL 超过 4 MiB 时轮转为 `<file>.1`；恢复时截断与坏行计入 `restored.truncated`/`restored.invalidLines`。
+
+`reconciliation` 返回 `processStartedAt`、`recoveredTurns`、`durableJournalHealthy`、`restored`（`accessDenials`、`usageEntries`、`truncated`、`invalidLines`、可选 `metricsError`）、`previousProcess`（上进程最后一次快照的 `capturedAt` 与 `view`，无快照时为 `null`）、`journal`（`healthy`、`writeFailures`）与 `current`（`usageEntries`、`accessDenials`、`metrics`）。
 
 ## JSON 快照字段
 
@@ -88,17 +99,32 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 
 同批复跑 `durable-host`、`durable-tool-attach`、`resource-limits`、`path-boundary`、`prompt-injection-boundaries` 共 15/15。
 
+`tests/observability-persistence.test.mjs` 3/3：
+
+```text
+✔ journal persists access denials, usage entries, and the last metrics snapshot (7.5ms)
+✔ journal keeps the newest entries, counts torn lines, and survives a corrupt metrics snapshot (1.8ms)
+✔ a restarted backend reconciles restored denials with the previous metrics snapshot (73.3ms)
+```
+
+| 断言 | 观测 |
+|---|---|
+| journal 写入 | 一次 denial 与两次 usage 各写一行；`metrics.json` 的 `capturedAt` 取自注入时钟，`view` 原样读回 |
+| 截断与坏行 | 205 条 denial 恢复为最近 200 条（`truncated=true`），两行坏 JSON 计入 `invalidLines=2`；损坏的 metrics 快照给出 `metricsError` 而不阻止恢复 |
+| 重启对账 | 同一 `dataDir` 第二次启动后 `reconciliation.restored.accessDenials=1`、`previousProcess.capturedAt` 为数字、`previousProcess.view.requests.total ≥ 2`、`journal.healthy=true`；内存审计同样包含恢复记录；匿名请求 401 |
+
 ## 失败场景清单（仍可能成立）
 
-1. **指标不持久**：所有计数在进程内，重启归零；没有跨实例聚合，多实例部署需外部按进程打标。
+1. **计数不跨进程累计**：重启后 `requests`、`model`、`durableTurns` 等计数从零开始；只有拒绝访问、usage 与最后一次快照恢复，跨实例聚合仍需外部采集。
 2. **metrics 路由未认证**：快照只含计数、路由与租约数量，不含 prompt 或凭据，但同源页面可读取；放在公网主机时需要外部鉴权。
 3. **证据包无日志正文**：为控制体积只保留最后 12 条精简事件；更早的模型输入与工具参数需按 seq 读 Session。
-4. **访问审计有窗口**：`accessDenials` 来自最近 200 条进程内审计，且按 principal digest 过滤；跨重启或超出窗口的拒绝不可回看。
+4. **访问审计有窗口**：`accessDenials` 只保留最近 200 条；重启恢复同一上限，更早的拒绝只存在于轮转前的 JSONL。
 5. **直方图为累计值**：没有滑动窗口或速率；要算 p99 需外部按 scrape 差分。
 6. **排队等待只在模型路由统计**：`model.queueWaitMs` 记录 LLM 路由的准入等待；durable turn 直接调用同一路由，因此也计入，但 worker 侧未单独打点。
 7. **无 trace/span**：只有请求与 turn 级计数，没有单请求分段耗时；无法区分解析、存储与写出耗时。
 8. **失败码来自 catch 通道**：未进入 catch 的语义失败（如工具 `isError` 结果）只体现在事件与 turn 状态，不计入 `failuresByCode`。
-9. **重启后的 running turn**：`durableTurns.running` 只在内存；重启后该 turn 从指标消失，Session 日志可能留下未结算 turn。
+9. **重启后的 running turn**：`durableTurns.running` 只在内存；重启后该 turn 从指标消失，Session 日志可能留下未结算 turn，`reconciliation.recoveredTurns` 只统计 durable host 已结算的数量。
+10. **usage 恢复不含费用**：journal 记录 provider 原始 token usage，不记录单价或金额；预算对账仍按 Session 日志的 meter 计算。
 
 ## 边界
 

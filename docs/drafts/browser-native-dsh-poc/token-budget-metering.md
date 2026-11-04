@@ -14,7 +14,7 @@ description: "Browser-Native PoC 的 Session/租户 token 预算验证：计量�
 
 每次实际阻断会向该 Session 追加一条 `budget/exceeded` 事件，包含 `scope`、`tenantId`、`sessionId`、当前输入/输出 token 与实际限额。每个 `(sessionId, scope)` 只记一次，避免重复告警。
 
-计量对照不依赖 Worker 自己的日志：PoC backend 在转发上游 SSE 时独立解析 provider 原始 usage 字段，按 `requestId`/`sessionId` 记录到 `usageAudit`，真实模式通过 `GET /api/browser-native/usage-audit?sessionId=...` 暴露。E2E 用这个记录与插件 meter 对照，而不是用同一份 Session 日志自证。
+计量对照不依赖 Worker 自己的日志：PoC backend 在转发上游 SSE 时独立解析 provider 原始 usage 字段，按 `requestId`/`sessionId` 记录到 `usageAudit`，并追加到 `<dataDir>/observability/usage.jsonl`；真实模式通过 `GET /api/browser-native/usage-audit?sessionId=...` 暴露，重启后 `GET /api/browser-native/observability/reconciliation` 报告恢复的 usage 条数与上一次 metrics 快照。E2E 用这个记录与插件 meter 对照，而不是用同一份 Session 日志自证。
 
 ## 真实模型证据
 
@@ -61,5 +61,6 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 - 租户汇总是本 Worker 内已见过 Session 的和；真实模型这次只在一个 Session 内执行了租户阻断，第二次 UI Session 的发送按钮在该流程中不可用，因此“跨 Session 聚合后阻断”的端到端路径未覆盖。插件代码按 Session 集合求和，没有持久化租户账本。
 - 租户只由 profile `tenantId` 标识，不是认证身份；Worker 没有租户凭据，跨 Worker 或跨设备不共享计量。
 - 没有费用/价格换算，只有 token；provider 的 cache 命中字段若将来出现在原始 usage 中，backend 审计只记录 `prompt_tokens` 总量，插件 meter 按 projection 分桶，二者可能不再逐值相等。
+- `usage.jsonl` 只保留最近 1 000 条 provider 调用记录，用于重启对账与证据回看，不参与预算判定；预算仍以 Session 日志的 meter 为准，因此超出 journal 窗口的历史用量无法从该文件累计。
 - 标题生成、压缩等后台请求的 usage 若不写入被计量的 Session 日志，租户总量会低估这些调用；本次运行没有触发这些请求，未验证。
 - 预算插件只注册在验证 roster，正式产品 profile 未启用；没有客户端预算条、预警阈值（如 80%）或用户可见的用量页。

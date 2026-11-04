@@ -1079,9 +1079,9 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 ## 可观测性
 
-[可观测性](observability.md)新增 `GET /api/browser-native/observability/metrics`（JSON 或 `?format=prometheus`）与 `GET /api/browser-native/observability/failure?turnId=`（principal 校验的失败证据包）。指标覆盖 HTTP 请求数与失败码、模型请求耗时与准入等待、队列深度、Session 租约状态、durable turn 运行/结算与进程 RSS/堆；路由与错误码标签做标识符归一并封顶 48 个键。
+[可观测性](observability.md)新增 `GET /api/browser-native/observability/metrics`（JSON 或 `?format=prometheus`）、`GET /api/browser-native/observability/failure?turnId=`（principal 校验的失败证据包）与 `GET /api/browser-native/observability/reconciliation`（重启恢复记录）。指标覆盖 HTTP 请求数与失败码、模型请求耗时与准入等待、队列深度、Session 租约状态、durable turn 运行/结算与进程 RSS/堆；路由与错误码标签做标识符归一并封顶 48 个键。拒绝访问审计、provider usage 与最后一次快照写入 `<dataDir>/observability`，重启恢复最近 200 条 denial 与 1 000 条 usage，`reconciliation` 暴露恢复条数、轮转/坏行、journal 健康与上进程快照。
 
-`tests/observability.test.mjs` 1/1：401 与 404 分别落入 `UNAUTHENTICATED`/`NOT_FOUND`；两个 durable turn 各请求模型一次，空白 completion 记为 `DURABLE_EMPTY_RESPONSE`（模型失败数为 0）；Prometheus 文本 225 行；失败证据包给出 `status`/`error.code`、末条 `turn/end.reason=error`、lease 与最近事件，且不含 prompt；跨 principal 404、匿名 401。同批回归 15/15。未改 `packages/`。
+`tests/observability.test.mjs` 1/1：401 与 404 分别落入 `UNAUTHENTICATED`/`NOT_FOUND`；两个 durable turn 各请求模型一次，空白 completion 记为 `DURABLE_EMPTY_RESPONSE`（模型失败数为 0）；Prometheus 文本 225 行；失败证据包给出 `status`/`error.code`、末条 `turn/end.reason=error`、lease 与最近事件，且不含 prompt；跨 principal 404、匿名 401。`tests/observability-persistence.test.mjs` 3/3：journal 写入/读回、205 条截断为 200 与 2 条坏行计数、损坏快照不阻止恢复；同一 dataDir 二次启动后恢复 denial 与上进程快照，匿名 reconciliation 401。同批回归 15/15。未改 `packages/`。
 
 ## durable 取消
 

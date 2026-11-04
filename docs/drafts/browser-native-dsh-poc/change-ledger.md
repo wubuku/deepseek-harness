@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-100：立项前必做第 4 项——observability、审计与 usage 持久化及重启对账
+
+```text
+changeId: BN-P2-100
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/observability-persistence.test.mjs; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/product-readiness-go-no-go.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 立项前必做第 4 项要求 observability、审计与预算记录迁到持久存储并定义重启对账口径；此前拒绝访问审计、provider usage 与指标快照只在进程内存，重启后无法区分“没有请求”与“记录丢失”。
+existingExtensionPointsChecked: 复用 backend 既有的 `accessAuditSink` 观测点、`recordAccessDenial`、real LLM 的 usage 回调与 `metrics.snapshot()`；持久化写在 `<dataDir>/observability`，与既有的 `durable-runs.json` 和 dataDir 锁并列；未修改 packages/、Session format 或 Agent Loop。
+whyDraftOnlyWasInsufficient: 恢复与对账只有在同一 dataDir 上真实启停两个 backend 进程才能证明；进程内计数无法验证轮转、坏行与上进程快照。
+behaviorChange: 新增 `createObservabilityJournal`：拒绝访问与 usage 追加 JSONL（超过 4 MiB 轮转为 `.1`），metrics 快照原子重写；写失败计数不抛出，`status()` 暴露 `healthy`/`writeFailures`。backend 启动时恢复最近 200 条 denial 与 1 000 条 usage 进内存审计，`GET /observability/metrics` 与 10 秒定时器刷新快照，`close()` 在释放 dataDir 锁前落盘并等待 journal。新增 `GET /api/browser-native/observability/reconciliation`（session principal）：`processStartedAt`、`recoveredTurns`、`durableJournalHealthy`、`restored`、`previousProcess`、`journal` 与 `current`。
+consumersUpdated: real LLM usage 回调、访问拒绝路径、metrics 路由、shutdown、observability 文档、token 预算文档、go/no-go 第 4 项状态与环境限制、ledger。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/observability-persistence.test.mjs docs/drafts/browser-native-dsh-poc/tests/observability.test.mjs` 4/4 通过：journal 写入/读回，205 条截断为 200 且 2 条坏行计数，损坏 metrics 给出 `metricsError`；同一 dataDir 二次启动后 `restored.accessDenials=1`、`previousProcess.capturedAt` 为数字、`journal.healthy=true`、匿名 reconciliation 401。
+syncReplaySteps: 上游同步后核对 metrics.registry 快照字段、real LLM usage 回调签名与 dataDir 锁释放顺序；复跑 observability 两个测试文件；若新增持久记录类型，扩展 journal 版本与恢复上限。
+deleteCondition: 正式产品提供外部指标/审计采集与跨实例对账，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-099：立项前必做第 3 项——浏览器支持矩阵与启动门禁
 
 ```text
