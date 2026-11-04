@@ -3206,3 +3206,20 @@ syncReplaySteps: 上游同步后复跑该 E2E 与 `tests/backend-v2.test.mjs`；
 deleteCondition: 产品提供浏览器安全 MCP transport 与代理，并有等效端到端验证；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-154：240 Session、28,800 事件的跨 Session 全文检索上限
+
+```text
+changeId: BN-P2-154
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/session-query-large-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-query-large-scale.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 上一轮检索规模验证只有 120 Session × 3 条短事件（255.8 ms），无法支撑“200+ Session、事件总量较大”的正确性与上限判断；缺少语料翻倍前后的实测曲线，也没有验证首条命中、唯一标记与全事件命中。
+existingExtensionPointsChecked: 复用 `browser-session-query` roster、validation 探针 `session-query-probe`（命中上限 100、每 Session 首条）、后端 `session/create`/`append`/`close` 与持久化 catalog；未修改产品 profile、探针或 `packages/`。
+whyDraftOnlyWasInsufficient: 线性回退的成本随 Session 数与转录长度叠加，必须实测翻倍语料才能给出交互与批量上限；同时需要证明扫描不会漏 Session、误报或把第二条命中当成第一条。
+behaviorChange: 仅新增 validation E2E 与文档；产品检索行为不变。
+consumersUpdated: 大规模检索 E2E、`session-query-large-scale.md`、PoC README 导航与章节、本 ledger。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-query-large-scale.e2e.mjs` 通过。Chrome：语料 241 Session（240 种子 + preview）、28,800 条种子事件；`NEEDLE_OMEGA` 命中 120/120、返回 100 条上限、首条序号 30；`RARE_OMEGA` 1/1 且序号 61；`routine` 240/240；不存在标记 0；重复查询一致；cwd 过滤 120/120；单 Session 内命中 1 条 6.5 ms。时延：阶段 A（121 Session、14,400 事件）1090.4 ms，阶段 B（241、28,800）2038.5 ms，边际 65.8 ms/1,000 事件；列表 4.6 ms、过滤 4.8 ms。后端仍为 `linear-fallback`，SQLite 索引报 `node:sqlite.DatabaseSync is not available`。
+syncReplaySteps: 上游同步后重建 preview 并复跑该 E2E；若探针命中上限或线性回退成本模型变化，更新本记录与 `session-query-large-scale.md` 的数字。
+deleteCondition: 服务端全文索引接管跨 Session 检索并有等效正确性与时延验证；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
