@@ -56,7 +56,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 | 主题 | 入口 |
 | --- | --- |
-| 运行入口与拓扑 | [托管模式部署](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
+| 运行入口与拓扑 | [托管模式部署与备份恢复](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |

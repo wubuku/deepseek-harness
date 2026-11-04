@@ -123,7 +123,14 @@ nginx 的 upstream 写成 `backend:4185`；容器部署时给 backend 容器加�
 ## 升级路径
 
 1. 向进程发送 `SIGTERM`，确认正常退出且 `.browser-native-backend.lock` 已删除。
-2. 停止状态下备份数据目录：`tar -czf browser-native-dsh-data-$(date +%F).tar.gz -C /srv browser-native-dsh-data`。
+2. 停止状态下导出带清单的备份：
+
+   ```sh
+   node docs/drafts/browser-native-dsh-poc/hosted/export-data.mjs \
+     --data-dir /srv/browser-native-dsh-data --out /srv/backups/$(date +%F)
+   ```
+
+   输出目录必须为空且位于数据目录之外；backend 未停止时退出码为 3。恢复见[备份与恢复](#备份与恢复)。
 3. 运行只读核对：
 
    ```sh
@@ -168,8 +175,33 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/path/to/playwright/index.js \
 
 实测结果（2026-11-04，Docker 29.4.0，Chrome 156，macOS）：三形态 `3/3 forms passed`；容器与 TLS 各产生 1 个 Session、1 个 Workspace，`check-data` 判定 compatible。systemd 只完成单元语法校验：本机没有 systemd，单元的运行时行为（启动服务、journal、stop 清理）未验证。TLS 验证使用自签证书，未覆盖证书轮换、HSTS 与真实 DNS。
 
+## 备份与恢复
+
+`hosted/data-backup.mjs` 把停止状态的数据目录导出为 bundle：`files/` 保存每个文件的字节副本，`manifest.json` 记录 `dsh-browser-native-data-backup/1` 协议、每个文件的相对路径、SHA-256 与字节数，以及 Session、Workspace、附件、journal、ledger 与 identity 的分类计数。backend lock 不进入 bundle。
+
+```sh
+node docs/drafts/browser-native-dsh-poc/hosted/export-data.mjs --data-dir /srv/browser-native-dsh-data --out /srv/backups/2026-11-04
+node docs/drafts/browser-native-dsh-poc/hosted/import-data.mjs --bundle /srv/backups/2026-11-04 --data-dir /srv/restored-data
+```
+
+导出退出码：0 成功、1 导出失败、2 用法错误、3 backend 仍在运行、4 输出目录非空。导入先校验协议、路径逃逸、重复条目、全部摘要与大小以及未列文件，再用 `inspectDataDirectory` 在 bundle 上做版本兼容检查；任一步失败都不创建目标目录，写入中途失败会删除已写入的目标目录。目标目录必须为空，因此导入不会覆盖现有数据。
+
+- 导出拒绝持有 lock 的目录：运行中的 backend 会继续写入，边写边拷贝会混合不同修订。
+- 导入只接受本构建可读的 Session format v4、Workspace metadata v1 与 identity metadata v1；版本不兼容在写入前失败。
+- 恢复后 `workspace-v2/chunk-objects` 存在时，启动必须带 `DSH_POC_WORKSPACE_CHUNK_OBJECTS=1`，与升级路径一致。
+
+`tests/backup-restore.e2e.mjs` 通过 HTTP 面填充源目录：一次 Workspace 文件写入、一次内容定义分块上传（chunk objects、file descriptor 与 content layout）、一个附件、一个两事件 Session，以及一条拒绝审计与一条 provider usage。停止 backend 后导出、导入空目录并重启，断言：
+
+- 全部文件（Session、Workspace manifest、chunk 与 descriptor、layout、附件、identity、ledger、journal）与源目录字节一致；
+- 重启后的 Session 导出与恢复前一致，`session/open` + `append` 能从 seq 2 续跑；
+- 恢复后的 usage 报告（请求数、输入/输出/总 token、按 principal 与 Session 的成本）与 journal 条目重建结果一致；
+- journal 的哈希链在恢复后仍验证通过，拒绝审计与 usage 条目各 1 条；
+- 运行中的 backend 拒绝导出（`BACKEND_RUNNING`）；篡改任一 bundle 文件得到 `INTEGRITY_MISMATCH` 且不创建目标目录；非空目标得到 `TARGET_NOT_EMPTY`。
+
+实测结果（2026-11-04，Chrome 156，macOS）：脚本输出 `{"result":"passed","files":16,...}`，journal `verified: true`，usage 汇总 120/30/150 token 与 `0.00036 USD`，`continuedSeq: 2`。
+
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性。
 
-未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。
+未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。

@@ -156,18 +156,8 @@ function printReport(report) {
   process.stdout.write(`verdict: ${report.compatible ? 'compatible with this build' : 'incompatible with this build'}\n`)
 }
 
-/** Inspect a data directory and print one report. */
-async function main() {
-  const values = parseArgs(process.argv.slice(2))
-  if (values === undefined) {
-    process.stdout.write(HELP)
-    return 0
-  }
-  const dataDir = resolve(values.dataDir ?? join(REPO_ROOT, 'browser-native-data'))
-  if (!existsSync(dataDir)) {
-    process.stderr.write(`check-data: no data directory at ${dataDir}\n`)
-    return 2
-  }
+/** Inspect one data directory and return the compatibility report. */
+export async function inspectDataDirectory(dataDir) {
   const report = {
     dataDir,
     sessions: await checkSessions(dataDir),
@@ -183,14 +173,32 @@ async function main() {
     && report.workspaces.invalid.length === 0
     && report.identity.supported
     && report.ledger.supported
+  return report
+}
+
+/** Inspect a data directory and print one report. */
+async function main() {
+  const values = parseArgs(process.argv.slice(2))
+  if (values === undefined) {
+    process.stdout.write(HELP)
+    return 0
+  }
+  const dataDir = resolve(values.dataDir ?? join(REPO_ROOT, 'browser-native-data'))
+  if (!existsSync(dataDir)) {
+    process.stderr.write(`check-data: no data directory at ${dataDir}\n`)
+    return 2
+  }
+  const report = await inspectDataDirectory(dataDir)
   if (values.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
   else printReport(report)
   return report.compatible ? 0 : 1
 }
 
-main().then(code => {
-  process.exitCode = code
-}, error => {
-  process.stderr.write(`check-data: ${error instanceof Error ? error.message : String(error)}\n`)
-  process.exitCode = 2
-})
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(code => {
+    process.exitCode = code
+  }, error => {
+    process.stderr.write(`check-data: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 2
+  })
+}

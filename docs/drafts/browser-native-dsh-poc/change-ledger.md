@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-123：dataDir 全量导出/导入与恢复后一致性验证
+
+```text
+changeId: BN-P2-123
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/hosted/data-backup.mjs; docs/drafts/browser-native-dsh-poc/hosted/export-data.mjs; docs/drafts/browser-native-dsh-poc/hosted/import-data.mjs; docs/drafts/browser-native-dsh-poc/hosted/check-data.mjs; docs/drafts/browser-native-dsh-poc/tests/backup-restore.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 升级路径此前只建议 tar 打包并依赖人工比对，没有任何工具验证备份完整性、版本兼容或恢复后可续跑；备份与恢复在“已验证与未验证”中不存在。
+existingExtensionPointsChecked: 复用 `check-data.mjs` 的数据目录检查与版本兼容判定、`createBrowserNativeV2Server` 的停止/启动生命周期、`observability-journal.mjs` 的哈希链恢复、`usage-report.mjs` 的成本重建与既有 Session HTTP 面；未改 Session 事件、Agent Loop、durable 协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 恢复一致性只能由真实数据目录与真实重启证明：需要 Workspace chunk objects 与 content layout、附件、Session 事件、journal 链和 usage 账在导出、导入、重启后逐字节与逐字段一致。
+behaviorChange: 新增 `hosted/data-backup.mjs`：`exportDataDir` 在 backend 停止（无 lock）时把除 lock 外的全部文件复制到 `files/` 并写 `manifest.json`（协议 `dsh-browser-native-data-backup/1`、每文件 SHA-256 与字节数、分类计数），拒绝非空输出、数据目录内输出与运行中目录；`importDataDir` 校验协议、路径逃逸、重复条目、全部摘要与大小、未列文件，并在 bundle 上跑 `inspectDataDirectory` 兼容检查，仅向空目录写入，失败时删除已写入目标。新增 `export-data.mjs`/`import-data.mjs` CLI（退出码 0/1/2/3/4）。`check-data.mjs` 抽出可复用的 `inspectDataDirectory` 并加直接执行守卫。
+consumersUpdated: `hosted-deployment.md` 升级路径改用 `export-data.mjs`，新增“备份与恢复”章节与已验证/未验证清单；README 导航指向部署文档。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/backup-restore.e2e.mjs` 在 Chrome 156 / macOS 上 PASS：源目录经 HTTP 面写入 Workspace 文件、内容定义分块上传（chunk objects、descriptor、layout）、附件、两事件 Session、拒绝审计与 usage 各 1 条；导出 16 个文件后导入空目录并重启，全部文件字节一致，Session 导出一致且 `append` 续跑 seq 2，usage 报告（120/30/150 token、0.00036 USD）与 journal 重建一致，journal `verified: true`；运行中导出 `BACKEND_RUNNING`、篡改 bundle `INTEGRITY_MISMATCH` 且不建目标、非空目标 `TARGET_NOT_EMPTY`。
+syncReplaySteps: 上游同步后核对 `check-data.mjs` 的 `inspectDataDirectory` 导出、`data-backup.mjs` 的清单校验与 CLI 退出码；复跑 `tests/backup-restore.e2e.mjs` 与 `hosted-deployment-smoke.e2e.mjs`。
+deleteCondition: 正式交付提供等价的备份/恢复工具与验证入口后删除本 PoC 脚本；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-122：容器镜像、systemd 单元与 TLS 反代的交付与实测
 
 ```text
