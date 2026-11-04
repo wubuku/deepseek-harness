@@ -64,7 +64,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
-| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
+| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[MCP 浏览器接入判定](mcp-browser-feasibility.md)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
 | 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[横向扩展可行性](multi-instance-feasibility.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[用户旅程叙事 E2E](user-journey.md)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
@@ -1767,6 +1767,12 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返回 `EGRESS_HOST_NOT_ALLOWED` 且服务端 0 请求；Worker 注入 `authorization` 返回 `EGRESS_FORBIDDEN_HEADER`；302 作为数据返回、未跟随；上游回显凭据只得到占位符；Worker 直接 fetch 被 CSP 拦截、上游 0 请求；脚本 turn 仍完成且 Session/页面文本无凭据。密钥仍只存在于 backend 进程；能力授权是静态部署配置，审计默认只在内存保留最近 200 条，限流为单进程 capability 级窗口，没有 per-Session 配额、集中持久审计或凭据轮换。
 
 复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/credential-isolation.e2e.mjs`；合同测试见 `tests/backend-v2.test.mjs`。
+
+## MCP 浏览器接入判定
+
+[MCP 浏览器接入判定](mcp-browser-feasibility.md)给出三条路径的结论：stdio 在浏览器不可行（Worker 无子进程 API，`mcp-client` 的 transport 还静态依赖 stdio 与 `dsh-subprocess`）；页面直接连 HTTP/SSE MCP 有条件可行（SDK 基于 `fetch`/Streams，但跨源需上游提供 CORS，且地址与凭据进入页面）；同源服务端代理是可落地的最小路径。
+
+实现按 id 转发 Streamable HTTP 到 `/api/browser-native/mcp/<id>`：启动校验 id、绝对 http(s) URL 与 headers，只接受 POST/GET/DELETE，转发 `mcp-session-id`/`mcp-protocol-version`/`Last-Event-ID` 而不转发 Cookie/Origin，并通过 `pipeline` 保持 SSE 流式回传。Chrome 156 实测 `initialize` 返回 `mcp-session-id`、`tools/list` 列出 `echo`、`tools/call` 以 `text/event-stream` 返回 `MCP_ECHO:` 文本；页面直连夹具为 `TypeError: Failed to fetch`，未知 id 404 `MCP_SERVER_UNKNOWN`、上游不可达 502 `MCP_UPSTREAM_UNAVAILABLE`、方法拒绝 405、无进程认证 401；上游 4 次 POST 无 Cookie/Origin 且带注入 header，页面/Worker/跨源错误为 0。接进 Agent Loop 仍需把 `packages/mcp/mcp-client` 的 transport 拆出浏览器安全入口。
 
 ## 长转录渲染成本与主线程占用
 

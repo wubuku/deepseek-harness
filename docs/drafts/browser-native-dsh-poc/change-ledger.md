@@ -3189,3 +3189,20 @@ syncReplaySteps: 上游同步后复跑 scripted E2E；凭据恢复后复跑 `DSH
 deleteCondition: 真实模型完成同等对照，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-153：浏览器端 MCP 接入判定与同源代理
+
+```text
+changeId: BN-P2-153
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/mini-mcp-server.mjs; docs/drafts/browser-native-dsh-poc/tests/mcp-browser-proxy.e2e.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/mcp-browser-feasibility.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 浏览器端能否接 MCP 一直只有“stdio 不可用”的笼统结论；缺少对直连 HTTP/SSE 的实测边界，也没有可复用的最小代理证明 Streamable HTTP 与 SSE 在同源路径上成立。
+existingExtensionPointsChecked: 复用 v2 backend 路由、body 上限、进程认证与同源来源检查、`pipeline` 流式回传、Playwright 页面 `fetch`；MCP 协议夹具用手写 JSON-RPC 覆盖 `initialize`/`initialized`/`tools/list`/`tools/call`；未修改 `packages/` 与默认 profile。
+whyDraftOnlyWasInsufficient: 静态阅读无法证明浏览器直连被 CORS 阻断、SSE 经代理不被缓冲、代理剥离 Cookie/Origin 并注入上游凭据，也无法确认认证与错误映射的实际状态码。
+behaviorChange: 仅新增 PoC backend 的 `mcpServers` 配置与 `/api/browser-native/mcp/<id>` 代理路由，以及 validation E2E/文档；产品 profile 与 Agent Loop 行为不变。
+consumersUpdated: MCP 代理 E2E、MCP 协议夹具、`mcp-browser-feasibility.md`、PoC README 导航与章节、本 ledger。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/mcp-browser-proxy.e2e.mjs` 通过。Chrome 156.0.8078.80：`initialize` 200 返回 `dsh-mini-mcp` 与 `mcp-session-id`，`tools/list` 200 列出 `echo`，`tools/call` 200 `text/event-stream` 返回 `MCP_ECHO:MCP_PROXY_BROWSER_ECHO_9C41`；页面直连夹具 `TypeError: Failed to fetch`；未知 id 404 `MCP_SERVER_UNKNOWN`、上游不可达 502 `MCP_UPSTREAM_UNAVAILABLE`、PUT 405 `METHOD_NOT_ALLOWED`、无进程认证 401 `AUTH_REQUIRED`；上游 4 次 POST 无 Cookie/Origin 且每次带注入的 `x-mcp-upstream-key`；页面/Worker 错误与跨源请求 0。
+syncReplaySteps: 上游同步后复跑该 E2E 与 `tests/backend-v2.test.mjs`；若 `packages/mcp/mcp-client` 的 transport 拆分落地，改为用 SDK `StreamableHTTPClientTransport` 指向同源代理路径复跑。
+deleteCondition: 产品提供浏览器安全 MCP transport 与代理，并有等效端到端验证；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

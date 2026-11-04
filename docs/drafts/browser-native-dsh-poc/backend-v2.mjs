@@ -5375,6 +5375,26 @@ export async function createBrowserNativeV2Server(options) {
     && (typeof sharedStateToken !== 'string' || sharedStateToken.length < 32 || sharedStateToken.length > 200)) {
     throw new TypeError('stateAuthorityToken must contain 32 to 200 characters')
   }
+  const mcpServers = options.mcpServers === undefined ? {} : options.mcpServers
+  if (mcpServers === null || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
+    throw new TypeError('mcpServers must be a map of server ids to transport config')
+  }
+  for (const [serverId, serverConfig] of Object.entries(mcpServers)) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(serverId)) throw new TypeError('mcpServers ids must match [A-Za-z0-9._-]{1,64}')
+    if (serverConfig === null || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
+      throw new TypeError(`mcpServers.${serverId} must be an object`)
+    }
+    if (typeof serverConfig.url !== 'string') throw new TypeError(`mcpServers.${serverId}.url must be an absolute URL`)
+    let upstream
+    try { upstream = new URL(serverConfig.url) } catch { throw new TypeError(`mcpServers.${serverId}.url must be an absolute URL`) }
+    if (upstream.protocol !== 'http:' && upstream.protocol !== 'https:') {
+      throw new TypeError(`mcpServers.${serverId}.url must use http or https`)
+    }
+    if (serverConfig.headers !== undefined
+      && (serverConfig.headers === null || typeof serverConfig.headers !== 'object' || Array.isArray(serverConfig.headers))) {
+      throw new TypeError(`mcpServers.${serverId}.headers must be a string map`)
+    }
+  }
   const workspaceDownloadMaxReaders = timeoutMs(options.workspaceDownloadMaxReaders === undefined ? 4
     : options.workspaceDownloadMaxReaders, 'workspaceDownloadMaxReaders')
   const workspaceDownloadTimeoutMs = timeoutMs(options.workspaceDownloadTimeoutMs === undefined ? 30_000
@@ -6053,6 +6073,64 @@ export async function createBrowserNativeV2Server(options) {
           ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
           ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }),
         })
+        return
+      }
+      const mcpMatch = url.pathname.match(/^\/api\/browser-native\/mcp\/([A-Za-z0-9._-]{1,64})$/)
+      if (mcpMatch !== null) {
+        if (request.method !== 'POST' && request.method !== 'GET' && request.method !== 'DELETE') {
+          throw new BackendError('METHOD_NOT_ALLOWED', 'MCP proxy accepts POST, GET and DELETE', 405)
+        }
+        const serverConfig = mcpServers[mcpMatch[1]]
+        if (serverConfig === undefined) {
+          throw new BackendError('MCP_SERVER_UNKNOWN', `no MCP server is configured under "${mcpMatch[1]}"`, 404)
+        }
+        const body = request.method === 'POST' ? await readBody(request) : undefined
+        const controller = new AbortController()
+        response.on('close', () => {
+          if (!response.writableFinished) controller.abort()
+        })
+        let upstream
+        try {
+          upstream = await fetch(serverConfig.url, {
+            method: request.method,
+            headers: {
+              ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+              accept: typeof request.headers.accept === 'string'
+                ? request.headers.accept : 'application/json, text/event-stream',
+              ...(typeof request.headers['mcp-session-id'] === 'string'
+                ? { 'mcp-session-id': request.headers['mcp-session-id'] } : {}),
+              ...(typeof request.headers['mcp-protocol-version'] === 'string'
+                ? { 'mcp-protocol-version': request.headers['mcp-protocol-version'] } : {}),
+              ...(typeof request.headers['last-event-id'] === 'string'
+                ? { 'last-event-id': request.headers['last-event-id'] } : {}),
+              ...(serverConfig.headers ?? {}),
+            },
+            body: body === undefined ? undefined : JSON.stringify(body),
+            redirect: 'error',
+            signal: controller.signal,
+          })
+        } catch {
+          if (controller.signal.aborted) return
+          throw new BackendError('MCP_UPSTREAM_UNAVAILABLE', `MCP upstream "${mcpMatch[1]}" is unreachable`, 502)
+        }
+        const forwardedHeaders = {}
+        for (const name of ['content-type', 'mcp-session-id', 'cache-control', 'retry-after', 'www-authenticate', 'last-event-id']) {
+          const value = upstream.headers.get(name)
+          if (value !== null) forwardedHeaders[name] = value
+        }
+        if (forwardedHeaders['content-type'] === undefined) {
+          forwardedHeaders['content-type'] = 'application/json; charset=utf-8'
+        }
+        response.writeHead(upstream.status, forwardedHeaders)
+        if (upstream.body === null) {
+          response.end()
+          return
+        }
+        try {
+          await pipeline(Readable.fromWeb(upstream.body), response)
+        } catch (error) {
+          if (!response.destroyed) response.destroy(error)
+        }
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/config') {
