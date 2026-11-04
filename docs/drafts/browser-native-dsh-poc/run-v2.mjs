@@ -145,11 +145,13 @@ if (options === undefined) {
   process.exit(0)
 }
 
-const app = await createBrowserNativeV2Server(options)
+const app = await createBrowserNativeV2Server({ ...options, requireLocalAuth: true })
 const origin = await app.listen(options.port, options.host)
-const previewUrl = `${origin}/preview.html?browser-native=1&preview-fixture=none`
+const previewPath = '/preview.html?browser-native=1&preview-fixture=none'
+const previewUrl = `${origin}/auth/handshake?token=${encodeURIComponent(app.authToken)}&next=${encodeURIComponent(previewPath)}`
 process.stdout.write(`browser-native dsh v2 listening at ${origin}\n`)
 process.stdout.write(`browser-native preview: ${previewUrl}\n`)
+if (app.authTokenPath !== undefined) process.stdout.write(`local auth token: ${app.authTokenPath}\n`)
 if (app.apiOrigin !== undefined) process.stdout.write(`browser-native api: ${app.apiOrigin}\n`)
 process.stdout.write(`llm mode: ${app.llm.mode}; model: ${app.llm.model}\n`)
 process.stdout.write(`admission: ≤${String(options.admission?.maxConcurrentTurns ?? 8)} concurrent turns, ≤${String(options.admission?.maxMountedSessions ?? 16)} mounted Sessions\n`)

@@ -107,7 +107,7 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
   --llm scripted
 ```
 
-然后打开 launcher 输出的 `preview.html?browser-native=1&preview-fixture=none` 地址。`browser-native=1` 是显式 opt-in；不带该参数的默认 preview 仍使用上游 overlay 列表和 acceptance。
+然后打开 launcher 输出的地址。launcher 给出的是 `/auth/handshake?token=...&next=/preview.html?browser-native=1&preview-fixture=none`：backend 校验令牌后设置 HttpOnly auth cookie 并 302 到不含令牌的页面。`browser-native=1` 是显式 opt-in；不带该参数的默认 preview 仍使用上游 overlay 列表和 acceptance。
 
 真实 provider 只在 backend 进程读取本机环境文件：
 
@@ -1059,7 +1059,9 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 
 [本地后端请求准入与凭据位置](local-backend-hardening.md)记录回环 HTTP 服务的攻击面验证。backend 在路由前要求回环 Host、API 同源 `Origin`/`Sec-Fetch-Site`，并拒绝查询串中的凭据；身份 cookie 保持 `HttpOnly` + `SameSite=Strict` + Path 限定，owner/GC/egress 凭据只走 JSON body 或服务端 header。
 
-修复前后探针可判定：伪造 Origin 读取 manifest 由 200 变为 403 `ORIGIN_FORBIDDEN`，伪造 Origin 调用 `/llm` 由 200 变为 403，`Host: attacker.example` 由 200 变为 403 `HOST_FORBIDDEN`，`?access_token=` 由 200 变为 400 `CREDENTIAL_IN_QUERY`；同源 `/llm` 仍为 200。合同测试 5/5、既有 backend 合同 64/64，真实 Chrome scripted E2E 完成 1 个 turn。同机其它进程、预览 origin 内 XSS、生产身份授权、Safari/WebKit 和 HTTPS 代理仍属未覆盖范围。
+`run-v2.mjs` 还启用同机进程互认证：每次启动生成 256 位令牌，以 0600 原子写入 `<dataDir>/browser-native-auth-token`，关闭时删除。`/auth/handshake` 把令牌换成 HttpOnly `SameSite=Strict` cookie 并重定向到不含令牌的页面地址；所有 `/api/browser-native/*` 与 `/preview-api-origin` 要求该 cookie 或 `x-browser-native-auth` header，分离源的 API listener 因 cookie 不按端口隔离而同样接受。CORS preflight 不携带凭据，只放行预检，实际请求仍校验。
+
+修复前后探针可判定：伪造 Origin 读取 manifest 由 200 变为 403 `ORIGIN_FORBIDDEN`，伪造 Origin 调用 `/llm` 由 200 变为 403，`Host: attacker.example` 由 200 变为 403 `HOST_FORBIDDEN`，`?access_token=` 由 200 变为 400 `CREDENTIAL_IN_QUERY`；同源 `/llm` 仍为 200。进程认证新增证据：无令牌、错误令牌与伪造 principal cookie 的 identity 均为 401 `AUTH_REQUIRED`，令牌 header 与握手 cookie 为 200；Chrome 分离源 E2E 经握手加载页面，URL 无 token、auth cookie 不可读、API 请求全落 API origin。合同测试 5/5 与进程认证 2/2、既有 backend 合同 64/64，真实 Chrome scripted E2E 完成 1 个 turn。同用户进程仍可读 0600 令牌文件、首次导航查询串会短暂携带令牌、生产身份授权、Safari/WebKit 和 HTTPS 代理仍属未覆盖范围。
 
 ## 服务端 durable turn host（最小原型）
 

@@ -1,6 +1,6 @@
 # 本地后端请求准入与凭据位置
 
-本专题记录 Browser-Native PoC 同源 backend 在“本机回环 HTTP 服务”这一形态下的攻击面验证，以及本批采用的请求准入修复。结论边界：它证明浏览器页面无法从其它 origin 读取 Workspace 或消耗模型额度；它不证明本机其它进程、预览 origin 内的 XSS、生产登录或跨主机部署已安全。
+本专题记录 Browser-Native PoC 同源 backend 在“本机回环 HTTP 服务”这一形态下的攻击面验证，以及本批采用的请求准入修复。结论边界：它证明浏览器页面无法从其它 origin 读取 Workspace 或消耗模型额度；进程认证在 `run-v2.mjs` 启动路径上要求 0600 令牌或握手 cookie，但不覆盖同用户进程读取令牌文件、预览 origin 内的 XSS、生产登录或跨主机部署。
 
 ## 威胁与判定口径
 
@@ -63,7 +63,7 @@ DSH_POC_DIST_ROOT=$PWD/apps/web/dist DSH_POC_BROWSER=chrome \
 
 ## 未覆盖与残余风险
 
-- 本机其它进程可以自行构造回环 Host 与 `Origin`，并调用 `/workspace/identity` 取得自己的 principal；本批不提供进程级互认证或启动 token，因此“同机进程隔离”仍未成立。
+- 本机其它进程可以自行构造回环 Host 与 `Origin`；`run-v2.mjs` 现在启用进程令牌，identity 与全部 browser-native API 在缺少 `x-browser-native-auth` header 或握手 cookie 时返回 401，但同一 OS 用户下的进程仍可读取 0600 令牌文件，进程隔离依赖用户隔离。
 - 预览 origin 内的 XSS 或恶意插件代码与服务同源，能执行用户已授权的操作；请求准入不替代 CSP 与代码审计。
 - 端口探测只能被削弱而不能消除：浏览器仍可观察到回环端口是否接受连接；非回环 Host 与指纹字段已不再响应。
 - owner token 仍是 JSON body 中的 bearer 凭据；本批没有轮换、短期化或一次性化。

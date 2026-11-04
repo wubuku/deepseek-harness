@@ -6,10 +6,10 @@
  * or an OpenAI-compatible upstream. Credentials are loaded only in this Node
  * process and are never included in responses or logs.
  */
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { createServer } from 'node:http'
-import { link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, link, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { relative, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
@@ -50,6 +50,10 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|api[-_]?key|access[-_]?key)/i
 const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
 const ACCESS_AUDIT_LIMIT = 200
+const AUTH_TOKEN_FILE_NAME = 'browser-native-auth-token'
+const AUTH_TOKEN_HEADER = 'x-browser-native-auth'
+const AUTH_COOKIE_NAME = 'dsh-browser-native-auth'
+const AUTH_COOKIE_MAX_AGE_SECONDS = 8 * 60 * 60
 
 class BackendError extends Error {
   constructor(code, message, status = 400, retryAfterMs, details) {
@@ -4542,6 +4546,16 @@ export async function createBrowserNativeV2Server(options) {
     await dataDirLock.release()
   }
   try {
+  const requireLocalAuth = options.requireLocalAuth === true
+  const authTokenPath = requireLocalAuth ? join(options.dataDir, AUTH_TOKEN_FILE_NAME) : undefined
+  const authToken = requireLocalAuth ? randomBytes(32).toString('base64url') : undefined
+  if (authTokenPath !== undefined) {
+    const staging = `${authTokenPath}.${process.pid}.tmp`
+    await writeFile(staging, `${authToken}\n`, { mode: 0o600 })
+    await chmod(staging, 0o600)
+    await rename(staging, authTokenPath)
+    await chmod(authTokenPath, 0o600)
+  }
   const store = new FormalSessionStore(options.dataDir, {
     ownerLeaseMs: options.ownerLeaseMs,
     now: options.testHooks?.now,
@@ -4897,6 +4911,18 @@ export async function createBrowserNativeV2Server(options) {
     })
   }
 
+  const assertProcessAuth = (request, url, internal) => {
+    if (!requireLocalAuth || internal) return
+    // CORS preflights never carry credentials; the actual request is checked.
+    if (request.method === 'OPTIONS' && typeof request.headers['access-control-request-method'] === 'string') return
+    const gated = url.pathname.startsWith('/api/browser-native/') || url.pathname === '/preview-api-origin'
+    if (!gated) return
+    const provided = request.headers[AUTH_TOKEN_HEADER] ?? requestCookie(request.headers.cookie, AUTH_COOKIE_NAME)
+    if (typeof provided !== 'string' || provided.length !== authToken.length
+      || !timingSafeEqual(Buffer.from(provided), Buffer.from(authToken))) {
+      throw new BackendError('AUTH_REQUIRED', 'local process authentication is required', 401)
+    }
+  }
   const handleRequest = async (role, request, response) => {
     let url
     activeRequests += 1
@@ -4942,6 +4968,7 @@ export async function createBrowserNativeV2Server(options) {
       const allowedOrigins = role === 'api' && apiOrigin !== undefined && previewOrigin !== undefined
         ? new Set([previewOrigin]) : undefined
       assertLocalRequest(request, url, internalStateRequest, allowedOrigins)
+      assertProcessAuth(request, url, internalStateRequest)
       if (role === 'api') {
         const requestedOrigin = request.headers.origin
         if (typeof requestedOrigin === 'string' && previewOrigin !== undefined && requestedOrigin === previewOrigin) {
@@ -5703,6 +5730,24 @@ export async function createBrowserNativeV2Server(options) {
         })
         return
       }
+      if (role === 'preview' && request.method === 'GET' && url.pathname === '/auth/handshake') {
+        if (!requireLocalAuth) throw new BackendError('NOT_FOUND', 'route not found', 404)
+        const presented = url.searchParams.get('token')
+        if (typeof presented !== 'string' || presented.length !== authToken.length
+          || !timingSafeEqual(Buffer.from(presented), Buffer.from(authToken))) {
+          throw new BackendError('AUTH_REQUIRED', 'local process authentication is required', 401)
+        }
+        const requestedNext = url.searchParams.get('next') ?? '/preview.html?browser-native=1&preview-fixture=none'
+        const next = requestedNext.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/'
+        response.writeHead(302, {
+          location: next,
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+          'set-cookie': `${AUTH_COOKIE_NAME}=${authToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${String(AUTH_COOKIE_MAX_AGE_SECONDS)}${request.socket.encrypted === true ? '; Secure' : ''}`,
+        })
+        response.end()
+        return
+      }
       if (role === 'preview' && request.method === 'GET' && url.pathname === '/preview-api-origin') {
         response.setHeader('cache-control', 'no-store')
         sendJson(response, 200, { origin: servedApiOrigin ?? servedOrigin })
@@ -5733,6 +5778,8 @@ export async function createBrowserNativeV2Server(options) {
   return {
     server: previewServer,
     get apiOrigin() { return servedApiOrigin },
+    authToken,
+    authTokenPath,
     store,
     workspaces,
     crossStoreLedger,
@@ -5780,6 +5827,7 @@ export async function createBrowserNativeV2Server(options) {
           await observabilityJournal.close()
           await Promise.allSettled([...workspaceDownloads.keys()])
         } finally {
+          if (authTokenPath !== undefined) await rm(authTokenPath, { force: true })
           await releaseDataDirLock()
         }
       }

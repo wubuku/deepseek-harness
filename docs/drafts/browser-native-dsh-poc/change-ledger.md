@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-108：同机进程启动令牌与握手 cookie
+
+```text
+changeId: BN-P2-108
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/run-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/local-process-authentication.test.mjs; docs/drafts/browser-native-dsh-poc/tests/local-process-authentication.e2e.mjs; docs/drafts/browser-native-dsh-poc/local-backend-hardening.md; docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 威胁模型 T4 与未闭环表记录回环端口对同机任意进程开放、identity 端点可自签 principal；关闭条件要求每次启动生成 0600 令牌并用第二个进程无令牌请求断言 401。
+existingExtensionPointsChecked: backend 已有 `assertLocalRequest`（Host/Origin/Sec-Fetch-Site）与 identity cookie 签发；只在既有准入链、`listen()` 返回值与 launcher 上扩展，不改 Session 格式、wire 协议、Worker 消息或 profile。
+whyDraftOnlyWasInsufficient: loopback 准入只区分“来自浏览器页面”与“跨源请求”，不能区分同机进程；任何本机进程都能调用 identity 获得 principal，继而在预算内运行工具。
+behaviorChange: `createBrowserNativeV2Server({requireLocalAuth:true})` 生成 256 位随机令牌，以 0600 原子写入 `<dataDir>/browser-native-auth-token`，关闭时删除；`GET /auth/handshake?token=...&next=...` 校验后写 HttpOnly `SameSite=Strict` `dsh-browser-native-auth` cookie 并 302 到不含令牌的页面；`/api/browser-native/*` 与 `/preview-api-origin` 要求 `x-browser-native-auth` header 或该 cookie，CORS preflight 只放行预检、实际请求仍校验；`app` 暴露 `authToken`/`authTokenPath`，`run-v2.mjs` 启用该开关并打印握手 URL。
+consumersUpdated: 新增 Node 合同测试与 Chrome 分离源 E2E；README 启动步骤改为握手 URL；`local-backend-hardening.md` 与威胁模型 T4/判定表同步。既有测试默认不启用该开关，路径不变。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/local-process-authentication.test.mjs` 2/2（无令牌/错误令牌/伪造 principal → 401；header 与 cookie → 200；文件 0600、关闭即删、握手 302 且拒绝 `//` 重定向）；`tests/local-process-authentication.e2e.mjs` Chrome scripted 分离源通过（URL 无 token、cookie 不可读、Workspace 同步与 cross-store probe 全走 API origin、无页面异常）；`tests/preview-api-origin-split.e2e.mjs` 回归通过；`tests/backend-v2.test.mjs` 64/64 与 `tests/local-request-guard.test.mjs` 5/5 通过。
+syncReplaySteps: 上游同步后重跑上述测试；若 `listen()` 返回值或 `/preview-api-origin` 路由变化，同步更新握手发现与 launcher URL。
+deleteCondition: 接入 OS 用户隔离、mTLS 或生产身份提供方后，可把启动令牌降级为开发模式默认并保留 header 校验。
+status: implemented
+```
+
 ### BN-P2-107：审计 journal 哈希链与尾行锚点
 
 ```text

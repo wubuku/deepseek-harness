@@ -45,7 +45,7 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 
 | 判定 | 客户端可做 | 服务端必须做 | 现状 |
 | --- | --- | --- | --- |
-| 我是谁 | 读取 backend 下发的 cookie | 签发 principal cookie、按 principal 过滤每个资源 | 已实现，[principal 隔离](principal-scoped-session-isolation-progress.md) |
+| 我是谁 | 读取 backend 下发的 cookie | 签发 principal cookie、按 principal 过滤每个资源；签发前校验本机启动令牌 | 已实现，[principal 隔离](principal-scoped-session-isolation-progress.md)；进程令牌见 T4 |
 | 能否写 Session | 提议 append | 校验 owner token/epoch、seq 与 `durableThroughSeq` | 已实现，[durable host 重启](durable-host-restart.md) |
 | 能否读 Session | 请求读取 | 按 principal 404 化拒绝 | 已实现 |
 | 能否发上游请求 | Worker 直接调用同源 `/llm` | 持 key、代理上游、解析 usage | key 仅在服务端；预算判定在 Worker（见 T7） |
@@ -61,7 +61,7 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | T1 | 恶意站点跨源读取 API 或发起 CSRF | 用户在其它站点打开页面，向回环端口发请求 | Host 白名单、`Sec-Fetch-Site`/`Origin` 准入、principal cookie `SameSite=Strict` + `Path` 限定 | `tests/local-request-guard.test.mjs` | 本机端口扫描仍可发现服务（见 T4） |
 | T2 | DNS rebinding 指向回环服务 | 攻击者域名解析到 `127.0.0.1` | 只接受回环 Host 与回环 Hostname | 同上 | 无 |
 | T3 | 凭据经 URL 查询串进入日志 | 页面或工具把 key 拼进 query | 查询名匹配 token、secret、key 等敏感名时拒绝 | 同上 | 无 |
-| T4 | 同机其它进程冒充浏览器 | 本机任意用户进程可访问回环端口；启动脚本默认端口 4185/4186 | 无进程互认证；identity 端点可自签 principal | 本页新增 `threat-model-invariants` 只证明凭据不回显 | **未闭环**：可消耗本机模型额度、运行工具；读不到其它 principal 的 Session |
+| T4 | 同机其它进程冒充浏览器 | 本机任意用户进程可访问回环端口；启动脚本默认端口 4185/4186 | 每次启动生成 256 位令牌并以 0600 写入 `dataDir/browser-native-auth-token`；所有 `/api/browser-native/*` 与 `/preview-api-origin` 要求 `x-browser-native-auth` header 或 HttpOnly `SameSite=Strict` 握手 cookie；CORS preflight 仅放行预检、实际请求仍校验；进程结束删除令牌文件 | `tests/local-process-authentication.test.mjs` 2/2（无令牌、伪造令牌、伪造 principal → 401；header/cookie → 200；文件 0600 且关闭即删除）；`tests/local-process-authentication.e2e.mjs` Chrome 分离源 + 握手，页面 URL 无 token、cookie 不可读、API 请求全落 API origin | 令牌在首次导航 URL 查询串出现一次后立即换成 cookie；同用户进程仍可读 0600 文件（需 OS 用户隔离）；本机 root 嗅探回环未覆盖 |
 | T5 | 预览页内 XSS 取得同源全部权限 | 同源预览页加载恶意脚本；模型输出进入 HTML 路径 | React 默认转义；Markdown 代码块只消费 shiki 生成的静态 span 树；HTML 文档在无 `allow-same-origin` 的 Blob iframe 内运行，写入文档首位带严格 CSP，静态模式额外经 DOMPurify 清理；`--api-port` 可把 `/api/browser-native/*` 移到独立 origin | `apps/web/tests/document-preview.e2e.ts` 注入脚本断言 cookie、Web storage、OPFS 与同源 API 均被拒；`html-bootstrap` 单测断言 CSP 位置与指令；`tests/preview-api-origin-split.e2e.mjs` 断言分离部署下 API 请求只落在 API origin | **部分闭环**：预览内容已隔离，分离部署可用；默认启动仍让预览页与 API 同源，页面脚本仍持完整权限 |
 | T6 | 提示注入让模型越过工具策略 | 工具结果或文件内容含指令 | 工具策略与 `ctx.tools.guard` 在 Worker 工具执行层；`deny` 是后验单调 guard，审批通过也不能绕过；durable host 对 `write` 要求页面审批；路径/大小限制 | [提示注入边界](prompt-injection-boundaries.md)；`tests/approval-policy.e2e.mjs` 在 rogue allow listener 存在时仍拒绝 `write` | **部分未闭环**：被篡改的 Worker 可跳过常规 turn 的策略与审批 |
 | T7 | 篡改客户端绕过预算 | 修改 Worker 中的 meter 或跳过 fetch 前判定 | backend 独立解析 usage 并记账；Worker 在 LLM 请求前与工具执行前各复核一次 meter；超限事件与账本可对账 | [token 预算](token-budget-metering.md)；`tests/token-budget.e2e.mjs` 在关闭 LLM 前置检查后仍由工具 guard 拒绝 `write` | **部分未闭环**：服务端仍只记账不拒绝，被篡改的 Worker 可跳过本地判定 |
@@ -78,7 +78,6 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | 项 | 风险等级 | 当前事实 | 关闭条件（需可判定证据） |
 | --- | --- | --- | --- |
 | 预览页内 XSS | 高 | HTML 预览内容已在无同源权限的 sandbox 与严格 CSP 下隔离，注入脚本读不到 cookie、OPFS 与同源 API；`--api-port` 可把 API 移到独立 origin，e2e 已验证分离路径；默认启动预览页仍与 API 同源 | 默认启动也分离到不同 origin，或预览页只读且 API 要求不可伪造的 per-tab token；用注入脚本用例断言 API 拒绝 |
-| 同机进程互认证 | 高 | 回环端口对同机任意进程开放，identity 端点自签 principal | 每次启动生成 0600 启动令牌，所有路由要求该令牌，且令牌不经 HTTP 暴露；用第二个进程无令牌请求断言 401 |
 | 工具策略/预算执行在客户端 | 高 | 常规 turn 的 `deny` 由工具执行层 guard 拒绝；超预算同时在 LLM 前置与工具执行前复核，关闭 LLM 前置后工具 guard 仍拒 `write`；服务端只记账 | 服务端在发出上游请求前复核预算，并在工具执行前复核策略（防被篡改的 Worker）；用篡改客户端跳过本地判定的用例断言服务端拒绝 |
 | 审计完整性 | 中 | 每条 journal 记录带 `prev`/`hash`，恢复时重算链；`.head.json` 锚定尾行，单条改写报 `brokenAt`，删尾报 `headSeq`/`tailSeq` 不一致；`reconciliation` 暴露 `integrity.verified` | 外部只追加采集或签名锚点，使同机进程无法重算整条链；用重写整链后重启对账断言仍报告不一致 |
 
@@ -154,6 +153,23 @@ node docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs
 ```
 
 Node backend 全程没有策略或预算拒绝逻辑，因此该拒绝来自 Worker 自己；服务端记账与对账仍按 [token 预算](token-budget-metering.md) 执行。
+
+## 同机进程认证
+
+`run-v2.mjs` 启动 backend 时启用 `requireLocalAuth`。backend 生成 256 位随机令牌，以 0600 原子写入 `<dataDir>/browser-native-auth-token`，关闭时删除；`GET /auth/handshake?token=...&next=/preview.html?...` 校验令牌后写 `dsh-browser-native-auth` cookie（HttpOnly、SameSite=Strict、Path=/）并 302 到不含令牌的页面地址。所有 `/api/browser-native/*` 与 `/preview-api-origin` 要求 `x-browser-native-auth` header 或该 cookie；CORS preflight 不携带凭据，仅预检放行，实际请求仍校验。cookie 按 host 生效、不按端口，因此分离源的 API listener 同样接受该 cookie。
+
+`tests/local-process-authentication.test.mjs` 2/2：
+
+```text
+无令牌 identity → 401 AUTH_REQUIRED；错误令牌 → 401；伪造 principal cookie 但无令牌 → 401
+API listener 无令牌 → 401；令牌 header / 握手 cookie → 200，cookie 跨端口生效
+token 文件 mode=0600 且内容等于 app.authToken；关闭后文件 ENOENT
+握手令牌 → 302 + HttpOnly/SameSite=Strict cookie，location 不含 token；错误令牌 → 401；`//evil.invalid` 被拒绝
+```
+
+`tests/local-process-authentication.e2e.mjs`（Chrome，scripted，`--api-port` 分离）复用 preview 与 Worker 真实路径：首次导航经握手 302 到 `/preview.html`，页面 URL 无 `token`；`document.cookie` 看不到 auth cookie；Workspace 同步与 `cross-store-probe` 在独立 API origin 完成，事件记录中所有 `/api/browser-native/*` 请求的 origin 都等于 API origin，页面无异常。
+
+残余：同一 OS 用户下的进程仍可读取 0600 令牌文件（进程互认证依赖用户隔离）；令牌在首次导航查询串出现一次，浏览器历史与本地代理日志可能保留该 URL；本机 root 嗅探回环流量未覆盖；跨主机、多实例与外部身份提供方不在本批范围。
 
 ## 审计 journal 完整性
 
