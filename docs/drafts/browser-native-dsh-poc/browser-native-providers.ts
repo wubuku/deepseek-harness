@@ -82,6 +82,8 @@ const CONFIG_ROUTE = '/api/browser-native/config'
 const ADMISSION_ROUTE = '/api/browser-native/admission'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
+/** Backend `session/list` page bound; keeping it at the server maximum halves catalog round trips. */
+const CATALOG_PAGE_SIZE = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
 const ADMISSION_QUEUE_POLL_MS = 400
 
@@ -1114,7 +1116,7 @@ function createRemoteSessionPersistenceClass(
       const snapshots: SessionPersistenceSnapshot[] = []
       let cursor: string | undefined
       do {
-        const response = await sessionRequest('list', cursor === undefined ? {} : { cursor }, options?.signal)
+        const response = await sessionRequest('list', cursor === undefined ? { limit: CATALOG_PAGE_SIZE } : { cursor, limit: CATALOG_PAGE_SIZE }, options?.signal)
         snapshots.push(...required(response.snapshots, 'snapshots'))
         cursor = response.hasMore === true && typeof response.nextCursor === 'string' ? response.nextCursor : undefined
       } while (cursor !== undefined)

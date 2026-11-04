@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-114：220 Session 的会话列表分页、搜索、排序与请求成本
+
+```text
+changeId: BN-P2-114
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/session-list-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/session-query-browser-scale.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有规模验证只覆盖 120 Session 的服务层检索，没有在 200+ Session 下用真实侧边栏验证分页、“显示更多”、本地搜索与排序，也没有记录列表请求成本。
+existingExtensionPointsChecked: 复用 shipped `ui-workspace` 侧边栏、`session/list` 分页协议与 `hasMore`/`nextCursor`；未改变 Session 格式、检索语义或 Worker 拓扑。
+whyDraftOnlyWasInsufficient: 服务层探针不渲染侧边栏，无法暴露列表交互被固定覆盖层挡住、以及每页 50 条导致的重复翻页成本。
+behaviorChange: `list()` 请求后端每页上限 100 条（服务端 `MAX_CATALOG_PAGE_SIZE`），220 Session 的 10 次列表请求降为 6 次；Workspace 切换器从左侧底部移到顶部右侧空标题栏，不再覆盖侧边栏会话行与“显示更多”按钮。
+consumersUpdated: `browser-native-providers.ts` 的持久化列表分页；页面控制覆盖层位置；新增 220 Session 界面级 E2E。
+decision: 可接受上限取 reload ≤ 10 s、首屏列表 ≤ 2.5 s、完整展开 ≤ 20 s、搜索 ≤ 2 s、列表请求 ≤ 2×ceil(n/100)+2；实测 220 Session 为 4.9 s / 1 ms / 1.9 s / 53 ms / 6 次，均在限内。
+test: `node docs/drafts/browser-native-dsh-poc/tests/session-list-scale.e2e.mjs` 通过：219 个种子行全部展开、43 次“显示更多”点击、主分组保持 createdAt 倒序、按 cwd 标签搜索命中 1 条并打开目标 Session；`workspace-switching.e2e.mjs` 与 `browser-native-v2.e2e.mjs` 复跑通过。
+syncReplaySteps: 上游同步后重建 preview 并重跑上述三条 E2E；若侧边栏分页或覆盖层布局改变，更新本记录与 `session-query-browser-scale.md` 的数字。
+deleteCondition: 正式产品提供虚拟滚动的会话列表或服务端检索后，本记录的分页上限与覆盖层约束失效。
+status: implemented
+```
+
 ### BN-P2-113：多 Workspace 列表、创建与切换
 
 ```text

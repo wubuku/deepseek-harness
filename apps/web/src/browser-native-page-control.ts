@@ -538,13 +538,13 @@ export async function connectBrowserNativePageControl(
     root.setAttribute('data-browser-native-workspace-switcher', '')
     Object.assign(root.style, {
       position: 'fixed',
-      left: '16px',
-      bottom: '64px',
+      right: '16px',
+      top: '6px',
       zIndex: '2147483000',
       display: 'flex',
-      flexDirection: 'column',
+      alignItems: 'center',
       gap: '6px',
-      maxWidth: 'min(360px, calc(100vw - 32px))',
+      maxWidth: 'min(520px, calc(100vw - 32px))',
       font: '500 13px/1.4 system-ui, sans-serif',
     })
     const select = document.createElement('select')
@@ -576,6 +576,10 @@ export async function connectBrowserNativePageControl(
     status.setAttribute('data-browser-native-workspace-switcher-status', '')
     applyLiveRegion(status, 'status')
     status.style.color = '#f9fafb'
+    status.style.maxWidth = '180px'
+    status.style.overflow = 'hidden'
+    status.style.textOverflow = 'ellipsis'
+    status.style.whiteSpace = 'nowrap'
     root.append(select, create, status)
     document.body.append(root)
     select.addEventListener('change', () => { void selectWorkspace(select.value) })
