@@ -65,7 +65,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
-| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[横向扩展可行性](multi-instance-feasibility.md) |
+| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[横向扩展可行性](multi-instance-feasibility.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
@@ -1725,6 +1725,12 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 [多 Session 争用上限](multi-session-contention.md)让 1、8、16 个独立 `BrowserContext`/Worker 同时提交 scripted turn。单 Session turn 中位数 257 ms、冷启动 2.2 秒、CPU 1.15–1.63 核；8 路为 615 ms / 5.4 秒 / 4.5–5.1 核；16 路为 1,694 ms / 13.8 秒 / 5.3–5.8 核，p95 1,824 ms。页堆在三种规模下都稳定在 46.7 MB，内存不是上限；CPU 在 8 路已接近 5 核、16 路只再涨约 17%，吞吐不再提高。
 
 16 个挂载但只放行 8 个 turn 时，turn 中位数降到 892 ms、p95 1,154 ms，代价是波次差异令 CV 从 0.095 升到 0.199。建议同时执行的 turn 数上限为 8，冷启动并发限制在 4–8；更多 Session 可以挂载，第 9 个及以后的 turn 排队。一次早先 16 路运行出现 3/48 个页面首次 boot payload fetch 失败，整页重载后恢复；正式采样的这一轮为 0/48，失败率未被表征。
+
+## 多 Principal 并发压测与拐点
+
+[多 Principal 并发压测](multi-principal-load.md)把压力从单 principal 的多 Session 扩展到 10 个 principal（每个 2 个 Session、20 个 Worker），并在同一负载中执行审批卡、跨 principal 只读协作与挂载上限探测。8 个 turn 槽、24 个挂载槽、3,000 ms 模型持有时，10 → 20 Session 的 turn 中位数从 3.47 s 升到 7.96 s（2.3 倍），p95 从 6.39 s 升到 10.88 s，吞吐仅从 1.55 升到 1.82 turn/s，新增并发全部转成排队（峰值 queued 5 → 26），说明吞吐拐点在 8 个 turn 槽。两组 active 峰值都是 8、错误率 0/30、单页堆稳定在 46 MB；审批 1 条 `approval/decided`、共享 viewer 读到 3 条事件且写请求 403 `SESSION_READ_ONLY`，第 25 个挂载返回 429 `SESSION_MOUNT_LIMIT`。
+
+同一 harness 缩短模型持有时间到 350 ms 时，20 个窗口的请求启动错峰超过持有时长，active 峰值只有 6、队列为空，但中位延迟仍为 4.8 s、CPU 3.1 核：浏览器进程调度会先于准入槽成为上限。因此“生效上限”分两层：服务端 8 个 turn 槽 / 24 个挂载槽，客户端则受 CPU 限制；模型持有的时间足够长时，准入队列是拐点，否则 Chrome 主线程先饱和。
 
 ## 模型流断开与重连
 

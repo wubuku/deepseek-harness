@@ -3087,3 +3087,20 @@ syncReplaySteps: 上游同步后核对 Cordis 插件配置传参、`resolveModel
 deleteCondition: 正式 Browser profile 通过运行时 provider 元数据或用户设置稳定提供模型窗口，并有不依赖 profile 硬值的 compaction 验证；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-147：10 principal 多 Session 压测、审批/协作负载与准入拐点
+
+```text
+changeId: BN-P2-147
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/multi-principal-load.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/multi-principal-load.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有压力验证只覆盖单 principal 的 1/8/16 Session；没有证明 10 个 principal 各自多 Session 同时 turn 时准入上限仍成立、审批与跨 principal 协作在负载中可用，也没有给出吞吐拐点。
+existingExtensionPointsChecked: 复用 PoC backend 的 admission controller（maxConcurrentTurns/maxMountedSessions）、共享 Session 分享与只读角色、`approval-integrity` 测试入口、真实 preview composer 与 `session/read`、`SystemInfo.getProcessInfo` 和 Performance CDP 指标；没有修改正式 DSH package、Agent Loop、Session format 或默认 profile。
+whyDraftOnlyWasInsufficient: 设计值不能证明 20 个真实 Worker 同时提交时 backend 仍只放行 8 个 turn、审批卡能结算、共享 viewer 只读且第 25 个挂载被拒；浏览器与 backend 的瓶颈先后顺序也只能由真实负载区分。
+behaviorChange: 仅新增 validation E2E 与文档。`submitPrompt` 增加 composer 文本重填检查，避免多窗口并发时首次 fill 被 UI 重渲染清空导致 Send 保持 disabled；未改变产品行为、backend 路由或默认配置。
+consumersUpdated: 多 principal 压测 E2E、共享 `submitPrompt` helper、PoC README 性能表与章节、本 ledger。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/multi-principal-load.e2e.mjs` 通过。基线 5 principal ×2 Session（10 Worker）与压力 10 principal ×2 Session（20 Worker）均在同一 8 turn / 24 mount 配置下运行：turn 中位数 3,469 → 7,963 ms、p95 6,385 → 10,883 ms、最大 10,956 ms，吞吐 1.55 → 1.82 turn/s，admission active 峰值两组均为 8、queued 5 → 26，CPU 1.11 → 2.87 核，单页堆约 46.4 MB，错误率 0/30，pageErrors 与跨源请求均为 0；审批 1 条 decided、协作读 3 条事件且写返回 403 SESSION_READ_ONLY、第 25 个挂载返回 429 SESSION_MOUNT_LIMIT。另把模型持有缩短到 350 ms 的对照出现 active 6、queued 0、CPU 3.1 核，记录为浏览器 CPU 先于准入槽成为上限。
+syncReplaySteps: 上游同步后核对 admission 语义、share/role 判定、审批测试入口和 composer 无障碍标签；复跑多 principal E2E 与 `multi-session-contention.e2e.mjs`，确认 8 active/24 mount 断言仍按当前默认配置成立。缩短模型持有时间时必须重新确认 queued 是否仍出现。
+deleteCondition: 正式多租户准入或容量验证覆盖等效的 principal × Session 并发、审批、协作与挂载上限；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

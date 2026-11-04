@@ -135,7 +135,16 @@ export async function sendTurn({ page, origin, requests, prompt, marker, session
  * @returns {Promise<object>} Settled Session response and id.
  */
 export async function submitPrompt({ page, origin, requests, prompt, sessionId, timeout = 180_000, captureStream = false, probeWhileRunning, expectedReason = 'completed' }) {
-  await page.locator('[data-composer-input][contenteditable="true"]').last().fill(prompt)
+  const composer = page.locator('[data-composer-input][contenteditable="true"]').last()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await composer.fill(prompt)
+    const retained = await page.waitForFunction(expected => {
+      const nodes = [...document.querySelectorAll('[data-composer-input]')]
+      const input = nodes.at(-1)
+      return input !== undefined && (input.innerText ?? '').trim() === expected.trim()
+    }, prompt, { timeout: 3_000 }).then(() => true, () => false)
+    if (retained) break
+  }
   if (captureStream) {
     await page.evaluate(() => {
       const capture = { samples: [], startedAt: performance.now(), previous: '', active: true, frame: 0 }
