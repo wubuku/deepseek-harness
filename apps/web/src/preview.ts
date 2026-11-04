@@ -8,6 +8,12 @@ import DshWorker from '../../../docs/drafts/browser-native-dsh-poc/browser-nativ
 import browserNativeProfileOverlay from '../../../docs/drafts/browser-native-dsh-poc/browser-native-profile-overlay.tar.gz?url'
 import { connectBrowserNativePageControl } from './browser-native-page-control.ts'
 import {
+  browserNativeSupportIssue,
+  type BrowserNativeSupportEnvironment,
+  type BrowserNativeSupportIssueCode,
+} from './browser-native-support.ts'
+import { browserNativeUnsupportedBrowserCopy } from './locales/browser-native-workspace.ts'
+import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
@@ -276,33 +282,82 @@ async function prepareBrowserNativeWorker(): Promise<Worker> {
   return currentWorker
 }
 
-markBoot('bootStart')
-try {
-  const prepared = browserNativePrewarm ? prepareBrowserNativeWorker() : undefined
-  void prepared?.catch(() => {})
-  const source = await chooseWorkerHostSource({ image })
-  markBoot('sourceChosen')
-  if (!browserNative || !pageLifecycle.unloading) {
-    const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
-    if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
-    if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker)
-    if (browserNative && prepared === undefined) markBoot('workerProbed')
-    markBoot('hostConnectStart')
-    await connectWorkerHost(currentWorker, {
-      image,
-      overlays: browserNative
-        ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]
-        : source.overlays,
-    })
-    markBoot('hostConnected')
+function observeBrowserNativeSupport(): BrowserNativeSupportEnvironment {
+  const storage = typeof navigator.storage === 'undefined' ? undefined : navigator.storage
+  const getDirectory = storage === undefined
+    ? undefined
+    : (storage as StorageManager & { getDirectory?: unknown }).getDirectory
+  const subtle = typeof crypto === 'undefined' ? undefined : crypto.subtle
+  return {
+    userAgent: navigator.userAgent,
+    dedicatedWorker: typeof Worker === 'function',
+    messageChannel: typeof MessageChannel === 'function',
+    opfs: typeof getDirectory === 'function',
+    indexedDb: typeof indexedDB !== 'undefined',
+    subtleCrypto: subtle !== undefined && typeof subtle.digest === 'function',
   }
-} catch (error) {
-  worker?.terminate()
-  const message = error instanceof Error ? error.message : String(error)
-  const workspaceStatus = window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state
-  const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
-    || workspaceStatus === 'local-newer-version' || workspaceStatus === 'recovery-conflict'
-    || workspaceStatus === 'recovery-unavailable' || workspaceStatus === 'identity-missing'
-    || workspaceStatus === 'identity-mismatch' || workspaceStatus === 'session-conflict')
-  if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
+}
+
+function showUnsupportedBrowser(issue: BrowserNativeSupportIssueCode): void {
+  const notice = document.createElement('div')
+  notice.dataset.browserNativeUnsupported = issue
+  notice.setAttribute('role', 'alert')
+  Object.assign(notice.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '2147483000',
+    display: 'grid',
+    placeItems: 'center',
+    padding: '24px',
+    background: '#0b1020',
+    color: '#f9fafb',
+    font: '500 14px/1.5 system-ui, sans-serif',
+    textAlign: 'center',
+  })
+  const message = document.createElement('p')
+  message.style.maxWidth = '560px'
+  message.style.margin = '0'
+  message.textContent = browserNativeUnsupportedBrowserCopy(document.documentElement.lang, issue)
+  notice.append(message)
+  document.body.append(notice)
+}
+
+async function bootBrowserNativePreview(): Promise<void> {
+  try {
+    const prepared = browserNativePrewarm ? prepareBrowserNativeWorker() : undefined
+    void prepared?.catch(() => {})
+    const source = await chooseWorkerHostSource({ image })
+    markBoot('sourceChosen')
+    if (!browserNative || !pageLifecycle.unloading) {
+      const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
+      if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
+      if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker)
+      if (browserNative && prepared === undefined) markBoot('workerProbed')
+      markBoot('hostConnectStart')
+      await connectWorkerHost(currentWorker, {
+        image,
+        overlays: browserNative
+          ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]
+          : source.overlays,
+      })
+      markBoot('hostConnected')
+    }
+  } catch (error) {
+    worker?.terminate()
+    const message = error instanceof Error ? error.message : String(error)
+    const workspaceStatus = window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state
+    const workspaceCannotBoot = browserNative && (workspaceStatus === 'lease-conflict' || workspaceStatus === 'local-corrupt'
+      || workspaceStatus === 'local-newer-version' || workspaceStatus === 'recovery-conflict'
+      || workspaceStatus === 'recovery-unavailable' || workspaceStatus === 'identity-missing'
+      || workspaceStatus === 'identity-mismatch' || workspaceStatus === 'session-conflict')
+    if ((!pageLifecycle.unloading || !message.startsWith('web-preview tunnel: boot payload failed')) && !workspaceCannotBoot) throw error
+  }
+}
+
+markBoot('bootStart')
+const supportIssue = browserNative ? browserNativeSupportIssue(observeBrowserNativeSupport()) : undefined
+if (supportIssue !== undefined) {
+  showUnsupportedBrowser(supportIssue)
+} else {
+  await bootBrowserNativePreview()
 }

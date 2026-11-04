@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## 产品就绪度
 
-[产品就绪度 go/no-go](product-readiness-go-no-go.md)汇总本 PoC 已落档的验证结论、环境限制与必须的服务端依赖，按能力给出判定与立项前必做项。结论是“有条件 GO”：浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担；纯浏览器零服务端依赖不成立。[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)把这五项定为试点交付物，逐项写明单实例已验证边界、多实例前置条件与不得声称的范围：试点只支持单进程同源服务，多实例/跨主机 HA 未实现也未验证。
+[产品就绪度 go/no-go](product-readiness-go-no-go.md)汇总本 PoC 已落档的验证结论、环境限制与必须的服务端依赖，按能力给出判定与立项前必做项。结论是“有条件 GO”：浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担；纯浏览器零服务端依赖不成立。[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)把这五项定为试点交付物，逐项写明单实例已验证边界、多实例前置条件与不得声称的范围：试点只支持单进程同源服务，多实例/跨主机 HA 未实现也未验证。浏览器范围见[浏览器支持矩阵](browser-support-matrix.md)：只支持 Chromium 桌面，Safari、Firefox、iOS/iPadOS 与移动浏览器在启动前被门禁拒绝。
 
 ## Summary
 
@@ -1562,7 +1562,11 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 ## 产品可见性
 
-[产品可见性](product-visibility.md)检查失败码、准入排队位置与 Session 租约冲突是否到达 preview。`TurnErrorNodeView` 已把 `turn/end` 的 `error.code` 渲染为 `<code>`；`ADMISSION_TIMEOUT` 消息新增超时瞬间的 `queue position N`，排队中的 prompt 本身立即可见。第二个标签页打开同一 Session 原先只得到空 Session，现发布 `session-conflict` 状态条，显示“该会话已在另一个标签页打开”与 backend 原文。Chrome scripted E2E 同时断言三类 DOM 输出。缺口：排队期间无实时位置或预计等待，冲突状态不自动恢复。
+[产品可见性](product-visibility.md)检查失败码、准入排队位置、Session 租约冲突与导出入口是否到达 preview。`TurnErrorNodeView` 用 `Tag` 渲染 `turn/end` 的 `error.code`；`ADMISSION_TIMEOUT` 消息包含超时瞬间的 `queue position N`，排队中的 prompt 立即可见，且 `output[data-browser-native-queue-status]` 每 400 ms 轮询显示实时位次（E2E 断言 2→1）。第二个标签页打开同一 Session 时发布 `session-conflict` 状态条并提供重载恢复按钮；持有写租约后页面显示本地化导出按钮，下载 `dsh-session-<id>.json`。缺口：位次是轮询的最终一致视图，尚未并入正式 composer/会话状态区；导出只取本页最近取得的 Session，导入仍只有 HTTP 入口。
+
+## 浏览器支持矩阵
+
+[浏览器支持矩阵](browser-support-matrix.md)把试点的浏览器范围收敛为 Chromium 桌面（Chrome、Edge、Chromium）；Safari、Firefox、iOS/iPadOS 与移动浏览器明确不支持，且不引入 iOS OPFS 兜底。`apps/web/src/browser-native-support.ts` 在创建 Worker 前检查 UA 与 Dedicated Worker、MessageChannel、OPFS、IndexedDB、SubtleCrypto，不满足时渲染本地化 `[data-browser-native-unsupported]` 提示并且不启动 Session。证据是 3 项支持判定单测与 `tests/browser-support-gate.e2e.mjs`（Safari 18 UA 下无 composer/导出按钮），支持路径由 `product-visibility.e2e.mjs` 回归。缺口：UA 不是安全边界，内嵌 webview 可能误判，WebKit 没有自动化，版本下限未定义。
 
 ## Worker 内 Session 记忆
 

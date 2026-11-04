@@ -43,7 +43,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-vis
 最近一次运行输出：
 
 ```json
-{"sessionLeaseConflict":"This Session is open in another tab — session is already owned by another browser; close that tab or retry after its write lease expires\nRetry opening this Session","sessionRecovery":{"attempts":1,"finalState":"synced"},"sessionExport":{"format":"dsh-session-bundle","formatVersion":1,"suggestedFilename":"dsh-session-session-56f0c79f-922b-4778-aace-4dc39b105c84.json"},"failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
+{"sessionLeaseConflict":"This Session is open in another tab — session is already owned by another browser; close that tab or retry after its write lease expires\nRetry opening this Session","sessionRecovery":{"attempts":1,"finalState":"synced"},"sessionExport":{"format":"dsh-session-bundle","formatVersion":1,"suggestedFilename":"dsh-session-session-faf00ffe-e4d7-4198-9743-57c6297ca29f.json"},"failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
 ```
 
 ## 缺口

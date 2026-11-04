@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-099：立项前必做第 3 项——浏览器支持矩阵与启动门禁
+
+```text
+changeId: BN-P2-099
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/browser-native-support.ts; apps/web/src/preview.ts; apps/web/src/locales/browser-native-workspace.ts; apps/web/tests/browser-native-support.spec.ts; docs/drafts/browser-native-dsh-poc/tests/browser-support-gate.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-support-matrix.md; docs/drafts/browser-native-dsh-poc/product-readiness-go-no-go.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md
+reason: 立项前必做第 3 项要求明确浏览器支持矩阵，并在 Safari/iOS 不是目标时把试点限定为 Chromium 桌面；此前 preview 在任何具备 Worker 的浏览器上直接启动，Safari/Firefox/移动浏览器会进入未验证路径。
+existingExtensionPointsChecked: 在 preview 的既有浏览器原生启动分支前插入纯函数门禁；复用页面本地化 copy 与 `[data-browser-native-*]` 观测属性；未改 Worker、Session、Workspace 或 LLM 路径。
+whyDraftOnlyWasInsufficient: 不支持浏览器目前会进入 Worker 启动与 Session 挂载，产生未验证的半工作状态；只有运行时门禁能在这些页面上明确拒绝并留下可断言的 DOM/role 证据。
+behaviorChange: 新增 `browserNativeSupportIssue`：先拒绝非移动 Chromium 桌面以外的 UA，再按 Dedicated Worker、MessageChannel、OPFS、IndexedDB、SubtleCrypto 顺序返回首个缺失项。preview 在创建任何 Worker 之前检查；不通过时渲染 `[data-browser-native-unsupported]`（`role="alert"`，中英本地化原因），不启动 Worker、不显示 Workspace 状态条、composer 或导出按钮。支持矩阵限定 Chrome/Edge/Chromium 桌面，Safari、Firefox、iOS/iPadOS 与移动浏览器明确不支持。
+consumersUpdated: preview 启动流程、本地化 copy、支持判定单测、Safari UA 启动门禁 E2E、支持矩阵决策文档、go/no-go 第 1–3 项状态与证据索引、PoC README 与 drafts README 导航、ledger。
+test: `pnpm run build:artifacts`、`pnpm run build:check` 通过；`pnpm exec vitest run apps/web/tests/browser-native-support.spec.ts` 3 项通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/browser-support-gate.e2e.mjs` 通过，Chrome 156 输出 `{"result":"passed","unsupportedState":"NON_CHROMIUM_DESKTOP","workerBooted":false}`，Safari UA 页面没有 Workspace 状态条/composer/导出按钮；`product-visibility.e2e.mjs` 在同一构建上通过，证明门禁不拦截 Chromium 桌面。
+syncReplaySteps: 上游同步后核对 preview 启动分支与本地化模块是否仍存在；若新增浏览器能力探测项，同步扩展 `BrowserNativeSupportEnvironment`、单测与门禁顺序；若 Safari/iOS 纳入目标，先完成矩阵重访条件再放宽 UA 判定；复跑单测、门禁 E2E 与支持路径 E2E。
+deleteCondition: 试点扩大到 WebKit/移动平台，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-098：立项前必做第 2 项——审批参数、Session 冲突恢复与导出入口
 
 ```text

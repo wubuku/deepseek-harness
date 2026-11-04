@@ -1,3 +1,5 @@
+import type { BrowserNativeSupportIssueCode } from '../browser-native-support.ts'
+
 type WorkspaceState = 'loading' | 'synced' | 'dirty' | 'syncing' | 'error' | 'conflict'
   | 'local-corrupt' | 'local-newer-version' | 'lease-conflict' | 'recovery-conflict'
   | 'recovery-unavailable' | 'identity-missing' | 'identity-mismatch' | 'read-only' | 'stale'
@@ -86,6 +88,45 @@ export function browserNativeQueueStatusCopy(
   return language.startsWith('zh')
     ? `等待模型执行槽位 · 队列第 ${String(position)} 位（共 ${String(queued)} 位）${capacity}`
     : `Waiting for a model slot · position ${String(position)} of ${String(queued)}${capacity}`
+}
+
+/** Format the notice shown when the page cannot host the Browser-Native preview.
+ * @param language - Page language tag.
+ * @param issue - First missing platform requirement.
+ * @returns Localized notice text.
+ */
+export function browserNativeUnsupportedBrowserCopy(language: string, issue: BrowserNativeSupportIssueCode): string {
+  const reason = UNSUPPORTED_BROWSER_REASONS[issue]
+  return language.startsWith('zh')
+    ? `Browser-Native DSH 预览无法在此浏览器运行：${reason.zh}`
+    : `The Browser-Native DSH preview cannot run in this browser: ${reason.en}`
+}
+
+const UNSUPPORTED_BROWSER_REASONS: Record<BrowserNativeSupportIssueCode, { readonly en: string; readonly zh: string }> = {
+  NON_CHROMIUM_DESKTOP: {
+    en: 'only Chromium desktop (Chrome, Edge, or Chromium) is supported; Safari, Firefox, and mobile browsers are not.',
+    zh: '目前仅支持 Chromium 桌面版（Chrome、Edge 或 Chromium）；Safari、Firefox 与移动浏览器不在支持范围。',
+  },
+  NO_DEDICATED_WORKER: {
+    en: 'a Dedicated Worker cannot be started, so the Agent cannot run off the UI thread.',
+    zh: '无法启动 Dedicated Worker，Agent 无法脱离 UI 线程运行。',
+  },
+  NO_MESSAGE_CHANNEL: {
+    en: 'MessageChannel is unavailable, so the page cannot observe Worker lifecycle state.',
+    zh: 'MessageChannel 不可用，页面无法观察 Worker 生命周期状态。',
+  },
+  NO_OPFS: {
+    en: 'the Origin Private File System is unavailable, so Workspace files cannot be stored.',
+    zh: 'Origin Private File System 不可用，无法存放 Workspace 文件。',
+  },
+  NO_INDEXED_DB: {
+    en: 'IndexedDB is unavailable, so Workspace metadata cannot be stored.',
+    zh: 'IndexedDB 不可用，无法存放 Workspace 元数据。',
+  },
+  NO_SUBTLE_CRYPTO: {
+    en: 'SubtleCrypto is unavailable, so Workspace content hashes cannot be verified.',
+    zh: 'SubtleCrypto 不可用，无法校验 Workspace 内容哈希。',
+  },
 }
 
 /** Format the explicit retry action for a Session owned by another tab.
