@@ -64,7 +64,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
-| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
+| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
 | 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[横向扩展可行性](multi-instance-feasibility.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
@@ -1667,6 +1667,12 @@ boot payload 预取同样无效：静态资源统一 `cache-control: no-store`�
 [分支与回滚](session-branch-rollback.md)把 fork 语义落到 PoC 存储：`session/branch` 要求边界是已完成的 `turn/end`，子 Session 头带 `parentSession`/`isSeeded`，`inheritedEventCount = boundarySeq + 1`，继承前缀逐项不变，随后追加 child-owned `session/end-seed`；`branch` 元数据记录 `intent`、边界 turn 与分叉时的 Workspace revision。源 Session 从不被改写，回滚是截断到目标 turn 的新世代，不是原地删除。
 
 验证中源 Session 有 7 个事件：从 turn 1 分叉得到 5 个事件（前缀 0..3 + seq 4 的 `end-seed`）、`nextSeq 5`；回滚到 turn 2 得到 8 个事件；源事件、头与 `nextSeq 7` 全部不变，Workspace revision 不变。分叉请求按 `requestId` 重放返回同一结果；子 Session 继续追加后序号 `0..8` 连续；导出携带 1 个 `sha256` 附件且字节一致。非法 `atSeq`/`atTurn` 返回 400 `SESSION_BRANCH_BOUNDARY_INVALID`，共享 viewer 返回 403 `SESSION_READ_ONLY`。
+
+## 系统级幂等
+
+[系统级幂等](state-change-idempotency.md)逐接口列出 `requestId`/`operationId`/`turnId` 重放、天然幂等（覆盖写、内容寻址）与 fail-closed 三类保证。本次补齐 `session/create`、`workspace/create`、`workspace/lease` claim 的收据，并把 durable run 的登记移到 journal 持久化之前；并发重复请求因此只结算一次。
+
+真实 Chrome 中双击 Send 只产生 1 条用户消息、1 个 `turn/start` 与 1 个 `turn/end`；捕获的末次 `session/append` 重放返回 `replayed:true` 且事件数不变，并发两次重放同样不追加事件，篡改同键请求体得到 409 `IDEMPOTENCY_CONFLICT`。`attachment-backend`、`session-branch-rollback`、`shared-authority-concurrency`、`durable-approval`、`workspace-durability` 等 12 个 backend 用例回归通过。收据仍是进程内 Map，backend 重启后的同键重试会得到 `SEQ_CONFLICT` 而不是重放。
 
 ## 刷新与 Worker 崩溃时的在途 turn
 

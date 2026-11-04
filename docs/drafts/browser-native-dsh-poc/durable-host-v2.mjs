@@ -826,7 +826,6 @@ export function createDurableTurnHost({
       return { ...recovered.status, replayed: true }
     }
     journalEntries.set(turnId, { turnId, sessionId, principalId, startedAt: Date.now() })
-    await persistJournal()
     const run = {
       turnId,
       sessionId,
@@ -840,7 +839,16 @@ export function createDurableTurnHost({
       stopRequested: false,
       decidedApprovals: new Map(),
     }
+    // Register before the awaited journal write so a concurrent duplicate start
+    // replays this run instead of opening a second turn on the Session.
     runs.set(turnId, run)
+    try {
+      await persistJournal()
+    } catch (error) {
+      runs.delete(turnId)
+      journalEntries.delete(turnId)
+      throw error
+    }
     void execute(run, prompt, header).catch(error => {
       run.status = typeof error?.code === 'string' && error.code === 'DURABLE_TURN_CANCELLED' ? 'cancelled' : 'failed'
       run.error = {

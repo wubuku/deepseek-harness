@@ -3138,3 +3138,20 @@ syncReplaySteps: 上游同步后核对转录窗口 floor、轮次导航 `Load an
 deleteCondition: 正式产品 UI 提供等效的历史搜索、方向跳转、过程折叠与回到最新并有长会话性能证据；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-150：系统级幂等——状态变更接口逐项覆盖与双击 Send/重试/并发重复
+
+```text
+changeId: BN-P2-150
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/state-change-idempotency.test.mjs; docs/drafts/browser-native-dsh-poc/tests/idempotent-send.e2e.mjs; docs/drafts/browser-native-dsh-poc/state-change-idempotency.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有实现只在 append/branch/commit/durable turnId 上有收据；`session/create` 的网络重试以 409 结束、`workspace/create` 的并发同键会创建两个 Workspace、`workspace/lease` claim 重试丢失 writer token、durable 并发同 turnId 会触发 SESSION_TURN_ACTIVE。双击 Send 也缺少证据。
+existingExtensionPointsChecked: 复用 session append/branch 收据模式、Workspace `exclusive('identities')` 锁与 commit 的 operationId 收据、durable `runs`/journal 生命周期、浏览器 composer 与真实 Worker append 通道；未修改 `packages/`、Agent Loop、Session 格式或默认 profile。
+whyDraftOnlyWasInsufficient: 静态审查看不到并发竞态（收据检查在锁外、run 登记在 await 之后），也无法证明双击 Send 只产生一个 turn；必须在真实 backend 上并发重复请求并在真实 Chrome 中双击。
+behaviorChange: PoC backend 的三类写接口增加收据与串行化；durable run 登记提前。对外 HTTP 语义除重放变为成功外不变；冲突与 fail-closed 行为保留。
+consumersUpdated: backend-v2 路由与 sessionOperation、workspace-v2 create/lease、durable-host-v2 start、两份新测试、幂等文档、README 与 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/state-change-idempotency.test.mjs` 3/3 通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/idempotent-send.e2e.mjs` 通过（双击后 19 事件、1 用户消息、1 turn/start、1 turn/end、1 个 transcript user、7 次 append；重放 200 replayed acceptedCount 2；并发重放 200/200；篡改同键 409 IDEMPOTENCY_CONFLICT；页面错误 0）。回归 12 个 backend 用例通过（attachment-backend、session-branch-rollback、shared-authority-concurrency、durable-approval、workspace-durability 等）与 `session-export-import.e2e.mjs`。
+syncReplaySteps: 上游同步后核对 append/branch/create 收据键、Workspace identity 锁与 claim 收据、durable start 的 run 登记顺序；复跑两份幂等测试与上述 12 个 backend 用例。
+deleteCondition: 生产后端以持久化幂等表提供同等保证，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

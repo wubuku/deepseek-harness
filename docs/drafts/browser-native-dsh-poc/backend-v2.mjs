@@ -2185,7 +2185,7 @@ function collaborationPrincipalDigest(principalId) {
   return createHash('sha256').update(principalId).digest('hex').slice(0, 16)
 }
 
-async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts, collaborationAudit, branchReceipts, workspaceRevisionOf) {
+async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts, collaborationAudit, branchReceipts, workspaceRevisionOf, createReceipts) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -2221,11 +2221,26 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
   return store.exclusive(id, async () => {
     await testHooks.beforeSessionOperation?.(operation, body)
     if (operation === 'create') {
+      const receiptKey = `${principalId}\u0000create\u0000${body.requestId}`
+      const header = assertRecord(body.header, 'header')
+      const requestDigest = fullDigest({ header, inheritedEventCount: body.inheritedEventCount ?? 0 })
+      const replay = createReceipts?.get(receiptKey)
+      if (replay !== undefined) {
+        if (replay.digest !== requestDigest) {
+          throw new BackendError('IDEMPOTENCY_CONFLICT', 'requestId was reused with a different Session header', 409)
+        }
+        return clone(replay.result)
+      }
       admission?.mountSession(id)
       try {
-        const session = store.create(id, assertRecord(body.header, 'header'), body.inheritedEventCount ?? 0, principalId)
+        const session = store.create(id, header, body.inheritedEventCount ?? 0, principalId)
         const owner = store.claim(session)
-        return sessionResponse(session, { owner })
+        const result = sessionResponse(session, { owner })
+        createReceipts?.set(receiptKey, { digest: requestDigest, result: clone(result) })
+        while (createReceipts !== undefined && createReceipts.size > MAX_SESSION_APPEND_RECEIPTS) {
+          createReceipts.delete(createReceipts.keys().next().value)
+        }
+        return result
       } catch (error) {
         admission?.releaseMount(id)
         throw error
@@ -5908,6 +5923,7 @@ export async function createBrowserNativeV2Server(options) {
     }
   }
   const branchReceipts = new Map()
+  const createReceipts = new Map()
   const handleRequest = async (role, request, response) => {
     let url
     activeRequests += 1
@@ -6163,7 +6179,7 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/create') {
         const body = await readBody(request)
         assertProtocol(body)
-        sendJson(response, 200, await workspaces.createWorkspace(request))
+        sendJson(response, 200, await workspaces.createWorkspace(request, body.requestId))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/select') {
@@ -6842,6 +6858,7 @@ export async function createBrowserNativeV2Server(options) {
             { headers: { cookie: `dsh-browser-native-principal=${ownerPrincipalId}` } },
             workspaces.workspaceIdForPrincipal(ownerPrincipalId),
           ).revision,
+          createReceipts,
         )
         if (operation === 'append' && result.replayed !== true) {
           sessionEvents.publish(result.sessionId, body.events)

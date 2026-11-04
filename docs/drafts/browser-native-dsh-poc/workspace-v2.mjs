@@ -490,6 +490,8 @@ export class WorkspaceStore {
     this.identitiesPath = join(this.root, 'identities.json')
     this.identities = new Map()
     this.workspaces = new Map()
+    this.createReceipts = new Map()
+    this.claimReceipts = new Map()
     this.locks = new Map()
     this.writerLeaseMs = options.writerLeaseMs ?? DEFAULT_WRITER_LEASE_MS
     this.now = options.now ?? (() => Date.now())
@@ -750,10 +752,16 @@ export class WorkspaceStore {
     }
   }
 
-  async createWorkspace(request) {
+  async createWorkspace(request, requestId) {
+    if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 200) {
+      throw new WorkspaceError('INVALID_REQUEST', 'requestId is required')
+    }
     const principalId = this.principalFromRequest(request)
-    const workspaceId = randomUUID()
-    await this.exclusive('identities', async () => {
+    const receiptKey = `${principalId}\u0000create\u0000${requestId}`
+    return await this.exclusive('identities', async () => {
+      const replay = this.createReceipts.get(receiptKey)
+      if (replay !== undefined) return structuredClone(replay)
+      const workspaceId = randomUUID()
       const workspace = {
         id: workspaceId, owner: principalId, revision: 0,
         entries: new Map(), operations: new Map(), uploadedHashes: new Set(), uploadedAt: new Map(),
@@ -764,8 +772,11 @@ export class WorkspaceStore {
       await this.writeIdentities(identities)
       this.workspaces.set(workspaceId, workspace)
       this.identities = identities
+      const result = { activeWorkspaceId: workspaceId, workspace: this.workspaceSummary(workspace) }
+      this.createReceipts.set(receiptKey, structuredClone(result))
+      while (this.createReceipts.size > 1_000) this.createReceipts.delete(this.createReceipts.keys().next().value)
+      return result
     })
-    return { activeWorkspaceId: workspaceId, workspace: this.workspaceSummary(this.workspaces.get(workspaceId)) }
   }
 
   async selectWorkspace(request, workspaceId) {
@@ -1516,6 +1527,16 @@ export class WorkspaceStore {
         workspace.writerExpiresAt = now + this.writerLeaseMs
         return this.writerLease(workspace)
       }
+      const requestId = body.requestId
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 200) {
+        throw new WorkspaceError('INVALID_REQUEST', 'requestId is required')
+      }
+      const claimKey = `${workspaceId}\u0000claim\u0000${requestId}`
+      const claimed = this.claimReceipts.get(claimKey)
+      if (claimed !== undefined && claimed.writerToken === workspace.writerToken
+        && workspace.writerExpiresAt > now) {
+        return structuredClone(claimed.lease)
+      }
       if (workspace.writerToken !== undefined && workspace.writerExpiresAt > now) {
         throw new WorkspaceError(
           'WORKSPACE_ALREADY_OWNED',
@@ -1533,7 +1554,10 @@ export class WorkspaceStore {
       }
       await this.persistWorkspace(next)
       this.workspaces.set(workspaceId, next)
-      return this.writerLease(next)
+      const lease = this.writerLease(next)
+      this.claimReceipts.set(claimKey, structuredClone({ writerToken: next.writerToken, lease }))
+      while (this.claimReceipts.size > 1_000) this.claimReceipts.delete(this.claimReceipts.keys().next().value)
+      return lease
     })
   }
 
