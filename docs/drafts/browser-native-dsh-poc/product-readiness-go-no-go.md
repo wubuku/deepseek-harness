@@ -58,11 +58,11 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI；审批卡现在对无 `command` 的工具展示完整参数，`session-conflict` 状态条提供重载恢复按钮，持有写租约后页面提供本地化导出下载（见[产品可见性](product-visibility.md)）；排队已在 `output[data-browser-native-queue-status]` 上显示实时位次并验证 2→1 变化（见[16 Session 仪表盘](session-dashboard-16.md)），但仍需并入正式 composer/会话状态区。
 3. 明确浏览器支持矩阵：如果 Safari/iOS 是目标，先解决 iOS OPFS 不可用；否则限定 Chromium 桌面试点。已完成：试点限定 Chromium 桌面，Safari/Firefox/移动浏览器由启动门禁拒绝，见[浏览器支持矩阵](browser-support-matrix.md)。
 4. 把 observability、审计与预算记录迁到持久存储，并定义重启后的对账口径。已完成：拒绝访问、provider usage 与最后一次 metrics 快照写入 `<dataDir>/observability`，`GET /api/browser-native/observability/reconciliation` 报告恢复条数、轮转/坏行、journal 健康与上进程快照（见[可观测性](observability.md#持久记录与重启对账)）。
-5. 以“客户端执行、服务端权威”的安全模型做一次威胁建模；浏览器内 XSS、同机进程互认证与 preview origin 仍是已知未闭环项。
+5. 以“客户端执行、服务端权威”的安全模型做一次威胁建模；浏览器内 XSS、同机进程互认证与 preview origin 仍是已知未闭环项。已完成：14 项威胁逐项给出控制、证据与残余风险，并列出五项未闭环风险的关闭条件（见[威胁模型](threat-model.md)）；新增 `threat-model-invariants` 2/2 证明 provider key 不经 health/config/上游失败回显、审计只存 principal digest 且 API 无 CORS。
 
 ## 证据索引
 
 - 运行时与恢复：[运行时验证报告](runtime-validation-report.md)、[durable host](durable-host-progress.md)、[重启恢复](durable-host-restart.md)
-- 安全：[egress 与凭据隔离](credential-isolation-proxy.md)、[principal 隔离](principal-scoped-session-isolation-progress.md)、[提示注入边界](prompt-injection-boundaries.md)、[本地后端加固](local-backend-hardening.md)
+- 安全：[威胁模型](threat-model.md)、[egress 与凭据隔离](credential-isolation-proxy.md)、[principal 隔离](principal-scoped-session-isolation-progress.md)、[提示注入边界](prompt-injection-boundaries.md)、[本地后端加固](local-backend-hardening.md)、[Worker 隔离](worker-isolation-and-security.md)
 - 性能：[性能基线](performance-baseline.md)、[会话规模曲线](session-scale-curve.md)、[多 Session 争用](multi-session-contention.md)、[长转录](long-transcript-rendering.md)
 - 本批结论：[审批策略](approval-policy-configuration.md)、[token 预算](token-budget-metering.md)、[会话检索](session-query-browser-scale.md)、[16 Session 仪表盘](session-dashboard-16.md)

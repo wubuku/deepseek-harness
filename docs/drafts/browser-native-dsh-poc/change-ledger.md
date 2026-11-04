@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-101：立项前必做第 5 项——“客户端执行、服务端权威”威胁建模
+
+```text
+changeId: BN-P2-101
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/tests/threat-model-invariants.test.mjs; docs/drafts/browser-native-dsh-poc/product-readiness-go-no-go.md; docs/drafts/browser-native-dsh-poc/server-delivery-boundaries.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 立项前必做第 5 项要求以“客户端执行、服务端权威”做一次威胁建模；此前安全事实散落在 Worker 隔离、egress、principal 隔离与提示注入文档中，缺少统一的资产口径、判定表、威胁清单与未闭环项的关闭条件。
+existingExtensionPointsChecked: 只读取既有证据与路由，不改 backend 协议、packages/、Session format 或 Agent Loop；复用 local-request-guard、principal 隔离、Worker 隔离、egress、提示注入与 durable host 的既有测试。
+whyDraftOnlyWasInsufficient: 威胁模型若不给出逐项证据与残余风险，会把“已验证的隔离事实”误当成“已关闭的风险”；三项已知未闭环（预览页 XSS、同机进程互认证、预览与 API 同源）需要显式保留并给出可判定关闭条件。
+behaviorChange: 新增威胁模型文档：信任边界、7 类资产、8 行判定表、14 项威胁（威胁/前提/控制/证据/残余）、5 项未闭环关闭条件；同一批次新增 `tests/threat-model-invariants.test.mjs`，在 real 模式配置探测密钥后断言 `/health`、`/config` 与上游 502 错误体均不含密钥、API 无 CORS 且带 `nosniff`，带 principal 的 404 拒绝只写 SHA-256 前 16 位 digest 且响应与审计都不含原始 cookie。同步修正服务端交付物页中“审计默认内存、重启归零”与 durable 运行表的过时描述。
+consumersUpdated: go/no-go 第 5 项状态与证据索引、PoC README 新增威胁模型节、服务端交付物共同不变量与部署拓扑、ledger。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/threat-model-invariants.test.mjs` 2/2 通过；`pnpm run test:docs` 只剩 `.archify` 两项既有失败；未改 `packages/`，未运行 build。
+syncReplaySteps: 上游同步后复核 health/config 路由字段、real LLM 错误码与 principal digest 计算；复跑威胁模型 2/2 与 local-request-guard；若新增客户端可见配置字段，先更新威胁模型 T11 与测试再提交。
+deleteCondition: 三项未闭环风险全部关闭并各自有可判定测试，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-100：立项前必做第 4 项——observability、审计与 usage 持久化及重启对账
 
 ```text

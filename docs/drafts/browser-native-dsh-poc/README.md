@@ -1500,6 +1500,10 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 
 网络面：同源请求返回 200；带 ACAO 的跨源读取成功，无 CORS 的跨源响应为 opaque 或 `TypeError`；Worker 从不附加 `Authorization`，探测中 principal cookie 也未到达跨源端点。CSP `connect-src` 让跨源请求在离开 Worker 前即被拦截（服务端记录 0 次），COOP `same-origin` + COEP `require-corp` 使 `crossOriginIsolated=true` 并拦截缺 CORP 的 `no-cors` 加载，但不影响 CORS 读取。三套响应头下 scripted `bash` turn 均完成。产品结论是浏览器不能充当工具的网络与凭据边界：需要白名单或凭据隔离时，由服务端持有凭据并代理出口，或由部署下发 CSP `connect-src`。
 
+## 威胁模型：客户端执行、服务端权威
+
+[威胁模型](threat-model.md)把页面与 Worker 当作不可信执行面、backend 当作唯一权威，列出 14 项威胁的控制、证据与残余风险。资产口径覆盖 provider 凭据、Session、Workspace、principal、usage/预算、egress 授权与审计 journal；判定表明确哪些结论必须由服务端给出。五项仍未闭环：预览页内 XSS（与 API 同源、注入脚本持有全部权限）、同机进程互认证（回环端口可被本机任意进程使用）、预览与 API 同源、常规 turn 的工具策略与预算阻断在 Worker 内、审计 JSONL 可被同机同用户进程改写；每项都给出关闭条件与可判定验收方式。`tests/threat-model-invariants.test.mjs` 2/2 证明 real 模式下 provider key 不经 `/health`、`/config` 或上游失败错误体回显，API 无 CORS 且带 `nosniff`，审计只存 principal digest 而不存原始 cookie。
+
 ## 性能基线
 
 [性能基线](performance-baseline.md)测量 1 个与 4 个并行 Session 的冷启动、hydrate、首个 scripted turn 与 JavaScript 堆。每个 Session 独立 `BrowserContext` 与 durable OPFS Workspace，因此 4 个 Session 就是 4 个标签页与 4 个 Dedicated Worker。冷启动 `synced` 中位数 2.32 秒（1 个）与 3.08 秒（4 个并行），hydrate 1.94 秒与 2.71 秒；page 堆约 42.7 MB、Worker 每页约 37.2 MB，两种规模下都不增长，单页合计约 79.9 MB。测量前对 page 与每个 Worker 强制 GC，两次独立运行得到相同的堆数字。harness 以 `DSH_POC_PERF_COLD_BUDGET_MS`、`DSH_POC_PERF_HYDRATE_BUDGET_MS`、`DSH_POC_PERF_HEAP_BUDGET_MB` 提供可收紧或放宽的回归阈值。

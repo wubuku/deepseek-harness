@@ -29,7 +29,7 @@ description: "把 Browser-Native DSH 的 Session 权威、检索索引、租户�
 2. **单写者 + 单调 epoch**：任何 Session 写入都必须持有当前 owner token 且 epoch 不落后；旧 token/epoch 的 append、renew、LLM 请求一律拒绝。进程重启后 epoch 只增不减。
 3. **模型可见 ⟺ 可重建**：任何进入模型请求的输入必须先追加为 Session 事件并 flush；durable host 的 `turnId` 幂等键以已持久化的 `turn/start` 为准。
 4. **预算先于出网**：超预算在 fetch 之前判定并写 `budget/exceeded`；不允许先请求上游再取消。
-5. **审计可追溯**：允许与拒绝记录 capability、request id、principal 与目标；不含原始凭据。试点期审计是进程内存环形缓冲，重启归零（见第 4 项必做）。
+5. **审计可追溯**：允许与拒绝记录 capability、request id、principal 与目标；不含原始凭据。拒绝访问、provider usage 与指标快照写入 `<dataDir>/observability` 并在重启时恢复（见[可观测性](observability.md#持久记录与重启对账)）。
 
 ## 部署拓扑（试点）
 
@@ -39,8 +39,8 @@ description: "把 Browser-Native DSH 的 Session 权威、检索索引、租户�
       ▼
 单实例 backend 进程 ── 单写者 Session 存储（dataDir）
       │                  ├─ token meter 与限额
-      │                  ├─ egress capability 白名单 + 内存审计
-      │                  └─ durable turn host 运行表（内存）
+      │                  ├─ egress capability 白名单 + 持久审计 journal
+      │                  └─ durable turn host 运行 journal（durable-runs.json）
       ▼
 上游模型 / 外部服务（仅经 egress 或 LLM proxy）
 ```
