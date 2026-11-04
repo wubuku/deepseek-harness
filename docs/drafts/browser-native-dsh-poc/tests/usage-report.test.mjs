@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from '../usage-report.mjs'
+import { buildBudgetSnapshot, buildUsageReport, normalizeBudgetLimits, normalizeUsagePricing, usageReportCsv } from '../usage-report.mjs'
 
 const PRICING = normalizeUsagePricing({ inputUsdPer1M: 1.25, outputUsdPer1M: 2.5 })
 
@@ -83,4 +83,83 @@ test('renders one CSV row per principal and Session pair', () => {
   assert.ok(rows.includes('p1,s1,1,1000,200,1200,0.001750'))
   assert.ok(rows.includes('p2,s3,1,0,800,800,0.002000'))
   assert.ok(rows.includes(',,1,5,5,10,0.000019'))
+})
+
+test('budget limits require both token totals and a usable warning ratio', () => {
+  assert.equal(normalizeBudgetLimits(undefined), undefined)
+  assert.deepEqual(normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000 }), {
+    sessionTokens: 1_000,
+    tenantTokens: 2_000,
+    tenantId: undefined,
+    warnRatio: 0.8,
+  })
+  assert.deepEqual(normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000, tenantId: 't1', warnRatio: 0.5 }), {
+    sessionTokens: 1_000,
+    tenantTokens: 2_000,
+    tenantId: 't1',
+    warnRatio: 0.5,
+  })
+  assert.throws(() => normalizeBudgetLimits({ sessionTokens: 0, tenantTokens: 2_000 }), /sessionTokens/)
+  assert.throws(() => normalizeBudgetLimits({ sessionTokens: 1_000 }), /tenantTokens/)
+  assert.throws(() => normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000, warnRatio: 1.5 }), /warnRatio/)
+  assert.throws(() => normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000, tenantId: '  ' }), /tenantId/)
+})
+
+test('budget snapshot sums only the requesting principal and session', () => {
+  const limits = normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000, tenantId: 't1' })
+  const snapshot = buildBudgetSnapshot([
+    { principalId: 'p1', sessionId: 's1', inputTokens: 300, outputTokens: 100 },
+    { principalId: 'p1', sessionId: 's2', inputTokens: 500, outputTokens: 100 },
+    { principalId: 'p2', sessionId: 's1', inputTokens: 100, outputTokens: 0 },
+    { inputTokens: 50, outputTokens: 50 },
+  ], { sessionId: 's1', principalId: 'p1', limits, pricing: PRICING })
+  assert.equal(snapshot.configured, true)
+  assert.equal(snapshot.tenantId, 't1')
+  assert.equal(snapshot.state, 'ok')
+  assert.equal(snapshot.blockedScope, null)
+  assert.equal(snapshot.session.requests, 2)
+  assert.equal(snapshot.session.totalTokens, 500)
+  assert.equal(snapshot.tenant.requests, 2)
+  assert.equal(snapshot.tenant.totalTokens, 1_000)
+  assert.equal(snapshot.remaining.sessionTokens, 500)
+  assert.equal(snapshot.remaining.tenantTokens, 1_000)
+  closeTo(snapshot.session.costUsd, (400 / 1_000_000) * 1.25 + (100 / 1_000_000) * 2.5)
+  closeTo(snapshot.tenant.costUsd, (800 / 1_000_000) * 1.25 + (200 / 1_000_000) * 2.5)
+})
+
+test('budget snapshot warns at the threshold and blocks on the exhausted scope', () => {
+  const limits = normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000, warnRatio: 0.8 })
+  const warned = buildBudgetSnapshot([
+    { principalId: 'p1', sessionId: 's1', inputTokens: 700, outputTokens: 100 },
+  ], { sessionId: 's1', principalId: 'p1', limits, pricing: PRICING })
+  assert.equal(warned.state, 'warning')
+  assert.equal(warned.warningScope, 'session')
+  assert.equal(warned.blockedScope, null)
+  const sessionExceeded = buildBudgetSnapshot([
+    { principalId: 'p1', sessionId: 's1', inputTokens: 1_000, outputTokens: 0 },
+  ], { sessionId: 's1', principalId: 'p1', limits, pricing: PRICING })
+  assert.equal(sessionExceeded.state, 'exceeded')
+  assert.equal(sessionExceeded.blockedScope, 'session')
+  assert.equal(sessionExceeded.remaining.sessionTokens, 0)
+  const tenantExceeded = buildBudgetSnapshot([
+    { principalId: 'p1', sessionId: 's1', inputTokens: 500, outputTokens: 100 },
+    { principalId: 'p1', sessionId: 's2', inputTokens: 1_500, outputTokens: 100 },
+  ], { sessionId: 's1', principalId: 'p1', limits, pricing: PRICING })
+  assert.equal(tenantExceeded.state, 'exceeded')
+  assert.equal(tenantExceeded.blockedScope, 'tenant')
+  assert.equal(tenantExceeded.remaining.tenantTokens, 0)
+})
+
+test('budget snapshot stays unconfigured without limits and unpriced without rates', () => {
+  assert.deepEqual(buildBudgetSnapshot([], { sessionId: 's1', principalId: 'p1', limits: undefined }), {
+    configured: false,
+    sessionId: 's1',
+    tenantId: null,
+  })
+  const limits = normalizeBudgetLimits({ sessionTokens: 1_000, tenantTokens: 2_000 })
+  const snapshot = buildBudgetSnapshot([
+    { principalId: 'p1', sessionId: 's1', inputTokens: 10, outputTokens: 20 },
+  ], { sessionId: 's1', principalId: 'p1', limits })
+  assert.equal(snapshot.session.costUsd, null)
+  assert.equal(snapshot.tenant.costUsd, null)
 })

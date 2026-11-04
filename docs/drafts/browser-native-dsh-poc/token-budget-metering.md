@@ -62,12 +62,56 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs
 ```
 
+## 客户端预算展示与发送前阻断
+
+`GET /api/browser-native/session/budget?sessionId=` 只对 Session owner 返回该 principal 的用量快照：`session` 是同一 Session 下所有 provider 记录的 token 与费用，`tenant` 是该 principal 名下所有 provider 记录的汇总，`remaining` 是 Session/租户限额减去已用量。数字全部来自 backend 已记录的 provider `usage`，不按字符估算；费用只在配置了 per-million 价格时出现。
+
+页面在 owner notice 后每 2 秒轮询该端点，显示 `Session 已用/限额 · 费用`、`Tenant 已用/限额 · 剩余 · 费用` 与 `Warning at 80%`。达到 80% 显示预警文案；达到任一限额时显示 `Sending is disabled`，将 composer 的发送按钮置为 disabled，并在 document capture 阶段拦截发送按钮点击与输入框 Enter（含按钮属性被重新渲染或移除的情况），同时给出“复制管理员说明”和“导出诊断包”两个入口。管理员说明包含 Session、已用量、限额与 tenant 汇总；诊断包复用既有 support bundle。
+
+配置入口是 hosted 启动脚本的环境变量 `DSH_POC_SESSION_TOKEN_BUDGET`、`DSH_POC_TENANT_TOKEN_BUDGET`、`DSH_POC_TENANT_ID` 与 `DSH_POC_BUDGET_WARN_RATIO`（默认 0.8）；两个 token 限额必须同时设置，都未设置时页面不显示预算条。`usagePricing` 与租户报表共用同一组价格。
+
+真实模型证据（`tests/budget-guidance.e2e.mjs`，roster `browser`，无 Worker 预算插件）：
+
+```json
+{
+  "alignment": {
+    "sessionTokens": 2372,
+    "inputTokens": 2348,
+    "outputTokens": 24,
+    "costUsd": 0.002995,
+    "tenantRemaining": 117628,
+    "state": "ok"
+  },
+  "preBlock": {
+    "state": "exceeded",
+    "blockedScope": "session",
+    "sendDisabled": true,
+    "enterBlocked": true,
+    "forcedClickBlocked": true,
+    "providerRequestsUnchanged": true,
+    "adminPath": true,
+    "diagnostics": "dsh-support-bundle-session-4a985488-583e-4b5d-b275-f11126a5bda9.json"
+  }
+}
+```
+
+第一个场景限额 60 000/120 000，真实 provider 完成一轮后页面显示值与 `/usage-audit` 的 Session 汇总逐值相等，费用按 `$1.25/M` 输入与 `$2.5/M` 输出计算一致，发送按钮可用。第二个场景把限额设为 1/2，启动 turn 完成后页面进入 `exceeded`，发送按钮 disabled；Enter 与强制解除 disabled 后的点击都没有新增 `user/message`，turn 请求数没有增加，管理员说明复制成功且诊断包可下载。
+
+运行命令：
+
+```sh
+DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/budget-guidance.e2e.mjs
+```
+
 ## 残余缺口
 
 - 阻断粒度是“上游请求之前”与“工具执行之前”，没有按预估输入 token 的预检；单次请求本身仍可能跨过限额，证据中的 2369/2368 就是请求完成后才越界。工具 guard 在超限后拒绝所有工具调用，直到限额上调或打开新 turn。
 - 租户汇总是本 Worker 内已见过 Session 的和；真实模型这次只在一个 Session 内执行了租户阻断，第二次 UI Session 的发送按钮在该流程中不可用，因此“跨 Session 聚合后阻断”的端到端路径未覆盖。插件代码按 Session 集合求和，没有持久化租户账本。
 - 租户只由 profile `tenantId` 标识，不是认证身份；Worker 没有租户凭据，跨 Worker 或跨设备不共享计量。
-- 没有费用/价格换算，只有 token；provider 的 cache 命中字段若将来出现在原始 usage 中，backend 审计只记录 `prompt_tokens` 总量，插件 meter 按 projection 分桶，二者可能不再逐值相等。
+- 预算判定没有费用换算，只有 token；客户端展示的费用来自 backend 的 `usagePricing`。provider 的 cache 命中字段若将来出现在原始 usage 中，backend 审计只记录 `prompt_tokens` 总量，插件 meter 按 projection 分桶，二者可能不再逐值相等。
 - `usage.jsonl` 只保留最近 1 000 条 provider 调用记录，用于重启对账与证据回看，不参与预算判定；预算仍以 Session 日志的 meter 为准，因此超出 journal 窗口的历史用量无法从该文件累计。
 - 标题生成、压缩等后台请求的 usage 若不写入被计量的 Session 日志，租户总量会低估这些调用；本次运行没有触发这些请求，未验证。
-- 预算插件只注册在验证 roster，正式产品 profile 未启用；没有客户端预算条、预警阈值（如 80%）或用户可见的用量页。
+- 客户端预算条的限额来自 backend 的 `budgetLimits`，Worker 预算插件的限额来自 profile config；两者是独立配置，部署时必须手动对齐。页面只按 backend 账本展示，不读取 Worker meter；插件未挂载时（本次 E2E 的 roster `browser`）页面阻断是唯一防线，服务端仍没有独立于 UI 的租户预算拒绝逻辑。
+- 页面按 principal cookie 聚合租户用量，不是认证租户；cookie 重置或换设备后历史用量不再计入。backend 只保留最近 1 000 条 provider 记录，超过窗口的历史用量同样不计入展示与阻断。
+- 预算条只在 owner Session 上出现；共享只读用户没有预算入口。轮询间隔 2 秒，极端情况下两次快速发送可能落在刷新间隙，仍由 Worker/服务端预算判定兜底。

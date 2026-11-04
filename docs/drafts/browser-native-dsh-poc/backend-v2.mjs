@@ -23,7 +23,13 @@ import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal, redactObservabilityJournal } from './observability-journal.mjs'
-import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
+import {
+  buildBudgetSnapshot,
+  buildUsageReport,
+  normalizeBudgetLimits,
+  normalizeUsagePricing,
+  usageReportCsv,
+} from './usage-report.mjs'
 import { buildPrincipalExport, verifyPrincipalExport } from './principal-export.mjs'
 import { SessionShareError, SessionShareStore } from './session-shares.mjs'
 import { buildTraceReport, traceIdFor } from './subagent-trace.mjs'
@@ -5468,6 +5474,7 @@ export async function createBrowserNativeV2Server(options) {
     throw new TypeError('workspaceVerifiedDownloads requires workspaceChunkObjects: true')
   }
   const usagePricing = normalizeUsagePricing(options.usagePricing)
+  const budgetLimits = normalizeBudgetLimits(options.budgetLimits)
   const sharedStateOrigin = options.stateAuthorityOrigin === undefined
     ? undefined : new URL(options.stateAuthorityOrigin).origin
   const sharedStateToken = options.stateAuthorityToken
@@ -6254,6 +6261,26 @@ export async function createBrowserNativeV2Server(options) {
             fallbackProviderKind: llm.fallback.kind,
           }),
         })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/budget') {
+        if (llm.mode !== 'real') {
+          sendJson(response, 404, { error: 'budget usage is available only in real-LLM mode' })
+          return
+        }
+        if (budgetLimits === undefined) {
+          sendJson(response, 200, { configured: false, sessionId: null, tenantId: null })
+          return
+        }
+        const sessionId = assertSessionId(url.searchParams.get('sessionId'))
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        store.getForPrincipal(sessionId, principalId)
+        sendJson(response, 200, buildBudgetSnapshot(retainedUsage(), {
+          sessionId,
+          principalId,
+          limits: budgetLimits,
+          pricing: usagePricing,
+        }))
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/usage-audit') {

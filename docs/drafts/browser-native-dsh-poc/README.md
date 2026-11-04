@@ -525,7 +525,7 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 ## Token 预算与计量
 
-[token 预算验证](token-budget-metering.md)用真实模型对照 PoC backend 独立记录的上游 usage：Session 计量 2346 输入 / 16 输出与 provider 完全一致。Session 限额压到已用量以下后，下一 turn 在 `fetch` 之前被拒绝，`turn/end` 为 `TOKEN_BUDGET_EXCEEDED`、上游请求数不增、`budget/exceeded` 一条且客户端显示错误；租户限额压到已用量以下后同样在请求前阻断，租户 scope 审计一条。预算来自验证 roster 的 profile `config`，正式 profile 未启用。
+[token 预算验证](token-budget-metering.md)用真实模型对照 PoC backend 独立记录的上游 usage：Session 计量 2346 输入 / 16 输出与 provider 完全一致。Session 限额压到已用量以下后，下一 turn 在 `fetch` 之前被拒绝，`turn/end` 为 `TOKEN_BUDGET_EXCEEDED`、上游请求数不增、`budget/exceeded` 一条且客户端显示错误；租户限额压到已用量以下后同样在请求前阻断，租户 scope 审计一条。同一文档记录客户端预算条：`GET /api/browser-native/session/budget` 按 provider 账本显示 Session/租户已用 token 与费用、80% 预警，达到限额时禁用 composer 发送并拦截 Enter/点击，提供管理员说明复制与诊断包下载；`tests/budget-guidance.e2e.mjs` 用真实模型逐值对齐展示值并用 1/2 token 限额证明发送前无新 turn、无 provider 请求。预算判定来自验证 roster 的 profile `config`，正式 profile 未启用；客户端限额由 hosted 环境变量单独配置。
 
 ```sh
 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \

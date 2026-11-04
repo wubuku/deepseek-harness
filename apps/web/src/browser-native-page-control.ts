@@ -31,6 +31,11 @@ import {
   type BrowserNativeFailureAction,
 } from './locales/browser-native-failure-guidance.ts'
 import {
+  browserNativeBudgetCopy,
+  type BrowserNativeBudgetSnapshot,
+  type BrowserNativeBudgetUsage,
+} from './locales/browser-native-budget.ts'
+import {
   BrowserNativeControlReceiver,
   type BrowserNativeControlNotice,
   type BrowserNativeOfflineStatus,
@@ -74,6 +79,60 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value)
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function parseBudgetUsage(value: unknown): BrowserNativeBudgetUsage | undefined {
+  if (!isRecord(value) || !isTokenCount(value.requests) || !isTokenCount(value.inputTokens)
+    || !isTokenCount(value.outputTokens) || !isTokenCount(value.totalTokens)) return undefined
+  const costUsd = value.costUsd
+  if (costUsd !== null && (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0)) return undefined
+  return {
+    requests: value.requests,
+    inputTokens: value.inputTokens,
+    outputTokens: value.outputTokens,
+    totalTokens: value.totalTokens,
+    costUsd,
+  }
+}
+
+function parseBudgetSnapshot(value: unknown): BrowserNativeBudgetSnapshot | undefined {
+  if (!isRecord(value) || value.configured !== true) return undefined
+  const sessionId = value.sessionId
+  const tenantId = value.tenantId
+  const state = value.state
+  const blockedScope = value.blockedScope
+  const warningScope = value.warningScope
+  const warnRatio = value.warnRatio
+  const limits = value.limits
+  const remaining = value.remaining
+  if (typeof sessionId !== 'string' || (tenantId !== null && typeof tenantId !== 'string')) return undefined
+  if (state !== 'ok' && state !== 'warning' && state !== 'exceeded') return undefined
+  if (blockedScope !== null && blockedScope !== 'session' && blockedScope !== 'tenant') return undefined
+  if (warningScope !== 'session' && warningScope !== 'tenant') return undefined
+  if (typeof warnRatio !== 'number' || !Number.isFinite(warnRatio) || warnRatio <= 0 || warnRatio > 1) return undefined
+  if (!isRecord(limits) || !isTokenCount(limits.sessionTokens) || !isTokenCount(limits.tenantTokens)
+    || !isRecord(remaining) || !isTokenCount(remaining.sessionTokens) || !isTokenCount(remaining.tenantTokens)) {
+    return undefined
+  }
+  const session = parseBudgetUsage(value.session)
+  const tenant = parseBudgetUsage(value.tenant)
+  if (session === undefined || tenant === undefined) return undefined
+  return {
+    sessionId,
+    tenantId,
+    state,
+    blockedScope,
+    warningScope,
+    warnRatio,
+    limits: { sessionTokens: limits.sessionTokens, tenantTokens: limits.tenantTokens },
+    session,
+    tenant,
+    remaining: { sessionTokens: remaining.sessionTokens, tenantTokens: remaining.tenantTokens },
+  }
 }
 
 interface RecoveryBlob {
@@ -753,6 +812,227 @@ export async function connectBrowserNativePageControl(
     exportControl.root.style.display = available ? 'flex' : 'none'
   }
   const workspaceApiUrl = (path: string): string => `${options.apiOrigin ?? ''}${path}`
+  let budgetPanel: {
+    readonly root: HTMLElement
+    readonly title: HTMLElement
+    readonly sessionLine: HTMLElement
+    readonly tenantLine: HTMLElement
+    readonly thresholdLine: HTMLElement
+    readonly note: HTMLElement
+    readonly actions: HTMLElement
+    readonly admin: HTMLButtonElement
+    readonly diagnostics: HTMLButtonElement
+    readonly result: HTMLElement
+  } | undefined
+  let budgetSessionId: string | undefined
+  let budgetTimer: number | undefined
+  let budgetSnapshot: BrowserNativeBudgetSnapshot | undefined
+  let budgetOwnedDisabled: HTMLButtonElement | undefined
+  let budgetBlocked = false
+  const isSendButton = (button: Element | null): button is HTMLButtonElement => {
+    const label = button?.getAttribute('aria-label')
+    return label === 'Send message' || label === '发送消息'
+  }
+  const showBudgetResult = (action: 'contact-admin' | 'diagnostics', success: boolean): void => {
+    if (budgetPanel === undefined) return
+    budgetPanel.result.style.display = 'block'
+    budgetPanel.result.textContent = browserNativeFailureActionResultCopy(
+      document.documentElement.lang,
+      action,
+      success,
+      'TOKEN_BUDGET_EXCEEDED',
+    )
+  }
+  const setBudgetComposerBlocked = (blocked: boolean): void => {
+    budgetBlocked = blocked
+    if (blocked) {
+      const button = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')]
+        .find(candidate => isSendButton(candidate))
+      if (button === undefined) return
+      if (!button.disabled) budgetOwnedDisabled = button
+      button.disabled = true
+      button.setAttribute('aria-disabled', 'true')
+      button.setAttribute('data-browser-native-budget-blocked', '')
+      Object.assign(button.style, { opacity: '0.55', cursor: 'not-allowed' })
+      return
+    }
+    const owned = budgetOwnedDisabled
+    budgetOwnedDisabled = undefined
+    if (owned === undefined) return
+    owned.disabled = false
+    owned.removeAttribute('aria-disabled')
+    owned.removeAttribute('data-browser-native-budget-blocked')
+    owned.style.opacity = ''
+    owned.style.cursor = ''
+  }
+  const hideBudgetPanel = (): void => {
+    setBudgetComposerBlocked(false)
+    budgetPanel?.root.remove()
+    budgetPanel = undefined
+  }
+  const createBudgetPanel = (): NonNullable<typeof budgetPanel> => {
+    const root = document.createElement('output')
+    applyLiveRegion(root, 'status')
+    root.setAttribute('data-browser-native-budget', '')
+    Object.assign(root.style, {
+      position: 'fixed',
+      left: '50%',
+      bottom: '150px',
+      transform: 'translateX(-50%)',
+      zIndex: '900',
+      display: 'block',
+      pointerEvents: 'none',
+      maxWidth: 'min(560px, calc(100vw - 32px))',
+      padding: '9px 13px',
+      border: `1px solid ${browserNativeSurface.border}`,
+      borderRadius: '10px',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
+      boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
+      font: '500 13px/1.4 system-ui, sans-serif',
+    })
+    const title = document.createElement('span')
+    title.style.display = 'block'
+    title.style.fontWeight = '600'
+    const sessionLine = document.createElement('span')
+    sessionLine.setAttribute('data-browser-native-budget-session', '')
+    sessionLine.style.display = 'block'
+    const tenantLine = document.createElement('span')
+    tenantLine.setAttribute('data-browser-native-budget-tenant', '')
+    tenantLine.style.display = 'block'
+    tenantLine.style.color = browserNativeSurface.secondary
+    const thresholdLine = document.createElement('span')
+    thresholdLine.setAttribute('data-browser-native-budget-threshold', '')
+    thresholdLine.style.display = 'block'
+    thresholdLine.style.color = browserNativeSurface.secondary
+    const note = document.createElement('span')
+    note.setAttribute('data-browser-native-budget-note', '')
+    applyLiveRegion(note, 'status')
+    Object.assign(note.style, { display: 'none', marginTop: '6px', fontWeight: '600' })
+    const actions = document.createElement('div')
+    Object.assign(actions.style, { display: 'none', gap: '8px', flexWrap: 'wrap', marginTop: '8px', pointerEvents: 'auto' })
+    const admin = document.createElement('button')
+    admin.type = 'button'
+    admin.setAttribute('data-browser-native-budget-admin', '')
+    styleStatusAction(admin, '600')
+    admin.addEventListener('click', () => {
+      const snapshot = budgetSnapshot
+      if (snapshot === undefined) return
+      const copyText = browserNativeBudgetCopy(document.documentElement.lang, snapshot).adminRequest
+      void navigator.clipboard.writeText(copyText).then(
+        () => { showBudgetResult('contact-admin', true) },
+        () => { showBudgetResult('contact-admin', false) },
+      )
+    })
+    const diagnostics = document.createElement('button')
+    diagnostics.type = 'button'
+    diagnostics.setAttribute('data-browser-native-budget-diagnostics', '')
+    styleStatusAction(diagnostics)
+    diagnostics.addEventListener('click', () => {
+      const sessionId = budgetSessionId
+      if (sessionId === undefined) return
+      void downloadSupportBundle(sessionId).then(
+        () => { showBudgetResult('diagnostics', true) },
+        () => { showBudgetResult('diagnostics', false) },
+      )
+    })
+    actions.append(admin, diagnostics)
+    const result = document.createElement('span')
+    result.setAttribute('data-browser-native-budget-result', '')
+    applyLiveRegion(result, 'status')
+    Object.assign(result.style, { display: 'none', marginTop: '6px' })
+    root.append(title, sessionLine, tenantLine, thresholdLine, note, actions, result)
+    document.body.append(root)
+    budgetPanel = { root, title, sessionLine, tenantLine, thresholdLine, note, actions, admin, diagnostics, result }
+    return budgetPanel
+  }
+  const showBudgetPanel = (snapshot: BrowserNativeBudgetSnapshot): void => {
+    const panel = budgetPanel ?? createBudgetPanel()
+    const copy = browserNativeBudgetCopy(document.documentElement.lang, snapshot)
+    panel.title.textContent = copy.title
+    panel.sessionLine.textContent = copy.sessionLine
+    panel.tenantLine.textContent = copy.tenantLine
+    panel.thresholdLine.textContent = copy.thresholdLine
+    panel.note.style.display = snapshot.state === 'ok' ? 'none' : 'block'
+    panel.note.textContent = snapshot.state === 'exceeded' ? copy.blocked : copy.warning
+    panel.note.style.color = snapshot.state === 'exceeded' ? browserNativeSurface.error : browserNativeSurface.warn
+    panel.actions.style.display = snapshot.state === 'exceeded' ? 'flex' : 'none'
+    panel.admin.textContent = copy.adminAction
+    panel.diagnostics.textContent = copy.diagnosticsAction
+    panel.root.dataset.state = snapshot.state
+    panel.root.dataset.sessionTotal = String(snapshot.session.totalTokens)
+    panel.root.dataset.sessionInput = String(snapshot.session.inputTokens)
+    panel.root.dataset.sessionOutput = String(snapshot.session.outputTokens)
+    panel.root.dataset.sessionCost = snapshot.session.costUsd === null ? '' : snapshot.session.costUsd.toFixed(9)
+    panel.root.dataset.sessionLimit = String(snapshot.limits.sessionTokens)
+    panel.root.dataset.tenantTotal = String(snapshot.tenant.totalTokens)
+    panel.root.dataset.tenantCost = snapshot.tenant.costUsd === null ? '' : snapshot.tenant.costUsd.toFixed(9)
+    panel.root.dataset.tenantLimit = String(snapshot.limits.tenantTokens)
+    panel.root.dataset.tenantRemaining = String(snapshot.remaining.tenantTokens)
+    panel.root.dataset.blockedScope = snapshot.blockedScope ?? ''
+    panel.root.style.borderColor = snapshot.state === 'exceeded' ? browserNativeSurface.error
+      : snapshot.state === 'warning' ? browserNativeSurface.warn : browserNativeSurface.border
+    applyLiveRegion(panel.root, snapshot.state === 'exceeded' ? 'alert' : 'status')
+    setBudgetComposerBlocked(snapshot.state === 'exceeded')
+  }
+  const pollBudget = async (): Promise<void> => {
+    const sessionId = budgetSessionId
+    if (sessionId === undefined || isPageLeaving()) return
+    let snapshot: BrowserNativeBudgetSnapshot | undefined
+    try {
+      const response = await fetch(workspaceApiUrl(`/api/browser-native/session/budget?sessionId=${encodeURIComponent(sessionId)}`), {
+        credentials: 'same-origin',
+      })
+      if (!response.ok) {
+        hideBudgetPanel()
+        return
+      }
+      snapshot = parseBudgetSnapshot(await response.json())
+    } catch {
+      return
+    }
+    if (budgetSessionId !== sessionId) return
+    if (snapshot === undefined) {
+      hideBudgetPanel()
+      return
+    }
+    budgetSnapshot = snapshot
+    showBudgetPanel(snapshot)
+  }
+  const stopBudgetWatch = (sessionId?: string): void => {
+    if (sessionId !== undefined && budgetSessionId !== sessionId) return
+    if (budgetTimer !== undefined) {
+      window.clearInterval(budgetTimer)
+      budgetTimer = undefined
+    }
+    budgetSessionId = undefined
+    budgetSnapshot = undefined
+    setBudgetComposerBlocked(false)
+    budgetPanel?.root.remove()
+    budgetPanel = undefined
+  }
+  const startBudgetWatch = (sessionId: string): void => {
+    stopBudgetWatch()
+    budgetSessionId = sessionId
+    void pollBudget()
+    budgetTimer = window.setInterval(() => { void pollBudget() }, 2_000)
+  }
+  const handleBudgetClick = (event: MouseEvent): void => {
+    if (!budgetBlocked) return
+    const target = event.target instanceof Element ? event.target.closest('button[aria-label]') : null
+    if (!isSendButton(target)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  const handleBudgetKeydown = (event: KeyboardEvent): void => {
+    if (!budgetBlocked || event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+    if (!(event.target instanceof Element) || !event.target.closest('[data-composer-input]')) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  document.addEventListener('click', handleBudgetClick, true)
+  document.addEventListener('keydown', handleBudgetKeydown, true)
+
   let turnRetryPanel: { readonly root: HTMLElement; readonly message: HTMLElement; readonly button: HTMLButtonElement } | undefined
   let turnRetrySessionId: string | undefined
   let turnRetryTimer: number | undefined
@@ -1459,6 +1739,7 @@ export async function connectBrowserNativePageControl(
       owners.set(notice.sessionId, notice.ownerToken)
       syncExportControl()
       startTurnRetryWatch(notice.sessionId)
+      startBudgetWatch(notice.sessionId)
       if (!recoveryLocks.supported) {
         publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
         stopWorker()
@@ -1471,6 +1752,7 @@ export async function connectBrowserNativePageControl(
       owners.delete(notice.sessionId)
       syncExportControl()
       if (turnRetrySessionId === notice.sessionId) stopTurnRetryWatch()
+      stopBudgetWatch(notice.sessionId)
       removeRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId))
       recoveryLocks.releaseResource({ kind: 'session', id: notice.sessionId })
     }
@@ -1584,8 +1866,11 @@ export async function connectBrowserNativePageControl(
     window.removeEventListener('online', reportNetworkState)
     document.removeEventListener('click', handleFirstUseClick, true)
     document.removeEventListener('keydown', handleFirstUseKeydown, true)
+    document.removeEventListener('click', handleBudgetClick, true)
+    document.removeEventListener('keydown', handleBudgetKeydown, true)
     clearRetryTimer()
     stopTurnRetryWatch()
+    stopBudgetWatch()
     pagehideWaiters.clear()
     channel.port1.close()
     workspaceStatus?.remove()

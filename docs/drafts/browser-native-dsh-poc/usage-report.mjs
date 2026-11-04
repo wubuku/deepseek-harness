@@ -105,6 +105,91 @@ export function buildUsageReport(entries, options = {}) {
   }
 }
 
+/**
+ * Validate the optional Session and tenant budget limits shown before a send.
+ * @param limits - Candidate `{ sessionTokens, tenantTokens, tenantId?, warnRatio? }` or undefined.
+ * @returns Normalized limits, or undefined when the budget surface is disabled.
+ */
+export function normalizeBudgetLimits(limits) {
+  if (limits === undefined) return undefined
+  for (const name of ['sessionTokens', 'tenantTokens']) {
+    const value = limits[name]
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError(`${name} must be a positive safe integer`)
+    }
+  }
+  const tenantId = limits.tenantId
+  if (tenantId !== undefined && (typeof tenantId !== 'string' || tenantId.trim().length === 0)) {
+    throw new TypeError('tenantId must be a non-empty string')
+  }
+  const warnRatio = limits.warnRatio ?? 0.8
+  if (typeof warnRatio !== 'number' || !Number.isFinite(warnRatio) || warnRatio <= 0 || warnRatio > 1) {
+    throw new TypeError('warnRatio must be a positive number up to 1')
+  }
+  return {
+    sessionTokens: limits.sessionTokens,
+    tenantTokens: limits.tenantTokens,
+    tenantId: tenantId?.trim(),
+    warnRatio,
+  }
+}
+
+/**
+ * Build the pre-send budget snapshot from provider-reported usage.
+ *
+ * Only entries attributed to the requesting principal count toward the tenant
+ * total; Session totals further require the matching Session id. Cost stays
+ * null until per-million prices are configured.
+ * @param entries - Recorded usage entries with `inputTokens`, `outputTokens`, optional `sessionId` and `principalId`.
+ * @param options - `sessionId`, `principalId`, optional normalized `limits`, optional normalized `pricing`.
+ * @returns Budget state, limits, usage totals, and remaining tokens for the page.
+ */
+export function buildBudgetSnapshot(entries, options) {
+  const pricing = options.pricing
+  const limits = options.limits
+  if (limits === undefined) return { configured: false, sessionId: options.sessionId, tenantId: null }
+  const mine = entries.filter(entry => typeof entry.principalId === 'string'
+    && entry.principalId === options.principalId)
+  const session = emptyTotals()
+  const tenant = emptyTotals()
+  for (const entry of mine) addTo(tenant, entry, pricing)
+  // Session spend includes every provider request recorded under the Session id,
+  // including ones a shared editor made, because the Session budget is charged
+  // once for the Session rather than per principal.
+  for (const entry of entries) {
+    if (typeof entry.sessionId === 'string' && entry.sessionId === options.sessionId) addTo(session, entry, pricing)
+  }
+  const serialize = accumulator => ({
+    requests: accumulator.requests,
+    inputTokens: accumulator.inputTokens,
+    outputTokens: accumulator.outputTokens,
+    totalTokens: accumulator.totalTokens,
+    costUsd: pricing === undefined ? null : accumulator.costUsd,
+  })
+  const sessionExceeded = session.totalTokens >= limits.sessionTokens
+  const tenantExceeded = tenant.totalTokens >= limits.tenantTokens
+  const tighterScope = session.totalTokens / limits.sessionTokens >= tenant.totalTokens / limits.tenantTokens
+    ? 'session' : 'tenant'
+  return {
+    configured: true,
+    sessionId: options.sessionId,
+    tenantId: limits.tenantId ?? null,
+    state: sessionExceeded || tenantExceeded ? 'exceeded'
+      : Math.max(session.totalTokens / limits.sessionTokens, tenant.totalTokens / limits.tenantTokens) >= limits.warnRatio
+        ? 'warning' : 'ok',
+    blockedScope: sessionExceeded ? 'session' : tenantExceeded ? 'tenant' : null,
+    warningScope: tighterScope,
+    warnRatio: limits.warnRatio,
+    limits: { sessionTokens: limits.sessionTokens, tenantTokens: limits.tenantTokens },
+    session: serialize(session),
+    tenant: serialize(tenant),
+    remaining: {
+      sessionTokens: Math.max(0, limits.sessionTokens - session.totalTokens),
+      tenantTokens: Math.max(0, limits.tenantTokens - tenant.totalTokens),
+    },
+  }
+}
+
 /** Quote one CSV field when it contains a delimiter, quote, or line break. */
 function csvField(value) {
   const text = value === null || value === undefined ? '' : String(value)

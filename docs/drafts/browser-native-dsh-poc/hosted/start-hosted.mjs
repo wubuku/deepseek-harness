@@ -94,6 +94,31 @@ function usagePricingFromEnv() {
   return rates
 }
 
+/** Read the optional pre-send budget limits; both token totals present or none. */
+function budgetLimitsFromEnv() {
+  const session = env.DSH_POC_SESSION_TOKEN_BUDGET
+  const tenant = env.DSH_POC_TENANT_TOKEN_BUDGET
+  if (session === undefined && tenant === undefined) return undefined
+  if (session === undefined || tenant === undefined) {
+    throw new Error('DSH_POC_SESSION_TOKEN_BUDGET and DSH_POC_TENANT_TOKEN_BUDGET must be set together')
+  }
+  const limits = {
+    sessionTokens: integerEnv('DSH_POC_SESSION_TOKEN_BUDGET', 1, 1, 2_147_483_647),
+    tenantTokens: integerEnv('DSH_POC_TENANT_TOKEN_BUDGET', 1, 1, 2_147_483_647),
+  }
+  const tenantId = env.DSH_POC_TENANT_ID
+  if (tenantId !== undefined && tenantId !== '') limits.tenantId = tenantId
+  const warnRatio = env.DSH_POC_BUDGET_WARN_RATIO
+  if (warnRatio !== undefined && warnRatio !== '') {
+    const value = Number(warnRatio)
+    if (!Number.isFinite(value) || value <= 0 || value > 1) {
+      throw new Error('DSH_POC_BUDGET_WARN_RATIO must be a number above 0 and at most 1')
+    }
+    limits.warnRatio = value
+  }
+  return limits
+}
+
 /** Read the hosted token verifier settings; all three present or none. */
 function hostedAuthFromEnv() {
   const issuer = env.DSH_POC_HOSTED_ISSUER
@@ -183,6 +208,7 @@ function readConfiguration() {
     workspaceChunkObjects: booleanEnv('DSH_POC_WORKSPACE_CHUNK_OBJECTS', false),
     workspaceVerifiedDownloads: booleanEnv('DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS', false),
     usagePricing: usagePricingFromEnv(),
+    budgetLimits: budgetLimitsFromEnv(),
     alerts: alertsFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,
@@ -204,6 +230,7 @@ function report(app, origin, options, authMode) {
   process.stdout.write(`hosted: llm ${app.llm.mode}; model ${app.llm.model}\n`)
   process.stdout.write(`hosted: admission ≤${String(options.admission.maxConcurrentTurns)} concurrent turns, ≤${String(options.admission.maxMountedSessions)} mounted Sessions\n`)
   process.stdout.write(`hosted: usage pricing ${options.usagePricing === undefined ? 'disabled' : `$${String(options.usagePricing.inputUsdPer1M)}/M input, $${String(options.usagePricing.outputUsdPer1M)}/M output`}\n`)
+  process.stdout.write(`hosted: pre-send budget ${options.budgetLimits === undefined ? 'disabled' : `${String(options.budgetLimits.sessionTokens)} Session tokens, ${String(options.budgetLimits.tenantTokens)} tenant tokens, warn at ${String(Math.round(options.budgetLimits.warnRatio * 100))}%`}\n`)
   process.stdout.write(`hosted: alerts ${options.alerts === undefined ? 'disabled' : [
     ...(options.alerts.failureRate === undefined ? [] : [`failure-rate ≥${String(options.alerts.failureRate.ratio)}`]),
     ...(options.alerts.queueBacklog === undefined ? [] : [`queue ≥${String(options.alerts.queueBacklog.queuedTurns)}`]),
@@ -249,6 +276,7 @@ async function main() {
     workspaceChunkObjects: options.workspaceChunkObjects,
     workspaceVerifiedDownloads: options.workspaceVerifiedDownloads,
     ...(options.usagePricing === undefined ? {} : { usagePricing: options.usagePricing }),
+    ...(options.budgetLimits === undefined ? {} : { budgetLimits: options.budgetLimits }),
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),
     ...(options.stateAuthorityToken === undefined ? {} : { stateAuthorityToken: options.stateAuthorityToken }),

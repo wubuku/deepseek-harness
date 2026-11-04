@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-163：客户端预算展示与发送前阻断
+
+```text
+changeId: BN-P2-163
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-budget.ts; docs/drafts/browser-native-dsh-poc/usage-report.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs; docs/drafts/browser-native-dsh-poc/tests/budget-guidance.e2e.mjs; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 预算只在 Worker/上游请求前拒绝，用户在发送前看不到 Session 已用 token/费用、租户剩余额度和预警阈值；被拒后只能从错误卡倒推原因，没有申请或诊断入口。
+existingExtensionPointsChecked: 复用 provider `usage` 审计、principal cookie、owner notice、既有 support bundle、页面 composer 与 document capture；只在 backend 增加 `GET /api/browser-native/session/budget` 与可选 `budgetLimits`，未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 provider 产生 usage 后，才能验证页面数字与审计逐值相等；只有真实页面点击/Enter 经 React 处理器，才能证明发送前阻断不会产生 turn 或上游请求。
+behaviorChange: 新增预算快照端点与 `buildBudgetSnapshot`/`normalizeBudgetLimits`：Session 汇总同一 Session 下全部 provider 记录（含共享 editor），租户只汇总请求 principal 的记录；按 `usagePricing` 计价，达到 80% 预警、达到任一限额进入 `exceeded` 并返回阻断 scope。页面每 2 秒轮询，显示 Session/租户用量与剩余、预警文案；超限时禁用发送按钮并在 document capture 拦截发送点击与 composer Enter，提供管理员说明复制和诊断包下载。hosted 新增 `DSH_POC_SESSION_TOKEN_BUDGET`/`DSH_POC_TENANT_TOKEN_BUDGET`/`DSH_POC_TENANT_ID`/`DSH_POC_BUDGET_WARN_RATIO`。未配置限额时端点返回 `configured:false` 且页面不显示预算条。
+consumersUpdated: backend v2 路由与初始化、hosted 启动参数、preview 页面控制、新增双语预算字典、usage-report 单元测试、真实模型 E2E、token-budget-metering.md、PoC README、本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs` 9/9 通过；`pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/budget-guidance.e2e.mjs` 真实模型通过：240 000 token 限额下页面显示 2372 tokens（2348 输入 + 24 输出）、$0.002995 与 `/usage-audit` 逐值相等、租户剩余 117628、state=ok 且发送可用；1/2 token 限额下页面进入 exceeded、发送按钮 disabled、Enter 与强制解除 disabled 后的点击均无新 `user/message`、turn 请求数不变、管理员说明可复制、`dsh-support-bundle-session-….json` 可下载，pageErrors=0。
+syncReplaySteps: 上游同步后重建 preview，复跑单元测试与真实模型脚本；确认未配置 `budgetLimits` 时端点返回 `configured:false`、页面无预算条，且既有 `token-budget.e2e.mjs` 的 Worker 预算路径不受影响。
+deleteCondition: 正式产品提供基于权威租户账本的发送前预算展示与阻断，或被等价的客户端预算门禁取代。
+status: implemented
+```
+
 ### BN-P2-157：工具策略的路径范围规则
 
 ```text
