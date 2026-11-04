@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-122：容器镜像、systemd 单元与 TLS 反代的交付与实测
+
+```text
+changeId: BN-P2-122
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/hosted/Dockerfile; docs/drafts/browser-native-dsh-poc/hosted/Dockerfile.dockerignore; docs/drafts/browser-native-dsh-poc/hosted/systemd/browser-native-dsh.service; docs/drafts/browser-native-dsh-poc/hosted/systemd/browser-native-dsh.env.example; docs/drafts/browser-native-dsh-poc/hosted/nginx/browser-native-dsh.conf; docs/drafts/browser-native-dsh-poc/hosted/verify-deployment.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 此前只有单命令启动，容器、systemd 与 TLS 反向代理均为“未验证”；且 `assertLocalRequest` 只接受回环 Host、`/preview-api-origin` 返回监听地址，导致任意代理域名或容器端口映射下的浏览器请求被 403 或拿到容器内 `0.0.0.0` origin。
+existingExtensionPointsChecked: 复用 `start-hosted.mjs` 的环境配置入口、`createBrowserNativeV2Server` 的 `requireLocalAuth` 选项、既有 token/handshake/cookie 与 `check-data.mjs`；未改 Session 事件、Agent Loop、durable 协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 只有真实构建镜像、真实启动进程、真实浏览器同步与真实 nginx 终结 TLS，才能证明三种形态按文档可跑；静态审阅无法证明 Host/Origin 准入与 Secure cookie。
+behaviorChange: 新增多阶段 `hosted/Dockerfile`（构建阶段 `pnpm install --frozen-lockfile` 与 `build:preview`，运行阶段仅 dist 与 PoC 目录、uid 10001、`/data` 卷、401 健康检查）与 `Dockerfile.dockerignore`；新增 systemd 单元与 env 示例（`StateDirectory`、`ProtectSystem=strict`、`ProtectHome`、`NoNewPrivileges`）；新增 nginx TLS 配置（`Host $http_host`、关闭 `proxy_buffering`、68 MiB 上传上限）；新增 `DSH_POC_PUBLIC_ORIGIN`：backend 额外接受该裸 origin 的 Host 与 Origin，handshake cookie 在其为 https 时加 `Secure`，非法取值拒绝启动；`/preview-api-origin` 改为返回经过校验的请求 Host（无 `publicOrigin` 且非 split 部署时），修复容器端口映射与通配监听下的 API origin；新增 `hosted/verify-deployment.mjs` 逐形态验证脚本。
+consumersUpdated: `start-hosted.mjs` 帮助、readiness 与服务器选项；托管部署文档新增“部署形态”“部署形态验证”并更新已验证/未验证清单；backend 测试新增 public origin 分支。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 70/70（新增 3 项：非法 origin 拒绝、转发 Host/Origin 准入与外来 Origin/Host 403、https public origin 的 Secure cookie）；`hosted/verify-deployment.mjs --skip-build` 在 Docker 29.4.0 / Chrome 156 / macOS 上 `3/3 forms passed`：容器形态（临时端口、401/200、43 字符 token、302 与非 Secure cookie、Chrome 同步、SIGTERM 退出码 0、lock 删除、`check-data` compatible、同卷重启再通过）与 TLS 形态（nginx 自签证书、代理后 401/200、匹配 Origin 200、外来 Origin 403、Secure cookie、Chrome https 同步、停止后 lock 清理与 `check-data` compatible）均产生 1 个 Session 与 1 个 Workspace；systemd 形态为 `systemd-analyze verify` 语法通过。既有 `hosted-deployment-smoke.e2e.mjs` 复跑 PASS。
+syncReplaySteps: 上游同步后核对 `assertLocalRequest` 的 Host/Origin 分支、`/preview-api-origin`、`start-hosted.mjs` 选项透传与 `check-data.mjs` 参数；复跑 backend 测试、`hosted-deployment-smoke.e2e.mjs` 与 `verify-deployment.mjs`（网络受限时用 `DSH_POC_NODE_IMAGE` 指向镜像源）。
+deleteCondition: 正式交付提供等价的部署产物与验证入口后删除本 PoC 镜像、单元、代理配置与验证脚本；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-121：失败率/队列积压/预算超限的最小阈值告警
 
 ```text

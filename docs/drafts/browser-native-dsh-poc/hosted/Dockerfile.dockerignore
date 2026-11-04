@@ -1,0 +1,8 @@
+# Build context excludes for hosted/Dockerfile (built from the repository root).
+.git
+node_modules
+**/node_modules
+apps/web/dist
+browser-native-data
+**/browser-native-data
+*.log

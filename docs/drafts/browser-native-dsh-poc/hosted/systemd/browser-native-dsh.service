@@ -1,0 +1,40 @@
+# Hosted browser-native DSH backend.
+#
+# Install the repository under /opt/browser-native-dsh with a built
+# apps/web/dist, then:
+#
+#   systemctl daemon-reload
+#   systemctl enable --now browser-native-dsh
+#
+# The service state directory is /var/lib/browser-native-dsh; configuration lives
+# in /etc/browser-native-dsh/browser-native-dsh.env (see the matching .env
+# example). Upgrade: stop the unit, back up the state directory, run
+# hosted/check-data.mjs, start the unit again.
+
+[Unit]
+Description=Browser-native DSH hosted backend
+Documentation=https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/drafts/browser-native-dsh-poc/hosted-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dsh
+Group=dsh
+WorkingDirectory=/opt/browser-native-dsh
+EnvironmentFile=/etc/browser-native-dsh/browser-native-dsh.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/browser-native-dsh/docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+StateDirectory=browser-native-dsh
+ReadWritePaths=/var/lib/browser-native-dsh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1296,9 +1296,11 @@ function auditResourceFor(pathname) {
  * @param {boolean} internal - The request proved the shared state token.
  * @param {ReadonlySet<string> | undefined} allowedOrigins - Additional page origins
  * admitted by the split API listener; only those may send `same-site` browser fetches.
+ * @param {URL | undefined} publicOrigin - Externally served origin when a TLS reverse
+ * proxy terminates the connection; its host is the only additional host admitted.
  * @returns {void} Throws a 403 or 400 BackendError when the request is refused.
  */
-function assertLocalRequest(request, url, internal, allowedOrigins) {
+function assertLocalRequest(request, url, internal, allowedOrigins, publicOrigin) {
   const host = request.headers.host
   if (typeof host !== 'string' || host.length === 0) throw new BackendError('HOST_FORBIDDEN', 'request host is required', 403)
   let selfOrigin
@@ -1307,8 +1309,9 @@ function assertLocalRequest(request, url, internal, allowedOrigins) {
   } catch {
     throw new BackendError('HOST_FORBIDDEN', 'request host is invalid', 403)
   }
-  if (!LOOPBACK_HOSTNAMES.has(selfOrigin.hostname)) {
-    throw new BackendError('HOST_FORBIDDEN', 'browser-native is reachable only through a loopback host', 403)
+  const proxied = publicOrigin !== undefined && selfOrigin.host === publicOrigin.host
+  if (!LOOPBACK_HOSTNAMES.has(selfOrigin.hostname) && !proxied) {
+    throw new BackendError('HOST_FORBIDDEN', 'browser-native is reachable only through a loopback host or the configured public origin', 403)
   }
   if (!url.pathname.startsWith('/api/browser-native/')) return
   if (!internal) {
@@ -1325,7 +1328,8 @@ function assertLocalRequest(request, url, internal, allowedOrigins) {
       } catch {
         throw new BackendError('ORIGIN_FORBIDDEN', 'request origin is invalid', 403)
       }
-      if (declaredOrigin !== selfOrigin.origin && allowedOrigins?.has(declaredOrigin) !== true) {
+      if (declaredOrigin !== selfOrigin.origin && declaredOrigin !== publicOrigin?.origin
+        && allowedOrigins?.has(declaredOrigin) !== true) {
         throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
       }
     }
@@ -1335,6 +1339,32 @@ function assertLocalRequest(request, url, internal, allowedOrigins) {
       throw new BackendError('CREDENTIAL_IN_QUERY', 'credentials must not be sent in the request URL', 400)
     }
   }
+}
+
+/**
+ * Parse the origin a TLS reverse proxy forwards to the backend.
+ *
+ * Only a bare http/https origin is accepted: paths, query strings, fragments,
+ * and userinfo would make the host rule ambiguous, so they refuse startup.
+ * @param {unknown} value - Configured external origin.
+ * @returns {URL} Parsed public origin.
+ */
+function parsePublicOrigin(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 300) {
+    throw new Error('publicOrigin must be a non-empty http or https origin')
+  }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('publicOrigin must be a valid URL origin')
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== ''
+    || parsed.username !== '' || parsed.password !== '') {
+    throw new Error('publicOrigin must be a bare http or https origin without a path, query, or credentials')
+  }
+  return parsed
 }
 
 function sendError(response, error) {
@@ -4649,6 +4679,7 @@ export async function createBrowserNativeV2Server(options) {
   }
   try {
   const requireLocalAuth = options.requireLocalAuth === true
+  const publicOrigin = options.publicOrigin === undefined ? undefined : parsePublicOrigin(options.publicOrigin)
   const authTokenPath = requireLocalAuth ? join(options.dataDir, AUTH_TOKEN_FILE_NAME) : undefined
   const authToken = requireLocalAuth ? randomBytes(32).toString('base64url') : undefined
   if (authTokenPath !== undefined) {
@@ -5082,7 +5113,7 @@ export async function createBrowserNativeV2Server(options) {
       const previewOrigin = servedPreviewOrigin
       const allowedOrigins = role === 'api' && apiOrigin !== undefined && previewOrigin !== undefined
         ? new Set([previewOrigin]) : undefined
-      assertLocalRequest(request, url, internalStateRequest, allowedOrigins)
+      assertLocalRequest(request, url, internalStateRequest, allowedOrigins, publicOrigin)
       assertProcessAuth(request, url, internalStateRequest)
       if (role === 'api') {
         const requestedOrigin = request.headers.origin
@@ -5937,14 +5968,18 @@ export async function createBrowserNativeV2Server(options) {
           location: next,
           'cache-control': 'no-store',
           'referrer-policy': 'no-referrer',
-          'set-cookie': `${AUTH_COOKIE_NAME}=${authToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${String(AUTH_COOKIE_MAX_AGE_SECONDS)}${request.socket.encrypted === true ? '; Secure' : ''}`,
+          'set-cookie': `${AUTH_COOKIE_NAME}=${authToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${String(AUTH_COOKIE_MAX_AGE_SECONDS)}${request.socket.encrypted === true || publicOrigin?.protocol === 'https:' ? '; Secure' : ''}`,
         })
         response.end()
         return
       }
       if (role === 'preview' && request.method === 'GET' && url.pathname === '/preview-api-origin') {
         response.setHeader('cache-control', 'no-store')
-        sendJson(response, 200, { origin: servedApiOrigin ?? servedOrigin })
+        // The validated Host names the origin the browser actually reached, which
+        // differs from the listen address when the backend binds a wildcard
+        // address behind a container port mapping or TLS proxy.
+        const requestOrigin = `http://${String(request.headers.host)}`
+        sendJson(response, 200, { origin: publicOrigin?.origin ?? servedApiOrigin ?? requestOrigin })
         return
       }
       if (request.method === 'GET') {

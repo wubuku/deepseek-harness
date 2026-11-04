@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -3846,3 +3846,61 @@ async function waitForAdmission(origin, predicate, timeoutMs = 3_000) {
   }
   assert.fail('admission state did not reach the expected queue depth')
 }
+
+/** Send a request with explicit Host and Origin headers, which fetch forbids. */
+function proxiedRequest(origin, path, headers) {
+  const target = new URL(origin)
+  return new Promise((resolveRequest, rejectRequest) => {
+    const request = httpRequest({ host: target.hostname, port: Number(target.port), path, headers }, response => {
+      const chunks = []
+      response.on('data', chunk => chunks.push(String(chunk)))
+      response.on('end', () => resolveRequest({
+        status: response.statusCode,
+        headers: response.headers,
+        body: chunks.join(''),
+      }))
+    })
+    request.once('error', rejectRequest)
+    request.end()
+  })
+}
+
+describe('public origin behind a TLS reverse proxy', () => {
+  it('refuses a public origin that is not a bare http or https origin', async () => {
+    const dataDir = await temporaryDirectory()
+    for (const value of ['https://dsh.example.test/path', 'ftp://dsh.example.test', 'https://user:pass@dsh.example.test']) {
+      await assert.rejects(
+        createBrowserNativeV2Server({ dataDir, llmMode: 'scripted', requireLocalAuth: false, publicOrigin: value }),
+        /publicOrigin/,
+      )
+    }
+  })
+
+  it('admits the forwarded host and matching origin and refuses others', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted', requireLocalAuth: false, publicOrigin: 'https://dsh.example.test' })
+
+    const health = await proxiedRequest(origin, '/api/browser-native/health', {
+      host: 'dsh.example.test', origin: 'https://dsh.example.test',
+    })
+    assert.equal(health.status, 200, health.body)
+
+    const foreignOrigin = await proxiedRequest(origin, '/api/browser-native/health', {
+      host: 'dsh.example.test', origin: 'https://evil.example',
+    })
+    assert.equal(foreignOrigin.status, 403, 'a foreign Origin must be refused')
+
+    const foreignHost = await proxiedRequest(origin, '/api/browser-native/health', { host: 'rebind.example' })
+    assert.equal(foreignHost.status, 403, 'only the configured public host and loopback hosts are admitted')
+  })
+
+  it('marks the local auth cookie Secure for an https public origin', async () => {
+    const dataDir = await temporaryDirectory()
+    const { app, origin } = await start({ dataDir, llmMode: 'scripted', requireLocalAuth: true, publicOrigin: 'https://dsh.example.test' })
+    const handshake = await proxiedRequest(origin, `/auth/handshake?token=${encodeURIComponent(app.authToken)}&next=%2Fpreview.html`, {
+      host: 'dsh.example.test',
+    })
+    assert.equal(handshake.status, 302)
+    assert.match(handshake.headers['set-cookie'][0], /; Secure$/)
+  })
+})

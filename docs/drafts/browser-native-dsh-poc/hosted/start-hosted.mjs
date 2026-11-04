@@ -40,6 +40,7 @@ Environment:
   DSH_POC_HOSTED_CLOCK_TOLERANCE_SECONDS  Token clock tolerance (default: 30)
   DSH_POC_STATE_AUTHORITY_ORIGIN  Shared Session/Workspace authority origin
   DSH_POC_STATE_AUTHORITY_TOKEN   Internal token for the shared authority
+  DSH_POC_PUBLIC_ORIGIN        Externally served origin when a TLS reverse proxy terminates TLS
 
 See hosted-deployment.md for the configuration reference and upgrade path.
 `
@@ -185,16 +186,18 @@ function readConfiguration() {
     alerts: alertsFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,
+    publicOrigin: env.DSH_POC_PUBLIC_ORIGIN,
   }
 }
 
 /** Print the URLs, locations, and limits the running server actually uses. */
 function report(app, origin, options, authMode) {
+  const externalOrigin = options.publicOrigin ?? origin
   const previewPath = '/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none'
-  const previewUrl = `${origin}/auth/handshake?token=${encodeURIComponent(app.authToken)}&next=${encodeURIComponent(previewPath)}`
-  process.stdout.write(`hosted: ready at ${origin}\n`)
+  const previewUrl = `${externalOrigin}/auth/handshake?token=${encodeURIComponent(app.authToken)}&next=${encodeURIComponent(previewPath)}`
+  process.stdout.write(`hosted: ready at ${externalOrigin}\n`)
   process.stdout.write(`hosted: preview ${previewUrl}\n`)
-  process.stdout.write(`hosted: health ${origin}/api/browser-native/health\n`)
+  process.stdout.write(`hosted: health ${externalOrigin}/api/browser-native/health\n`)
   process.stdout.write(`hosted: data dir ${resolve(options.dataDir)}\n`)
   if (app.authTokenPath !== undefined) process.stdout.write(`hosted: local auth token ${app.authTokenPath}\n`)
   process.stdout.write(`hosted: auth ${authMode}\n`)
@@ -249,6 +252,7 @@ async function main() {
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),
     ...(options.stateAuthorityToken === undefined ? {} : { stateAuthorityToken: options.stateAuthorityToken }),
+    ...(options.publicOrigin === undefined ? {} : { publicOrigin: options.publicOrigin }),
     requireLocalAuth: true,
   })
   const origin = await app.listen(options.port, options.host)
