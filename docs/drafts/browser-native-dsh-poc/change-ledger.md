@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-130：从页面导出严格脱敏的单 Session 支持包
+
+```text
+changeId: BN-P2-130
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/support-bundle.e2e.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 失败 turn 此前只能靠重新复现或直接读取后端 memory，没有可从 UI 获取、又不泄露 prompt 与凭据的现场材料；支持包需要能只凭导出文件定位失败 turn 与错误码。
+existingExtensionPointsChecked: 复用页面控制栏、Session principal cookie 作用域、`sessionOperation` read 授权、`store.leaseSnapshot`、`metricsView`、usage audit 与 access audit；未改 Agent Loop、Session 事件类型、Session format、模型/工具协议、正式 DSH package 或 cookie 作用域。
+whyDraftOnlyWasInsufficient: 真实浏览器下载、Session principal 路径 cookie、页面控制栏同步与 observability 计数只能在真实 Chrome + 真实 backend 下联合验证；scripted fault 提供了可判定的失败码，而无需真实供应商。
+behaviorChange: 新增 `GET /api/browser-native/session/support-bundle?sessionId=<id>`，返回 `dsh-browser-native-support-bundle-v1` JSON：环境、租约与 observability 状态、Session 事件类型 / turn 结局 / 错误码 / 工具名计数、最近 100 条向上脱敏日志（model-failure、usage、access-denial）、按 provider 的用量与访问拒绝审计摘要。页面控制栏新增“导出支持包”按钮，下载 `dsh-support-bundle-<sessionId>.json`。后端新增有界 `diagnosticLog`，仅记录失败模型尝试的 code / purpose / provider，不记录消息内容。
+consumersUpdated: 页面控制栏与 locale 文案新增按钮和结果文案；PoC README 新增“支持包导出”章节与本 ledger；未新增生产入口。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview && node docs/drafts/browser-native-dsh-poc/tests/support-bundle.e2e.mjs` 通过：注入 `SCRIPTED_SUPPORT_BUNDLE_FAILURE` 后页面导出成功，包内 `turnOutcomes.error = 1`、`errorCodes` 为该码、`logs` 有一条 `model-failure`、observability 包含该 outcome；重复导出 Session 与审计摘要逐字段相同。测试枚举 6 个秘密值（prompt marker、浏览器 cookies、sessionStorage/localStorage、auth token 文件）逐一断言不出现在包内。
+syncReplaySteps: 上游同步后复跑同一命令；确认按钮 data 属性、Session principal cookie 路径仍为 `/api/browser-native/session`，事件摘要仍只读 type / reason / tool name，且秘密清单断言仍覆盖当前身份与所有权存储键。
+deleteCondition: 正式诊断包入口与脱敏契约接管后删除本端点与按钮；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-129：200 ms RTT / 1.5 Mbps 下的 turn、首字与中断画像
 
 ```text

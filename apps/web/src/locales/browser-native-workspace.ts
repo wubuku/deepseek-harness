@@ -184,6 +184,28 @@ export function browserNativeSessionExportResultCopy(language: string, success: 
   return success ? 'Session bundle downloaded.' : 'Session bundle download failed; Session data was not changed.'
 }
 
+/** Format the label for exporting a redacted support bundle.
+ * @param language - Page language tag.
+ * @returns Localized button label.
+ */
+export function browserNativeSupportBundleCopy(language: string): string {
+  return language.startsWith('zh') ? '导出支持包' : 'Export support bundle'
+}
+
+/** Format the result of a support bundle export.
+ * @param language - Page language tag.
+ * @param success - Whether the browser started the download.
+ * @returns Localized result text.
+ */
+export function browserNativeSupportBundleResultCopy(language: string, success: boolean): string {
+  if (language.startsWith('zh')) {
+    return success ? '支持包已导出（不含 prompt、密钥或 token）。' : '支持包导出失败；会话数据未更改。'
+  }
+  return success
+    ? 'Support bundle exported without prompts, credentials, or auth tokens.'
+    : 'Support bundle export failed; Session data was not changed.'
+}
+
 /** Format the explicit retry action for a Browser-Native writer lease conflict.
  * @param language - Page language tag.
  * @param remainingMs - Time until the backend lease was expected to expire.

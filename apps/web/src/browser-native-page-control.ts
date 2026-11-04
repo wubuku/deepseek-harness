@@ -5,6 +5,8 @@ import {
   browserNativeSessionExportCopy,
   browserNativeSessionExportResultCopy,
   browserNativeSessionRetryCopy,
+  browserNativeSupportBundleCopy,
+  browserNativeSupportBundleResultCopy,
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
   browserNativeWorkspaceRecoveryWarningCopy,
@@ -260,6 +262,20 @@ async function downloadSessionBundle(workspaceId: string, sessionId: string): Pr
   }
 }
 
+async function downloadSupportBundle(sessionId: string): Promise<void> {
+  const response = await fetch(`/api/browser-native/session/support-bundle?sessionId=${encodeURIComponent(sessionId)}`)
+  if (!response.ok) throw new Error(`Support bundle failed with HTTP ${response.status}`)
+  const objectUrl = URL.createObjectURL(await response.blob())
+  try {
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `dsh-support-bundle-${sessionId}.json`
+    link.click()
+  } finally {
+    window.setTimeout(() => { URL.revokeObjectURL(objectUrl) }, 30_000)
+  }
+}
+
 /**
  * Keep the browser-native Session write lease across a normal page reload.
  * @param worker - Dedicated Worker receiving the Browser-Native DSH Host.
@@ -492,11 +508,28 @@ export async function connectBrowserNativePageControl(
       cursor: 'pointer',
       font: '500 13px/1.3 system-ui, sans-serif',
     })
+    const supportButton = document.createElement('button')
+    supportButton.type = 'button'
+    supportButton.dataset.browserNativeSupportBundle = ''
+    supportButton.textContent = browserNativeSupportBundleCopy(document.documentElement.lang)
+    Object.assign(supportButton.style, {
+      padding: '7px 12px',
+      border: '1px solid #526174',
+      borderRadius: '7px',
+      background: '#111827',
+      color: '#f9fafb',
+      cursor: 'pointer',
+      font: '500 13px/1.3 system-ui, sans-serif',
+    })
     const result = document.createElement('span')
     result.dataset.browserNativeSessionExportResult = ''
     applyLiveRegion(result, 'status')
     result.style.color = '#f9fafb'
-    root.append(button, result)
+    const supportResult = document.createElement('span')
+    supportResult.dataset.browserNativeSupportBundleResult = ''
+    applyLiveRegion(supportResult, 'status')
+    supportResult.style.color = '#f9fafb'
+    root.append(button, supportButton, result, supportResult)
     document.body.append(root)
     const control = { root, button, result }
     button.addEventListener('click', () => {
@@ -516,6 +549,25 @@ export async function connectBrowserNativePageControl(
       }).finally(() => {
         button.disabled = false
         button.removeAttribute('aria-busy')
+      })
+    })
+    supportButton.addEventListener('click', () => {
+      const sessionId = [...owners.keys()].at(-1)
+      if (sessionId === undefined) return
+      const language = document.documentElement.lang
+      supportButton.disabled = true
+      supportButton.setAttribute('aria-busy', 'true')
+      supportResult.textContent = ''
+      delete root.dataset.supportBundleState
+      void downloadSupportBundle(sessionId).then(() => {
+        root.dataset.supportBundleState = 'downloaded'
+        supportResult.textContent = browserNativeSupportBundleResultCopy(language, true)
+      }).catch(() => {
+        root.dataset.supportBundleState = 'failed'
+        supportResult.textContent = browserNativeSupportBundleResultCopy(language, false)
+      }).finally(() => {
+        supportButton.disabled = false
+        supportButton.removeAttribute('aria-busy')
       })
     })
     return control

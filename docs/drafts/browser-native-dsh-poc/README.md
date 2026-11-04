@@ -476,12 +476,28 @@ DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/
 可用性阈值判定：transport overhead ≤ 2 s、真实首字 ≤ 15 s、turn 完成 ≤ 20 s、取消确认 ≤ 2 s；四项都满足，因此在 200 ms RTT + 1.5 Mbps 下判定可用，中断率 3/3。结论的适用条件是供应商首字落在 15 s 内；超过该值时瓶颈在供应商而非网络 profile。
 
 ```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 node docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs
 DSH_POC_LLM_PROVIDER=anthropic DSH_POC_WEAK_NETWORK_REAL=1 DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs
 ```
 
 scripted fault 是真实 DSH Worker/Host 的确定性时序注入；它不是移动设备、真实蜂窝网络、Safari 或后台标签页的证据。
+
+## 支持包导出
+
+页面控制栏在 Session 工作区同步完成后显示“导出支持包”。按钮调用 `/api/browser-native/session/support-bundle?sessionId=<id>`；该路径位于 Session principal cookie 的作用域内，因此沿用现有 Session 授权，不新增凭据。下载文件是 `dsh-support-bundle-<sessionId>.json`。
+
+支持包包含五部分：环境（Node、平台、协议 / Session format 版本、模型 provider 名称与型号，不含 URL 或密钥）、状态（租约快照与 observability 计数）、Session 事件摘要（事件类型计数、turn 结局、错误码、工具名、durable seq）、日志（最近 100 条 model-failure、usage 与 access-denial 记录）、审计摘要（按 provider 汇总的请求数与 token 用量、访问拒绝摘要）。事件摘要只读取 `type`、`reason.kind`、`reason.error.code` 与工具名，从不复制 `data.content`、prompt、assistant 文本、工具参数或附件字节；日志也不含 cookie、owner token 或 API key。
+
+测试 `tests/support-bundle.e2e.mjs` 注入 `SCRIPTED_SUPPORT_BUNDLE_FAILURE` 后从页面点击导出：支持包记录 `turnOutcomes.error = 1`、同名 error code、一条 `model-failure` 日志和 observability 中的失败 outcome，因此只看支持包即可定位失败 turn 与错误码。重复导出得到相同的 Session 摘要与审计摘要；测试还读取浏览器 cookie、sessionStorage / localStorage 与 auth token 文件，断言这些值都不出现在包内。
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/tests/support-bundle.e2e.mjs
+```
+
+支持包是单个 JSON 文件，不是 ZIP；它按单个 Session 导出，不包含其他 Session 的内容。
 
 ## 黄金路径端到端
 

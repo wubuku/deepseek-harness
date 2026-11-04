@@ -1863,6 +1863,71 @@ class FormalSessionStore {
   }
 }
 
+/**
+ * Summarize a Session log without copying prompts, assistant text, tool
+ * arguments, or attachment bytes. Only event types, turn outcome kinds, failure
+ * codes, and tool names leave the log.
+ * @param {object[]} events - Sequential Session events.
+ * @returns {object} Event counts and failure facts sufficient to locate a turn.
+ */
+function supportBundleEventSummary(events) {
+  const eventTypes = {}
+  const turnOutcomes = { completed: 0, aborted: 0, blocked: 0, error: 0, 'max-tokens': 0, interrupted: 0, forked: 0 }
+  const errorCodes = {}
+  const toolNames = {}
+  for (const event of events) {
+    if (typeof event?.type !== 'string') continue
+    eventTypes[event.type] = (eventTypes[event.type] ?? 0) + 1
+    if (event.type === 'turn/end') {
+      const kind = event.data?.reason?.kind
+      if (typeof kind === 'string') turnOutcomes[kind] = (turnOutcomes[kind] ?? 0) + 1
+      const code = event.data?.reason?.error?.code
+      if (typeof code === 'string') errorCodes[code] = (errorCodes[code] ?? 0) + 1
+    }
+    if (event.type === 'tool/call' && typeof event.data?.name === 'string') {
+      toolNames[event.data.name] = (toolNames[event.data.name] ?? 0) + 1
+    }
+  }
+  return { eventCount: events.length, eventTypes, turnOutcomes, errorCodes, toolNames }
+}
+
+/**
+ * Aggregate the provider usage ledger for one Session without request ids or
+ * message content.
+ * @param {object[]} entries - Recorded usage entries.
+ * @param {string} sessionId - Session whose usage is summarized.
+ * @returns {object} Per-provider counts and token totals plus a bounded log.
+ */
+function supportBundleUsageSummary(entries, sessionId) {
+  const providers = {}
+  const totals = { requests: 0, inputTokens: 0, outputTokens: 0, fallbackRequests: 0 }
+  const log = []
+  for (const entry of entries) {
+    if (entry.sessionId !== sessionId) continue
+    const provider = typeof entry.provider === 'string' ? entry.provider : 'unknown'
+    const bucket = providers[provider] ??= { requests: 0, inputTokens: 0, outputTokens: 0, fallbackRequests: 0 }
+    const inputTokens = Number.isSafeInteger(entry.inputTokens) ? entry.inputTokens : 0
+    const outputTokens = Number.isSafeInteger(entry.outputTokens) ? entry.outputTokens : 0
+    for (const target of [bucket, totals]) {
+      target.requests += 1
+      target.inputTokens += inputTokens
+      target.outputTokens += outputTokens
+      if (entry.fallbackUsed === true) target.fallbackRequests += 1
+    }
+    log.push({
+      at: entry.at ?? null,
+      kind: 'usage',
+      provider,
+      purpose: entry.purpose ?? 'turn',
+      attempt: entry.attempt ?? 1,
+      fallbackUsed: entry.fallbackUsed === true,
+      inputTokens,
+      outputTokens,
+    })
+  }
+  return { providers, totals, log }
+}
+
 function sessionResponse(session, extra = {}) {
   return {
     sessionId: session.id,
@@ -5025,6 +5090,8 @@ export async function createBrowserNativeV2Server(options) {
     throw new TypeError('accessAuditSink must be a function')
   }
   const accessAuditEntries = []
+  // Prompt-free operational log: failures and denials only, bounded for exports.
+  const diagnosticLog = []
   const recordAccessDenial = (url, request, error) => {
     const status = typeof error.status === 'number' ? error.status : 500
     const principal = workspaces.auditPrincipal(request)
@@ -5463,6 +5530,61 @@ export async function createBrowserNativeV2Server(options) {
           return
         }
         sendJson(response, 200, report)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/support-bundle') {
+        const sessionId = assertSessionId(url.searchParams.get('sessionId') ?? '')
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const events = []
+        let offset = 0
+        let durableThroughSeq = -1
+        for (;;) {
+          const page = await sessionOperation(
+            store, 'read',
+            { protocolVersion: PROTOCOL_VERSION, requestId: randomUUID(), sessionId, offset, length: MAX_SESSION_READ_EVENTS },
+            principalId, sessionShares,
+          )
+          events.push(...page.events)
+          durableThroughSeq = page.durableThroughSeq
+          if (!page.hasMore || page.events.length === 0) break
+          offset += page.events.length
+        }
+        const usage = supportBundleUsageSummary(usageAudit, sessionId)
+        const accessDenials = accessAuditEntries
+          .filter(entry => entry.resourceId === sessionId)
+          .map(entry => ({ method: entry.method, route: entry.route, code: entry.code, status: entry.status }))
+        sendJson(response, 200, {
+          format: 'dsh-browser-native-support-bundle-v1',
+          formatVersion: 1,
+          generatedAt: new Date().toISOString(),
+          environment: {
+            node: process.version,
+            platform: process.platform,
+            protocolVersion: PROTOCOL_VERSION,
+            sessionFormatVersion: SESSION_FORMAT_VERSION,
+            llmMode: llm.mode,
+            provider: llm.provider,
+            model: llm.model,
+            ...(llm.fallback === undefined ? {} : { fallbackProvider: llm.fallback.provider, fallbackModel: llm.fallback.model }),
+          },
+          state: {
+            leases: store.leaseSnapshot(),
+            observability: metricsView(),
+          },
+          session: {
+            sessionId,
+            ...supportBundleEventSummary(events),
+            durableThroughSeq,
+          },
+          logs: [
+            ...usage.log,
+            ...diagnosticLog.filter(entry => entry.sessionId === sessionId),
+            ...accessDenials.map(entry => ({ kind: 'access-denial', ...entry })),
+          ].slice(-100),
+          audit: { usage: { providers: usage.providers, totals: usage.totals }, accessDenials },
+        }, {
+          'content-disposition': `attachment; filename="dsh-support-bundle-${sessionId}.json"`,
+        })
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/auth/exchange') {
@@ -6104,17 +6226,30 @@ export async function createBrowserNativeV2Server(options) {
                 options.testHooks?.onLlmClientClose?.(body)
               }
               response.on('close', onClose)
+              const fault = options.testHooks?.scriptedLlmFault?.(body)
               try {
                 await scriptedLlm(
                   response,
                   body.messages,
                   body.tools,
-                  options.testHooks?.scriptedLlmFault?.(body),
+                  fault,
                   () => clientClosed,
                   body.purpose,
                 )
               } finally {
                 response.off('close', onClose)
+              }
+              if (fault?.kind === 'error') {
+                modelOutcome = typeof fault.code === 'string' ? fault.code : 'MODEL_FAILED'
+                diagnosticLog.push({
+                  at: Date.now(),
+                  kind: 'model-failure',
+                  sessionId: body.sessionId,
+                  purpose: body.purpose ?? 'turn',
+                  code: modelOutcome,
+                  provider: llm.mode,
+                })
+                if (diagnosticLog.length > 200) diagnosticLog.shift()
               }
             } else {
               let usagePrincipalId = workspaces.auditPrincipal(request)
@@ -6136,6 +6271,15 @@ export async function createBrowserNativeV2Server(options) {
           }, waitMs => { modelQueueWaitMs = waitMs })
         } catch (error) {
           modelOutcome = typeof error?.code === 'string' ? error.code : 'MODEL_FAILED'
+          diagnosticLog.push({
+            at: Date.now(),
+            kind: 'model-failure',
+            sessionId: body.sessionId,
+            purpose: body.purpose ?? 'turn',
+            code: modelOutcome,
+            provider: llm.mode,
+          })
+          if (diagnosticLog.length > 200) diagnosticLog.shift()
           throw error
         } finally {
           if (modelStarted || modelOutcome !== 'completed') {
