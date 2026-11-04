@@ -12,17 +12,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
+import { createRuntimeValidationDist } from '../runtime-validation.mjs'
 import { openPreview, sessionRequest, submitPrompt } from './runtime-test-support.mjs'
 
 const require = createRequire(import.meta.url)
 const playwrightPath = process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright')
 const playwright = await import(playwrightPath)
 const { chromium } = playwright.default ?? playwright
-const HERE = fileURLToPath(new URL('.', import.meta.url))
-const DIST_ROOT = process.env.DSH_POC_DIST_ROOT ?? resolve(HERE, '../../../../apps/web/dist')
+const image = await createRuntimeValidationDist({ roster: 'browser' })
+const DIST_ROOT = image.distRoot
 const PROFILE = { name: '200ms-rtt-1.5mbps', latencyMs: 200, downloadBytesPerSecond: 187_500, uploadBytesPerSecond: 93_750 }
 const SCRIPTED_MODEL_DELAY_MS = 1_500
 const THRESHOLDS = { transportOverheadMs: 2_000, realFirstTokenMs: 15_000, turnCompletionMs: 20_000, abortAckMs: 2_000 }
@@ -230,3 +230,4 @@ if (process.env.DSH_POC_RESULT_FILE !== undefined) {
   await writeFile(process.env.DSH_POC_RESULT_FILE, `${JSON.stringify(summary, null, 2)}\n`)
 }
 process.stdout.write(`${JSON.stringify(summary)}\n`)
+await image.cleanup()
