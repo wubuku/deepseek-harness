@@ -21,6 +21,7 @@ import { createEgressPolicy, EgressError } from './egress-proxy-v2.mjs'
 import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
+import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal } from './observability-journal.mjs'
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 
@@ -4912,6 +4913,14 @@ export async function createBrowserNativeV2Server(options) {
     void observabilityJournal.persistMetrics(metricsView())
   }, 10_000)
   metricsSnapshotTimer.unref()
+  const alertEvaluator = createAlertEvaluator({
+    config: options.alerts,
+    pricing: usagePricing,
+    usage: () => usageAudit,
+    queue: () => admission === undefined ? undefined : admission.snapshot(),
+    now: options.testHooks?.now,
+  })
+  alertEvaluator.start()
   const observabilityReconciliation = {
     processStartedAt: new Date(startedAt).toISOString(),
     recoveredTurns: durableRecovery.recovered,
@@ -5046,6 +5055,10 @@ export async function createBrowserNativeV2Server(options) {
         method: request.method ?? 'GET',
         status: response.statusCode,
         durationMs: Date.now() - requestStartedAt,
+        aborted: !response.writableFinished,
+      })
+      alertEvaluator.recordRequest({
+        status: response.statusCode,
         aborted: !response.writableFinished,
       })
     }
@@ -5835,6 +5848,11 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, view)
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/alerts') {
+        await alertEvaluator.run()
+        sendJson(response, 200, alertEvaluator.snapshot())
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/observability/reconciliation') {
         workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const { healthy, writeFailures } = observabilityJournal.status()
@@ -5995,6 +6013,7 @@ export async function createBrowserNativeV2Server(options) {
       try {
         if (attachmentGcSweepTimer !== undefined) clearInterval(attachmentGcSweepTimer)
         clearInterval(metricsSnapshotTimer)
+        alertEvaluator.stop()
         for (const controller of workspaceDownloads.values()) controller.abort()
         await Promise.all([closeServer(previewServer), closeServer(apiServer)])
       } finally {

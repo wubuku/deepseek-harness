@@ -14,6 +14,7 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 |---|---|---|
 | `GET /api/browser-native/observability/metrics` | 无（同源 loopback） | JSON 快照 |
 | `GET /api/browser-native/observability/metrics?format=prometheus` | 无（同源 loopback） | Prometheus 文本，`text/plain; version=0.0.4` |
+| `GET /api/browser-native/observability/alerts` | 无（同源 loopback） | 先评估一次阈值，再返回告警状态 |
 | `GET /api/browser-native/observability/failure?turnId=...` | session principal cookie | 单次 durable turn 的证据包 |
 | `GET /api/browser-native/observability/reconciliation` | session principal cookie | 重启恢复记录与当前进程状态 |
 
@@ -72,6 +73,38 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 
 标签值转义反斜线、双引号与换行；每行以换行结束。一次 scrape 看不到自己：当前 scrape 的请求只在下一个快照中出现。
 
+## 阈值告警
+
+`createAlertEvaluator()`（[observability-alerts.mjs](observability-alerts.mjs)）按配置的阈值输出告警；三类信号独立启用，未配置时不产生任何评估：
+
+| 配置 | 判定 | 说明 |
+|---|---|---|
+| `failureRate: { ratio, minSamples?, windowSize? }` | 最近 `windowSize`（默认 200）个 HTTP 请求中，`aborted` 或状态 ≥500 的占比 ≥ `ratio` | 样本数达到 `minSamples`（默认 20）后才判定；4xx 客户端校验失败不计入 |
+| `queueBacklog: { queuedTurns }` | admission 快照的 `queuedTurns` ≥ 阈值 | 取当前排队等待模型槽位的 turn 数 |
+| `budgetUsd` | `usage-report` 的累计 `costUsd` ≥ 阈值 | 必须同时配置 `usagePricing`，否则启动时报错；金额来自 provider 上报 token |
+
+`webhookUrl` 可选，`intervalMs` 默认 15 000 ms。告警在进入条件时输出一次，恢复时输出一次；持续超限不重复。输出同时写 stderr（单行 `browser-native alert {JSON}`）并 POST 到 webhook（`content-type: application/json`，2 秒超时，不重试）。webhook 失败只累计 `webhookFailures` 并写一行 `console.error`，不阻塞请求或改变评估结果。评估由定时器与每次 `GET /observability/alerts` 触发；该路由先 `run()` 再返回快照。
+
+快照字段：`alertsVersion`、`enabled`、`evaluatedAt`、`thresholds`（失败率、队列、预算、是否配置 webhook、间隔）、`window`（`samples`/`failures`）、`active`（`alert`、`since`、`value`、`threshold`）、`history`（最近 32 次 alert/recovery）、`webhookFailures`。
+
+`tests/observability-alerts.test.mjs` 4/4：
+
+```text
+✔ threshold alerts fire once, recover once, and normalize invalid configuration
+✔ budget alerts follow provider cost and require configured pricing
+✔ webhook delivery carries transitions and survives an unreachable receiver
+✔ backend exposes alert thresholds, window samples, and no false active alerts
+```
+
+| 断言 | 观测 |
+|---|---|
+| 失败率 | 4 个样本中 2 个 500 → `value=0.5` 触发一次；再评估不重复；窗口变为 4 个 200 后输出一次 recovery |
+| 队列 | `queuedTurns=3` 对阈值 2 触发，降到 1 后恢复 |
+| 预算 | 400 输入 + 300 输出按 $1/M、$2/M 计为 `0.001`，越过 `0.0005` 触发；继续增长不重复 |
+| webhook | 接收端按顺序收到 `alert` 与 `recovery`，`content-type` 与 `source=browser-native` 正确；接收端关闭后评估仍返回，`webhookFailures=1` |
+| 配置校验 | `ratio>1`、非 http(s) webhook、只配预算不配价格均在启动/构造时报错 |
+| backend 接线 | 4 次 200 健康请求后 `/observability/alerts` 返回 `window.samples=4`、`failures=0`、`active=[]`，阈值原样回显 |
+
 ## 失败证据包
 
 `GET /api/browser-native/observability/failure?turnId=...` 要求该 turn 的 principal cookie，其他 principal 与不存在的 `turnId` 都返回 404，匿名返回 401。包内字段：
@@ -124,18 +157,19 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 ## 失败场景清单（仍可能成立）
 
 1. **计数不跨进程累计**：重启后 `requests`、`model`、`durableTurns` 等计数从零开始；只有拒绝访问、usage 与最后一次快照恢复，跨实例聚合仍需外部采集。
-2. **metrics 路由未认证**：快照只含计数、路由与租约数量，不含 prompt 或凭据，但同源页面可读取；放在公网主机时需要外部鉴权。
+2. **metrics 与 alerts 路由未认证**：快照只含计数、路由、阈值与累计费用，不含 prompt 或凭据，但同源页面可读取；放在公网主机时需要外部鉴权。
 3. **证据包无日志正文**：为控制体积只保留最后 12 条精简事件；更早的模型输入与工具参数需按 seq 读 Session。
 4. **访问审计有窗口**：`accessDenials` 只保留最近 200 条；重启恢复同一上限，更早的拒绝只存在于轮转前的 JSONL。
-5. **直方图为累计值**：没有滑动窗口或速率；要算 p99 需外部按 scrape 差分。
+5. **直方图与告警窗口都是进程内近似**：直方图为累计值，没有滑动窗口或速率，要算 p99 需外部按 scrape 差分；告警的失败率窗口最多 `windowSize` 个请求且重启清零。
 6. **排队等待只在模型路由统计**：`model.queueWaitMs` 记录 LLM 路由的准入等待；durable turn 直接调用同一路由，因此也计入，但 worker 侧未单独打点。
 7. **无 trace/span**：只有请求与 turn 级计数，没有单请求分段耗时；无法区分解析、存储与写出耗时。
 8. **失败码来自 catch 通道**：未进入 catch 的语义失败（如工具 `isError` 结果）只体现在事件与 turn 状态，不计入 `failuresByCode`。
 9. **重启后的 running turn**：`durableTurns.running` 只在内存；重启后该 turn 从指标消失，Session 日志可能留下未结算 turn，`reconciliation.recoveredTurns` 只统计 durable host 已结算的数量。
 10. **usage 恢复不含费用**：journal 记录 provider 原始 token usage，不记录单价或金额；预算对账仍按 Session 日志的 meter 计算。
+11. **告警没有重试、抑制或静默**：webhook 失败只累计计数，不补发；没有告警去重窗口之外的抑制、静默期或分组路由，持续故障也不会重复提醒。
 
 ## 边界
 
-- 使用 `llmMode: "scripted"`；未调用真实 provider。
+- 使用 `llmMode: "scripted"`；未调用真实 provider（预算告警的金额算术由注入的 usage 条目验证）。
 - 未改 `packages/`，无需 `build:artifacts`/`build:check`。
-- 未接入外部采集器、未做长期趋势或告警阈值验证。
+- 已接入阈值告警（stderr 与可选 webhook），未接入外部采集器、长期趋势、告警抑制/静默或分页路由。

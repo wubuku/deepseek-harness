@@ -123,6 +123,37 @@ function ensurePreview(distRoot, buildMode) {
   if (result.status !== 0) throw new Error(`preview build failed with exit code ${String(result.status)}`)
 }
 
+/** Read optional alert thresholds; each signal is independently enabled. */
+function alertsFromEnv() {
+  const raw = {
+    ratio: env.DSH_POC_ALERT_FAILURE_RATIO,
+    queue: env.DSH_POC_ALERT_QUEUE_BACKLOG,
+    budget: env.DSH_POC_ALERT_BUDGET_USD,
+    webhook: env.DSH_POC_ALERT_WEBHOOK_URL,
+    interval: env.DSH_POC_ALERT_INTERVAL_MS,
+  }
+  if (Object.values(raw).every(value => value === undefined || value === '')) return undefined
+  const alerts = {}
+  if (raw.ratio !== undefined && raw.ratio !== '') {
+    alerts.failureRate = { ratio: Number(raw.ratio) }
+    if (env.DSH_POC_ALERT_FAILURE_MIN_SAMPLES !== undefined) {
+      alerts.failureRate.minSamples = integerEnv('DSH_POC_ALERT_FAILURE_MIN_SAMPLES', 20, 1, 100_000)
+    }
+    if (env.DSH_POC_ALERT_FAILURE_WINDOW !== undefined) {
+      alerts.failureRate.windowSize = integerEnv('DSH_POC_ALERT_FAILURE_WINDOW', 200, 1, 100_000)
+    }
+  }
+  if (raw.queue !== undefined && raw.queue !== '') {
+    alerts.queueBacklog = { queuedTurns: integerEnv('DSH_POC_ALERT_QUEUE_BACKLOG', 1, 1, 100_000) }
+  }
+  if (raw.budget !== undefined && raw.budget !== '') alerts.budgetUsd = Number(raw.budget)
+  if (raw.webhook !== undefined && raw.webhook !== '') alerts.webhookUrl = raw.webhook
+  if (raw.interval !== undefined && raw.interval !== '') {
+    alerts.intervalMs = integerEnv('DSH_POC_ALERT_INTERVAL_MS', 15_000, 1, 2_147_483_647)
+  }
+  return alerts
+}
+
 /** Build deployment options from the environment. */
 function readConfiguration() {
   const llmMode = env.DSH_POC_LLM ?? 'scripted'
@@ -151,6 +182,7 @@ function readConfiguration() {
     workspaceChunkObjects: booleanEnv('DSH_POC_WORKSPACE_CHUNK_OBJECTS', false),
     workspaceVerifiedDownloads: booleanEnv('DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS', false),
     usagePricing: usagePricingFromEnv(),
+    alerts: alertsFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,
   }
@@ -169,6 +201,12 @@ function report(app, origin, options, authMode) {
   process.stdout.write(`hosted: llm ${app.llm.mode}; model ${app.llm.model}\n`)
   process.stdout.write(`hosted: admission ≤${String(options.admission.maxConcurrentTurns)} concurrent turns, ≤${String(options.admission.maxMountedSessions)} mounted Sessions\n`)
   process.stdout.write(`hosted: usage pricing ${options.usagePricing === undefined ? 'disabled' : `$${String(options.usagePricing.inputUsdPer1M)}/M input, $${String(options.usagePricing.outputUsdPer1M)}/M output`}\n`)
+  process.stdout.write(`hosted: alerts ${options.alerts === undefined ? 'disabled' : [
+    ...(options.alerts.failureRate === undefined ? [] : [`failure-rate ≥${String(options.alerts.failureRate.ratio)}`]),
+    ...(options.alerts.queueBacklog === undefined ? [] : [`queue ≥${String(options.alerts.queueBacklog.queuedTurns)}`]),
+    ...(options.alerts.budgetUsd === undefined ? [] : [`budget $${String(options.alerts.budgetUsd)}`]),
+    ...(options.alerts.webhookUrl === undefined ? [] : ['webhook']),
+  ].join(', ')}\n`)
 }
 
 /** Start the server and keep it alive until SIGINT or SIGTERM. */
@@ -208,6 +246,7 @@ async function main() {
     workspaceChunkObjects: options.workspaceChunkObjects,
     workspaceVerifiedDownloads: options.workspaceVerifiedDownloads,
     ...(options.usagePricing === undefined ? {} : { usagePricing: options.usagePricing }),
+    ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),
     ...(options.stateAuthorityToken === undefined ? {} : { stateAuthorityToken: options.stateAuthorityToken }),
     requireLocalAuth: true,

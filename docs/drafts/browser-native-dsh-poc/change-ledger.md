@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-121：失败率/队列积压/预算超限的最小阈值告警
+
+```text
+changeId: BN-P2-121
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/observability-alerts.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/observability-alerts.test.mjs; docs/drafts/browser-native-dsh-poc/tests/hosted-deployment-smoke.e2e.mjs; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有 metrics/failure/reconciliation 只能被外部采集器拉取，部署方没有开箱可用的失败率、排队深度或费用越限告警；需要在请求路径之外按可配阈值输出告警，且 webhook 故障不能影响服务。
+existingExtensionPointsChecked: 复用 backend 的 `metrics.recordRequest` 落点、`admission.snapshot()` 队列深度、`usageAudit` 与 `buildUsageReport()` 费用口径、`start-hosted.mjs` 的环境配置入口；未改 Session 事件、Agent Loop、durable 协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 只写文档或只加 metrics 不能证明阈值判定、进入/恢复去重、webhook 投递与失败隔离；必须用可重复的本地接收端与 backend 接线测试验证。
+behaviorChange: 新增 `createAlertEvaluator()`，三个独立阈值 `failureRate {ratio,minSamples,windowSize}`、`queueBacklog {queuedTurns}`、`budgetUsd`（必须同时配置 `usagePricing`），进入与恢复各输出一次 JSON 事件；默认写 stderr，可选 `webhookUrl` POST（2 秒超时、不重试、失败只累计 `webhookFailures`），`intervalMs` 默认 15 000 ms。backend 在请求结束时记录状态，新增 `GET /api/browser-native/observability/alerts`（先评估再返回快照），关闭时停止定时器；`start-hosted.mjs` 读取 `DSH_POC_ALERT_*` 环境变量并在 readiness 输出阈值。
+consumersUpdated: backend 请求记录与关闭路径、托管启动配置与 readiness、可观测性文档、托管部署配置表、PoC README、托管冒烟 E2E。
+tests: `observability-alerts.test.mjs` 4/4（失败率 2/4=0.5 触发且不重复、窗口恢复；队列 3→1；费用 0.001 越过 0.0005；本地 webhook 收到 alert/recovery，接收端关闭后 `webhookFailures=1` 且不拒绝；backend 4 次健康请求后窗口 samples=4、failures=0、active 为空）。既有 `observability.test.mjs` 与 `observability-persistence.test.mjs` 同批 10/10。`hosted-deployment-smoke.e2e.mjs` 以 failureRate 0.5/minSamples 100/queue 6/budget 5 启动，readiness 列出阈值并回读 `enabled:true`、三个阈值与 `failures:0`，整体 PASS。
+syncReplaySteps: 上游同步后核对 `recordRequestMetric` 调用点、admission/usage 访问器、alerts 路由与关闭顺序；复跑 `observability-alerts.test.mjs`、观测性两个既有测试与托管冒烟。
+deleteCondition: 正式包提供等价的阈值告警与投递机制后删除本 PoC 实现；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-120：模型可见工具输出标注为“数据非指令”并经真实模型验证
 
 ```text

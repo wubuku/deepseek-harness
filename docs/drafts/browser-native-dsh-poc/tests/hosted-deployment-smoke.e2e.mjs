@@ -33,6 +33,15 @@ const childEnv = {
   DSH_POC_DIST_ROOT: DIST_ROOT,
   DSH_POC_BUILD: '0',
   DSH_POC_LLM: 'scripted',
+  DSH_POC_INPUT_USD_PER_1M: '1',
+  DSH_POC_OUTPUT_USD_PER_1M: '2',
+  DSH_POC_ALERT_FAILURE_RATIO: '0.5',
+  DSH_POC_ALERT_FAILURE_MIN_SAMPLES: '100',
+  DSH_POC_ALERT_QUEUE_BACKLOG: '6',
+  DSH_POC_ALERT_BUDGET_USD: '5',
+}
+for (const name of ['DSH_POC_ALERT_FAILURE_WINDOW', 'DSH_POC_ALERT_WEBHOOK_URL', 'DSH_POC_ALERT_INTERVAL_MS']) {
+  delete childEnv[name]
 }
 for (const name of ['DSH_POC_HOSTED_ISSUER', 'DSH_POC_HOSTED_AUDIENCE', 'DSH_POC_HOSTED_SECRET',
   'DSH_POC_STATE_AUTHORITY_ORIGIN', 'DSH_POC_STATE_AUTHORITY_TOKEN']) {
@@ -92,6 +101,19 @@ try {
   const healthBody = JSON.parse(healthText)
   assert.equal(healthBody.ok, true)
   assert.equal(healthBody.llmMode, 'scripted')
+  assert.ok(started.stdout.join('').includes('hosted: alerts failure-rate ≥0.5, queue ≥6, budget $5'),
+    'the readiness output must report the configured alert thresholds')
+
+  const alerts = await fetch(`${origin}/api/browser-native/observability/alerts`, { headers: tokenHeader })
+  const alertText = await alerts.text()
+  assert.equal(alerts.status, 200, alertText)
+  const alertBody = JSON.parse(alertText)
+  assert.equal(alertBody.enabled, true)
+  assert.equal(alertBody.thresholds.failureRate.ratio, 0.5)
+  assert.equal(alertBody.thresholds.queueBacklog.queuedTurns, 6)
+  assert.equal(alertBody.thresholds.budgetUsd, 5)
+  assert.equal(alertBody.window.failures, 0)
+  assert.deepEqual(alertBody.active, [])
 
   const ungated = await fetch(`${origin}/api/browser-native/health`)
   assert.equal(ungated.status, 401, 'the API must reject requests without the local process token')
