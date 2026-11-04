@@ -502,14 +502,16 @@ function promptText(content) {
 /**
  * Most recent Agent turn whose terminal reason permits a user-initiated retry.
  * @param {object} session - stored Session carrying its events.
- * @returns {{turn: number, reason: string} | undefined} The failed turn, when its user prompt is recoverable.
+ * @returns {{turn: number, reason: string, code: string} | undefined} The failed turn and its failure code, when its user prompt is recoverable.
  */
 function latestRetryableTurn(session) {
   const terminal = session.events.findLast(event => event.type === 'turn/end')
   if (terminal === undefined || !['error', 'aborted', 'interrupted'].includes(terminal.data.reason?.kind)) return undefined
   const userMessage = session.events.slice(0, terminal.seq).findLast(event => event.type === 'user/message')
   if (promptText(userMessage?.data.content ?? userMessage?.data.message?.content) === undefined) return undefined
-  return { turn: terminal.data.turn, reason: terminal.data.reason.kind }
+  const failure = terminal.data.reason?.error
+  const code = typeof failure?.code === 'string' && failure.code.length > 0 ? failure.code : 'UNKNOWN_FAILURE'
+  return { turn: terminal.data.turn, reason: terminal.data.reason.kind, code }
 }
 
 async function readBody(request) {
@@ -6287,7 +6289,7 @@ export async function createBrowserNativeV2Server(options) {
         const retryable = latestRetryableTurn(session)
         if (retryable === undefined || retryable.turn !== turn) {
           throw new BackendError('TURN_RETRY_INVALID', 'turn retry requires the latest turn to have failed or been interrupted', 400, undefined, {
-            sessionId, turn, reason: retryable?.reason,
+            sessionId, turn, reason: retryable?.reason, code: retryable?.code,
           })
         }
         const terminal = session.events.findLast(event => event.type === 'turn/end')

@@ -3342,3 +3342,20 @@ syncReplaySteps: 上游同步后复跑升级/回滚 E2E、备份恢复 E2E 与�
 deleteCondition: 正式产品提供版本化数据集标记与可验证的升级/回滚流程，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-162：失败码到用户说明与一键动作
+
+```text
+changeId: BN-P2-162
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: apps/web/src/locales/browser-native-failure-guidance.ts; apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/browser-native-failure-guidance.spec.ts; docs/drafts/browser-native-dsh-poc/tests/failure-guidance.e2e.mjs; docs/drafts/browser-native-dsh-poc/failure-guidance.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 页面原先只显示状态文案或原始模型错误；用户无法从 `SESSION_READ_ONLY`、`TOKEN_BUDGET_EXCEEDED` 或 lease 冲突判断该重试、重载、申请权限还是联系管理员，失败 turn 也一律给出盲重试。
+existingExtensionPointsChecked: 复用 `turn/end` 的 `reason.error.code`、Workspace 状态 notice、既有 turn retry 轮询与 support bundle 路由、`browserNativeWorkspaceStatusCopy` 与页面 live region；未改 Agent Loop、Session format、`packages/`、正式 profile 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实页面、真实 Session log 与真实 backend 拒绝同时成立，才能验证码到文案、按钮可见性、剪贴板与诊断包下载不会在轮询中被重置。
+behaviorChange: 新增 `browser-native-failure-guidance.ts`，码 → `{title, explanation, action, actionLabel, copyText, diagnostics}`，动作限定 `retry|reload|request-access|contact-admin|diagnostics`，未知码保留一次 `retry` 加诊断包；`browserNativeFailureCodeForState` 把 `session-conflict`/`lease-conflict`/`read-only`/`stale` 映射到同一批码。turn retry 响应新增 `retryable.code`（`TURN_RETRY_INVALID` details 同步），页面重试条只在 `action === 'retry'` 时显示重试按钮，其余码显示说明、复制按钮或诊断包按钮；workspace 状态条追加同一说明并在动作不是 reload 时提供入口。轮询对同一 failed turn 不再重建 DOM，保留复制/下载结果。
+consumersUpdated: preview 页面控制、backend turn retry 响应与错误 details、新增 locale 字典、单元测试、E2E、failure-guidance.md、README 导航与章节、本 ledger。
+tests: `pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-failure-guidance.spec.ts` 7/7 通过；`node --test docs/drafts/browser-native-dsh-poc/tests/turn-retry-ledger.test.mjs` 5/5 通过；`pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/failure-guidance.e2e.mjs` 通过：`TOKEN_BUDGET_EXCEEDED` 指南可见、重试按钮隐藏、剪贴板含 Session id、诊断包文件名正确；第二标签页 `SESSION_ALREADY_OWNED` 指南可见且保留 session-retry；viewer 写 open/append 均 403 `SESSION_READ_ONLY`。`turn-retry.e2e.mjs` 回归通过，未知码仍保留重试与一次结算。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 上游同步后重建 preview，复跑单元测试、这个 E2E 与 `turn-retry.e2e.mjs`；若 `LlmFailure` 码集合或 Workspace 状态枚举变化，同步更新映射表与单元测试。预算的真实前置拦截仍由 `token-budget.e2e.mjs` 拥有，本 E2E 使用 scripted fault hook 产生同码失败 turn。
+deleteCondition: 正式产品提供统一的失败分类与可操作建议，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

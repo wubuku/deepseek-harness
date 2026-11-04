@@ -25,6 +25,12 @@ import {
   type BrowserNativeRecoveryResource,
 } from './browser-native-recovery.ts'
 import {
+  browserNativeFailureActionResultCopy,
+  browserNativeFailureCodeForState,
+  browserNativeFailureGuidanceCopy,
+  type BrowserNativeFailureAction,
+} from './locales/browser-native-failure-guidance.ts'
+import {
   BrowserNativeControlReceiver,
   type BrowserNativeControlNotice,
   type BrowserNativeOfflineStatus,
@@ -348,6 +354,95 @@ export async function connectBrowserNativePageControl(
       font: `${weight} 13px/1.3 system-ui, sans-serif`,
     })
   }
+  const copyFailureText = async (text: string): Promise<boolean> => {
+    if (text.length === 0 || navigator.clipboard === undefined) return false
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Clipboard access is optional; the guidance still reports the code.
+      return false
+    }
+  }
+  const showFailureGuidance = (
+    host: HTMLElement,
+    code: string | undefined,
+    options: { readonly sessionId?: string; readonly turn?: number } = {},
+    before?: HTMLElement,
+  ): void => {
+    host.querySelector('[data-browser-native-failure-guidance]')?.remove()
+    if (code === undefined) return
+    const language = document.documentElement.lang
+    const guidance = browserNativeFailureGuidanceCopy(language, code, options)
+    const root = document.createElement('div')
+    root.setAttribute('data-browser-native-failure-guidance', '')
+    root.dataset.code = guidance.code
+    root.dataset.action = guidance.action
+    Object.assign(root.style, { display: 'block', marginTop: '6px' })
+    const title = document.createElement('span')
+    title.setAttribute('data-browser-native-failure-guidance-title', '')
+    title.style.display = 'block'
+    title.style.fontWeight = '600'
+    title.textContent = guidance.title
+    const explanation = document.createElement('span')
+    explanation.setAttribute('data-browser-native-failure-guidance-explanation', '')
+    explanation.style.display = 'block'
+    explanation.textContent = guidance.explanation
+    const result = document.createElement('span')
+    result.setAttribute('data-browser-native-failure-guidance-result', '')
+    applyLiveRegion(result, 'status')
+    Object.assign(result.style, { display: 'none', marginTop: '6px' })
+    const showResult = (action: BrowserNativeFailureAction, success: boolean): void => {
+      result.style.display = 'block'
+      result.textContent = browserNativeFailureActionResultCopy(language, action, success, guidance.code)
+    }
+    const diagnostics = async (): Promise<void> => {
+      const sessionId = options.sessionId
+      if (sessionId === undefined) {
+        showResult('diagnostics', false)
+        return
+      }
+      try {
+        await downloadSupportBundle(sessionId)
+        showResult('diagnostics', true)
+      } catch {
+        showResult('diagnostics', false)
+      }
+    }
+    const run = async (): Promise<void> => {
+      if (guidance.action === 'reload') {
+        window.location.reload()
+        return
+      }
+      if (guidance.action === 'diagnostics') {
+        await diagnostics()
+        return
+      }
+      showResult(guidance.action, await copyFailureText(guidance.copyText))
+    }
+    root.append(title, explanation)
+    if (guidance.action !== 'retry') {
+      const action = document.createElement('button')
+      action.type = 'button'
+      action.setAttribute('data-browser-native-failure-action', '')
+      action.dataset.action = guidance.action
+      action.textContent = guidance.actionLabel
+      styleStatusAction(action, '600')
+      action.addEventListener('click', () => { void run() })
+      root.append(action)
+    }
+    if (guidance.diagnostics && guidance.action !== 'diagnostics' && options.sessionId !== undefined) {
+      const bundle = document.createElement('button')
+      bundle.type = 'button'
+      bundle.setAttribute('data-browser-native-failure-diagnostics', '')
+      bundle.textContent = browserNativeSupportBundleCopy(language)
+      styleStatusAction(bundle)
+      bundle.addEventListener('click', () => { void diagnostics() })
+      root.append(bundle)
+    }
+    root.append(result)
+    host.insertBefore(root, before ?? null)
+  }
   const isBlockingWorkspaceState = (state: BrowserNativeWorkspaceStatus['state']): boolean => state === 'error'
     || state === 'conflict' || state === 'local-corrupt' || state === 'local-newer-version'
     || state === 'recovery-conflict' || state === 'recovery-unavailable'
@@ -455,6 +550,12 @@ export async function connectBrowserNativePageControl(
       button.addEventListener('click', () => { window.location.reload() })
       workspaceStatus.append(button)
     }
+    showFailureGuidance(
+      workspaceStatus,
+      browserNativeFailureCodeForState(notice.state),
+      {},
+      workspaceStatus.querySelector<HTMLElement>('button') ?? undefined,
+    )
     syncExportControl()
   }
   const showQueueStatus = (notice: BrowserNativeQueueStatus): void => {
@@ -657,7 +758,13 @@ export async function connectBrowserNativePageControl(
   let turnRetryTimer: number | undefined
   let turnRetryBusy = false
   let turnRetryHoldUntil = 0
-  let turnRetryTarget: { readonly sessionId: string; readonly turn: number; readonly reason: string } | undefined
+  type TurnRetryTarget = {
+    readonly sessionId: string
+    readonly turn: number
+    readonly reason: string
+    readonly code?: string
+  }
+  let turnRetryTarget: TurnRetryTarget | undefined
   const stopTurnRetryWatch = (): void => {
     if (turnRetryTimer !== undefined) {
       window.clearInterval(turnRetryTimer)
@@ -706,18 +813,37 @@ export async function connectBrowserNativePageControl(
     return turnRetryPanel
   }
   const showTurnRetryPanel = (
-    target: { readonly sessionId: string; readonly turn: number; readonly reason: string },
+    target: TurnRetryTarget,
     state: 'failed' | 'submitted' | 'duplicate',
     detail?: string,
   ): void => {
+    const previous = turnRetryTarget
     turnRetryTarget = target
     const panel = ensureTurnRetryPanel()
+    if (state === 'failed' && detail === undefined && previous !== undefined
+      && previous.sessionId === target.sessionId && previous.turn === target.turn && previous.code === target.code
+      && panel.root.dataset.state === 'failed') {
+      // Repeated polling of the same failed turn must keep the guidance result visible.
+      return
+    }
     const copy = browserNativeTurnRetryCopy(document.documentElement.lang, target.turn, target.reason)
     panel.root.dataset.state = state
     panel.root.style.borderColor = state === 'failed' ? browserNativeSurface.warn : browserNativeSurface.success
     panel.message.textContent = detail ?? copy.message
-    panel.button.hidden = state !== 'failed'
+    const guidance = browserNativeFailureGuidanceCopy(
+      document.documentElement.lang,
+      target.code,
+      { sessionId: target.sessionId, turn: target.turn },
+    )
+    // Codes that need an administrator or a permission change must not offer a blind retry.
+    panel.button.hidden = state !== 'failed' || guidance.action !== 'retry'
+    panel.button.style.display = panel.button.hidden ? 'none' : 'inline-flex'
     panel.button.textContent = copy.action
+    if (state === 'failed') {
+      showFailureGuidance(panel.root, target.code, { sessionId: target.sessionId, turn: target.turn }, panel.button)
+    } else {
+      panel.root.querySelector('[data-browser-native-failure-guidance]')?.remove()
+    }
     if (state !== 'failed') panel.root.setAttribute('aria-live', 'polite')
   }
   const submitComposerPrompt = async (prompt: string): Promise<void> => {
@@ -735,7 +861,7 @@ export async function connectBrowserNativePageControl(
     if (send.disabled) throw new Error('the Send action stayed disabled')
     send.click()
   }
-  const submitTurnRetry = async (target: { readonly sessionId: string; readonly turn: number; readonly reason: string }): Promise<void> => {
+  const submitTurnRetry = async (target: TurnRetryTarget): Promise<void> => {
     if (turnRetryBusy) return
     const panel = ensureTurnRetryPanel()
     turnRetryBusy = true
@@ -802,7 +928,11 @@ export async function connectBrowserNativePageControl(
       const retryable = isRecord(body) && isRecord(body.retryable)
         && typeof body.retryable.turn === 'number' && Number.isSafeInteger(body.retryable.turn)
         && typeof body.retryable.reason === 'string'
-        ? { turn: body.retryable.turn, reason: body.retryable.reason }
+        ? {
+          turn: body.retryable.turn,
+          reason: body.retryable.reason,
+          code: typeof body.retryable.code === 'string' ? body.retryable.code : undefined,
+        }
         : undefined
       if (retryable === undefined) {
         turnRetryTarget = undefined
@@ -810,7 +940,12 @@ export async function connectBrowserNativePageControl(
         turnRetryPanel = undefined
         return
       }
-      const target = { sessionId, turn: retryable.turn, reason: retryable.reason }
+      const target = {
+        sessionId,
+        turn: retryable.turn,
+        reason: retryable.reason,
+        ...(retryable.code === undefined ? {} : { code: retryable.code }),
+      }
       const retries = isRecord(body) && Array.isArray(body.retries) ? body.retries : []
       const existing = retries.find(record => isRecord(record) && record.turn === target.turn)
       if (existing !== undefined) {
