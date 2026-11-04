@@ -1,0 +1,383 @@
+{
+  "capturedAt": "2026-11-04T12:56:33.443Z",
+  "note": "Green poc-gate baseline. Regenerate with DSH_POC_GATE_UPDATE_BASELINE=1.",
+  "groups": [
+    {
+      "group": "contract",
+      "passed": 38,
+      "total": 38,
+      "durationMs": 68.1
+    },
+    {
+      "group": "e2e",
+      "passed": 10,
+      "total": 10,
+      "durationMs": 134.5
+    },
+    {
+      "group": "perf",
+      "passed": 1,
+      "total": 1,
+      "durationMs": 523.2
+    },
+    {
+      "group": "chaos",
+      "passed": 1,
+      "total": 1,
+      "durationMs": 58.2
+    }
+  ],
+  "items": [
+    {
+      "id": "contract/attachment-backend.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/attachment-chunked-upload.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.6
+    },
+    {
+      "id": "contract/attachment-gc.backend.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.4
+    },
+    {
+      "id": "contract/backend-v2.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 13.2
+    },
+    {
+      "id": "contract/backend.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/chunk-object-store.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 5.5
+    },
+    {
+      "id": "contract/chunk-object-workspace.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 7.9
+    },
+    {
+      "id": "contract/collaboration-stream.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/content-upload-backend.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 8.5
+    },
+    {
+      "id": "contract/cross-store-operation-ledger.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/durable-approval.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1.7
+    },
+    {
+      "id": "contract/durable-cancellation.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/durable-host-restart.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/durable-host.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/durable-multi-host.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.6
+    },
+    {
+      "id": "contract/durable-tool-attach.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.6
+    },
+    {
+      "id": "contract/durable-workspace-recovery.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.6
+    },
+    {
+      "id": "contract/external-business-idempotency.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/llm-provider-fallback.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.8
+    },
+    {
+      "id": "contract/local-process-authentication.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/local-request-guard.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.9
+    },
+    {
+      "id": "contract/multi-instance-feasibility.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.4
+    },
+    {
+      "id": "contract/observability-alerts.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.2
+    },
+    {
+      "id": "contract/observability-persistence.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/observability.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/path-boundary.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.4
+    },
+    {
+      "id": "contract/principal-isolation.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/prompt-injection-boundaries.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.7
+    },
+    {
+      "id": "contract/resource-limits.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 7.4
+    },
+    {
+      "id": "contract/session-format-upgrade.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "contract/session-workspace-reconciliation.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.4
+    },
+    {
+      "id": "contract/shared-authority-concurrency.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1
+    },
+    {
+      "id": "contract/shared-state-authority.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.8
+    },
+    {
+      "id": "contract/threat-model-invariants.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.4
+    },
+    {
+      "id": "contract/usage-report.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.1
+    },
+    {
+      "id": "contract/verified-stream-backend.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 7.4
+    },
+    {
+      "id": "contract/worker-module-trace-report.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.2
+    },
+    {
+      "id": "contract/workspace-durability.test.mjs",
+      "group": "contract",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1.5
+    },
+    {
+      "id": "e2e/cold-start.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 38.2
+    },
+    {
+      "id": "e2e/browser-native-v2.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 8.2
+    },
+    {
+      "id": "e2e/cold-hydrate-integrity.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 15.1
+    },
+    {
+      "id": "e2e/session-mount-lifecycle.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 10.5
+    },
+    {
+      "id": "e2e/session-sharing.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 0.3
+    },
+    {
+      "id": "e2e/offline-reconnect.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 8.7
+    },
+    {
+      "id": "e2e/principal-data.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 15.8
+    },
+    {
+      "id": "e2e/data-erasure.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 10
+    },
+    {
+      "id": "e2e/tool-capability-matrix.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 8.3
+    },
+    {
+      "id": "e2e/session-transport-resilience.e2e.mjs",
+      "group": "e2e",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 19.4
+    },
+    {
+      "id": "perf/perf-gate",
+      "group": "perf",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 523.2
+    },
+    {
+      "id": "chaos/chaos-suite",
+      "group": "chaos",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 58.2
+    }
+  ],
+  "totalDurationMs": 784
+}

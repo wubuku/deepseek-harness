@@ -627,8 +627,12 @@ export class WorkspaceStore {
         return undefined
       }
     }
-    const cookiePrincipal = parseCookies(request.headers.cookie).get(COOKIE_NAME)
-    return cookiePrincipal !== undefined && this.identities.has(cookiePrincipal) ? cookiePrincipal : undefined
+    const cookies = parseCookies(request.headers.cookie)
+    for (const name of [COOKIE_NAME, SESSION_COOKIE_NAME]) {
+      const principalId = cookies.get(name)
+      if (principalId !== undefined && this.identities.has(principalId)) return principalId
+    }
+    return undefined
   }
 
   principalFromRequest(request, cookieName = COOKIE_NAME) {

@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-137：一条 poc-gate 汇总合同、E2E、性能与混沌回归
+
+```text
+changeId: BN-P2-137
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/poc-gate.mjs; docs/drafts/browser-native-dsh-poc/poc-gate.md; docs/drafts/browser-native-dsh-poc/poc-gate-baseline.json; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 合同测试、E2E、性能守门与混沌套件此前只能分别手工运行，无法用一条命令得到逐项状态、耗时和统一退出码，也难以判断一次提交后哪些能力退化；首次全量运行还暴露出跨 principal 的 Session 路由拒绝没有进入访问审计。
+existingExtensionPointsChecked: 复用 `chaos-suite.mjs` 与 `perf-gate.mjs` 的既有子进程编排和超时、`recordAccessDenial`/`accessAudit` 拒绝记录、`parseCookies` 与 workspace/session cookie 常量、各 E2E 的 `createRuntimeValidationDist` 与 scripted 模式；未改 Agent Loop、Session 事件类型或格式、模型/工具协议、普通 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: 逐项 PASS/FAIL、耗时与非零退出只能由真实运行 50 个独立进程证明；审计缺口也只有在合同组与 E2E 组同时运行时才暴露为两个既有测试失败，静态阅读无法区分“未记录”与“记录在另一 cookie 名下”。
+behaviorChange: 新增 `tests/poc-gate.mjs`，按 `contract`（全部 38 个 `*.test.mjs`，含 `node:test` 的用 `node --test`）、`e2e`（默认 10 个无外部依赖的产品路径，`DSH_POC_GATE_FULL_E2E=1` 展开全部）、`perf` 与 `chaos` 四组串行执行，逐项输出状态与耗时、失败附尾 30 行，任一失败非零退出；`--group`/`--filter`/`--list`/`--prepare` 提供选择与 preview 构建，`DSH_POC_GATE_UPDATE_BASELINE=1` 在全绿时写基线。`workspace-v2.mjs` 的 `auditPrincipal` 在 workspace cookie 缺失时回退到 session principal cookie，使 Session 路由的 404 拒绝按实际 principal 记账。
+consumersUpdated: PoC README 导航与“一键全量回归”章节新增入口；新增 `poc-gate.md` 与全绿基线 `poc-gate-baseline.json`；本 ledger 登记。未新增生产入口。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/poc-gate.mjs` 全绿 50/50，总耗时 784.0 秒：`contract` 38/38（68.1 秒）、`e2e` 10/10（134.5 秒）、`perf` 1/1（523.2 秒）、`chaos` 1/1（58.2 秒）。修复前 `principal-isolation.test.mjs` 与 `threat-model-invariants.test.mjs` 因 session cookie 拒绝未入审计而失败；修复后单独复跑 3/3 通过，全量基线恢复全绿。`--list`、`--group contract`（38/38、45.7 秒）、`--group e2e`（10/10、115.4 秒）均单独验证。
+syncReplaySteps: 上游同步后先 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，再复跑 `node docs/drafts/browser-native-dsh-poc/tests/poc-gate.mjs`；若合同或 E2E 文件改名，同步默认 E2E 名单与 `poc-gate.md` 的分组表；确认 `recordAccessDenial` 仍是拒绝审计的唯一入口、workspace 与 session cookie 常量仍分别位于 `workspace-v2.mjs`。
+deleteCondition: 正式产品提供等价的单命令回归门禁，或该 PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-136：按 principal 导出全量数据并强制可配置保留期
 
 ```text
