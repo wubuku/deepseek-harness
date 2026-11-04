@@ -2,7 +2,7 @@
 /** Bootstrap serialization and resource creation in the receiving document's environment. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runInNewContext } from 'node:vm'
-import { createHtmlDocument } from '../src/client/html/bootstrap.ts'
+import { createHtmlDocument, PREVIEW_DOCUMENT_POLICY } from '../src/client/html/bootstrap.ts'
 import { decodeText, encodeText } from '../src/client/html/bytes.ts'
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -28,10 +28,17 @@ describe('HTML bootstrap', () => {
     expect(html.match(/<\/script>/gu)).toHaveLength(1)
     expect(html).not.toContain('你好')
     const result = run(html)
-    expect(result.write).toHaveBeenCalledExactlyOnceWith(source)
+    expect(result.write).toHaveBeenCalledExactlyOnceWith(
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${PREVIEW_DOCUMENT_POLICY}">`
+      + source.slice('<!doctype html>'.length),
+    )
     expect(result.open).toHaveBeenCalledOnce()
     expect(result.close).toHaveBeenCalledOnce()
     expect(result.createObjectURL).not.toHaveBeenCalled()
+    expect(html).toContain(PREVIEW_DOCUMENT_POLICY)
+    expect(result.document.head.firstElementChild?.getAttribute('http-equiv')).toBe('Content-Security-Policy')
+    expect(result.document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content'))
+      .toBe(PREVIEW_DOCUMENT_POLICY)
   })
 
   it('creates local resources in the frame and preserves base, inline code and script order attributes', () => {
@@ -42,6 +49,7 @@ describe('HTML bootstrap', () => {
     ] }))
     expect(result.createObjectURL).toHaveBeenCalledTimes(2)
     expect(result.createObjectURL.mock.calls.map(([blob]) => blob.type)).toEqual(['application/javascript', 'text/css'])
+    expect(result.document.head.firstElementChild?.getAttribute('http-equiv')).toBe('Content-Security-Policy')
     const scripts = [...result.document.querySelectorAll('script')]
     expect(scripts.map(script => script.getAttribute('src'))).toEqual(['blob:null/resource-1', null, 'blob:null/resource-1', 'https://example.invalid/remote.js'])
     expect(scripts[1]?.textContent).toBe('window.next=1')

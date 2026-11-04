@@ -57,7 +57,7 @@ Web 和桌面端均通过代码工作工具选择 HTML 预览策略。渲染器�
 - **完整字节** —— PDF、HTML、常见图片和表格调用 `remote.workspaceFiles.readBytes(sessionId, path, {}, signal)`。二进制 Remote 直接返回 `data: Uint8Array<ArrayBuffer>`，供 `{ kind: 'bytes', data }` 使用。Host 的 `maxFileBytes` 上限拒绝超大文件，不截断。PDF 和表格渲染器在传给 Worker 前复制保留的字节，使 Preview 缓冲区仍可使用。字节仅保存在临时视图状态中，绝不进入持久布局或 Session JSONL。加载模式变化会淘汰先前结果。
 - **重新载入** —— 手动重新载入仅让当前 Preview tab 通过自己的 Remote 回调重读，保留滚动偏好并淘汰旧请求。`ResourceGroup` 成员变化后，自动刷新使用相同回调。各成员首次元数据仅建立基线，不触发重新载入或首读版本对账；后续在读取期间收到的变化仍会留待下一次刷新。读取既不刷新共享元数据，也不清除其它 tab 的提示。
 
-开启代码工作工具时，HTML 以贴合正文四边的 Blob iframe 运行，沙箱属性严格为 `sandbox="allow-scripts"`，不含 `allow-same-origin`；脚本无法访问父应用的源或文件读取接口。渲染器通过注入的 Remote 回调，加载直接声明的相对 `.js` 经典脚本和 `.css` 样式表；固定安全上限为单个资源 4 MiB、总计 32 MiB、64 个不同资源。Host 代码解析关联路径，带 `baseFile` 的 `readBytes` 返回原生字节。依赖 Resource 在读取返回后加入，使用返回的 `absolutePath`，失败时则使用字符串类型的 `error.details.path`；没有 Host 路径时，Client 不自行猜测。在渲染器内部，base64 仅用于把 iframe 引导载荷嵌入脚本文本。`<base href>` 将依赖解析交给浏览器，HTTPS 资源也由浏览器处理。本地模块 import、CSS `url()`/`@import` 和动态 `fetch` 不使用 Host 文件访问。读取失败、无效 UTF-8 或超出上限都使预览失败，不发布部分资源包。替换或卸载文档会释放其 Blob URL。
+开启代码工作工具时，HTML 以贴合正文四边的 Blob iframe 运行，沙箱属性严格为 `sandbox="allow-scripts"`，不含 `allow-same-origin`；脚本无法访问父应用的源或文件读取接口。写入的文档带有严格 CSP：保留行内与 Blob 脚本、样式以及 data/Blob/HTTPS 图片，同时禁止 `connect-src`、`frame-src`、`form-action`、`object-src` 与 `base-uri`；预览中的脚本无法读取同源 API、cookie、Web 存储或 OPFS。渲染器通过注入的 Remote 回调，加载直接声明的相对 `.js` 经典脚本和 `.css` 样式表；固定安全上限为单个资源 4 MiB、总计 32 MiB、64 个不同资源。Host 代码解析关联路径，带 `baseFile` 的 `readBytes` 返回原生字节。依赖 Resource 在读取返回后加入，使用返回的 `absolutePath`，失败时则使用字符串类型的 `error.details.path`；没有 Host 路径时，Client 不自行猜测。在渲染器内部，base64 仅用于把 iframe 引导载荷嵌入脚本文本。`<base href>` 将依赖解析交给浏览器，HTTPS 资源也由浏览器处理。本地模块 import、CSS `url()`/`@import` 和动态 `fetch` 不使用 Host 文件访问。读取失败、无效 UTF-8 或超出上限都使预览失败，不发布部分资源包。替换或卸载文档会释放其 Blob URL。
 
 PNG、JPEG、GIF、WebP、BMP、ICO 和 SVG 通过 Blob URL 在 `<img>` 静态图片上下文中渲染，带 12px 内边距和圆角。图片默认适应宽度，但不会放大小于面板的内容；100% 使用图片的固有 CSS 像素宽度。共享缩放控件可产生横向和纵向滚动，但不提供拖拽平移。缩放不会替换 `<img>` 或 Blob URL，因此动画图片会继续播放。位图超过固有尺寸后可能变虚，SVG 则继续使用浏览器的矢量渲染路径。SVG 标记绝不进入应用 DOM 或 iframe，因此其中的脚本无法执行，也无法访问父页面。替换或卸载图片会撤销其 Blob URL。
 
@@ -142,7 +142,7 @@ Office Remote 通过 Connection 的 multipart 二进制传输返回原生 `Uint8
 - **文本顺序分页，完整文件受限。** 定位到较深处的源码行需要先加载此前各页；PDF、HTML 和图片必须取得 Host `maxFileBytes` 上限内的完整结果。
 - **PDF 栅格分配有上限。** 每页位图最多为 16,777,216 像素；超大页面或高像素密度屏幕上的高比例缩放仍可能低于设备分辨率。
 - **字节视图不恢复滚动位置。** PDF、HTML 与图片的渲染器重新挂载或重新载入时可能回到顶部；固定 PDF 与图片缩放可产生横向滚动，HTML iframe 的滚动属于其不透明浏览上下文。
-- **本地 HTML 依赖集合有限。** 只打包直接引用的经典 `.js` 脚本和 `.css` 样式表。浏览器解析的资源仍受浏览器源与网络规则限制；iframe 不获得运行时文件读取桥接。
+- **本地 HTML 依赖集合有限。** 只打包直接引用的经典 `.js` 脚本和 `.css` 样式表。策略允许 HTTPS 图片、字体与媒体，但禁止网络调用、嵌套框架、表单与 base 改写；iframe 不获得运行时文件读取桥接。
 - **滚动写入未节流。** 每次滚动事件都把偏移记进 store；行块已 memo 化，于是由此引发的重渲染交还给 React 的是同一批元素。
 - **PDF chunk 加载失败后需要刷新页面。** React 会在页面生命周期内缓存被拒绝的 lazy import；已加载正文中的普通 PDF 打开或渲染失败仍可重试。
 

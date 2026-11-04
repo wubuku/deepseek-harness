@@ -627,6 +627,7 @@ else process.exit(1);
     if (outsideRoot === undefined) throw new Error('outside fixture directory is unavailable')
     const outsideScript = join(outsideRoot, 'outside.js')
     const outsideReference = relative(cwd, outsideScript).replace(/\\/g, '/')
+    const appOrigin = new URL(page.url()).origin
     let previewNetworkRequests = 0
     await page.route('https://preview.invalid/developer-tools.png', async (route) => {
       previewNetworkRequests += 1
@@ -668,11 +669,19 @@ else process.exit(1);
       writeFile(join(cwd, 'smoke.html'), [
         '<!doctype html><link rel="stylesheet" href="./local.css">',
         '<h1>HTML smoke</h1><p id="result">pending</p><p id="local-result">pending</p><p id="parent-result">pending</p>',
+        '<p id="cookie-result">pending</p><p id="storage-result">pending</p><p id="opfs-result">pending</p><p id="api-result">pending</p>',
         '<img src="https://preview.invalid/developer-tools.png" width="1" height="1" alt="">',
         '<p id="outside-result">pending</p>',
         '<script>document.getElementById("result").textContent="INLINE_OK";',
         'try{parent.document.documentElement.setAttribute("data-document-preview-escape","true");document.getElementById("parent-result").textContent="parent-accessible"}',
         'catch(error){const result=document.getElementById("parent-result");result.textContent="parent-blocked";result.dataset.error=error.name}</script>',
+        '<script>(async()=>{',
+        'const write=(id,value)=>{document.getElementById(id).textContent=value};',
+        'try{write("cookie-result",document.cookie===""?"empty":"COOKIE_LEAK:"+document.cookie)}catch(error){write("cookie-result","blocked:"+error.name)}',
+        'try{localStorage.getItem("probe");write("storage-result","readable")}catch(error){write("storage-result","blocked:"+error.name)}',
+        'try{await navigator.storage.getDirectory();write("opfs-result","readable")}catch(error){write("opfs-result","blocked:"+error.name)}',
+        `try{const response=await fetch("${appOrigin}/api",{credentials:"include",mode:"cors"});write("api-result","READ:"+response.status)}catch(error){write("api-result","blocked:"+error.name)}`,
+        '})()</script>',
         '<script src="./local.js"></script>',
         `<script src="${outsideReference}"></script>`,
       ].join('\n')),
@@ -881,6 +890,14 @@ else process.exit(1);
     await expect.poll(() => html.locator('#parent-result').innerText()).toBe('parent-blocked')
     expect(await html.locator('#parent-result').getAttribute('data-error')).toBe('SecurityError')
     expect(await page.locator('html').getAttribute('data-document-preview-escape')).toBeNull()
+    await expect.poll(() => html.locator('#cookie-result').innerText()).toMatch(/^(empty|blocked:)/)
+    await expect.poll(() => html.locator('#storage-result').innerText()).toBe('blocked:SecurityError')
+    await expect.poll(() => html.locator('#opfs-result').innerText()).toMatch(/^blocked:/)
+    await expect.poll(() => html.locator('#api-result').innerText()).toMatch(/^blocked:/)
+    const previewPolicy = await html.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')
+    expect(previewPolicy).toContain("connect-src 'none'")
+    expect(previewPolicy).toContain("frame-src 'none'")
+    expect(previewPolicy).toContain("form-action 'none'")
     expect(previewNetworkRequests).toBe(1)
     const beforeStyleSave = await iframe.getAttribute('src')
     await writeFile(join(cwd, 'local.css'), '#local-result { color: rgb(56, 34, 12); }')
@@ -909,6 +926,11 @@ else process.exit(1);
       `- Local stylesheet after save: ${await html.locator('#local-result').evaluate(node => getComputedStyle(node).color)}`,
       `- Parent access: ${await html.locator('#parent-result').innerText()} (${await html.locator('#parent-result').getAttribute('data-error')})`,
       `- Parent unchanged: ${String(await page.locator('html').getAttribute('data-document-preview-escape') === null)}`,
+      `- Cookie access: ${await html.locator('#cookie-result').innerText()}`,
+      `- Web storage: ${await html.locator('#storage-result').innerText()}`,
+      `- OPFS: ${await html.locator('#opfs-result').innerText()}`,
+      `- Same-origin API: ${await html.locator('#api-result').innerText()}`,
+      `- Policy blocks network, frames and forms: ${String(previewPolicy?.includes("connect-src 'none'") === true)}`,
     ].join('\n'))
 
     await openFile('smoke.pdf')

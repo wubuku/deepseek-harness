@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-104：HTML 预览内容隔离、严格 CSP 与注入脚本验证
+
+```text
+changeId: BN-P2-104
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: packages/client/ui-sidebar-documentpreview/src/client/html/bootstrap.ts; packages/client/ui-sidebar-documentpreview/tests/html-bootstrap.client.spec.ts; packages/client/ui-sidebar-documentpreview/README.md; packages/client/ui-sidebar-documentpreview/README.zh.md; apps/web/tests/document-preview.e2e.ts; snapshots/web/document-preview/document.expected.md; docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 威胁模型 T5 记录模型输出进入 HTML 路径后，注入脚本可持有预览页的完整同源权限；关闭条件要求预览内容不能读同源 API、cookie 或 OPFS。
+existingExtensionPointsChecked: 文档预览渲染器已用 `sandbox="allow-scripts"`（无 `allow-same-origin`）的 Blob iframe 与 DOMPurify 静态清理；缺少脚本模式的 CSP，因此只在既有 HTML 渲染器内补策略，不改 host、session、wire 或其它渲染器。
+whyDraftOnlyWasInsufficient: 隔离必须发生在实际渲染路径；文档不能阻止注入脚本访问同源 API、cookie 或 OPFS。
+behaviorChange: 交互式 HTML 预览写入的文档首位新增 meta CSP：`default-src 'none'`；`script-src`/`style-src` 允许 inline 与 Blob；`img-src`/`font-src`/`media-src` 允许 data、Blob 与 HTTPS；`connect-src`、`frame-src`、`form-action`、`object-src`、`base-uri` 均为 `'none'`。静态模式不变，仍经 DOMPurify 清理。e2e 新增 cookie、Web storage、OPFS 与同源 API 探测脚本及断言。
+consumersUpdated: document preview README（中英）、`document.expected.md` 快照、威胁模型 T5 与未闭环表；无 SDK、profile、CLI 或 wire 变更。
+test: `pnpm run build:artifacts` 7/7 与 `pnpm run build:check` 2/2 通过；`html-bootstrap.client.spec.ts` 4/4；`DSH_SNAPSHOT=refresh vitest run --config vitest.web.config.ts apps/web/tests/document-preview.e2e.ts` 6/6 通过（Chrome，真实 Scaffold）。探测结果：cookie、Web storage、OPFS 均 `blocked:SecurityError`，同源 API `blocked:TypeError`，父文档不可访问且未变更。
+syncReplaySteps: 上游同步后复跑单测与 `pnpm run test:web:built -- -t "opens text, isolated HTML"`；若 iframe 组装或 CSP 指令变化，同时更新 README 与快照。
+deleteCondition: 预览页与 API 分离到不同 origin，且页面级 XSS 由独立策略覆盖后，可移除渲染器内 CSP 或并入部署层策略。
+status: implemented
+```
+
 ### BN-P2-103：drafts 索引分组与 PoC README 导航收敛
 
 ```text

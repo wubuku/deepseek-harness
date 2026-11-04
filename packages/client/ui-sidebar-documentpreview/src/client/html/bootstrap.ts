@@ -16,6 +16,15 @@ export interface HtmlBundle {
 }
 
 /**
+ * Policy for the interactive document. Scripts and styles stay available to the
+ * authored document, while network reads, nested frames, forms, plugins and base
+ * rewriting are denied so an injected script cannot reach the API, cookies or storage.
+ */
+export const PREVIEW_DOCUMENT_POLICY = "default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline' blob:; img-src data: blob: https:; font-src data: blob: https:; media-src data: blob: https:; connect-src 'none'; frame-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'"
+
+const POLICY_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_DOCUMENT_POLICY}">`
+
+/**
  * Build the outer iframe document. Its resource URLs are created inside the sandbox,
  * because that opaque origin cannot load resource URLs created by the parent.
  * @param bundle - complete HTML bytes and optional static dependencies.
@@ -29,6 +38,8 @@ export function createHtmlDocument(bundle: HtmlBundle): string {
   return `<!doctype html><meta charset="utf-8"><script>(()=>{
 const bytes=data=>Uint8Array.from(atob(data),character=>character.charCodeAt(0));
 const text=data=>new TextDecoder('utf-8',{fatal:true}).decode(bytes(data));
+const meta=${JSON.stringify(POLICY_META)};
+const policy=value=>{const match=/^<!doctype[^>]*>/i.exec(value);return match===null?meta+value:match[0]+meta+value.slice(match[0].length)};
 const bundle=JSON.parse(text("${payload}"));
 let html=bundle.html;
 if(bundle.assets.length){
@@ -43,6 +54,6 @@ if(bundle.assets.length){
   }
   html='<!doctype html>'+parsed.documentElement.outerHTML;
 }
-document.open();document.write(html);document.close();
+document.open();document.write(policy(html));document.close();
 })()</script>`
 }

@@ -33,6 +33,11 @@
 - Local stylesheet after save: rgb(56, 34, 12)
 - Parent access: parent-blocked (SecurityError)
 - Parent unchanged: true
+- Cookie access: blocked:SecurityError
+- Web storage: blocked:SecurityError
+- OPFS: blocked:SecurityError
+- Same-origin API: blocked:TypeError
+- Policy blocks network, frames and forms: true
 
 ## PDF
 
