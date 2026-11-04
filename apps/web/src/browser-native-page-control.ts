@@ -298,7 +298,12 @@ export async function connectBrowserNativePageControl(
   let queueStatus: HTMLElement | undefined
   let offlineStatus: HTMLElement | undefined
   let offlineQueued = 0
-  let exportControl: { readonly root: HTMLElement; readonly button: HTMLButtonElement; readonly result: HTMLElement } | undefined
+  let exportControl: {
+    readonly root: HTMLElement
+    readonly button: HTMLButtonElement
+    readonly supportButton: HTMLButtonElement
+    readonly result: HTMLElement
+  } | undefined
   let retryTimer: number | undefined
   const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
   let failedClosed = false
@@ -344,7 +349,7 @@ export async function connectBrowserNativePageControl(
         position: 'fixed',
         right: '16px',
         top: '72px',
-        zIndex: '2147483000',
+        zIndex: '900',
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
@@ -441,7 +446,7 @@ export async function connectBrowserNativePageControl(
         position: 'fixed',
         left: '16px',
         top: '72px',
-        zIndex: '2147483000',
+        zIndex: '900',
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
@@ -483,7 +488,7 @@ export async function connectBrowserNativePageControl(
         position: 'fixed',
         left: '16px',
         bottom: '16px',
-        zIndex: '2147483000',
+        zIndex: '900',
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
@@ -527,7 +532,7 @@ export async function connectBrowserNativePageControl(
       position: 'fixed',
       left: '16px',
       bottom: '16px',
-      zIndex: '2147483000',
+      zIndex: '900',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'flex-start',
@@ -571,7 +576,7 @@ export async function connectBrowserNativePageControl(
     supportResult.style.color = '#f9fafb'
     root.append(button, supportButton, result, supportResult)
     document.body.append(root)
-    const control = { root, button, result }
+    const control = { root, button, supportButton, result }
     button.addEventListener('click', () => {
       const sessionId = [...owners.keys()].at(-1)
       if (sessionId === undefined || workspaceId === undefined) return
@@ -615,7 +620,16 @@ export async function connectBrowserNativePageControl(
   const syncExportControl = (): void => {
     exportControl ??= createExportControl()
     const available = owners.size > 0 && workspaceId !== undefined
+    // The locale plugin publishes the active language after the Worker handshake,
+    // so a control created during boot would otherwise keep the page's default
+    // English label for its lifetime.
+    exportControl.button.textContent = browserNativeSessionExportCopy(document.documentElement.lang)
+    exportControl.supportButton.textContent = browserNativeSupportBundleCopy(document.documentElement.lang)
+    // The root's inline flex display outranks the UA `[hidden]` rule, so an
+    // unavailable control would stay laid out and keep intercepting clicks at
+    // its fixed corner. Set both: `hidden` for semantics, display for layout.
     exportControl.root.hidden = !available
+    exportControl.root.style.display = available ? 'flex' : 'none'
   }
   const workspaceApiUrl = (path: string): string => `${options.apiOrigin ?? ''}${path}`
   const reloadAfterWorkspaceChange = (): void => {
@@ -691,7 +705,7 @@ export async function connectBrowserNativePageControl(
       left: '50%',
       top: '56px',
       transform: 'translateX(-50%)',
-      zIndex: '2147483000',
+      zIndex: '900',
       pointerEvents: 'none',
       width: 'min(440px, calc(100vw - 32px))',
       maxHeight: 'calc(100vh - 120px)',
@@ -824,7 +838,7 @@ export async function connectBrowserNativePageControl(
       position: 'fixed',
       right: '16px',
       top: '6px',
-      zIndex: '2147483000',
+      zIndex: '900',
       display: 'flex',
       alignItems: 'center',
       gap: '6px',

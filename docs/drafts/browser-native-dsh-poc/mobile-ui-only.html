@@ -52,10 +52,54 @@ const storageLine = document.querySelector('[data-mobile-storage]')
 const form = document.querySelector('[data-mobile-form]')
 const input = document.querySelector('[data-mobile-input]')
 const send = document.querySelector('[data-mobile-send]')
+const zh = (navigator.language ?? 'en').toLowerCase().startsWith('zh')
+const copy = zh ? {
+  title: 'DSH 移动端 · 仅 UI',
+  heading: 'DSH 移动端 · 服务端执行',
+  probing: '正在探测浏览器存储',
+  opfsUnused: 'OPFS 可用但未使用 · 不使用 Worker 存储',
+  noOpfs: 'OPFS 不可用 · 仅使用服务端会话',
+  placeholder: '向服务端 Agent 提问',
+  promptLabel: '提示词',
+  send: '发送',
+  ready: '就绪',
+  running: '服务端回合正在运行',
+  completed: phase => `已完成 · ${phase}`,
+  turnReason: reason => reason === 'completed' ? '回合已完成' : reason === 'aborted' ? '回合已中止' : `回合${reason}`,
+  incomplete: '回合结束但未完成',
+  refused: status => `服务端拒绝了该回合（${status}）`,
+  streamFailed: status => `服务端流读取失败（${status}）`,
+  roles: { user: '用户', 'server user': '服务端用户', assistant: '助手', tool: '工具', 'tool result': '工具结果' },
+} : {
+  title: 'DSH mobile · UI only',
+  heading: 'DSH mobile · server-host execution',
+  probing: 'probing browser storage',
+  opfsUnused: 'OPFS API present but unused · no Worker storage',
+  noOpfs: 'OPFS unavailable · server-side Session only',
+  placeholder: 'Ask the server-hosted agent',
+  promptLabel: 'Prompt',
+  send: 'Send',
+  ready: 'ready',
+  running: 'server host running',
+  completed: phase => `completed · ${phase}`,
+  turnReason: reason => `turn ${reason}`,
+  incomplete: 'turn settled without completion',
+  refused: status => `server host refused the turn (${status})`,
+  streamFailed: status => `server host stream failed (${status})`,
+  roles: { user: 'user', 'server user': 'server user', assistant: 'assistant', tool: 'tool', 'tool result': 'tool result' },
+}
+document.documentElement.lang = zh ? 'zh-CN' : 'en'
+document.title = copy.title
+document.querySelector('h1').textContent = copy.heading
+storageLine.textContent = copy.probing
+input.placeholder = copy.placeholder
+input.setAttribute('aria-label', copy.promptLabel)
+send.textContent = copy.send
+statusLine.textContent = copy.ready
 
 storageLine.textContent = navigator.storage && navigator.storage.getDirectory
-  ? 'OPFS API present but unused · no Worker storage'
-  : 'OPFS unavailable · server-side Session only'
+  ? copy.opfsUnused
+  : copy.noOpfs
 
 function setStatus(text, error = false) {
   statusLine.textContent = text
@@ -69,7 +113,7 @@ function appendEntry(role, text) {
   entry.dataset.mobileRole = role
   const label = document.createElement('span')
   label.className = 'role'
-  label.textContent = role
+  label.textContent = copy.roles[role] ?? role
   entry.append(label, document.createTextNode(text))
   transcript.append(entry)
 }
@@ -109,7 +153,7 @@ form.addEventListener('submit', async event => {
   appendEntry('user', prompt)
   input.value = ''
   send.disabled = true
-  setStatus('server host running')
+  setStatus(copy.running)
   const turnId = `mobile-turn-${crypto.randomUUID()}`
   window.__DSH_LAST_TURN_ID__ = turnId
   try {
@@ -124,14 +168,14 @@ form.addEventListener('submit', async event => {
         prompt,
       }),
     })
-    if (!started.ok) throw new Error(`server host refused the turn (${started.status})`)
+    if (!started.ok) throw new Error(copy.refused(started.status))
     const stream = await fetch(`/api/browser-native/session/durable/stream?turnId=${encodeURIComponent(turnId)}&fromSeq=0`)
-    if (!stream.ok) throw new Error(`server host stream failed (${stream.status})`)
+    if (!stream.ok) throw new Error(copy.streamFailed(stream.status))
     let completed = false
     await readStream(stream, item => {
       if (item.kind === 'settled') {
         completed = true
-        setStatus(`completed · ${item.phase ?? 'settled'}`)
+        setStatus(copy.completed(item.phase ?? 'settled'))
         return
       }
       if (item.kind !== 'event') return
@@ -146,10 +190,10 @@ form.addEventListener('submit', async event => {
       if (entry.type === 'turn/end') {
         const reason = entry.data?.reason?.kind ?? 'completed'
         completed = reason === 'completed'
-        setStatus(`turn ${reason}`)
+        setStatus(copy.turnReason(reason))
       }
     })
-    if (!completed) setStatus('turn settled without completion', true)
+    if (!completed) setStatus(copy.incomplete, true)
   } catch (error) {
     console.error(error)
     setStatus(String(error?.message ?? error), true)

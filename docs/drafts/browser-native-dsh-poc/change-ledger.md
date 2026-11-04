@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-144：双语字典覆盖与伪本地化窄屏验证
+
+```text
+changeId: BN-P2-144
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/browser-native-page-control.ts; apps/web/tests/browser-native-copy.spec.ts; docs/drafts/browser-native-dsh-poc/mobile-ui-only.html; docs/drafts/browser-native-dsh-poc/tests/pseudo-localization-narrow.e2e.mjs; docs/drafts/browser-native-dsh-poc/pseudo-localization-narrow.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 新增状态条、导出控件与移动端 UI-only 页面此前只有英文路径经过真实浏览器验证；窄屏在加长文本下是否溢出/截断、中英字典是否成对完整，没有自动门禁。
+existingExtensionPointsChecked: 复用既有 `browserNative*Copy(document.documentElement.lang)` 字典、客户端 locale 插件的 `document.documentElement.lang` 发布、preview 的真实 Session/导出/排队通道与 Playwright 文本测量；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 静态断言无法证明真实渲染后的 320px 布局；伪本地化必须走真实 turn、真实导出与真实排队，才能在可测状态下加长文本并测量溢出与截断。
+behaviorChange: 导出与支持包控件在每次同步时按当前语言重写按钮文本，修复语言插件晚于控件创建导致的固化英文；不可用导出控件同时设置 `hidden` 与 `display`，修复内联 `display:flex` 覆盖 UA 隐藏规则并拦截工作区选择对话框；页面控件固定层级从 2147483000 降到 900，避免覆盖 z-index 1000 的 Modal。移动端 UI-only 页面新增中英字典。新增伪本地化窄屏 E2E 与页面文案单测。
+consumersUpdated: preview 构建产物、移动端页面、PoC README 产品导航、新增 pseudo-localization-narrow.md、本 ledger。
+tests: `pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`pnpm exec vitest run apps/web/tests/browser-native-copy.spec.ts` 11/11 通过；`DSH_POC_BROWSER=chrome DSH_POC_LOCALE=en-US DSH_POC_WIDTH=320 node docs/drafts/browser-native-dsh-poc/tests/pseudo-localization-narrow.e2e.mjs` 与 zh-CN 同参数均通过：queued、main、export、offline-recovery、collaboration-session-conflict、mobile-ui-only 全部 `problems: []`，pageerror 0。
+syncReplaySteps: 上游同步后重建 preview，复跑文案单测与两个语言的 320px 伪本地化脚本；确认导出控件标签仍跟随 `document.documentElement.lang`、控件层级仍低于 Modal、移动端仍按 `navigator.language` 选中英字典。
+deleteCondition: 正式客户端提供双语字典完整性门禁与伪本地化布局回归，或被等价的可视回归门禁取代。
+status: implemented
+```
+
 ### BN-P2-143：axe-core 可访问性审计与 label-in-name 修复
 
 ```text
