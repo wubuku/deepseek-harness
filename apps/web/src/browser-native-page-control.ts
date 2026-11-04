@@ -339,7 +339,6 @@ export async function connectBrowserNativePageControl(
       document.documentElement.lang,
       notice.revision,
       notice.dirtyCount,
-      notice.message,
     )
     workspaceStatus.dataset.state = notice.state
     if (notice.workspaceId !== undefined) {

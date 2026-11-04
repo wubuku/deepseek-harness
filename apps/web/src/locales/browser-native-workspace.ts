@@ -70,11 +70,14 @@ export function browserNativeWorkspaceSwitcherCopy(language: string): {
 }
 
 /** Format the opt-in preview's Workspace sync notice for the page language.
+ *
+ * The visible notice carries only locale-owned copy. Backend failure detail
+ * stays on the status channel for diagnostics and never reaches the rendered
+ * text, so a Chinese page cannot surface an English provider message.
  * @param state - Current synchronization state.
  * @param language - Page language tag.
  * @param revision - Last confirmed server revision.
  * @param dirtyCount - Number of pending local paths.
- * @param message - Optional synchronization failure detail.
  * @returns Localized status text.
  */
 export function browserNativeWorkspaceStatusCopy(
@@ -82,14 +85,13 @@ export function browserNativeWorkspaceStatusCopy(
   language: string,
   revision: number | undefined,
   dirtyCount: number,
-  message: string | undefined,
 ): string {
   const dictionary = language.startsWith('zh') ? messages.zh : messages.en
   const revisionLabel = revision === undefined ? '' : ` · r${String(revision)}`
   const dirtyLabel = dirtyCount === 0
     ? ''
     : language.startsWith('zh') ? ` · ${String(dirtyCount)} 项待同步` : ` · ${String(dirtyCount)} pending`
-  return `${dictionary[state]}${revisionLabel}${dirtyLabel}${message === undefined ? '' : ` — ${message}`}`
+  return `${dictionary[state]}${revisionLabel}${dirtyLabel}`
 }
 
 /** Format the live admission queue position for the page language.

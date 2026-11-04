@@ -96,7 +96,11 @@ try {
   const visibleStatus = page.locator('[data-browser-native-workspace-status]')
   await visibleStatus.waitFor({ state: 'visible' })
   assert.equal(await visibleStatus.getAttribute('data-state'), 'error')
-  assert.match(await visibleStatus.innerText(), /503|outage|unavailable/i)
+  const visibleText = await visibleStatus.innerText()
+  assert.match(visibleText, /^Workspace sync failed/,
+    'the visible status starts with the locale-owned sync-failure copy')
+  assert.doesNotMatch(visibleText, /503|outage|unavailable/i,
+    'the 503 detail stays on the status channel and never reaches the page text')
   assert.deepEqual(manifestFailures, [200, 503])
   assert.equal(pageErrors.length, 1, `expected one preview boot rejection after the injected 503: ${JSON.stringify(pageErrors)}`)
   assert.match(pageErrors[0], /boot payload failed with HTTP 503/)

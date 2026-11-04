@@ -24,9 +24,9 @@ E2E 把 `maxConcurrentTurns` 设为 1、`queueTimeoutMs` 设为 3 秒，用 `bar
 
 第二个标签页打开同一 Session 时，`session/open` 返回 `409 SESSION_ALREADY_OWNED`，provider 在约 5 秒重试窗口内重复失败。此前该标签页只落在一个空 Session，没有可见错误。
 
-`browser-native-providers.ts` 在 `SESSION_ALREADY_OWNED` 或 owner 续租报告 `SESSION_OWNERSHIP_LOST` 时发布 workspace 状态 `session-conflict`，消息为 backend 原文。状态条显示英文/中文标题加 ` — <backend message>`，边框为红色；`preview.ts` 把该状态视为可继续运行的启动结果，标签页保持打开。
+`browser-native-providers.ts` 在 `SESSION_ALREADY_OWNED` 或 owner 续租报告 `SESSION_OWNERSHIP_LOST` 时发布 workspace 状态 `session-conflict`。状态条只渲染 locale 字典中的中/英文标题；backend 原文保留在同一条 status 消息的 `message` 字段供诊断，不进入页面文本，因此中文页面不会出现英文 provider 文案。边框为红色；`preview.ts` 把该状态视为可继续运行的启动结果，标签页保持打开。
 
-E2E 在同一个 `BrowserContext` 开 A/B 两页，断言 B 的 `[data-browser-native-workspace-status]` 进入 `data-state="session-conflict"`，文本同时包含 `This Session is open in another tab` 与 `session is already owned by another browser`；同一断言还要求该状态条为 `role="alert"`、`aria-live="assertive"` 与 `aria-atomic="true"`。状态条提供一个 `button[data-browser-native-session-retry]`（本地化文案，激活后重载页面）；E2E 用键盘聚焦后按 Enter，而不是鼠标点击；关闭 A 页后 B 页重试即可重新打开 Session，E2E 断言状态回到 `synced`，并把尝试次数写入输出。
+E2E 在同一个 `BrowserContext` 开 A/B 两页，断言 B 的 `[data-browser-native-workspace-status]` 进入 `data-state="session-conflict"`，文本包含 `This Session is open in another tab` 且不存在 ` — <backend message>` 后缀；同一断言还要求该状态条为 `role="alert"`、`aria-live="assertive"` 与 `aria-atomic="true"`。状态条提供一个 `button[data-browser-native-session-retry]`（本地化文案，激活后重载页面）；E2E 用键盘聚焦后按 Enter，而不是鼠标点击；关闭 A 页后 B 页重试即可重新打开 Session，E2E 断言状态回到 `synced`，并把尝试次数写入输出。
 
 ## Session 导出
 
@@ -43,7 +43,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-vis
 最近一次运行输出：
 
 ```json
-{"sessionLeaseConflict":"This Session is open in another tab — session is already owned by another browser; close that tab or retry after its write lease expires\nRetry opening this Session","sessionRecovery":{"attempts":1,"finalState":"synced"},"sessionExport":{"format":"dsh-session-bundle","formatVersion":1,"suggestedFilename":"dsh-session-session-0e0c76ed-594b-42cd-a37b-c3068cbf10c0.json"},"failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
+{"sessionLeaseConflict":"This Session is open in another tab\nRetry opening this Session","sessionRecovery":{"attempts":1,"finalState":"synced"},"sessionExport":{"format":"dsh-session-bundle","formatVersion":1,"suggestedFilename":"dsh-session-session-57f0867c-967a-4e2b-bf8a-13913fe9e5d4.json"},"failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
 ```
 
 ## 无障碍与键盘可达性

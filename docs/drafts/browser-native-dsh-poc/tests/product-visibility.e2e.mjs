@@ -96,7 +96,7 @@ try {
     return (await status.getAttribute('data-state')) === 'session-conflict' ? await status.innerText() : undefined
   }, 'session lease conflict surfaced in the preview status', 30_000)
   assert.match(conflict, /This Session is open in another tab/)
-  assert.match(conflict, /session is already owned by another browser/i)
+  assert.doesNotMatch(conflict, / — /, 'the visible status must not append an English backend message')
   const conflictStatus = pageB.locator('[data-browser-native-workspace-status]')
   assert.equal(await conflictStatus.getAttribute('role'), 'alert')
   assert.equal(await conflictStatus.getAttribute('aria-live'), 'assertive')

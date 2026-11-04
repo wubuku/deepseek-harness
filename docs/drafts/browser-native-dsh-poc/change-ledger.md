@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-116：把新增 UI 状态统一到 locale 字典
+
+```text
+changeId: BN-P2-116
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/locales/browser-native-workspace.ts; apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/workspace-cache-backend-unavailable.e2e.mjs; docs/drafts/browser-native-dsh-poc/product-visibility.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 排队、恢复、导出、失败分类与 lease 冲突的标题与按钮已走 locale 字典，但 Workspace 状态条仍把 backend 英文 `message` 拼在本地化标题之后；中文页面上会出现未翻译的 provider 文案，失败分类与租约冲突无法保证纯 locale 文案。
+existingExtensionPointsChecked: 复用既有 `browserNativeWorkspaceStatusCopy`、状态通道 `message` 字段与 `[data-browser-native-workspace-status]` 属性；未新增 locale key、未改 Worker 发布协议，也未改 workspace 同步、租约或导出行为。
+whyDraftOnlyWasInsufficient: 只有渲染层能把“可见文案”和“诊断消息”分开；React/overlay 之外的 backend 与 Worker 不应知道页面语言，若在那里翻译会引入多语言耦合。
+behaviorChange: `browserNativeWorkspaceStatusCopy` 只渲染 locale 字典中的状态标题、revision 与待同步计数，去掉 ` — <backend message>` 后缀。backend/Worker 原文继续保留在 status 消息的 `message` 字段，供控制台与测试诊断，不再进入页面文本。`product-visibility.e2e` 与 `workspace-cache-backend-unavailable.e2e` 改为断言可见文案为 locale 标题（或不存在英文后缀），原始 503 仍由 `status.message` 断言。
+consumersUpdated: `browser-native-page-control.ts` 的状态条调用去掉 message 实参；两个 E2E 断言与 `product-visibility.md` 的租约冲突描述同步更新。
+tests: `pnpm run verify-client-ui-i18n` 通过（1067 个 Client UI 源文件全部 locale-owned）；`pnpm run typecheck` 5/5 通过；`build:preview` 后 `DSH_POC_BROWSER=chrome node .../workspace-cache-backend-unavailable.e2e.mjs` 与 `.../product-visibility.e2e.mjs` 均通过，前者可见文案为 `Workspace sync failed` 且不含 503 原文，后者租约冲突文案为 `This Session is open in another tab` 且无 ` — ` 后缀。
+syncReplaySteps: 上游同步后核对 `browserNativeWorkspaceStatusCopy` 签名只有状态/语言/revision/待同步计数四个参数，状态条不再拼接 `message`；复跑 `verify-client-ui-i18n`、`product-visibility.e2e` 与 `workspace-cache-backend-unavailable.e2e`。
+deleteCondition: PoC 状态条被移除，或正式客户端把 Workspace 状态迁到带 typed locale key 的 `t` 体系；届时本条目随之删除。
+status: implemented
+```
+
 ### BN-P2-115：托管多用户认证的 token 到 principal 映射
 
 ```text
