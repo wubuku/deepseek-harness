@@ -6,7 +6,7 @@ description: "一条命令运行 Browser-Native PoC 的四组性能测量，按�
 
 ## 目的
 
-[perf-gate.mjs](tests/perf-gate.mjs) 把此前分散测量的关键预算收成一条命令：依次运行[性能基线](performance-baseline.md)、[长转录渲染](long-transcript-rendering.md)、9,990 文件 Workspace 同步与[弱网画像](weak-network-profile.md)，从每个套件的 JSON 报告抽取指标，再与预算和 [perf-gate-baseline.json](perf-gate-baseline.json) 比较。任一指标超预算或任一子套件失败，进程以非零退出。
+[perf-gate.mjs](tests/perf-gate.mjs) 把此前分散测量的关键预算收成一条命令：依次运行[性能基线](performance-baseline.md)、[长转录渲染](long-transcript-rendering.md)、9,990 文件 Workspace 同步与[弱网画像](README.md#弱网与移动延迟画像)，从每个套件的 JSON 报告抽取指标，再与预算和 [perf-gate-baseline.json](perf-gate-baseline.json) 比较。任一指标超预算或任一子套件失败，进程以非零退出。
 
 ## 覆盖指标与预算
 

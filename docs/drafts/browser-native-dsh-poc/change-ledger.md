@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-136：按 principal 导出全量数据并强制可配置保留期
+
+```text
+changeId: BN-P2-136
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/principal-export.mjs; docs/drafts/browser-native-dsh-poc/tests/principal-data.e2e.mjs; docs/drafts/browser-native-dsh-poc/data-export-retention.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 已有 Session 导出/导入只处理单个 Session 包，支持包只覆盖故障诊断，没有任何入口按 principal 汇总其全部 Session、Workspace、附件、usage 与审计数据；保留期也无实现，到期数据只能靠外部脚本删除，读路径仍可取回。
+existingExtensionPointsChecked: 复用 `FormalSessionStore` 的加载/flush/记录序列化、Workspace principal cookie 与 `principalFromRequest`、`attachments-v1` 与 `workspace-v2` 的对象布局、usage ledger 与 `buildUsageReport` 计费口径、observability journal 的哈希链与 `redactObservabilityJournal`、`createBrowserNativeV2Server` 的 options 与 `testHooks.now`；未改 Agent Loop、Session 事件类型或格式、模型/工具协议、普通 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: “导出完整且不混入他人数据”只能由真实两个 principal 的 Session、Workspace 对象与 usage 记录共同证明；“清理不可绕过”需要在真实进程里观察越界后的 410 与 sweep 删除，静态阅读无法区分“尚未清理”和“仍可读取”。
+behaviorChange: 新增 `principal-export.mjs`（bundle v1 + `verifyPrincipalExport` 重算摘要、哈希、归属、counts 与成本请求数）；`backend-v2.mjs` 新增 `GET /api/browser-native/workspace/principal-export`（workspace cookie 鉴权，路由挂在该前缀以匹配 cookie `Path`）、`GET /api/browser-native/retention`、`retentionDays`/`retentionSweepMs` 配置、`lastActivityAt` 与 `isExpired` 读取层 410 `SESSION_EXPIRED`、`purgeExpired()` 与周期 `sweepRetention()`（Session 文件、内存 usage、journal 过期行）；usage ledger 条目新增 `at`，所有 usage 读路径改用 `retainedUsage()`；`observability-journal.mjs` 新增可串行化的 `redact`。
+consumersUpdated: `usage-audit`、`usage-report`、支持包摘要与导出改用保留窗口过滤；PoC README 新增“用户数据导出与保留策略”章节与导航分组；新增 `data-export-retention.md`；本 ledger 登记。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 后 `node docs/drafts/browser-native-dsh-poc/tests/principal-data.e2e.mjs` 1/1 通过（本地 OpenAI-compatible SSE upstream 驱动真实 provider 客户端与 usage 解析；真实网关配额已 402）。Run A：alice 导出 `sessions=1`、`sessionEvents=18`、`workspaceBlobs=1`、`attachments=1`、`usageEntries=2`、`costRequests=2`，usage `requestId` 与 `/usage-audit` 一致，bundle 不含 bob 的 principalId/Session/Workspace/内容，篡改附件被 `verifyPrincipalExport` 拒绝。Run B：2 秒保留期越界后读与追加均 410 `SESSION_EXPIRED`，导出 `sessions=0`/`usageEntries=0`，sweep 后 Session 文件 `ENOENT`、`usageEntries=2` 被删除、`/usage-report` `requests=0`。输出 `{"result":"passed","upstream":"local-openai-compatible","export":{"sessions":1,"sessionEvents":18,"workspaceBlobs":1,"attachments":1,"usageEntries":2,"costRequests":2,"digest":"68ddcad46bb1f9a4"},"retention":{"retentionDays":0.000023148148148148147,"sweepIntervalMs":5000,"readStatus":410,"readCode":"SESSION_EXPIRED","appendStatus":410,"exportSessions":0,"exportUsageEntries":0,"sweptUsageEntries":2,"reportRequests":0,"fileDeleted":true}}`。
+syncReplaySteps: 上游同步后确认 `FormalSessionStore` 的记录字段、Workspace principal cookie 名称与 `Path`、`attachments-v1`/`workspace-v2` 对象布局、usage ledger 与 journal 记录是否仍带 `at`；重建 preview 后复跑 `principal-data.e2e.mjs` 与 `backend-v2.test.mjs`、`usage-report.test.mjs`，确认新读取路径仍先过滤保留窗口。
+deleteCondition: 正式 Session/Workspace 服务提供按 principal 的完整导出与不可绕过的保留期清理；或该 PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-135：usage ledger 记录缓存读写拆分，并用真实 provider 测量裁剪与缓存成本
 
 ```text

@@ -22,8 +22,9 @@ import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createAlertEvaluator } from './observability-alerts.mjs'
-import { createObservabilityJournal } from './observability-journal.mjs'
+import { createObservabilityJournal, redactObservabilityJournal } from './observability-journal.mjs'
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
+import { buildPrincipalExport, verifyPrincipalExport } from './principal-export.mjs'
 import { SessionShareStore } from './session-shares.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
 
@@ -48,6 +49,8 @@ const MAX_HANDOFF_ID_LENGTH = 200
 const MAX_CHECKPOINT_IDS = 1_000
 const MAX_CHECKPOINT_ID_LENGTH = 200
 const DEFAULT_OWNER_LEASE_MS = 30_000
+const DEFAULT_RETENTION_SWEEP_MS = 5 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_LLM_TIMEOUT_MS = 60_000
 const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
 const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -1570,9 +1573,40 @@ async function acquireDataDirLock(dataDir) {
   }
 }
 
+/** Epoch milliseconds for a Session timestamp that may be numeric or ISO text. */
+function activityAt(value) {
+  if (Number.isSafeInteger(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return 0
+}
+
+/** Whether a journal record carries an `at` timestamp that has left the retention window. */
+function recordExpired(record, cutoff) {
+  const at = record?.at
+  return Number.isSafeInteger(at) && at <= cutoff
+}
+
+/** Durable record shape written to `sessions/<id>.json` and returned by exports. */
+function recordOf(session) {
+  return {
+    id: session.id,
+    ...(session.principalId === undefined ? {} : { principalId: session.principalId }),
+    header: session.header,
+    inheritedEventCount: session.inheritedEventCount,
+    events: session.events,
+    durableThroughSeq: session.events.length - 1,
+    ownerEpoch: session.ownerEpoch,
+    handoffs: Object.fromEntries(session.handoffs),
+  }
+}
+
 class FormalSessionStore {
-  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, failFlush, failFlushAfterRename } = {}) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
+    if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) throw new Error('retentionMs must be a non-negative safe integer')
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
     this.sessions = new Map()
@@ -1580,6 +1614,7 @@ class FormalSessionStore {
     this.locks = new Map()
     this.ownerLeaseMs = ownerLeaseMs
     this.now = now
+    this.retentionMs = retentionMs
     this.failFlush = failFlush
     this.failFlushAfterRename = failFlushAfterRename
   }
@@ -1588,7 +1623,9 @@ class FormalSessionStore {
     await mkdir(this.sessionsDir, { recursive: true })
     for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-      const raw = JSON.parse(await readFile(join(this.sessionsDir, entry.name), 'utf8'))
+      const entryPath = join(this.sessionsDir, entry.name)
+      const raw = JSON.parse(await readFile(entryPath, 'utf8'))
+      const modifiedAt = await stat(entryPath).then(info => Math.floor(info.mtimeMs)).catch(() => 0)
       const id = assertSessionId(raw.id)
       if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
       const principalId = raw.principalId === undefined ? undefined : assertPrincipalId(raw.principalId)
@@ -1616,6 +1653,7 @@ class FormalSessionStore {
         ownerExpiresAt: 0,
         writeBlocked: false,
         handoffs,
+        lastActivityAt: Math.max(activityAt(raw.header?.createdAt), modifiedAt),
       }
       this.sessions.set(id, session)
       if (handoffsMigrated) await this.flush(session)
@@ -1636,12 +1674,25 @@ class FormalSessionStore {
     }
   }
 
+  /** Whether this Session's retention window has elapsed since its last write. */
+  isExpired(session) {
+    return this.retentionMs > 0 && this.now() >= session.lastActivityAt + this.retentionMs
+  }
+
+  /**
+   * Read one Session, refusing retained data whose window has elapsed.
+   * @param id - Session id.
+   * @returns Stored Session record.
+   */
   get(id) {
     const session = this.sessions.get(assertSessionId(id))
     if (session === undefined) {
       const unsupported = this.unsupported.get(id)
       if (unsupported !== undefined) throw unsupportedSessionFormat(id, unsupported.version)
       throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    }
+    if (this.isExpired(session)) {
+      throw new BackendError('SESSION_EXPIRED', 'session retention window has elapsed', 410)
     }
     return session
   }
@@ -1650,6 +1701,9 @@ class FormalSessionStore {
     const session = this.sessions.get(assertSessionId(id))
     if (session !== undefined) {
       if (session.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      if (this.isExpired(session)) {
+        throw new BackendError('SESSION_EXPIRED', 'session retention window has elapsed', 410)
+      }
       return session
     }
     const unsupported = this.unsupported.get(id)
@@ -1709,6 +1763,7 @@ class FormalSessionStore {
       ownerEpoch: 0,
       ownerExpiresAt: 0,
       handoffs: new Map(),
+      lastActivityAt: this.now(),
     }
     this.sessions.set(id, session)
     return session
@@ -1820,16 +1875,7 @@ class FormalSessionStore {
   async flush(session) {
     const target = join(this.sessionsDir, `${session.id}.json`)
     const temporary = `${target}.${randomUUID()}.tmp`
-    const record = {
-      id: session.id,
-      ...(session.principalId === undefined ? {} : { principalId: session.principalId }),
-      header: session.header,
-      inheritedEventCount: session.inheritedEventCount,
-      events: session.events,
-      durableThroughSeq: session.events.length - 1,
-      ownerEpoch: session.ownerEpoch,
-      handoffs: Object.fromEntries(session.handoffs),
-    }
+    const record = recordOf(session)
     let published = false
     try {
       if (this.failFlush?.(session) === true) throw new BackendError('E2E_INJECTED_SESSION_FLUSH_FAILURE', 'E2E injected Session flush failure', 503)
@@ -1853,7 +1899,33 @@ class FormalSessionStore {
       )
     }
     session.durableThroughSeq = record.durableThroughSeq
+    session.lastActivityAt = this.now()
     return `durable-${session.id}-${session.durableThroughSeq}`
+  }
+
+  /**
+   * Delete Sessions whose retention window elapsed and report their ids.
+   * @returns Removed Session ids in store order.
+   */
+  async purgeExpired() {
+    const removed = []
+    for (const session of [...this.sessions.values()]) {
+      if (!this.isExpired(session)) continue
+      this.sessions.delete(session.id)
+      this.locks.delete(session.id)
+      await rm(join(this.sessionsDir, `${session.id}.json`), { force: true })
+      removed.push(session.id)
+    }
+    return removed
+  }
+
+  /**
+   * Serialize one Session for an export bundle without owner leases.
+   * @param session - Stored Session record.
+   * @returns Durable Session record.
+   */
+  recordFor(session) {
+    return recordOf(session)
   }
 
   snapshot(session) {
@@ -1953,7 +2025,7 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
       if (limit === 0) throw new BackendError('INVALID_REQUEST', 'limit must be at least 1')
       const after = body.cursor === undefined ? undefined : sessionIdFromCatalogCursor(body.cursor, principalId)
       const sessions = [...store.sessions.values()]
-        .filter(session => session.principalId === principalId)
+        .filter(session => session.principalId === principalId && !store.isExpired(session))
         .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
       const page = sessions.filter(session => after === undefined || session.id > after).slice(0, limit)
       const snapshots = page.map(session => store.snapshot(session))
@@ -4750,6 +4822,7 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
       recordUsage({
         requestId: body.requestId,
         sessionId: body.sessionId,
+        at: Date.now(),
         ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
         provider: attempt.provider,
         attempt: index + 1,
@@ -5050,13 +5123,33 @@ export async function createBrowserNativeV2Server(options) {
     await rename(staging, authTokenPath)
     await chmod(authTokenPath, 0o600)
   }
+  const retentionDays = options.retentionDays === undefined ? 0 : options.retentionDays
+  if (typeof retentionDays !== 'number' || !Number.isFinite(retentionDays) || retentionDays < 0) {
+    throw new TypeError('retentionDays must be a non-negative finite number of days')
+  }
+  const retentionMs = Math.round(retentionDays * DAY_MS)
+  if (retentionDays > 0 && retentionMs < 1) throw new TypeError('retentionDays must be at least one millisecond')
+  const retentionSweepMs = options.retentionSweepMs === undefined
+    ? DEFAULT_RETENTION_SWEEP_MS : options.retentionSweepMs
+  if (!Number.isSafeInteger(retentionSweepMs) || retentionSweepMs < 250) {
+    throw new TypeError('retentionSweepMs must be an integer of at least 250')
+  }
+  const retentionClock = options.testHooks?.retentionNow ?? options.testHooks?.now ?? Date.now
   const store = new FormalSessionStore(options.dataDir, {
     ownerLeaseMs: options.ownerLeaseMs,
-    now: options.testHooks?.now,
+    now: options.testHooks?.now ?? options.testHooks?.retentionNow,
+    retentionMs,
     failFlush: options.testHooks?.failSessionFlush,
     failFlushAfterRename: options.testHooks?.failSessionFlushAfterRename,
   })
   await store.load()
+  if (retentionMs > 0) {
+    await store.purgeExpired()
+    await redactObservabilityJournal({
+      dataDir: options.dataDir,
+      shouldRemove: record => recordExpired(record, retentionClock() - retentionMs),
+    })
+  }
   const hostedAuth = options.hostedAuth === undefined ? undefined : createHostedAuthenticator(options.hostedAuth)
   const workspaces = new WorkspaceStore(options.dataDir, {
     writerLeaseMs: options.testHooks?.workspaceWriterLeaseMs,
@@ -5336,6 +5429,45 @@ export async function createBrowserNativeV2Server(options) {
   }
 
   /**
+   * Usage entries still inside the retention window. Reads use this even when
+   * the sweep has not run, so elapsed data cannot be read back.
+   * @returns Retained usage entries.
+   */
+  const retainedUsage = () => retentionMs === 0
+    ? usageAudit
+    : usageAudit.filter(entry => !recordExpired(entry, retentionClock() - retentionMs))
+
+  let lastRetentionSweep = {
+    at: retentionClock(),
+    cutoff: retentionMs === 0 ? undefined : retentionClock() - retentionMs,
+    sessions: [],
+    usageEntries: 0,
+    journal: { accessDenials: 0, usage: 0 },
+  }
+
+  /**
+   * Purge Sessions, usage entries, and observability records past the window.
+   * @returns Sweep summary with the removed Session ids and record counts.
+   */
+  const sweepRetention = async () => {
+    if (retentionMs === 0) return lastRetentionSweep
+    const cutoff = retentionClock() - retentionMs
+    const sessions = await store.purgeExpired()
+    const retained = usageAudit.filter(entry => !recordExpired(entry, cutoff))
+    const usageEntries = usageAudit.length - retained.length
+    usageAudit.splice(0, usageAudit.length, ...retained)
+    const journal = await observabilityJournal.redact(record => recordExpired(record, cutoff))
+    lastRetentionSweep = { at: retentionClock(), cutoff, sessions, usageEntries, journal }
+    return lastRetentionSweep
+  }
+  const retentionTimer = retentionMs === 0 ? undefined : setInterval(() => {
+    void sweepRetention().catch(error => {
+      process.stderr.write(`browser-native backend: retention sweep failed: ${String(error)}\n`)
+    })
+  }, retentionSweepMs)
+  retentionTimer?.unref()
+
+  /**
    * Serialize a Session and the attachments its log references from one Workspace.
    * @param session - Stored Session record.
    * @param workspaceId - Workspace that owns the attachment objects.
@@ -5547,15 +5679,45 @@ export async function createBrowserNativeV2Server(options) {
           return
         }
         const sessionId = url.searchParams.get('sessionId')
+        const entries = retainedUsage()
         sendJson(response, 200, {
-          entries: sessionId === null ? usageAudit : usageAudit.filter(entry => entry.sessionId === sessionId),
+          entries: sessionId === null ? entries : entries.filter(entry => entry.sessionId === sessionId),
         })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/retention') {
+        sendJson(response, 200, {
+          retentionDays,
+          sweepIntervalMs: retentionSweepMs,
+          lastSweep: lastRetentionSweep,
+        })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/principal-export') {
+        const principalId = workspaces.principalFromRequest(request)
+        const sessions = [...store.sessions.values()]
+          .filter(session => session.principalId === principalId && !store.isExpired(session))
+          .map(session => store.recordFor(session))
+        const usage = retainedUsage().filter(entry => entry.principalId === principalId)
+        const bundle = await buildPrincipalExport({
+          dataDir: options.dataDir,
+          principalId,
+          workspaceId: workspaces.workspaceIdForPrincipal(principalId),
+          sessions,
+          usage,
+          accessDenials: accessAuditEntries,
+          pricing: usagePricing,
+          model: llm.model,
+          now: retentionClock,
+        })
+        verifyPrincipalExport(bundle)
+        sendJson(response, 200, bundle)
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/usage-report') {
         const format = url.searchParams.get('format') ?? 'json'
         if (format !== 'json' && format !== 'csv') throw new BackendError('INVALID_REQUEST', 'format must be json or csv')
-        const report = buildUsageReport(usageAudit, { pricing: usagePricing, model: llm.model })
+        const report = buildUsageReport(retainedUsage(), { pricing: usagePricing, model: llm.model })
         if (format === 'csv') {
           const filename = `usage-report-${report.generatedAt.slice(0, 10)}.csv`
           response.writeHead(200, {
@@ -5586,7 +5748,7 @@ export async function createBrowserNativeV2Server(options) {
           if (!page.hasMore || page.events.length === 0) break
           offset += page.events.length
         }
-        const usage = supportBundleUsageSummary(usageAudit, sessionId)
+        const usage = supportBundleUsageSummary(retainedUsage(), sessionId)
         const accessDenials = accessAuditEntries
           .filter(entry => entry.resourceId === sessionId)
           .map(entry => ({ method: entry.method, route: entry.route, code: entry.code, status: entry.status }))
@@ -6625,6 +6787,7 @@ export async function createBrowserNativeV2Server(options) {
     close: async () => {
       try {
         if (attachmentGcSweepTimer !== undefined) clearInterval(attachmentGcSweepTimer)
+        if (retentionTimer !== undefined) clearInterval(retentionTimer)
         clearInterval(metricsSnapshotTimer)
         alertEvaluator.stop()
         for (const controller of workspaceDownloads.values()) controller.abort()

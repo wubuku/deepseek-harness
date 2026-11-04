@@ -61,6 +61,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
@@ -1457,6 +1458,26 @@ DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/
 ```
 
 边界：只覆盖一个 OpenAI-compatible 网关与一个模型；缓存字段由 provider 兼容层读取，网关不返回该字段时脚本在断言处失败而不是跳过；裁剪对比是单 turn 单工具结果，未覆盖并行工具与长会话累积裁剪；provider 侧缓存 TTL 与计费折扣不在测量范围。
+
+## 用户数据导出与保留策略
+
+[导出与保留策略](data-export-retention.md)新增 `GET /api/browser-native/workspace/principal-export`：用 Workspace principal cookie 返回 v1 bundle，包含该 principal 的 Session 全量事件、Workspace 元数据与 blob、附件字节、usage ledger、成本报表与归属自己的拒绝访问审计；每个附件与 blob 都带字节数、sha256 与 base64，bundle 自身有覆盖其余字段的摘要。导出前先跑 `verifyPrincipalExport`，校验方重新推导摘要、哈希、Session 归属、各类 counts 与成本请求数，任一不符即拒绝；路由放在 workspace 前缀下是因为 principal cookie 的 `Path` 限定在那里。
+
+保留期由 `createBrowserNativeV2Server({ retentionDays, retentionSweepMs })` 配置，按 Session 的 `lastActivityAt`（`max(header.createdAt, 文件 mtime, 最近 flush)`) 判定，usage 与审计记录按自身 `at` 判定。到期后读路径立即返回 410 `SESSION_EXPIRED`（`session/get`、`get-for-principal`、`list`、导出），`usage-audit`/`usage-report`/支持包摘要统一走 `retainedUsage()`；后台 sweep 删除 Session 文件、内存 usage 与 journal 中的过期行，启动时先清一次再按 `retentionSweepMs` 周期执行，`GET /api/browser-native/retention` 暴露最近一次 sweep 结果。
+
+`tests/principal-data.e2e.mjs` 用本地 OpenAI-compatible upstream 驱动真实 provider 客户端路径。Run A（关闭保留期）导出 alice 得到 `sessions=1`、`sessionEvents=18`、`workspaceBlobs=1`、`attachments=1`、usage 与 `/usage-audit` 的 `requestId` 集合一致、`cost.totals.requests=2`，bundle 不含 bob 的 principalId、Session、Workspace 或内容，篡改附件后校验失败。Run B（2 秒保留期）到期后读到 410 `SESSION_EXPIRED`、追加 410、导出与 `/usage-report` 均为 0，sweep 后 Session 文件 `ENOENT` 且 `usageEntries=2` 被删除。
+
+实测输出：`{"result":"passed","upstream":"local-openai-compatible","export":{"sessions":1,"sessionEvents":18,"workspaceBlobs":1,"attachments":1,"usageEntries":2,"costRequests":2,"digest":"68ddcad46bb1f9a4"},"retention":{"retentionDays":0.000023148148148148147,"sweepIntervalMs":5000,"readStatus":410,"readCode":"SESSION_EXPIRED","appendStatus":410,"exportSessions":0,"exportUsageEntries":0,"sweptUsageEntries":2,"reportRequests":0,"fileDeleted":true}}`。
+
+复跑：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/tests/principal-data.e2e.mjs
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs
+```
+
+边界：真实 provider 配额已耗尽（402），本项用本地 upstream，仍走完整 provider 客户端与 usage 解析；2 秒窗口是测试压缩时间；未覆盖跨进程并发 sweep、清理中崩溃、对象存储后端分段删除，以及导出包传输层加密与签名。删除 Session 不等于删除附件与 Workspace blob，文件对象由既有 GC 与 Workspace 生命周期管理。
 
 ## 权限预设与审批生命周期
 

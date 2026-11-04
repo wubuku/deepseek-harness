@@ -325,11 +325,32 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
     return chain
   }
 
+  /**
+   * Drop matching records and re-anchor both ledgers without racing appends.
+   * @param shouldRemove - Predicate receiving the record and ledger name.
+   * @returns Promise resolving to removed record counts per ledger.
+   */
+  const redact = shouldRemove => {
+    const run = chain.then(async () => {
+      tails.clear()
+      const removed = await redactObservabilityJournal({ dataDir, shouldRemove })
+      await Promise.all([ACCESS_DENIALS_FILE, USAGE_FILE].map(file => ensureTail(file)))
+      return removed
+    })
+    chain = run.then(() => undefined, error => {
+      healthy = false
+      writeFailures += 1
+      process.stderr.write(`browser-native observability: redaction failed: ${String(error)}\n`)
+    })
+    return run
+  }
+
   return {
     appendAccessDenial: entry => append(ACCESS_DENIALS_FILE, entry),
     appendUsage: entry => append(USAGE_FILE, entry),
     persistMetrics,
     restore,
+    redact,
     close: () => chain,
     status: () => ({ healthy, writeFailures, path: directory }),
   }
