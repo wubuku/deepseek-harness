@@ -56,6 +56,8 @@ const DATA_DIR_LOCK_NAME = '.browser-native-backend.lock'
 const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|api[-_]?key|access[-_]?key)/i
+/** Base64 image data URL produced by the Worker LLM adapter for provider-visible image blocks. */
+const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/
 const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 // `sec-fetch-mode` is excluded: Node's fetch sends `cors`, and a non-browser
@@ -2845,6 +2847,29 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     && typeof message.content === 'string'
     && !message.content.startsWith('Current runtime context.')
     && !message.content.startsWith('Time sampled while preparing turn'))?.content ?? ''
+  const imageMarker = 'BROWSER_NATIVE_IMAGE_APPLICATION_E2E'
+  const imagePrompt = [...messages].reverse().find(message => message.role === 'user'
+    && (typeof message.content === 'string' || Array.isArray(message.content))
+    && (typeof message.content === 'string'
+      ? message.content.includes(imageMarker)
+      : message.content.some(part => part?.type === 'text' && typeof part.text === 'string' && part.text.includes(imageMarker))))
+  if (imagePrompt !== undefined) {
+    const parts = Array.isArray(imagePrompt.content) ? imagePrompt.content : []
+    const imagePart = parts.find(part => part?.type === 'image_url' && typeof part.image_url?.url === 'string')
+    if (imagePart === undefined) {
+      scriptedText(response, 'BROWSER_NATIVE_IMAGE_APPLICATION_MISSING')
+      return
+    }
+    const match = IMAGE_DATA_URL.exec(imagePart.image_url.url)
+    if (match === null) {
+      scriptedText(response, 'BROWSER_NATIVE_IMAGE_APPLICATION_INVALID')
+      return
+    }
+    const bytes = Buffer.from(match[2], 'base64')
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    scriptedText(response, `BROWSER_NATIVE_IMAGE_APPLICATION_APPLIED:${match[1]}:${bytes.length}:${digest.slice(0, 16)}`)
+    return
+  }
   const skillPrompt = [...messages].reverse().find(message => message.role === 'user'
     && typeof message.content === 'string' && /BROWSER_NATIVE_SKILL_/.test(message.content))
   const skillMarker = typeof skillPrompt?.content === 'string'
@@ -4630,6 +4655,34 @@ function appendAnthropicMessage(messages, role, blocks) {
   else previous.content.push(...blocks)
 }
 
+/**
+ * Convert one Worker wire message body into Anthropic content blocks.
+ *
+ * The Worker emits a string for text-only messages and an OpenAI-shaped part
+ * array when the message carries images, so the same translator serves both
+ * request generations. Image parts become base64 image sources; a URL that is
+ * not a base64 data URL is rejected instead of sending a reference the provider
+ * could fetch.
+ * @param {string | readonly object[]} content - Worker wire content.
+ * @returns {object[]} Anthropic text and image blocks in wire order.
+ */
+function anthropicContentBlocks(content) {
+  if (typeof content === 'string') return content.length > 0 ? [{ type: 'text', text: content }] : []
+  if (!Array.isArray(content)) return []
+  const blocks = []
+  for (const part of content) {
+    if (part.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
+      blocks.push({ type: 'text', text: part.text })
+      continue
+    }
+    if (part.type !== 'image_url' || typeof part.image_url?.url !== 'string') continue
+    const match = IMAGE_DATA_URL.exec(part.image_url.url)
+    if (match === null) throw new BackendError('INVALID_REQUEST', 'image_url must be a base64 data URL for an Anthropic provider')
+    blocks.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } })
+  }
+  return blocks
+}
+
 /** Translate the Worker's OpenAI-shaped wire request into an Anthropic Messages body. */
 function anthropicRequestBody(config, body) {
   const system = []
@@ -4647,8 +4700,7 @@ function anthropicRequestBody(config, body) {
       }])
       continue
     }
-    const blocks = []
-    if (typeof message.content === 'string' && message.content.length > 0) blocks.push({ type: 'text', text: message.content })
+    const blocks = anthropicContentBlocks(message.content)
     for (const call of message.tool_calls ?? []) {
       blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: anthropicToolInput(call.function.arguments) })
     }
@@ -5063,13 +5115,16 @@ async function runLlmAttempt(response, request, config, body, { canRetry }) {
       }
     : undefined)
   const timeoutFailure = () => new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM did not respond within ${config.timeoutMs}ms`, 504)
+  // Serialize before the transport try so a malformed wire message reports a
+  // request error rather than an unreachable upstream.
+  const upstreamBody = JSON.stringify(config.kind === 'anthropic' ? anthropicRequestBody(config, body) : openAiRequestBody(config, body))
   let upstream
   try {
     try {
       upstream = await fetch(config.url, {
         method: 'POST',
         headers: upstreamHeaders(config),
-        body: JSON.stringify(config.kind === 'anthropic' ? anthropicRequestBody(config, body) : openAiRequestBody(config, body)),
+        body: upstreamBody,
         signal: controller.signal,
       })
     } catch (error) {

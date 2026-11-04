@@ -3223,3 +3223,20 @@ syncReplaySteps: 上游同步后重建 preview 并复跑该 E2E；若探针命�
 deleteCondition: 服务端全文索引接管跨 Session 检索并有等效正确性与时延验证；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-155：图片附件从上传到模型输入与历史渲染
+
+```text
+changeId: BN-P2-155
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-attachments.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/image-attachment.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/image-attachment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: PoC 的图片附件此前全部显式拒绝：附件存储 `validateImage`/`saveImage`/`readImage` 抛 `ATTACHMENT_FILES_UNSUPPORTED`，Worker LLM adapter 把 image block 扁平化为 `'[image]'`，backend 的 Anthropic 翻译只接受字符串 content。composer 已能编码图片，但提交必然失败，历史图片也无法渲染。
+existingExtensionPointsChecked: 复用 `packages/attachment/attachment` 的 `AttachmentStore` 抽象（`validateImage`/`saveImage`/`readImage`，`readImageRequest` 保持默认拒绝）、`ImageBlock`/`ImageAttachmentRef` 持久化类型、composer 既有 base64 提交、`uiConversation.imageUrl` → `readAttachment` 渲染路径、PoC 同源附件对象存储；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 composer 上传、真实 Session 持久化、真实 LLM 请求序列化与刷新后重新读取，才能证明图片字节确实到达 provider 并可重建；静态检查无法覆盖 OPFS 清空后的补水与 data URL 编码。
+behaviorChange: 浏览器附件服务新增 PNG/JPEG/GIF/WebP 头解析与图片上限（单张 20 MiB、单消息 20 张/200 MiB、64M 像素、单边 8192 px），实现 `saveImage`（OPFS staging、sha256 对象上传、VFS 挂载）与 `readImage`（哈希与头信息复核）。Worker LLM adapter 按 `ImageAttachmentRef` 读取字节并发出 OpenAI 风格 `image_url` data URL；插件的 `attachments` 服务在请求时解析，避免启动顺序依赖。backend 为 Anthropic 端点新增 image block 翻译，非 data URL 返回 400 `INVALID_REQUEST` 且不发往上游；请求体改为在传输 try 之外序列化，避免把请求错误误报为 502。
+consumersUpdated: 新增 `tests/image-attachment.e2e.mjs`（scripted 与 real 两种模式）、`tests/backend-v2.test.mjs` 的 Anthropic 图片翻译合同测试、`image-attachment.md`、PoC README 导航与章节（并修正“图片附件不支持”的旧描述）、本 ledger。
+tests: 先 `pnpm run build:artifacts`，再 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，随后 `pnpm run build:check` 通过。`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/image-attachment.e2e.mjs` 通过：64×64 红色 PNG（1108 bytes、sha256 `ae3d34b5c7347b5a…`），upload receipt 为 `{attachmentId: sha256:ae3d34b5…, name: ae3d34b5c7347b5a.png, bytes: 1108}`，Session 持久化 1 条 `ImageBlock`（`image/png`、64×64），LLM `image_url` base64 解码哈希与上传一致，assistant 为 `BROWSER_NATIVE_IMAGE_APPLICATION_APPLIED:image/png:1108:ae3d34b5c7347b5a`，转录渲染 64×64 且哈希一致；清空 OPFS 后刷新续发一轮，同一 Session 触发 1 次附件 GET 补水并以相同字节渲染，图片事件仍为 1 条；页面错误 0、跨源请求 0。`DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env`（`OPENAI_*` OpenAI-compatible 端点）真实视觉回答 `Red`。`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 72 项全部通过，其中新增 Anthropic 合同测试断言上游收到 `{type:'image', source:{type:'base64', media_type:'image/png', data}}`，并确认非 data URL 返回 400 且上游请求数保持 1。
+syncReplaySteps: 上游同步后重建 `build:artifacts` 与 preview，复跑图片 E2E（scripted + real）与 backend 合同测试；若 `AttachmentStore` 抽象或 `ImageBlock` 类型变化，同步更新浏览器实现与本文档。
+deleteCondition: 正式浏览器附件提供等价的图片校验、对象持久化与历史渲染能力，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

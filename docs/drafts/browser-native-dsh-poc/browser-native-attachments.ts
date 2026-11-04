@@ -1,9 +1,8 @@
 import { requireActiveModuleLoader, type StaticModuleFactory } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  FileAttachmentRef, ImageAttachmentLimits, ImageAttachmentRef, ImageRequestTarget,
-  RequestImageAttachment, SaveFileAttachment, SaveFileStreamAttachment, SaveImageAttachment,
-  StoredImageAttachment,
+  FileAttachmentRef, ImageAttachmentLimits, ImageAttachmentRef, SaveFileAttachment, SaveFileStreamAttachment,
+  SaveImageAttachment, StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import { MemoryVfs } from '../../../packages/experimental/webworker-runtime/src/storage/memory.ts'
 import type { BrowserNativeWorkspaceRuntime } from './browser-native-workspace.ts'
@@ -122,6 +121,124 @@ function assertFileReference(value: FileAttachmentRef): string {
 function filePath(ref: FileAttachmentRef): string {
   const hash = assertFileReference(ref)
   return `/dsh/home/attachments/v1/files/${hash.slice(0, 2)}/${hash}/${ref.name}`
+}
+
+const IMAGE_LIMITS: ImageAttachmentLimits = {
+  maxImageBytes: 20 * 1024 * 1024,
+  maxImagesPerMessage: 20,
+  maxMessageImageBytes: 200 * 1024 * 1024,
+  maxImagePixels: 64_000_000,
+  maxImageDimension: 8192,
+  mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+}
+
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+interface ParsedImage {
+  readonly mediaType: string
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * Header-only image probe: no decode, so stored bytes stay byte-identical to
+ * the upload. Returns `undefined` for an unrecognized container.
+ */
+function parseImageBytes(data: Uint8Array): ParsedImage | undefined {
+  const png = data.length >= 26 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
+  if (png) {
+    return {
+      mediaType: 'image/png',
+      width: readUint32(data, 16),
+      height: readUint32(data, 20),
+    }
+  }
+  if (data.length >= 4 && data[0] === 0xff && data[1] === 0xd8) {
+    let offset = 2
+    while (offset + 9 < data.length) {
+      if (data[offset] !== 0xff) {
+        offset += 1
+        continue
+      }
+      const marker = data[offset + 1]
+      if (marker === undefined) break
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return {
+          mediaType: 'image/jpeg',
+          width: readUint16(data, offset + 7),
+          height: readUint16(data, offset + 5),
+        }
+      }
+      const length = readUint16(data, offset + 2)
+      if (length < 2) break
+      offset += 2 + length
+    }
+  }
+  if (data.length >= 10 && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) {
+    return {
+      mediaType: 'image/gif',
+      width: readUint16LittleEndian(data, 6),
+      height: readUint16LittleEndian(data, 8),
+    }
+  }
+  if (data.length >= 30 && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) {
+    const chunk = String.fromCharCode(data[12] ?? 0, data[13] ?? 0, data[14] ?? 0, data[15] ?? 0)
+    if (chunk === 'VP8X') {
+      return {
+        mediaType: 'image/webp',
+        width: readUint24LittleEndian(data, 24) + 1,
+        height: readUint24LittleEndian(data, 27) + 1,
+      }
+    }
+    if (chunk === 'VP8L' && data.length >= 26) {
+      const b1 = data[21] ?? 0
+      const b2 = data[22] ?? 0
+      const b3 = data[23] ?? 0
+      const b4 = data[24] ?? 0
+      const bits = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)
+      return {
+        mediaType: 'image/webp',
+        width: (bits & 0x3fff) + 1,
+        height: ((bits >>> 14) & 0x3fff) + 1,
+      }
+    }
+    if (chunk === 'VP8 ' && data[23] === 0x9d && data[24] === 0x01 && data[25] === 0x2a) {
+      return {
+        mediaType: 'image/webp',
+        width: readUint16LittleEndian(data, 26) & 0x3fff,
+        height: readUint16LittleEndian(data, 28) & 0x3fff,
+      }
+    }
+  }
+  return undefined
+}
+
+function readUint16(data: Uint8Array, offset: number): number {
+  return ((data[offset] ?? 0) << 8) | (data[offset + 1] ?? 0)
+}
+
+function readUint16LittleEndian(data: Uint8Array, offset: number): number {
+  return ((data[offset + 1] ?? 0) << 8) | (data[offset] ?? 0)
+}
+
+function readUint24LittleEndian(data: Uint8Array, offset: number): number {
+  return (data[offset] ?? 0) | ((data[offset + 1] ?? 0) << 8) | ((data[offset + 2] ?? 0) << 16)
+}
+
+function readUint32(data: Uint8Array, offset: number): number {
+  return (((data[offset] ?? 0) << 24) | ((data[offset + 1] ?? 0) << 16)
+    | ((data[offset + 2] ?? 0) << 8) | (data[offset + 3] ?? 0)) >>> 0
+}
+
+function imageObjectName(ref: ImageAttachmentRef): string {
+  const hash = String(ref.attachmentId).slice('sha256:'.length)
+  return fileLeafName(`${hash.slice(0, 16)}.${IMAGE_EXTENSIONS[ref.mediaType] ?? 'bin'}`)
 }
 
 function temporaryFileLockName(workspaceId: string, fileName: string): string {
@@ -282,33 +399,96 @@ export function createBrowserNativeAttachmentModule(
     if (!(vfs instanceof MemoryVfs)) throw new Error('browser-native attachments: Worker VFS runtime identity differs')
 
     class BrowserNativeAttachmentStore extends AttachmentStore {
-      override readonly imageLimits: ImageAttachmentLimits = {
-        maxImageBytes: 1,
-        maxImagesPerMessage: 1,
-        maxMessageImageBytes: 1,
-        maxImagePixels: 1,
-        maxImageDimension: 1,
-        mediaTypes: [],
-      }
+      override readonly imageLimits: ImageAttachmentLimits = IMAGE_LIMITS
 
       constructor(ctx: Context) {
         super(ctx)
       }
 
+      /** Reject bytes without a supported container header before any storage write. */
+      private parseImage(data: Uint8Array): ParsedImage {
+        const parsed = parseImageBytes(data)
+        if (parsed === undefined) {
+          throw new AttachmentError('Uploaded image has no recognizable PNG, JPEG, WebP or GIF header.', 'INVALID_IMAGE')
+        }
+        return parsed
+      }
+
       override async validateImage(input: SaveImageAttachment): Promise<void> {
-        void input
-        throw new AttachmentError('Browser-native PoC does not support image attachments.', 'ATTACHMENT_FILES_UNSUPPORTED')
+        const parsed = this.parseImage(input.data)
+        if (parsed.mediaType !== input.mediaType) {
+          throw new AttachmentError(`Uploaded image bytes are ${parsed.mediaType}, not ${input.mediaType}.`, 'IMAGE_TYPE_MISMATCH')
+        }
+        if (input.data.byteLength > this.imageLimits.maxImageBytes) {
+          throw new AttachmentError('Image exceeds the per-image byte limit.', 'IMAGE_TOO_LARGE')
+        }
+        if (parsed.width > this.imageLimits.maxImageDimension || parsed.height > this.imageLimits.maxImageDimension) {
+          throw new AttachmentError('Image exceeds the per-side pixel limit.', 'IMAGE_DIMENSION_TOO_LARGE')
+        }
+        if (parsed.width * parsed.height > this.imageLimits.maxImagePixels) {
+          throw new AttachmentError('Image exceeds the intrinsic pixel budget.', 'IMAGE_TOO_MANY_PIXELS')
+        }
       }
 
       override async saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
-        void input
-        throw new AttachmentError('Browser-native PoC does not support image attachments.', 'ATTACHMENT_FILES_UNSUPPORTED')
+        input.signal?.throwIfAborted()
+        const parsed = this.parseImage(input.data)
+        if (parsed.mediaType !== input.mediaType) {
+          throw new AttachmentError(`Uploaded image bytes are ${parsed.mediaType}, not ${input.mediaType}.`, 'IMAGE_TYPE_MISMATCH')
+        }
+        const workspaceId = workspaceIdOf(workspace)
+        const directory = await opfsWorkspace(workspaceId)
+        const temporaryName = `upload-${crypto.randomUUID()}`
+        return await withTemporaryFileLock(workspaceId, temporaryName, async () => {
+          const temporary = await directory.directory.getFileHandle(temporaryName, { create: true })
+          const stored = await writeStreamToOpfs(
+            directory.directory,
+            temporary,
+            (async function* (): AsyncGenerator<Uint8Array> { yield input.data })(),
+            input.signal,
+            testHooks.afterOpfsStagingWrite,
+          )
+          const ref: ImageAttachmentRef = {
+            attachmentId: AttachmentId(`sha256:${stored.hash}`),
+            mediaType: input.mediaType,
+            bytes: stored.bytes,
+            width: parsed.width,
+            height: parsed.height,
+          }
+          const fileRef: FileAttachmentRef = {
+            attachmentId: ref.attachmentId,
+            name: imageObjectName(ref),
+            bytes: stored.bytes,
+          }
+          const object = await publishLocalObject(directory, temporary, stored.hash, stored.bytes)
+          await uploadObject(workspaceId, object, fileRef, input.signal)
+          await mountFile(directory, fileRef, stored.hash)
+          return ref
+        })
       }
 
       override async readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> {
-        void ref
         signal?.throwIfAborted()
-        throw new AttachmentError('Browser-native PoC does not support image attachments.', 'ATTACHMENT_FILES_UNSUPPORTED')
+        const fileRef: FileAttachmentRef = {
+          attachmentId: ref.attachmentId,
+          name: imageObjectName(ref),
+          bytes: ref.bytes,
+        }
+        await ensureAttachmentFile(fileRef, signal)
+        const directory = await opfsWorkspace(workspaceIdOf(workspace))
+        const object = await directory.directory.getFileHandle(assertFileReference(fileRef))
+        const data = new Uint8Array(await (await object.getFile()).arrayBuffer())
+        signal?.throwIfAborted()
+        const digest = new Sha256()
+        digest.update(data)
+        if (data.byteLength !== ref.bytes || digest.digestHex() !== String(ref.attachmentId).slice('sha256:'.length)) {
+          throw new AttachmentError('Stored browser image failed integrity verification.', 'ATTACHMENT_CORRUPT')
+        }
+        const parsed = this.parseImage(data)
+        if (parsed.mediaType !== ref.mediaType || parsed.width !== ref.width || parsed.height !== ref.height) {
+          throw new AttachmentError('Stored browser image metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
+        }
+        return { ref, data }
       }
 
       override async saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef> {
@@ -380,17 +560,6 @@ export function createBrowserNativeAttachmentModule(
       override imageHostPath(ref: ImageAttachmentRef): undefined {
         void ref
         return undefined
-      }
-
-      override readImageRequest(
-        ref: ImageAttachmentRef,
-        target: ImageRequestTarget,
-        signal?: AbortSignal,
-      ): Promise<RequestImageAttachment> {
-        void ref
-        void target
-        signal?.throwIfAborted()
-        return Promise.reject(new AttachmentError('Browser-native PoC does not support image attachments.', 'ATTACHMENT_FILES_UNSUPPORTED'))
       }
     }
 

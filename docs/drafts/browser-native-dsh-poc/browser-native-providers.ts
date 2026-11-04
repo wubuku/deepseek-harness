@@ -19,6 +19,7 @@ import type {
   StreamChunk,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-tool-skill'
 import type {
   SessionEvent,
@@ -1170,14 +1171,40 @@ function textFromContent(content: RequestMessage['content']): string {
   }).join('')
 }
 
+interface WireTextPart {
+  readonly type: 'text'
+  readonly text: string
+}
+
+interface WireImagePart {
+  readonly type: 'image_url'
+  readonly image_url: { readonly url: string }
+}
+
+type WireContentPart = WireTextPart | WireImagePart
+
 interface WireMessage {
   readonly role: string
-  readonly content: string
+  readonly content: string | readonly WireContentPart[]
   readonly tool_calls?: readonly { readonly id: string; readonly type: 'function'; readonly function: { readonly name: string; readonly arguments: string } }[]
   readonly tool_call_id?: string
 }
 
-function toWireMessage(message: RequestMessage): WireMessage {
+/** Base64 for a request image; the OpenAI-compatible wire carries data URLs. */
+function base64FromBytes(data: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let offset = 0; offset < data.length; offset += chunk) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + chunk))
+  }
+  return btoa(binary)
+}
+
+async function toWireMessage(
+  message: RequestMessage,
+  readImage: ((ref: ImageAttachmentRef, signal?: AbortSignal) => Promise<StoredImageAttachment>) | undefined,
+  signal: AbortSignal | undefined,
+): Promise<WireMessage> {
   const toolCalls = typeof message.content === 'string' ? [] : message.content
     .filter(block => block.type === 'tool-call')
     .map(block => ({
@@ -1192,9 +1219,32 @@ function toWireMessage(message: RequestMessage): WireMessage {
       tool_call_id: message.source.callId,
     }
   }
+  const images = typeof message.content === 'string'
+    ? []
+    : message.content.filter(block => block.type === 'image' && block.offloaded !== true)
+  if (images.length === 0 || readImage === undefined) {
+    return {
+      role: message.role,
+      content: textFromContent(message.content),
+      ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
+    }
+  }
+  const textBlocks = typeof message.content === 'string'
+    ? message.content
+    : message.content.filter(block => !(block.type === 'image' && block.offloaded !== true))
+  const text = textFromContent(textBlocks)
+  const parts: WireContentPart[] = text.length === 0 ? [] : [{ type: 'text', text }]
+  for (const block of images) {
+    if (block.type !== 'image') continue
+    const stored = await readImage(block.attachment, signal)
+    parts.push({
+      type: 'image_url',
+      image_url: { url: `data:${block.attachment.mediaType};base64,${base64FromBytes(stored.data)}` },
+    })
+  }
   return {
     role: message.role,
-    content: textFromContent(message.content),
+    content: parts,
     ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
   }
 }
@@ -1253,6 +1303,7 @@ function createRemoteLlmAdapterClass(
   publication: BrowserNativeCapabilityPublication,
   budget?: BrowserNativeTokenBudgetProbe,
   declaredWindow?: number,
+  readImage?: (ref: ImageAttachmentRef, signal?: AbortSignal) => Promise<StoredImageAttachment>,
 ): typeof import('@deepseek-ai/dsh-llm').LlmAdapter {
   const Base = runtimeLlm().LlmAdapter
   return class RemoteLlmAdapter extends Base {
@@ -1314,9 +1365,11 @@ function createRemoteLlmAdapterClass(
             provider: options.provider,
             model: options.model,
             ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
-            messages: options.messages
-              .filter(message => publication.isToolPublished('skill') || !isSkillCatalogMessage(message))
-              .map(toWireMessage),
+            messages: await Promise.all(
+              options.messages
+                .filter(message => publication.isToolPublished('skill') || !isSkillCatalogMessage(message))
+                .map(message => toWireMessage(message, readImage, options.signal)),
+            ),
             tools: toWireTools(options.tools, publication),
             temperature: options.temperature,
             maxTokens: options.maxTokens,
@@ -1424,11 +1477,21 @@ function createSessionModule(
 function createLlmModule(publication: BrowserNativeCapabilityPublication, budget?: BrowserNativeTokenBudgetProbe): unknown {
   let module: unknown
   return () => {
-    const RemoteLlmAdapter = createRemoteLlmAdapterClass(publication, budget)
     module ??= {
       default: (ctx: Context, config: unknown): void => {
         const declared = declaredContextWindow(config)
-        const Adapter = declared === undefined ? RemoteLlmAdapter : createRemoteLlmAdapterClass(publication, budget, declared)
+        const Adapter = createRemoteLlmAdapterClass(
+          publication,
+          budget,
+          declared,
+          async (ref, signal) => {
+            // The plugin activates before the attachments static module in some
+            // boot orders, so resolve the service at request time.
+            const attachments = ctx.get('attachments')
+            if (attachments === undefined) throw new Error('browser-native LLM: attachments service is unavailable')
+            return await attachments.readImage(ref, signal)
+          },
+        )
         const adapter = new Adapter()
         ctx.effect(() => ctx.llm.registerAdapter(['browser-native'], adapter))
         const controlledAgents = new Set<string>()
@@ -1463,7 +1526,6 @@ function createLlmModule(publication: BrowserNativeCapabilityPublication, budget
           controlledAgents.delete(String(agent.id))
         })
       },
-      RemoteLlmAdapter,
     }
     return module
   }

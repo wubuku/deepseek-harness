@@ -3161,6 +3161,87 @@ describe('browser-native DSH v2 backend', () => {
     }
   })
 
+  it('translates provider image parts into Anthropic image blocks and rejects non-data URLs', async () => {
+    const upstreamBodies = []
+    const upstream = createServer(async (request, response) => {
+      let text = ''
+      for await (const chunk of request) text += chunk
+      upstreamBodies.push(JSON.parse(text))
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end([
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":1}}}',
+        '',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        '',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ANTHROPIC_IMAGE_CONTRACT_OK"}}',
+        '',
+        'data: {"type":"content_block_stop","index":0}',
+        '',
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":1}}',
+        '',
+        'data: {"type":"message_stop"}',
+        '',
+      ].join('\n'))
+    })
+    const upstreamOrigin = await listen(upstream)
+    try {
+      const envFile = await temporaryDirectory('browser-native-v2-env-').then(async directory => {
+        const file = join(directory, '.env')
+        await writeFile(file, [
+          `ANTHROPIC_BASE_URL=${upstreamOrigin}`,
+          'ANTHROPIC_MODEL=contract-vision-model',
+          `ANTHROPIC_${'API_KEY'}=contract-secret`,
+          'HTTPS_PROXY=',
+          '',
+        ].join('\n'))
+        return file
+      })
+      const dataDir = await temporaryDirectory()
+      const { origin } = await start({ dataDir, llmMode: 'real', llmProviderKind: 'anthropic', envFile })
+
+      const encoded = 'iVBORw0KGgoAAAANSUhEUg'
+      const response = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-anthropic-image', {
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: 'ANTHROPIC_IMAGE_CONTRACT_PROMPT' },
+              { type: 'image_url', image_url: { url: `data:image/png;base64,${encoded}` } },
+            ],
+          }],
+        })),
+      })
+      const items = await readNdjson(response)
+      assert.equal(items.some(item => item.kind === 'error'), false)
+      assert.match(items.map(item => item.chunk?.text ?? item.chunk?.block?.text ?? '').join(''), /ANTHROPIC_IMAGE_CONTRACT_OK/)
+      assert.equal(JSON.stringify(upstreamBodies[0]).includes('contract-secret'), false)
+      const user = upstreamBodies[0].messages.find(message => message.role === 'user')
+      assert.deepEqual(user.content, [
+        { type: 'text', text: 'ANTHROPIC_IMAGE_CONTRACT_PROMPT' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: encoded } },
+      ])
+
+      const rejected = await fetch(`${origin}/api/browser-native/llm`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope('llm-anthropic-image-url', {
+          messages: [{
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: 'https://example.com/insecure.png' } }],
+          }],
+        })),
+      })
+      assert.equal(rejected.status, 400)
+      const errorBody = await rejected.json()
+      assert.equal(errorBody.error.code, 'INVALID_REQUEST')
+      assert.equal(upstreamBodies.length, 1, 'a rejected image must never reach the upstream')
+    } finally {
+      await close(upstream)
+    }
+  })
+
   it('reports a severed upstream stream as a typed error after the partial chunks', async () => {
     const upstream = createServer(async (request, response) => {
       for await (const _chunk of request) { /* consume the proxied body */ }

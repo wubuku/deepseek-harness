@@ -58,7 +58,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | --- | --- |
 | 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
-| 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
+| 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[多模态图片附件](image-attachment.md)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
@@ -268,7 +268,13 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env \
   node docs/drafts/browser-native-dsh-poc/tests/browser-native-file-attachment.e2e.mjs
 ```
 
-附件大小上限为 PoC 64 MiB，图片附件不支持；8 MiB 以上走分片上传，但没有刷新后续传、分片独立摘要、配额账本或多实例并发验证。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断、Session append 响应丢失，以及 OPFS staging 和 backend 对象发布前/后的 composer remove。自然 eviction、自然网络中断、OS/磁盘崩溃、多设备恢复和大附件真实 LLM 尚未验证；发布后取消留下的对象尚无安全 GC。
+附件大小上限为 PoC 64 MiB；图片附件已支持（单张 20 MiB、单消息 20 张与 200 MiB、64,000,000 像素、单边 8192 px），见[多模态图片附件](image-attachment.md)；8 MiB 以上走分片上传，但没有刷新后续传、分片独立摘要、配额账本或多实例并发验证。后端对象位于本机 `dataDir`，没有对象 GC、生产云存储或生产身份认证；OPFS 是可清除缓存，后台对象与 Session/FileBlock 不构成跨存储事务。当前引用从浏览器 Workspace 身份确定附件命名空间；切换 Workspace 身份后打开旧 Session 会在缺少对象时显式失败。Chrome 定向测试覆盖 OPFS quota 拒绝、backend 503、对象发布后响应截断、Session append 响应丢失，以及 OPFS staging 和 backend 对象发布前/后的 composer remove。自然 eviction、自然网络中断、OS/磁盘崩溃、多设备恢复和大附件真实 LLM 尚未验证；发布后取消留下的对象尚无安全 GC。
+
+## 多模态图片附件
+
+[多模态图片附件](image-attachment.md) 补齐图片从 composer 到模型再到历史渲染的完整链路。composer 把图片编码为 base64 提交；Worker 的附件服务校验媒体类型、字节、尺寸与像素上限，写入 OPFS、按 `sha256` 上传同源 backend 对象并挂载为 VFS 文件；Session 只持久化 `ImageBlock`，图片不进入 Workspace manifest 或 revision。Worker LLM adapter 每次请求按 `ImageAttachmentRef` 调 `readImage`，拼成 OpenAI 风格 `image_url` data URL；backend 对 OpenAI-compatible 端点原样转发，对 Anthropic 端点翻译为 base64 image block，非 data URL 以 `INVALID_REQUEST` 拒绝且不触达上游。
+
+历史渲染经 `uiConversation.imageUrl` → `readAttachment` → `readImage`，因此刷新或 OPFS 清空后仍能从 backend 对象重建。实测：真实 composer 上传 64×64 红色 PNG（1108 bytes、`sha256:ae3d34b5…`），scripted 断言 upload receipt、Session `ImageBlock`、LLM 请求字节哈希与 assistant 标记一致；清空 OPFS 后刷新续发一轮，同一 Session 触发 1 次附件 GET 补水并以相同字节渲染，图片事件仍只有 1 条；`OPENAI_*` 真实视觉端点对同一图片回答 `Red`。Anthropic 翻译由 backend 合同测试覆盖（image block 结构与 400 `INVALID_REQUEST`）。
 
 ## 可写 chunk-backed 编辑验证
 
