@@ -3121,3 +3121,20 @@ syncReplaySteps: 上游同步后核对 Session fork 的 `inheritCount`/`end-seed
 deleteCondition: 正式 DSH 提供被测 UI 可用的分支/回滚并覆盖等效一致性；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-149：300 turn 长会话的历史搜索、方向跳转、过程折叠与回到最新
+
+```text
+changeId: BN-P2-149
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/long-session-usability.e2e.mjs; docs/drafts/browser-native-dsh-poc/long-session-usability.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有长转录验证只测滚动、DOM 与流式追加成本，没有证明 300 turn 下读者真正使用的四个动作是否可用：搜索已被窗口隐藏的历史、跳转到已加载与窗口外的 turn、折叠工具输出、从远处回到最新。
+existingExtensionPointsChecked: 复用已发布的 `ui-chat` 转录窗口（150 turn）、轮次导航虚拟轨道、`data-turn-process` 过程折叠与 `Back to bottom`；复用 PoC session-query 测试入口 `linear-fallback` 路径、`interaction` composer 与 scripted backend 的 `BROWSER_NATIVE_PRINCIPAL_SCOPE_B` 工具调用。未修改 `packages/`、Agent Loop、Session 格式或默认 profile。
+whyDraftOnlyWasInsufficient: 静态检查无法给出 300 turn 下的实际落位延迟、历史搜索耗时、折叠后的可见文本变化，也无法量化“跳到窗口外 turn 会展开整个后缀”的 DOM 代价。
+behaviorChange: 仅新增 validation E2E 与文档，产品行为不变。
+consumersUpdated: 300 turn 可用性 E2E、PoC README 性能表与章节、本 ledger。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`（复用既有产物）后执行 `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/long-session-usability.e2e.mjs` 通过。300 turn 中位 671 ms、最大 1,220 ms；历史搜索在 turn 1 被窗口隐藏时命中 4 条、服务内 24.3 ms；已加载跳转 26 ms、未加载跳转 99 ms（1 个 89 ms 长任务）、展开/折叠 59/57 ms、回到最新 128 ms；DOM 8,239 → 14,924 → 14,923，隐藏 turn 150 → 19 → 19；页面错误与跨源请求 0。浏览器内 SQLite 索引不可用（`node:sqlite.DatabaseSync is not available`），搜索走 `linear-fallback`。
+syncReplaySteps: 上游同步后核对转录窗口 floor、轮次导航 `Load and jump to turn` 标签、`data-turn-process` 折叠属性和 `Back to bottom` 文案；复跑本 E2E 与 `long-transcript-rendering.e2e.mjs`。若窗口改为按目标附近收敛，删除“回到最新后仍保持展开”的断言并更新文档边界。
+deleteCondition: 正式产品 UI 提供等效的历史搜索、方向跳转、过程折叠与回到最新并有长会话性能证据；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
