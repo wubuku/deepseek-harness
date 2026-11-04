@@ -29,6 +29,7 @@ import { SessionShareError, SessionShareStore } from './session-shares.mjs'
 import { buildTraceReport, traceIdFor } from './subagent-trace.mjs'
 import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
+import { assertDataFormatReadable } from './hosted/data-format.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -5596,6 +5597,7 @@ export async function createBrowserNativeV2Server(options) {
   if (workspaceDownloadTimeoutMs > 2_147_483_647) {
     throw new TypeError('workspaceDownloadTimeoutMs exceeds the Node timer limit')
   }
+  await assertDataFormatReadable(options.dataDir)
   const dataDirLock = await acquireDataDirLock(options.dataDir)
   let released = false
   const releaseDataDirLock = async () => {

@@ -12,6 +12,7 @@ import { createReadStream, existsSync } from 'node:fs'
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { inspectDataDirectory } from './check-data.mjs'
+import { readDataFormat } from './data-format.mjs'
 
 /** Bundle protocol identifier recorded in the manifest. */
 export const BACKUP_PROTOCOL = 'dsh-browser-native-data-backup/1'
@@ -105,6 +106,7 @@ export async function exportDataDir({ dataDir, outputDir }) {
   const manifest = {
     protocol: BACKUP_PROTOCOL,
     createdAt: new Date().toISOString(),
+    dataset: await readDataFormat(source),
     files: [],
     stores: await summarizeStores(source, files),
   }
@@ -157,6 +159,9 @@ async function readManifest(bundleDir) {
     if (duplicates.has(entry.path)) throw new BackupError('INVALID_BACKUP', `manifest lists ${entry.path} twice`)
     duplicates.add(entry.path)
   }
+  if (manifest.dataset !== undefined && (!Number.isSafeInteger(manifest.dataset?.version) || manifest.dataset.version < 1)) {
+    throw new BackupError('INVALID_BACKUP', 'manifest dataset record has no valid version')
+  }
   return manifest
 }
 
@@ -178,6 +183,19 @@ async function verifyBundleFiles(bundleDir, manifest) {
 }
 
 /**
+ * Verify a bundle's manifest and file digests without writing anything.
+ * @param bundleDir - Backup bundle directory.
+ * @returns {Promise<object>} Verified manifest.
+ */
+export async function inspectBackupManifest(bundleDir) {
+  const bundle = resolve(bundleDir)
+  if (!existsSync(bundle)) throw new BackupError('BUNDLE_MISSING', `no backup bundle at ${bundle}`)
+  const manifest = await readManifest(bundle)
+  await verifyBundleFiles(bundle, manifest)
+  return manifest
+}
+
+/**
  * Restore a bundle into a new empty data directory.
  *
  * Compatibility is checked on the verified bundle before writing, so an
@@ -189,9 +207,7 @@ async function verifyBundleFiles(bundleDir, manifest) {
 export async function importDataDir({ bundleDir, dataDir }) {
   const bundle = resolve(bundleDir)
   const target = resolve(dataDir)
-  if (!existsSync(bundle)) throw new BackupError('BUNDLE_MISSING', `no backup bundle at ${bundle}`)
-  const manifest = await readManifest(bundle)
-  await verifyBundleFiles(bundle, manifest)
+  const manifest = await inspectBackupManifest(bundle)
   const compatibility = await inspectDataDirectory(join(bundle, FILES_DIRECTORY))
   if (!compatibility.compatible) {
     throw new BackupError('INCOMPATIBLE_BACKUP', 'the bundle records a Session or metadata version this build cannot read')

@@ -140,11 +140,11 @@ nginx 的 upstream 写成 `backend:4185`；容器部署时给 backend 容器加�
    node docs/drafts/browser-native-dsh-poc/hosted/check-data.mjs --data-dir /srv/browser-native-dsh-data
    ```
 
-   输出逐项列出 Session 日志格式、Workspace 元数据与 identity 元数据版本、存储布局、backend lock 和 `verdict`。存在不支持版本或不可读文件时退出码为 1；数据目录不存在时为 2。工具不写、不迁移、不删除任何数据。
+   输出逐项列出 Session 日志格式、Workspace 元数据与 identity 元数据版本、dataset 标记、share 文件版本、存储布局、backend lock 和 `verdict`。存在不支持版本或不可读文件时退出码为 1；数据目录不存在时为 2。工具不写、不迁移、不删除任何数据。
 
 4. 当前构建只读取 Session format v4、Workspace metadata v1、identity metadata v1 与 cross-store ledger v1。低版本 Session 日志不会被就地迁移：backend 会保留文件并拒绝加载，直到兼容的构建读取。不要用新构建覆盖旧格式文件。
 5. 目录存在 `workspace-v2/chunk-objects` 时，本次构建启动必须带 `DSH_POC_WORKSPACE_CHUNK_OBJECTS=1`，否则 `WorkspaceStore.load()` 会以 `CHUNK_STORE_REQUIRED` 失败。`check-data` 会打印 `required flags`。
-6. 用新构建启动，执行下方冒烟。失败时回滚：恢复备份、用旧构建启动；不要在同一目录同时运行两个 backend。
+6. 需要数据集版本升级时（当前只有 share 文件 v1→v2），停服后运行 `hosted/upgrade-data.mjs --data-dir <data> --backup-root <backups>`：它先写带 `dataset.version` 的版本化备份，再迁移并写 `data-format.json`，失败自动用备份恢复。回滚运行 `hosted/rollback-data.mjs --data-dir <data> --bundle <备份目录>`；完整步骤与失败边界见[数据格式升级与回滚](upgrade-rollback.md)。手工回退仍可恢复备份并用旧构建启动；不要在同一目录同时运行两个 backend。
 7. 升级前后都不得删除 `sessions/`、`workspace-v2/`、`cross-store-operation-ledger.json` 等历史数据。
 
 ## 冒烟

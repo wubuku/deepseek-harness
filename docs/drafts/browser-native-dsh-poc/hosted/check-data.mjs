@@ -12,12 +12,14 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { CURRENT_DATASET_VERSION, readDataFormat } from './data-format.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const SESSION_FORMAT_VERSION = 4
 const WORKSPACE_METADATA_VERSION = 1
 const IDENTITY_METADATA_VERSION = 1
 const CROSS_STORE_LEDGER_VERSION = 1
+const SHARE_FILE_VERSIONS = new Set([1, 2])
 const BACKEND_LOCK_NAME = '.browser-native-backend.lock'
 
 const HELP = `Usage: node docs/drafts/browser-native-dsh-poc/hosted/check-data.mjs [options]
@@ -137,6 +139,33 @@ async function checkLock(dataDir) {
     : { present: true, unreadable: true }
 }
 
+/** Report the dataset generation the upgrade scripts key off. */
+async function checkDataFormat(dataDir) {
+  try {
+    const format = await readDataFormat(dataDir)
+    return {
+      present: format.inferred !== true,
+      version: format.version,
+      inferred: format.inferred === true,
+      supported: format.version <= CURRENT_DATASET_VERSION,
+      needsUpgrade: format.version < CURRENT_DATASET_VERSION,
+    }
+  } catch (error) {
+    return { present: true, supported: false, reason: error.message }
+  }
+}
+
+/** Report the share-file generation; v1 still loads and is upgraded in place. */
+async function checkShareFile(dataDir) {
+  const path = join(dataDir, 'session-shares.json')
+  if (!existsSync(path)) return { present: false, supported: true, needsUpgrade: false }
+  const parsed = await readJson(path)
+  if (!parsed.ok) return { present: true, supported: false, reason: parsed.error }
+  const version = parsed.value?.version
+  if (!SHARE_FILE_VERSIONS.has(version)) return { present: true, supported: false, version: version ?? null }
+  return { present: true, supported: true, version, needsUpgrade: version === 1 }
+}
+
 /** Print the human-readable report and return the compatibility exit code. */
 function printReport(report) {
   process.stdout.write(`data dir: ${report.dataDir}\n`)
@@ -144,6 +173,8 @@ function printReport(report) {
   process.stdout.write(`workspaces: ${String(report.workspaces.total)} total, ${String(report.workspaces.supported)} metadata v${String(WORKSPACE_METADATA_VERSION)}, unsupported ${String(report.workspaces.unsupported.length)}, unreadable ${String(report.workspaces.invalid.length)}\n`)
   process.stdout.write(`identity metadata: ${report.identity.present ? (report.identity.supported ? `v${String(IDENTITY_METADATA_VERSION)}` : 'unsupported') : 'absent'}\n`)
   process.stdout.write(`cross-store ledger: ${report.ledger.present ? (report.ledger.supported ? `v${String(CROSS_STORE_LEDGER_VERSION)}` : 'unsupported') : 'absent'}\n`)
+  process.stdout.write(`dataset: ${report.dataset.present ? `v${String(report.dataset.version)}${report.dataset.needsUpgrade ? ' (upgrade available)' : ''}` : 'v1 (unmarked, upgrade available)'}\n`)
+  process.stdout.write(`share file: ${report.shareFile.present ? (report.shareFile.supported ? `v${String(report.shareFile.version)}${report.shareFile.needsUpgrade ? ' (upgrade available)' : ''}` : 'unsupported') : 'absent'}\n`)
   process.stdout.write(`storage: ${report.storage.chunkObjects ? 'chunk objects' : 'plain blobs'}\n`)
   process.stdout.write(`backend lock: ${report.lock.present ? `held${report.lock.pid === undefined ? '' : ` by pid ${String(report.lock.pid)}`} (stop the server before upgrading)` : 'free'}\n`)
   if (report.storage.chunkObjects) {
@@ -164,6 +195,8 @@ export async function inspectDataDirectory(dataDir) {
     workspaces: await checkWorkspaces(dataDir),
     identity: await checkIdentity(dataDir),
     ledger: await checkLedger(dataDir),
+    dataset: await checkDataFormat(dataDir),
+    shareFile: await checkShareFile(dataDir),
     storage: { chunkObjects: existsSync(join(dataDir, 'workspace-v2', 'chunk-objects')) },
     lock: await checkLock(dataDir),
   }
@@ -173,6 +206,8 @@ export async function inspectDataDirectory(dataDir) {
     && report.workspaces.invalid.length === 0
     && report.identity.supported
     && report.ledger.supported
+    && report.dataset.supported
+    && report.shareFile.supported
   return report
 }
 

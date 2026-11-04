@@ -3325,3 +3325,20 @@ syncReplaySteps: 上游同步后复跑 share-link 单测、E2E 与 session-shari
 deleteCondition: 正式产品提供带过期与撤销的只读分享链接，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-161：数据集版本标记、版本化备份与升级/回滚流程
+
+```text
+changeId: BN-P2-161
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/hosted/data-format.mjs; docs/drafts/browser-native-dsh-poc/hosted/upgrade-data.mjs; docs/drafts/browser-native-dsh-poc/hosted/rollback-data.mjs; docs/drafts/browser-native-dsh-poc/hosted/data-backup.mjs; docs/drafts/browser-native-dsh-poc/hosted/check-data.mjs; docs/drafts/browser-native-dsh-poc/session-shares.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/data-upgrade-rollback.e2e.mjs; docs/drafts/browser-native-dsh-poc/upgrade-rollback.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: share 文件已升到 v2，但数据目录没有整体版本标记，备份包也不记录格式代次；升级没有可执行的迁移入口，失败可能留下半迁移目录，回滚只能手工恢复且无法在写入前证明备份可用。
+existingExtensionPointsChecked: 复用 `exportDataDir`/`importDataDir` 的清单、摘要校验、兼容性检查与空目录约束，`SessionShareStore` 的 load/persist，`check-data` 的只读报告，`.browser-native-backend.lock` 停服判定与 `DataFormatError` 错误面；未改 Session 日志格式、Workspace metadata、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 backend 目录、真实 v1 share 文件与重启读取，才能证明升级后的 v2 目录仍可服务、回滚后逐字节恢复、以及各拒绝路径不会先动数据；静态检查无法覆盖 rename 顺序与失败恢复。
+behaviorChange: 新增 `data-format.json`（`version`/`sessionFormatVersion`/`shareFileVersion`/`createdAt`/`upgradedFrom`），backend 在取锁前用 `assertDataFormatReadable` 拒绝更新代次；缺标记按 v1。`data-backup` 的 manifest 新增 `dataset` 并校验其版本，新增 `inspectBackupManifest` 供回滚预检。新增 `upgrade-data.mjs`：停服检查、代次校验、按 `from` 顺序执行迁移、版本化备份（同时间戳追加后缀）、失败自动恢复并保留 `<data>.upgrade-failed-*`；当前迁移 `session-shares-v2` 通过 `SessionShareStore.save()` 把 v1 写为 v2。新增 `rollback-data.mjs`：拒绝无 `dataset`/过新备份与运行中目录，导入 staging 后原子换入，原目录保留为 `<data>.pre-rollback-*`，换入失败恢复原名。`check-data` 新增 dataset 与 share 文件报告并纳入 `compatible`。
+consumersUpdated: 新增 `tests/data-upgrade-rollback.e2e.mjs`；新增 `upgrade-rollback.md`；README 导航与章节、`hosted-deployment.md` 升级步骤与 `check-data` 输出说明更新；本 ledger。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/data-upgrade-rollback.e2e.mjs` 通过：v1（无标记、share v1、缺失 role）升级后 backend 读同一 Session 200，备份 manifest `dataset.version: 1` 且保留 v1 文件，缺失 role 落成 viewer，再升级返回 `up-to-date`；回滚后指纹与升级前一致（标记消失、share 回 v1），backend 再读 200 且事件 `[0,1]`；`BACKUP_UNVERSIONED`、`BACKUP_TOO_NEW`、`BACKEND_RUNNING`（升级与回滚各一次）、`DATA_FORMAT_TOO_NEW`（启动、check-data、升级）、`UPGRADE_FAILED_ROLLED_BACK`（注入迁移先写半成品再抛错，恢复原字节并保留半成品）均按预期。`node docs/drafts/browser-native-dsh-poc/tests/backup-restore.e2e.mjs` 通过；`node --test tests/backend-v2.test.mjs tests/session-share-link.test.mjs` 73/73 通过。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 上游同步后复跑升级/回滚 E2E、备份恢复 E2E 与两类单测；若 share 文件版本、Session 格式或备份清单结构变化，同步更新 `data-format.mjs` 的版本常量、迁移表与本文件。回滚到不识别 v2 的旧构建前必须先停服并执行 `rollback-data`，本 build 只能拒绝更新数据，不能证明旧 build 的行为。
+deleteCondition: 正式产品提供版本化数据集标记与可验证的升级/回滚流程，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

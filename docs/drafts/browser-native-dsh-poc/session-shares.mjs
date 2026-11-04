@@ -302,6 +302,16 @@ export class SessionShareStore {
   }
 
   /**
+   * Write the loaded grants and links in the current file version.
+   *
+   * Used by the dataset upgrade after loading a v1 file so role defaults are
+   * materialized and the file gains its `links` list.
+   */
+  async save() {
+    await this.#persist()
+  }
+
+  /**
    * Remove a grant, used to roll back a failed ownership transfer.
    * @param revoke - Session identifier and viewer principal.
    * @returns True when a grant existed and was removed.

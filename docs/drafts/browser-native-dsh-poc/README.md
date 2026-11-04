@@ -56,7 +56,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 | 主题 | 入口 |
 | --- | --- |
-| 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
+| 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[数据格式升级与回滚](upgrade-rollback.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[多模态图片附件](image-attachment.md)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[Preset 切换：工具集、模型与审批](preset-switching.md)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
@@ -1164,6 +1164,12 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 [Session 格式升级路径](session-format-upgrade.md)记录 backend 对落盘 Session 的版本判定。`FormalSessionStore` 镜像 `SESSION_FORMAT_VERSION = 4`：load 时 header 版本不等于当前值的记录不进入可读集合，只在 stderr 告警并登记到内存 `unsupported` 表，随后 `list` 不返回该会话，`stat`/`open`/`read`/`create` 与 durable turn 返回 422 `SESSION_FORMAT_UNSUPPORTED`，`details` 携带 `storedVersion` 和 `expectedVersion`；非 owner principal 仍得到 404，不泄露旧日志存在。`create` 拒绝任何非当前版本 header 且不覆盖旧文件。Worker 把该错误映射为正式 `SessionFormatUnsupportedError`，并用 `sessionFormatVersionRefusal()` 生成方向感知文案。durable 路由的默认 header 从 `version: 1` 改为当前版本。
 
 `tests/session-format-upgrade.test.mjs` 2/2：旧版本（`version: 3`）会话落盘后重启 backend，`stat`/`open` 422 且 `details = { storedVersion: 3, expectedVersion: 4 }`，另一 principal 404，同 id 当前版本 `create` 仍被拒且文件字节不变；`version: 1` 的 `create` 被 422 拒绝，当前版本 `create`/`stat`/`list` 正常。既有 8 个 backend 合同测试文件复跑 80/80。本构建不提供迁移或降级，旧日志原样保留；未模拟旧版浏览器 OPFS/cache 数据、跨主机 `dataDir` 或并发多实例版本竞争。未改 `packages/`，无需 `build:check`。
+
+## 数据集升级与回滚
+
+[数据格式升级与回滚](upgrade-rollback.md)给数据目录加版本标记 `data-format.json`（缺省按 v1）：backend 在取锁前拒绝比本 build 新的标记，`hosted/upgrade-data.mjs` 先导出带 `dataset.version` 的版本化备份，再按版本顺序迁移并盖新标记，失败时自动用备份恢复原目录、半成品留在 `<data>.upgrade-failed-<时间戳>`；`hosted/rollback-data.mjs` 校验备份与摘要、拒绝无版本或过新的备份、导入 staging 后再原子换入，原目录保留为 `<data>.pre-rollback-<时间戳>`。本轮迁移只含 `session-shares-v2`（share 文件 v1→v2，补 `links: []`、缺失 `role` 落成 viewer）。
+
+`tests/data-upgrade-rollback.e2e.mjs` 通过：v1 目录升级后 backend 仍以 200 读同一 Session，备份 manifest 记录 `dataset.version: 1` 且保留 v1 share 文件，升级后再升级返回 `up-to-date`；回滚后目录与升级前逐字节一致（标记消失、share 文件回到 v1），backend 再次读 200；`BACKUP_UNVERSIONED`、`BACKUP_TOO_NEW`、`BACKEND_RUNNING`、`DATA_FORMAT_TOO_NEW`、`UPGRADE_FAILED_ROLLED_BACK` 均按预期拒绝且不改动目录。只验证本 build 内的升级与回滚，没有可运行的旧构建来证明旧版读新数据；回滚前必须停服并换回旧构建。未改 `packages/`，无需 `build:check`。
 
 ## 路径穿越与文件边界
 
