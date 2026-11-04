@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-098：立项前必做第 2 项——审批参数、Session 冲突恢复与导出入口
+
+```text
+changeId: BN-P2-098
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: packages/client/ui-chat/src/client/chat/ApprovalCommand.tsx; packages/client/ui-chat/tests/approval-command.client.spec.tsx; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/cross-tab-approval.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs; docs/drafts/browser-native-dsh-poc/product-visibility.md; docs/drafts/browser-native-dsh-poc/session-export-import.md; docs/drafts/browser-native-dsh-poc/golden-path-e2e.md
+reason: 立项前必做第 2 项要求为审批策略、Session 冲突恢复与导出入口补齐正式 UI；此前审批卡对无 `command` 的工具调用不显示任何参数，冲突状态没有恢复操作，导出只有 HTTP 入口。
+existingExtensionPointsChecked: 复用 `conversation.approval.detail` 槽与相关 `tool-call` 节点、页面 control channel 的 `owner`/`released` 通知、workspace `session-conflict` 状态条、`/api/browser-native/session/export` 与既有 blob 下载模式；未改 Agent Loop、Session format、审批决策语义或 profile 组合。
+whyDraftOnlyWasInsufficient: 参数渲染只能在真实 DOM 中验证；冲突恢复只能通过关闭拥有者标签后重载验证；浏览器下载与路径作用域 cookie 的鉴权行为只能由真实浏览器暴露。
+behaviorChange: `ApprovalCommand` 在相关调用没有 string `command` 时渲染完整参数对象（`[data-approval-arguments]`，2 空格缩进，限高滚动）；`session-conflict` 状态条增加本地化 `button[data-browser-native-session-retry]`，点击重载页面；持有写租约后页面左下角出现 `button[data-browser-native-session-export]`，调用 `/session/export` 并下载 `dsh-session-<id>.json`，结果写入 `role="status"` 文本。`session/export` 与 `session/import` 改用 Session cookie 派生的 principal 校验 Workspace 归属：Workspace cookie 的作用域是 `/workspace`，Session 路由在浏览器里收不到它，旧实现因此 401。
+consumersUpdated: 审批单测与跨标签 E2E（断言审批卡 command 文本）、product-visibility E2E（新增下载与冲突恢复断言）、session-export-import E2E（回归 Node 鉴权路径）、页面本地化 copy、可见性与导出/导入文档、golden-path 缺口说明、ledger。
+test: `pnpm run build:artifacts`、`pnpm run build:check` 通过；`pnpm exec vitest run packages/client/ui-chat/tests/approval-command.client.spec.tsx` 4 项通过（含 `write` 参数渲染与 `argumentsOf` 拒绝非法 JSON）；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/cross-tab-approval.e2e.mjs` 通过（`decisions: 1`、`requests: 2`、接管后 `TOOL_OUTCOME_UNKNOWN` 且工具未执行）；`product-visibility.e2e.mjs` 通过（导出文件名 `dsh-session-session-56f0c79f-....json`、`format: dsh-session-bundle`、`formatVersion: 1`、冲突恢复 `attempts: 1` → `synced`）；`session-export-import.e2e.mjs` 通过（8 个拒绝用例）；`session-dashboard-16.e2e.mjs` 通过。
+syncReplaySteps: 上游同步后核对 `conversation.approval.detail` 槽仍由 `ApprovalCommand` 实现、`Tag`/turn 节点未变；核对 Session 与 Workspace cookie 路径作用域，若上游改为同作用域 cookie 则撤回 backend 的 principal 复用；复跑上述单测与 E2E。
+deleteCondition: 审批详情改由其他组件承担、冲突恢复改为自动重试、导出改由产品级下载中心承担，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-097：服务端交付物与单实例/多实例边界
 
 ```text

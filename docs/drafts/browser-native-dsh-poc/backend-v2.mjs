@@ -5420,7 +5420,9 @@ export async function createBrowserNativeV2Server(options) {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         if (operation === 'export' || operation === 'import') {
           const workspaceId = boundedString(body.workspaceId, 'workspaceId', MAX_CHECKPOINT_ID_LENGTH)
-          workspaces.requireWorkspace(workspaces.principalFromRequest(request), workspaceId)
+          // The Workspace cookie is path-scoped to /workspace, so this Session route
+          // authorizes both resources with the identity's Session cookie.
+          workspaces.requireWorkspace(principalId, workspaceId)
           if (operation === 'export') {
             const session = store.getForPrincipal(assertSessionId(body.sessionId), principalId)
             const bundle = await store.exclusive(session.id, async () => await buildSessionBundle(session, workspaceId))

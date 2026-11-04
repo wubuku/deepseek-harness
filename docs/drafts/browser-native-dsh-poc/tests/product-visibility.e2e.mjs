@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -67,6 +67,19 @@ try {
   await openPreview(pageA, previewUrl)
   await pageA.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
 
+  await pageA.locator('[data-browser-native-session-export]').waitFor({ state: 'visible', timeout: 30_000 })
+  const [download] = await Promise.all([
+    pageA.waitForEvent('download'),
+    pageA.locator('[data-browser-native-session-export]').click(),
+  ])
+  const downloadedPath = await download.path()
+  const downloadedBundle = JSON.parse(await readFile(downloadedPath, 'utf8'))
+  assert.equal(downloadedBundle.format, 'dsh-session-bundle')
+  assert.equal(downloadedBundle.formatVersion, 1)
+  assert.match(downloadedBundle.session.id, /.+/)
+  assert.equal(download.suggestedFilename(), `dsh-session-${downloadedBundle.session.id}.json`)
+  await pageA.locator('[data-browser-native-session-export-root][data-export-state="downloaded"]').waitFor({ timeout: 10_000 })
+
   const pageB = await context.newPage()
   trackRequests(pageB, [])
   await openPreview(pageB, previewUrl)
@@ -132,8 +145,32 @@ try {
   assert.equal(held.session.events.findLast(event => event.type === 'turn/end' && event.data.turn === held.turn).data.reason.kind, 'completed')
   assert.equal(queuedObserved, true)
 
+  await pageA.close()
+  let recoveryAttempts = 0
+  let recoveredState
+  while (recoveryAttempts < 3 && recoveredState !== 'synced') {
+    recoveryAttempts += 1
+    const retryButton = pageB.locator('[data-browser-native-session-retry]')
+    if (await retryButton.count() === 1) await retryButton.click({ timeout: 10_000 })
+    recoveredState = await waitFor(async () => {
+      try {
+        const state = await pageB.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state)
+        return state === 'synced' ? 'synced' : undefined
+      } catch {
+        return undefined
+      }
+    }, 'Session becomes writable after the owning tab closes', 20_000).catch(() => undefined)
+  }
+  assert.equal(recoveredState, 'synced')
+
   process.stdout.write(`${JSON.stringify({
     sessionLeaseConflict: conflict,
+    sessionRecovery: { attempts: recoveryAttempts, finalState: recoveredState },
+    sessionExport: {
+      format: downloadedBundle.format,
+      formatVersion: downloadedBundle.formatVersion,
+      suggestedFilename: download.suggestedFilename(),
+    },
     failureClassification: {
       code: codeText.trim(),
       message: 'visibility probe: upstream rejected the key',

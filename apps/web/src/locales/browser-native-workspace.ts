@@ -88,6 +88,34 @@ export function browserNativeQueueStatusCopy(
     : `Waiting for a model slot · position ${String(position)} of ${String(queued)}${capacity}`
 }
 
+/** Format the explicit retry action for a Session owned by another tab.
+ * @param language - Page language tag.
+ * @returns Localized button label.
+ */
+export function browserNativeSessionRetryCopy(language: string): string {
+  return language.startsWith('zh') ? '重新打开该会话' : 'Retry opening this Session'
+}
+
+/** Format the user-initiated Session bundle action.
+ * @param language - Page language tag.
+ * @returns Localized button label.
+ */
+export function browserNativeSessionExportCopy(language: string): string {
+  return language.startsWith('zh') ? '下载会话包' : 'Download Session bundle'
+}
+
+/** Format the result of a Session bundle download.
+ * @param language - Page language tag.
+ * @param success - Whether the browser started the download.
+ * @returns Localized result text.
+ */
+export function browserNativeSessionExportResultCopy(language: string, success: boolean): string {
+  if (language.startsWith('zh')) {
+    return success ? '会话包已下载。' : '会话包下载失败；会话数据未更改。'
+  }
+  return success ? 'Session bundle downloaded.' : 'Session bundle download failed; Session data was not changed.'
+}
+
 /** Format the explicit retry action for a Browser-Native writer lease conflict.
  * @param language - Page language tag.
  * @param remainingMs - Time until the backend lease was expected to expire.

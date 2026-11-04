@@ -1,6 +1,9 @@
 import {
   browserNativeQueueStatusCopy,
   browserNativeRecoveryErrorCopy,
+  browserNativeSessionExportCopy,
+  browserNativeSessionExportResultCopy,
+  browserNativeSessionRetryCopy,
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
   browserNativeWorkspaceRecoveryWarningCopy,
@@ -221,6 +224,24 @@ async function downloadLocalRecoveryBundle(workspaceId?: string): Promise<void> 
   }
 }
 
+async function downloadSessionBundle(workspaceId: string, sessionId: string): Promise<void> {
+  const response = await fetch('/api/browser-native/session/export', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ workspaceId, sessionId }),
+  })
+  if (!response.ok) throw new Error(`Session export failed with HTTP ${response.status}`)
+  const objectUrl = URL.createObjectURL(await response.blob())
+  try {
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `dsh-session-${sessionId}.json`
+    link.click()
+  } finally {
+    window.setTimeout(() => { URL.revokeObjectURL(objectUrl) }, 30_000)
+  }
+}
+
 /**
  * Keep the browser-native Session write lease across a normal page reload.
  * @param worker - Dedicated Worker receiving the Browser-Native DSH Host.
@@ -233,8 +254,10 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
   const owners = new Map<string, string>()
   const recoveryLocks = new BrowserNativeRecoveryLocks(typeof navigator.locks === 'undefined' ? undefined : navigator.locks)
   let recoveryStorage: Storage | undefined
+  let workspaceId: string | undefined
   let workspaceStatus: HTMLElement | undefined
   let queueStatus: HTMLElement | undefined
+  let exportControl: { readonly root: HTMLElement; readonly button: HTMLButtonElement; readonly result: HTMLElement } | undefined
   let retryTimer: number | undefined
   const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
   let failedClosed = false
@@ -244,6 +267,20 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     if (retryTimer === undefined) return
     window.clearInterval(retryTimer)
     retryTimer = undefined
+  }
+  const styleStatusAction = (button: HTMLButtonElement, weight: '500' | '600' = '500'): void => {
+    Object.assign(button.style, {
+      display: 'block',
+      marginTop: '8px',
+      padding: '6px 10px',
+      pointerEvents: 'auto',
+      border: '1px solid #8ab4f8',
+      borderRadius: '5px',
+      background: '#1d4ed8',
+      color: '#fff',
+      cursor: 'pointer',
+      font: `${weight} 13px/1.3 system-ui, sans-serif`,
+    })
   }
   const showWorkspaceStatus = (notice: BrowserNativeWorkspaceStatus): void => {
     clearRetryTimer()
@@ -277,6 +314,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       notice.message,
     )
     workspaceStatus.dataset.state = notice.state
+    if (notice.workspaceId !== undefined) workspaceId = notice.workspaceId
     workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
       || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable'
@@ -294,18 +332,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       button.type = 'button'
       button.dataset.browserNativeRecoveryExport = ''
       button.textContent = browserNativeWorkspaceRecoveryExportCopy(document.documentElement.lang)
-      Object.assign(button.style, {
-        display: 'block',
-        marginTop: '8px',
-        padding: '6px 10px',
-        pointerEvents: 'auto',
-        border: '1px solid #8ab4f8',
-        borderRadius: '5px',
-        background: '#1d4ed8',
-        color: '#fff',
-        cursor: 'pointer',
-        font: '500 13px/1.3 system-ui, sans-serif',
-      })
+      styleStatusAction(button)
       button.addEventListener('click', () => {
         void downloadLocalRecoveryBundle(
           notice.state === 'identity-missing' || notice.state === 'identity-mismatch' ? undefined : notice.workspaceId,
@@ -328,42 +355,30 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
         button.textContent = browserNativeWorkspaceRetryCopy(document.documentElement.lang, remainingMs)
       }
       updateRetry()
-      Object.assign(button.style, {
-        display: 'block',
-        marginTop: '8px',
-        padding: '6px 10px',
-        pointerEvents: 'auto',
-        border: '1px solid #8ab4f8',
-        borderRadius: '5px',
-        background: '#1d4ed8',
-        color: '#fff',
-        cursor: 'pointer',
-        font: '500 13px/1.3 system-ui, sans-serif',
-      })
+      styleStatusAction(button)
       button.addEventListener('click', () => { window.location.reload() })
       workspaceStatus.append(button)
       if (button.disabled) retryTimer = window.setInterval(updateRetry, 250)
+    }
+    if (notice.state === 'session-conflict') {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.dataset.browserNativeSessionRetry = ''
+      button.textContent = browserNativeSessionRetryCopy(document.documentElement.lang)
+      styleStatusAction(button)
+      button.addEventListener('click', () => { window.location.reload() })
+      workspaceStatus.append(button)
     }
     if (notice.state === 'read-only' || notice.state === 'stale') {
       const button = document.createElement('button')
       button.type = 'button'
       button.dataset.browserNativeWorkspaceRefresh = ''
       button.textContent = browserNativeWorkspaceRefreshCopy(document.documentElement.lang, notice.state === 'stale')
-      Object.assign(button.style, {
-        display: 'block',
-        marginTop: '8px',
-        padding: '6px 10px',
-        pointerEvents: 'auto',
-        border: '1px solid #8ab4f8',
-        borderRadius: '5px',
-        background: '#1d4ed8',
-        color: '#fff',
-        cursor: 'pointer',
-        font: '600 13px/1.3 system-ui, sans-serif',
-      })
+      styleStatusAction(button, '600')
       button.addEventListener('click', () => { window.location.reload() })
       workspaceStatus.append(button)
     }
+    syncExportControl()
   }
   const showQueueStatus = (notice: BrowserNativeQueueStatus): void => {
     queueStatus ??= (() => {
@@ -416,6 +431,63 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     result.style.marginTop = '6px'
     result.textContent = browserNativeWorkspaceRecoveryResultCopy(document.documentElement.lang, success)
     workspaceStatus.append(result)
+  }
+  const createExportControl = (): NonNullable<typeof exportControl> => {
+    const root = document.createElement('div')
+    root.setAttribute('data-browser-native-session-export-root', '')
+    Object.assign(root.style, {
+      position: 'fixed',
+      left: '16px',
+      bottom: '16px',
+      zIndex: '2147483000',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'flex-start',
+      gap: '6px',
+      maxWidth: 'min(320px, calc(100vw - 32px))',
+      font: '500 13px/1.4 system-ui, sans-serif',
+    })
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.browserNativeSessionExport = ''
+    button.textContent = browserNativeSessionExportCopy(document.documentElement.lang)
+    Object.assign(button.style, {
+      padding: '7px 12px',
+      border: '1px solid #526174',
+      borderRadius: '7px',
+      background: '#111827',
+      color: '#f9fafb',
+      cursor: 'pointer',
+      font: '500 13px/1.3 system-ui, sans-serif',
+    })
+    const result = document.createElement('span')
+    result.dataset.browserNativeSessionExportResult = ''
+    result.setAttribute('role', 'status')
+    result.style.color = '#f9fafb'
+    root.append(button, result)
+    document.body.append(root)
+    const control = { root, button, result }
+    button.addEventListener('click', () => {
+      const sessionId = [...owners.keys()].at(-1)
+      if (sessionId === undefined || workspaceId === undefined) return
+      const language = document.documentElement.lang
+      button.disabled = true
+      result.textContent = ''
+      delete root.dataset.exportState
+      void downloadSessionBundle(workspaceId, sessionId).then(() => {
+        root.dataset.exportState = 'downloaded'
+        result.textContent = browserNativeSessionExportResultCopy(language, true)
+      }).catch(() => {
+        root.dataset.exportState = 'failed'
+        result.textContent = browserNativeSessionExportResultCopy(language, false)
+      }).finally(() => { button.disabled = false })
+    })
+    return control
+  }
+  const syncExportControl = (): void => {
+    exportControl ??= createExportControl()
+    const available = owners.size > 0 && workspaceId !== undefined
+    exportControl.root.hidden = !available
   }
   const publishLocalStatus = (state: BrowserNativeWorkspaceStatus['state'], message?: string): void => {
     const notice: BrowserNativeWorkspaceStatus = {
@@ -555,6 +627,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
         return
       }
       owners.set(notice.sessionId, notice.ownerToken)
+      syncExportControl()
       if (!recoveryLocks.supported) {
         publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
         stopWorker()
@@ -565,6 +638,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     }
     if (notice.type === 'released' || notice.type === 'unavailable') {
       owners.delete(notice.sessionId)
+      syncExportControl()
       removeRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId))
       recoveryLocks.releaseResource({ kind: 'session', id: notice.sessionId })
     }
@@ -668,5 +742,6 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     channel.port1.close()
     workspaceStatus?.remove()
     queueStatus?.remove()
+    exportControl?.root.remove()
   }
 }

@@ -4,7 +4,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { PartialArguments } from '@deepseek-ai/dsh-util-values'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { ApprovalCommand, commandOf } from '../src/client/chat/ApprovalCommand.tsx'
+import { ApprovalCommand, argumentsOf } from '../src/client/chat/ApprovalCommand.tsx'
 
 function props(
   nodes: readonly unknown[],
@@ -17,13 +17,14 @@ function props(
   return { callId, useChat } as PropsRuntime<'conversation.approval.detail'>
 }
 
-describe('commandOf', () => {
-  it('accepts only a string command from valid JSON arguments', () => {
-    expect(commandOf(undefined)).toBeUndefined()
-    expect(commandOf({ callId: 'c1', argsRaw: '{' })).toBeUndefined()
-    expect(commandOf({ callId: 'c1', argsRaw: '{}' })).toBeUndefined()
-    expect(commandOf({ callId: 'c1', argsRaw: '{"command":42}' })).toBeUndefined()
-    expect(commandOf({ callId: 'c1', argsRaw: '{"command":"pnpm test"}' })).toBe('pnpm test')
+describe('argumentsOf', () => {
+  it('parses non-empty argument objects and rejects other JSON values', () => {
+    expect(argumentsOf(undefined)).toBeUndefined()
+    expect(argumentsOf({ callId: 'c1', argsRaw: '{' })).toBeUndefined()
+    expect(argumentsOf({ callId: 'c1', argsRaw: '{}' })).toBeUndefined()
+    expect(argumentsOf({ callId: 'c1', argsRaw: '[]' })).toBeUndefined()
+    expect(argumentsOf({ callId: 'c1', argsRaw: '{"file_path":"/dsh/home/a.txt","content":"A"}' }))
+      .toEqual({ file_path: '/dsh/home/a.txt', content: 'A' })
   })
 })
 
@@ -36,6 +37,17 @@ describe('ApprovalCommand', () => {
     ] as never)} />)
 
     expect(screen.getByText('pnpm test')).toBeTruthy()
+  })
+
+  it('renders every argument when the correlated Tool call has no command', () => {
+    const { container } = render(<ApprovalCommand {...props([
+      { kind: 'tool-call', data: { root: { phase: 'start', args: PartialArguments.fromText('{"file_path":"/dsh/home/a.txt","content":"A"}'), callId: 'call-1', argsRaw: '{"file_path":"/dsh/home/a.txt","content":"A"}' } } },
+    ] as never)} />)
+
+    const block = container.querySelector('[data-approval-arguments]')
+    expect(block).not.toBeNull()
+    expect(block?.textContent).toContain('/dsh/home/a.txt')
+    expect(block?.textContent).toContain('"content": "A"')
   })
 
   it('omits absent, uncorrelated, preparing, and settled Tool calls', () => {

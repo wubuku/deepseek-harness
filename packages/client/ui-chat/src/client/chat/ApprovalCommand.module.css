@@ -1,0 +1,10 @@
+/* The argument block stays readable inside a compact approval card: wrap long
+   values and cap the height so an oversized Tool payload cannot push the
+   decision controls off-screen. */
+.arguments {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

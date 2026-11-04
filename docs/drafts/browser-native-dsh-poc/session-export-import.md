@@ -60,6 +60,7 @@ description: "给 Browser-Native Session 定义可移植导出包（格式版本
 | --- | --- |
 | [backend-v2.mjs](backend-v2.mjs) | 新增 `assertSessionBundle`、`bundleAttachmentReferences`、`decodeBundleAttachment`（纯校验）与 `buildSessionBundle`、`writeBundleAttachment`、`importSessionBundle`（IO），并在 `/session/export`、`/session/import` 路由接上。 |
 | [tests/session-export-import.e2e.mjs](tests/session-export-import.e2e.mjs) | 创建带附件 Session、导出、复制导入、读回与 8 个拒绝用例。 |
+| [apps/web/src/browser-native-page-control.ts](../../../apps/web/src/browser-native-page-control.ts) | 页面在持有 Session 写租约后显示导出按钮，调用 `/session/export` 并下载 `dsh-session-<id>.json`；失败只显示状态文本。 |
 | [README.md](README.md) | 新增本节入口。 |
 | [operational-compatibility-matrix.md](operational-compatibility-matrix.md) | 新增导出/导入行。 |
 
@@ -99,5 +100,5 @@ node docs/drafts/browser-native-dsh-poc/tests/session-export-import.e2e.mjs
 - 导入只覆盖单 Session；跨 Session 的 fork/handoff 历史、Session 继承链与 workspace 文件不打包。
 - 未验证两个 backend 实例之间的迁移（同一 `workspaceId` 在另一实例不存在）；当前要求导入方已拥有目标 Workspace。
 - 未测并发导入同名 Session、导入过程中的 lease 竞争、磁盘写满与 `flush` 失败注入后的附件残留。
-- 未在浏览器 UI 增加导出/导入按钮；验证走 Node HTTP 与 Session API。
+- 浏览器 UI 只提供导出按钮（见[产品可见性](product-visibility.md#session-导出)）；导入没有页面入口，仍走 HTTP。
 - 附件内容校验只保证摘要与长度，没有媒体类型检测；包内 `name` 仅作展示。

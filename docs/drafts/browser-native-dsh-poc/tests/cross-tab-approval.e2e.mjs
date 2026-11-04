@@ -91,6 +91,9 @@ try {
     return session.events?.find(event => event.type === 'approval/asked')
   }, 'first approval request', 30_000)
   await owner.locator('[data-approval-key]').waitFor({ state: 'visible', timeout: 30_000 })
+  assert.match(await owner.locator('[data-approval-key]').innerText(),
+    /BROWSER_NATIVE_PERMISSION_APPROVAL_WRITE_OK/,
+    'the approval card renders the correlated Tool command')
 
   const duplicate = await openClone(owner, previewUrl, origin)
   await duplicate.waitForFunction(() => ['recovery-conflict', 'recovery-unavailable', 'lease-conflict', 'error']

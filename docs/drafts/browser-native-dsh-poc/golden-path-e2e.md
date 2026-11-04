@@ -48,9 +48,9 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 ## 缺口
 
-- 审批卡文案没有展示文件路径或工具参数（本次 `cardMentionsArguments` 为 false）；用户只能从模型说明或事件里确认目标文件。该可见性缺口在本批点 4 继续处理。
+- 审批卡对无 `command` 的工具调用改为展示完整参数（`[data-approval-arguments]`，JSON 缩进），`bash` 仍优先展示 command；该渲染由 `approval-command.client.spec.tsx` 的 `write` 用例覆盖，跨标签 E2E 只断言 command。`golden-path.e2e.mjs` 未重跑，`cardMentionsArguments` 仍是旧采样。
 - 黄金 turn 依赖提示词给出精确 `write` JSON 参数；模型仍会先被只读策略拒绝再重试，因此黄金路径包含两次工具结果。真实自然语言需求下不保证一次命中。
-- 导出导入走 HTTP Session API，预览 UI 没有导出入口；只覆盖单 Session 与工作区文件未打包。
+- 预览 UI 已提供 Session 导出按钮；导入仍只有 HTTP 入口，且导出不打包工作区文件。
 - 只跑 LongCat-2.5 OpenAI-compatible；Anthropic-compatible 流程由双 provider 测试单独覆盖，未在本回归里重跑。
 - 70 秒 turn 与 5 秒刷新是单机单次采样，不是性能预算；未覆盖网络抖动、审批超时、并发刷新和导入同名冲突。
 - 未覆盖附件、fork/handoff 继承链、跨 backend 实例迁移和模型不遵循工具提示时的降级路径。

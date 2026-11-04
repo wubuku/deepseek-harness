@@ -26,7 +26,11 @@ E2E 把 `maxConcurrentTurns` 设为 1、`queueTimeoutMs` 设为 3 秒，用 `bar
 
 `browser-native-providers.ts` 在 `SESSION_ALREADY_OWNED` 或 owner 续租报告 `SESSION_OWNERSHIP_LOST` 时发布 workspace 状态 `session-conflict`，消息为 backend 原文。状态条显示英文/中文标题加 ` — <backend message>`，边框为红色；`preview.ts` 把该状态视为可继续运行的启动结果，标签页保持打开。
 
-E2E 在同一个 `BrowserContext` 开 A/B 两页，断言 B 的 `[data-browser-native-workspace-status]` 进入 `data-state="session-conflict"`，文本同时包含 `This Session is open in another tab` 与 `session is already owned by another browser`。
+E2E 在同一个 `BrowserContext` 开 A/B 两页，断言 B 的 `[data-browser-native-workspace-status]` 进入 `data-state="session-conflict"`，文本同时包含 `This Session is open in another tab` 与 `session is already owned by another browser`。状态条提供一个 `button[data-browser-native-session-retry]`（本地化文案，点击后重载页面）；关闭 A 页后 B 页点击该按钮即可重新打开 Session，E2E 断言状态回到 `synced`，并把尝试次数写入输出。
+
+## Session 导出
+
+页面拥有 Session 写租约后，右下角出现 `button[data-browser-native-session-export]`（本地化文案，会话数据就绪前隐藏）。点击后页面 `POST /api/browser-native/session/export`，把 `dsh-session-bundle` 存为 `dsh-session-<id>.json`，并在 `[data-browser-native-session-export-result]`（`role="status"`）显示下载结果；失败不会改动任何会话数据。E2E 用 `page.waitForEvent('download')` 读取下载文件，断言 `format === 'dsh-session-bundle'`、`formatVersion === 1`、文件名为 `dsh-session-<sessionId>.json`，并等待 `data-export-state="downloaded"`。导入仍只有 HTTP 入口。
 
 ## 验证
 
@@ -39,12 +43,13 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-vis
 最近一次运行输出：
 
 ```json
-{"sessionLeaseConflict":"This Session is open in another tab — session is already owned by another browser; close that tab or retry after its write lease expires","failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
+{"sessionLeaseConflict":"This Session is open in another tab — session is already owned by another browser; close that tab or retry after its write lease expires\nRetry opening this Session","sessionRecovery":{"attempts":1,"finalState":"synced"},"sessionExport":{"format":"dsh-session-bundle","formatVersion":1,"suggestedFilename":"dsh-session-session-56f0c79f-922b-4778-aace-4dc39b105c84.json"},"failureClassification":{"code":"UPSTREAM_LLM_AUTH_FAILED","message":"visibility probe: upstream rejected the key","rendered":true},"admissionQueue":{"observedWhileQueueing":true,"timeoutCode":"ADMISSION_TIMEOUT","timeoutMessageIncludesPosition":true}}
 ```
 
 ## 缺口
 
 - 排队位置是 400 ms 轮询的最终一致视图，不显示预计等待时间；轮询频率是 PoC 常量，不是服务端推送。
 - 队列超时消息里的 `queuePosition` 是超时瞬间的值；实时横幅会在前项结算后前移，但终止消息本身不会重写。
-- 冲突状态没有自动恢复路径：另一个标签页关闭或租约过期后，B 页仍需刷新才会重新打开 Session，E2E 未覆盖该恢复。
+- 冲突恢复是用户触发的整页重载，不是保留内存状态的原地重试；E2E 最多允许 3 次重试以覆盖另一个标签页释放租约的延迟。
+- 导出按钮只导出本页最近取得写租约的 Session；多 Session 标签页没有选择列表。导入仍只有 HTTP 入口，没有页面入口。
 - 非租约类 `session/open` 失败仍只发布 `unavailable`，状态条没有专门文案；本轮只补齐 Session 租约冲突。
