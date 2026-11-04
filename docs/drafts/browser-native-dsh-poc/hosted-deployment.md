@@ -225,25 +225,27 @@ node docs/drafts/browser-native-dsh-poc/hosted/erase-data.mjs --data-dir /srv/br
 
 保留边界：删除只作用于当前 dataDir。已经导出的旧 bundle 仍包含删除前的数据，需要单独销毁；删除命令不撤销[备份与恢复](#备份与恢复)生成的备份。
 
-## Session 只读共享
+## Session 共享：viewer 与 editor
 
-Session owner 可以把一个已持久化的 Session 授予另一个已有 principal 只读访问：
+Session owner 可以把一个已持久化的 Session 授予另一个已有 principal 只读访问，或用 `role: "editor"` 授予共编权：
 
 ```sh
 curl -X POST http://127.0.0.1:4185/api/browser-native/session/share \
   -H 'content-type: application/json' \
   -H "cookie: dsh-browser-native-principal=<owner>" \
-  -d '{"protocolVersion":1,"requestId":"share-1","sessionId":"<session>","viewerPrincipalId":"<viewer>"}'
+  -d '{"protocolVersion":1,"requestId":"share-1","sessionId":"<session>","viewerPrincipalId":"<viewer>","role":"editor"}'
 ```
 
-授权写入 `session-shares.json`（`version: 1`，含 `sessionId`、owner、viewer 与 `grantedAt`），因此在 backend 重启后仍然有效。viewer 只能用 `session/open` 的 `access: "read"`、`session/read` 与 `session/stat`；响应带 `shared: true`，且不含 owner token。`open` 的 `access: "write"`、`append`、`flush`、`close`、`renew` 与 `handoff` 一律返回 403 `SESSION_READ_ONLY`，租约不会被 viewer 取得；`session/export` 与再次共享保持 owner 专属。viewer 的写尝试由统一拒绝审计记录：`resource: "session"`、`resourceId` 为 Session id、`principalDigest` 为 viewer 的摘要、`code` 为 `SESSION_READ_ONLY`，可从 `observability/access-denials.jsonl` 追溯。
+授权写入 `session-shares.json`（`version: 1`，含 `sessionId`、owner、viewer、`role` 与 `grantedAt`），因此在 backend 重启后仍然有效；缺省 `role` 为 `viewer`。viewer 只能用 `session/open` 的 `access: "read"`、`session/read` 与 `session/stat`；响应带 `shared: true`，且不含 owner token。`open` 的 `access: "write"`、`append`、`flush`、`close`、`renew` 与 `handoff` 一律返回 403 `SESSION_READ_ONLY`，租约不会被 viewer 取得；`session/export` 与再次共享保持 owner 专属。viewer 的写尝试由统一拒绝审计记录：`resource: "session"`、`resourceId` 为 Session id、`principalDigest` 为 viewer 的摘要、`code` 为 `SESSION_READ_ONLY`，可从 `observability/access-denials.jsonl` 追溯。
 
-`tests/session-sharing.e2e.mjs` 使用两个真实 principal 的 HTTP 面：owner 写入并 flush 两个事件，viewer 在授权前读取得到 404；授权后读取到事件 0–1 且无 owner token；写 open、append、handoff、renew 均为 403 `SESSION_READ_ONLY`，viewer 不能转授；owner 继续 append 到 seq 2 并 flush；拒绝审计四条带正确 resource/resourceId/principalDigest/status；journal 恢复后哈希链验证通过；重启后 viewer 仍可只读打开，owner 打开不带 `shared`。导出保持 owner-only。
+editor 用 `open(access: "write")` 取得 `editorToken`/`editorEpoch`（`shared: true`、`role: "editor"`，无 owner token），之后 `append`/`flush` 必须携带该租约。同一 Session 同时只有一个活跃 editor lease：第二个 editor 取得 409 `SESSION_EDITOR_LEASE_HELD`，旧租约或他人租约写入返回 409 `SESSION_EDITOR_LEASE_LOST`。`POST /session/editor-lease` 支持 `claim`、`renew`、`release`；owner 用 `revoke` 强制收回，owner 移交时也会清空。即使两个同租约请求同时到达，`expectedNextSeq` 仍只让一个成功，另一个返回 409 `SEQ_CONFLICT`。裁定记录（share、lease granted/denied、append seq 区间与 revoke）写入 `session-collaboration.jsonl`，并经 `app.collaborationAudit()` 与 support bundle 的 `audit.collaboration` 暴露；租约本身不持久化，重启后需重新 claim。
 
-未实现：授权撤销、有效期、viewer 侧 Catalog 列表、共享 Session 的 UI 呈现、按字段或其他更细粒度授权。
+`tests/session-sharing.e2e.mjs` 使用两个真实 principal 的 HTTP 面：owner 写入并 flush 两个事件，viewer 在授权前读取得到 404；授权后读取到事件 0–1 且无 owner token；写 open、append、handoff、renew 均为 403 `SESSION_READ_ONLY`，viewer 不能转授；owner 继续 append 到 seq 2 并 flush；拒绝审计四条带正确 resource/resourceId/principalDigest/status；journal 恢复后哈希链验证通过；重启后 viewer 仍可只读打开，owner 打开不带 `shared`。导出保持 owner-only。`tests/session-editor-collaboration.test.mjs` 覆盖双 editor 租约竞争、并发 seq 冲突、旧租约与 revoke 拒绝、viewer 拒绝以及审计持久化。
+
+未实现：授权撤销、有效期、editor 侧 Catalog 列表、页面级 viewer/editor UI、按字段或其他更细粒度授权、editor 操作与 owner 写入的排队公平性。
 
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；真实 Chromium 跨站攻击的 0 副作用拒绝（跨站表单、`no-cors` 简单请求、CORS 读取、EventSource）；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session 只读共享的授权持久化、viewer 读取、写入与租约拒绝、拒绝审计与重启后保持。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；真实 Chromium 跨站攻击的 0 副作用拒绝（跨站表单、`no-cors` 简单请求、CORS 读取、EventSource）；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session viewer/editor 共享的授权持久化、viewer 读取、写入与租约拒绝、editor 单租约仲裁、并发 seq 冲突、协作审计与重启后保持。
 
 未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理；共享的撤销/有效期与 UI 呈现。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。

@@ -1,10 +1,11 @@
 /**
- * Durable viewer grants for Session sharing.
+ * Durable read and editor grants for Session sharing.
  *
- * A grant lets one other principal read a Session's events without giving it
- * the owner token, the write lease, or any mutation right. Grants are stored
- * outside the Session log so the log format and its ownership epoch stay
- * unchanged.
+ * A viewer grant lets one other principal read a Session's events without the
+ * owner token, the write lease, or any mutation right. An editor grant adds
+ * append and flush rights, still gated by the separate editor lease in the
+ * backend. Grants are stored outside the Session log so the log format and its
+ * ownership epoch stay unchanged.
  */
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
@@ -12,6 +13,7 @@ import { join } from 'node:path'
 
 const FILE_NAME = 'session-shares.json'
 const VERSION = 1
+const ROLES = new Set(['viewer', 'editor'])
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 class SessionShareError extends Error {
@@ -21,6 +23,13 @@ class SessionShareError extends Error {
     this.code = code
     this.status = status
   }
+}
+
+/** Normalize a stored share, defaulting the role for files written before roles existed. */
+function normalizedRole(share) {
+  if (share.role === undefined) return 'viewer'
+  if (!ROLES.has(share.role)) throw new SessionShareError('SHARE_FILE_INVALID', `invalid Session share role in ${FILE_NAME}`, 500)
+  return share.role
 }
 
 /**
@@ -54,35 +63,57 @@ export class SessionShareStore {
       if (typeof share?.sessionId !== 'string' || typeof share?.ownerPrincipalId !== 'string' || typeof share?.viewerPrincipalId !== 'string') {
         throw new SessionShareError('SHARE_FILE_INVALID', `invalid Session share record in ${FILE_NAME}`, 500)
       }
-      this.#shares.set(`${share.sessionId}\u0000${share.viewerPrincipalId}`, share)
+      this.#shares.set(`${share.sessionId}\u0000${share.viewerPrincipalId}`, { ...share, role: normalizedRole(share) })
     }
   }
 
   /**
-   * Whether a principal holds a read grant for a Session.
+   * The grant role a principal holds for a Session.
    * @param sessionId - Session identifier.
-   * @param principalId - Candidate viewer principal.
-   * @returns True when a grant exists.
+   * @param principalId - Candidate viewer or editor principal.
+   * @returns `viewer`, `editor`, or `undefined` when no grant exists.
    */
-  isViewer(sessionId, principalId) {
-    return this.#shares.has(`${sessionId}\u0000${principalId}`)
+  roleOf(sessionId, principalId) {
+    return this.#shares.get(`${sessionId}\u0000${principalId}`)?.role
   }
 
   /**
-   * Record a read grant. Repeating the same grant returns the existing record.
-   * @param grant - Session, owning principal, and viewer principal.
+   * Whether a principal holds any read grant for a Session.
+   * @param sessionId - Session identifier.
+   * @param principalId - Candidate viewer principal.
+   * @returns True when a viewer or editor grant exists.
+   */
+  isViewer(sessionId, principalId) {
+    return this.roleOf(sessionId, principalId) !== undefined
+  }
+
+  /**
+   * Whether a principal holds an editor grant for a Session.
+   * @param sessionId - Session identifier.
+   * @param principalId - Candidate editor principal.
+   * @returns True when an editor grant exists.
+   */
+  isEditor(sessionId, principalId) {
+    return this.roleOf(sessionId, principalId) === 'editor'
+  }
+
+  /**
+   * Record a grant. Repeating the same grant returns the existing record;
+   * repeating it with a different role replaces the role.
+   * @param grant - Session, owning principal, viewer principal, and role.
    * @returns The stored grant.
    */
-  async grant({ sessionId, ownerPrincipalId, viewerPrincipalId }) {
+  async grant({ sessionId, ownerPrincipalId, viewerPrincipalId, role = 'viewer' }) {
     if (!UUID_PATTERN.test(ownerPrincipalId)) throw new SessionShareError('INVALID_REQUEST', 'owner principal id is invalid')
     if (!UUID_PATTERN.test(viewerPrincipalId)) throw new SessionShareError('INVALID_REQUEST', 'viewer principal id is invalid')
+    if (!ROLES.has(role)) throw new SessionShareError('INVALID_REQUEST', 'share role must be viewer or editor')
     if (ownerPrincipalId === viewerPrincipalId) {
       throw new SessionShareError('INVALID_REQUEST', 'a Session cannot be shared with its owner')
     }
     const key = `${sessionId}\u0000${viewerPrincipalId}`
     const existing = this.#shares.get(key)
-    if (existing !== undefined) return existing
-    const share = { sessionId, ownerPrincipalId, viewerPrincipalId, grantedAt: Date.now() }
+    if (existing !== undefined && existing.role === role) return existing
+    const share = { sessionId, ownerPrincipalId, viewerPrincipalId, role, grantedAt: Date.now() }
     this.#shares.set(key, share)
     await this.#persist()
     return share
@@ -101,7 +132,7 @@ export class SessionShareStore {
   }
 
   /**
-   * Remove a read grant, used to roll back a failed ownership transfer.
+   * Remove a grant, used to roll back a failed ownership transfer.
    * @param revoke - Session identifier and viewer principal.
    * @returns True when a grant existed and was removed.
    */

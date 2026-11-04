@@ -1651,6 +1651,10 @@ class FormalSessionStore {
         ownerToken: undefined,
         ownerEpoch: Number.isSafeInteger(raw.ownerEpoch) && raw.ownerEpoch >= 0 ? raw.ownerEpoch : 0,
         ownerExpiresAt: 0,
+        editorToken: undefined,
+        editorEpoch: 0,
+        editorExpiresAt: 0,
+        editorPrincipalId: undefined,
         writeBlocked: false,
         handoffs,
         lastActivityAt: Math.max(activityAt(raw.header?.createdAt), modifiedAt),
@@ -1721,18 +1725,21 @@ class FormalSessionStore {
     const now = this.now()
     let held = 0
     let expired = 0
+    let editorsHeld = 0
     let writeBlocked = 0
     for (const session of this.sessions.values()) {
       if (session.ownerToken !== undefined) {
         if (session.ownerExpiresAt > now) held += 1
         else expired += 1
       }
+      if (session.editorPrincipalId !== undefined && session.editorExpiresAt > now) editorsHeld += 1
       if (session.writeBlocked) writeBlocked += 1
     }
     return {
       sessions: this.sessions.size,
       held,
       expired,
+      editorsHeld,
       writeBlocked,
       unsupportedFormats: this.unsupported.size,
     }
@@ -1762,6 +1769,10 @@ class FormalSessionStore {
       ownerToken: undefined,
       ownerEpoch: 0,
       ownerExpiresAt: 0,
+      editorToken: undefined,
+      editorEpoch: 0,
+      editorExpiresAt: 0,
+      editorPrincipalId: undefined,
       handoffs: new Map(),
       lastActivityAt: this.now(),
     }
@@ -1812,6 +1823,106 @@ class FormalSessionStore {
       || (ownerEpoch !== undefined && ownerEpoch !== session.ownerEpoch)) {
       throw new BackendError('SESSION_OWNERSHIP_LOST', 'session write ownership is no longer valid', 409)
     }
+  }
+
+  /**
+   * Grant the single editor lease to a principal with an editor share.
+   * @param session - Session receiving editor writes.
+   * @param principalId - Editor principal requesting the lease.
+   * @param requestedEditorToken - Token to keep when retrying the same claim.
+   * @param requestedEditorEpoch - Epoch to keep when retrying the same claim.
+   * @returns Editor token, epoch, and renewal timing.
+   */
+  claimEditor(session, principalId, requestedEditorToken, requestedEditorEpoch) {
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session ownership is blocked until the backend reloads its durable state', 503)
+    if (session.editorPrincipalId !== undefined && session.editorExpiresAt > this.now()) {
+      if (session.editorPrincipalId === principalId
+        && (requestedEditorToken === undefined || requestedEditorToken === session.editorToken)
+        && (requestedEditorEpoch === undefined || requestedEditorEpoch === session.editorEpoch)) {
+        return this.renewEditor(session, principalId, session.editorToken, session.editorEpoch, true)
+      }
+      throw new BackendError(
+        'SESSION_EDITOR_LEASE_HELD',
+        'another editor holds the Session write lease',
+        409,
+        session.editorExpiresAt - this.now(),
+        { sessionId: session.id },
+      )
+    }
+    session.editorEpoch += 1
+    session.editorPrincipalId = principalId
+    session.editorToken = typeof requestedEditorToken === 'string' ? requestedEditorToken : randomUUID()
+    return this.renewEditor(session, principalId, session.editorToken, session.editorEpoch, true)
+  }
+
+  /**
+   * Extend an editor lease after verifying its token and principal.
+   * @param session - Session holding the lease.
+   * @param principalId - Editor principal.
+   * @param editorToken - Lease token.
+   * @param editorEpoch - Lease epoch, checked when provided.
+   * @param initial - Skip verification for a just-granted lease.
+   * @returns Editor token, epoch, and renewal timing.
+   */
+  renewEditor(session, principalId, editorToken, editorEpoch, initial = false) {
+    if (!initial) this.assertEditor(session, principalId, editorToken, editorEpoch)
+    session.editorExpiresAt = this.now() + this.ownerLeaseMs
+    return {
+      editorToken: session.editorToken,
+      editorEpoch: session.editorEpoch,
+      leaseDurationMs: this.ownerLeaseMs,
+      renewAfterMs: Math.floor(this.ownerLeaseMs / 3),
+    }
+  }
+
+  /**
+   * Verify that a principal still holds the active editor lease.
+   * @param session - Session receiving the write.
+   * @param principalId - Editor principal.
+   * @param editorToken - Lease token.
+   * @param editorEpoch - Lease epoch, checked when provided.
+   */
+  assertEditor(session, principalId, editorToken, editorEpoch) {
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session writes are blocked until the backend reloads its durable state', 503)
+    if (typeof editorToken !== 'string' || session.editorToken !== editorToken
+      || session.editorPrincipalId !== principalId
+      || (editorEpoch !== undefined && editorEpoch !== session.editorEpoch)) {
+      throw new BackendError('SESSION_EDITOR_LEASE_LOST', 'the Session editor lease is no longer valid', 409)
+    }
+    if (session.editorExpiresAt <= this.now()) {
+      throw new BackendError('SESSION_EDITOR_LEASE_LOST', 'the Session editor lease is no longer valid', 409)
+    }
+  }
+
+  /**
+   * Release an editor lease held by the calling principal.
+   * @param session - Session holding the lease.
+   * @param principalId - Editor principal.
+   * @param editorToken - Lease token.
+   * @param editorEpoch - Lease epoch, checked when provided.
+   * @returns The released epoch.
+   */
+  releaseEditor(session, principalId, editorToken, editorEpoch) {
+    this.assertEditor(session, principalId, editorToken, editorEpoch)
+    const editorEpochReleased = session.editorEpoch
+    session.editorToken = undefined
+    session.editorExpiresAt = 0
+    session.editorPrincipalId = undefined
+    return { released: true, editorEpoch: editorEpochReleased }
+  }
+
+  /**
+   * Revoke any editor lease. Owner-only; used for handoff and ownership transfer.
+   * @param session - Session whose editor lease is revoked.
+   * @returns Whether a lease existed and its epoch.
+   */
+  revokeEditor(session) {
+    const existed = session.editorPrincipalId !== undefined && session.editorExpiresAt > this.now()
+    const editorEpoch = session.editorEpoch
+    session.editorToken = undefined
+    session.editorExpiresAt = 0
+    session.editorPrincipalId = undefined
+    return { revoked: existed, editorEpoch }
   }
 
   findHandoff(session, handoffId) {
@@ -2013,10 +2124,17 @@ function sessionResponse(session, extra = {}) {
   }
 }
 
-/** Operations a Session viewer may perform; everything else requires the owner lease. */
+/** Operations a Session viewer may perform; everything else requires the owner or editor lease. */
 const SHARED_READ_OPERATIONS = new Set(['open', 'read', 'stat'])
+/** Operations a Session editor may perform under an active editor lease. */
+const SHARED_EDITOR_OPERATIONS = new Set(['open', 'read', 'stat', 'editor-lease', 'append', 'flush'])
 
-async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts) {
+/** Stable, non-reversible actor identifier for collaboration audit records. */
+function collaborationPrincipalDigest(principalId) {
+  return createHash('sha256').update(principalId).digest('hex').slice(0, 16)
+}
+
+async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts, collaborationAudit) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -2063,26 +2181,47 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
       }
     }
     let session
-    let shared = false
+    let shared
+    const audit = collaborationAudit ?? (() => {})
     try {
       session = store.getForPrincipal(id, principalId)
     } catch (error) {
-      if (error?.code !== 'SESSION_NOT_FOUND' || !shares.isViewer(id, principalId)) throw error
-      if (!SHARED_READ_OPERATIONS.has(operation) || (operation === 'open' && body.access !== 'read')) {
+      const role = error?.code === 'SESSION_NOT_FOUND' ? shares.roleOf(id, principalId) : undefined
+      if (role === undefined) throw error
+      const allowed = role === 'editor' ? SHARED_EDITOR_OPERATIONS : SHARED_READ_OPERATIONS
+      if (!allowed.has(operation) || (operation === 'open' && body.access === 'write' && role !== 'editor')) {
         throw new BackendError(
-          'SESSION_READ_ONLY',
-          'a shared Session is read-only for its viewer',
+          role === 'editor' ? 'SESSION_OWNER_REQUIRED' : 'SESSION_READ_ONLY',
+          role === 'editor'
+            ? 'this operation requires the Session owner lease'
+            : 'a shared Session is read-only for its viewer',
           403,
           undefined,
           { sessionId: id },
         )
       }
       session = store.get(id)
-      shared = true
+      shared = role
     }
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
       if (body.access === 'write') {
+        if (shared === 'editor') {
+          try {
+            const editor = store.claimEditor(session, principalId, body.editorToken, body.editorEpoch)
+            await audit({
+              action: 'editor-lease.claim', sessionId: id, principalDigest: collaborationPrincipalDigest(principalId),
+              role: 'editor', outcome: 'granted', editorEpoch: editor.editorEpoch,
+            })
+            return sessionResponse(session, { editor, shared: true, role: 'editor' })
+          } catch (error) {
+            await audit({
+              action: 'editor-lease.claim', sessionId: id, principalDigest: collaborationPrincipalDigest(principalId),
+              role: 'editor', outcome: 'denied', code: error?.code ?? 'UNKNOWN',
+            })
+            throw error
+          }
+        }
         admission?.mountSession(id)
         try {
           return sessionResponse(session, { owner: store.claim(session, body.ownerToken, body.ownerEpoch) })
@@ -2091,9 +2230,9 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
           throw error
         }
       }
-      return sessionResponse(session, shared ? { shared: true } : {})
+      return sessionResponse(session, shared === undefined ? {} : { shared: true, role: shared })
     }
-    if (operation === 'stat') return sessionResponse(session, shared ? { shared: true } : {})
+    if (operation === 'stat') return sessionResponse(session, shared === undefined ? {} : { shared: true, role: shared })
     if (operation === 'read') {
       const offset = body.offset === undefined ? 0 : boundedInteger(body.offset, 'offset', MAX_EVENTS)
       const length = body.length === undefined ? MAX_SESSION_READ_EVENTS : boundedInteger(body.length, 'length', MAX_SESSION_READ_EVENTS)
@@ -2106,7 +2245,7 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
         durableThroughSeq: session.durableThroughSeq,
         ownerEpoch: session.ownerEpoch,
         hasMore: offset + page.length < session.events.length,
-        ...(shared ? { shared: true } : {}),
+        ...(shared === undefined ? {} : { shared: true, role: shared }),
       })
     }
     if (operation === 'authorize-llm') {
@@ -2166,7 +2305,46 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
         throw error
       }
     }
-    store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+    if (shared === 'editor') {
+      if (operation === 'editor-lease') {
+        try {
+          let result
+          if (body.action === 'claim') {
+            result = { editor: store.claimEditor(session, principalId, body.editorToken, body.editorEpoch) }
+          } else if (body.action === 'renew') {
+            result = { editor: store.renewEditor(session, principalId, body.editorToken, body.editorEpoch) }
+          } else if (body.action === 'release') {
+            result = store.releaseEditor(session, principalId, body.editorToken, body.editorEpoch)
+          } else {
+            throw new BackendError('INVALID_REQUEST', 'action must be claim, renew, or release')
+          }
+          await audit({
+            action: `editor-lease.${body.action}`, sessionId: id, principalDigest: collaborationPrincipalDigest(principalId),
+            role: 'editor', outcome: body.action === 'release' ? 'released' : 'granted',
+            editorEpoch: result.editor?.editorEpoch ?? result.editorEpoch,
+          })
+          return { sessionId: id, role: 'editor', ...result }
+        } catch (error) {
+          await audit({
+            action: `editor-lease.${String(body.action)}`, sessionId: id, principalDigest: collaborationPrincipalDigest(principalId),
+            role: 'editor', outcome: 'denied', code: error?.code ?? 'UNKNOWN',
+          })
+          throw error
+        }
+      }
+      store.assertEditor(session, principalId, body.editorToken, body.editorEpoch)
+    } else if (operation === 'editor-lease') {
+      if (body.action !== 'revoke') throw new BackendError('INVALID_REQUEST', 'only the Session owner may revoke an editor lease')
+      store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+      const result = store.revokeEditor(session)
+      await audit({
+        action: 'editor-lease.revoke', sessionId: id, principalDigest: collaborationPrincipalDigest(principalId),
+        role: 'owner', outcome: result.revoked ? 'revoked' : 'none', editorEpoch: result.editorEpoch,
+      })
+      return sessionResponse(session, result)
+    } else {
+      store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+    }
     if (operation === 'renew') {
       admission?.renewMount(id)
       return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
@@ -5254,6 +5432,26 @@ export async function createBrowserNativeV2Server(options) {
     boundedInteger(limit ?? ACCESS_AUDIT_LIMIT, 'accessAudit limit', ACCESS_AUDIT_LIMIT)
     return accessAuditEntries.slice(-(limit ?? ACCESS_AUDIT_LIMIT)).map(clone)
   }
+  const collaborationAuditEntries = []
+  /**
+   * Record one editor lease, append, or share arbitration outcome.
+   * @param entry - Action, Session, actor digest, role, outcome, and optional details.
+   */
+  const recordCollaboration = entry => {
+    const record = { at: Date.now(), ...entry }
+    collaborationAuditEntries.push(record)
+    if (collaborationAuditEntries.length > ACCESS_AUDIT_LIMIT) collaborationAuditEntries.shift()
+    return observabilityJournal.appendCollaboration(structuredClone(record))
+  }
+  /**
+   * Read collaboration audit evidence newest-first ordering preserved.
+   * @param {number} [limit] - Number of newest entries to return, at most 200.
+   * @returns {object[]} Editor lease and write arbitration records.
+   */
+  const collaborationAudit = limit => {
+    boundedInteger(limit ?? ACCESS_AUDIT_LIMIT, 'collaborationAudit limit', ACCESS_AUDIT_LIMIT)
+    return collaborationAuditEntries.slice(-(limit ?? ACCESS_AUDIT_LIMIT)).map(clone)
+  }
   const MAX_DURABLE_TOOL_WRITE_BYTES = 1 * 1024 * 1024
   const MAX_DURABLE_TOOL_READ_BYTES = 2 * 1024 * 1024
   const DURABLE_WORKSPACE_ROOT = '/dsh/home/workspace/'
@@ -5379,6 +5577,10 @@ export async function createBrowserNativeV2Server(options) {
   accessAuditEntries.push(...observabilityRestore.accessDenials)
   if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) {
     accessAuditEntries.splice(0, accessAuditEntries.length - ACCESS_AUDIT_LIMIT)
+  }
+  collaborationAuditEntries.push(...observabilityRestore.collaboration)
+  if (collaborationAuditEntries.length > ACCESS_AUDIT_LIMIT) {
+    collaborationAuditEntries.splice(0, collaborationAuditEntries.length - ACCESS_AUDIT_LIMIT)
   }
   usageAudit.push(...observabilityRestore.usage)
   const durableHost = createDurableTurnHost({
@@ -5779,8 +5981,13 @@ export async function createBrowserNativeV2Server(options) {
             ...usage.log,
             ...diagnosticLog.filter(entry => entry.sessionId === sessionId),
             ...accessDenials.map(entry => ({ kind: 'access-denial', ...entry })),
+            ...collaborationAudit().filter(entry => entry.sessionId === sessionId).map(entry => ({ kind: 'collaboration', ...entry })),
           ].slice(-100),
-          audit: { usage: { providers: usage.providers, totals: usage.totals }, accessDenials },
+          audit: {
+            usage: { providers: usage.providers, totals: usage.totals },
+            accessDenials,
+            collaboration: collaborationAudit().filter(entry => entry.sessionId === sessionId),
+          },
         }, {
           'content-disposition': `attachment; filename="dsh-support-bundle-${sessionId}.json"`,
         })
@@ -6340,16 +6547,16 @@ export async function createBrowserNativeV2Server(options) {
         try {
           snapshot = await store.exclusive(sessionId, async () => {
             let session
-            let shared = false
+            let sharedRole
             try {
               session = store.getForPrincipal(sessionId, principalId)
             } catch (error) {
-              if (error?.code !== 'SESSION_NOT_FOUND' || !sessionShares.isViewer(sessionId, principalId)) throw error
+              sharedRole = error?.code === 'SESSION_NOT_FOUND' ? sessionShares.roleOf(sessionId, principalId) : undefined
+              if (sharedRole === undefined) throw error
               session = store.get(sessionId)
-              shared = true
             }
             if (fromSeq > session.events.length) throw new BackendError('INVALID_REQUEST', 'fromSeq is beyond the Session log')
-            return { events: clone(session.events.slice(fromSeq)), shared }
+            return { events: clone(session.events.slice(fromSeq)), role: sharedRole ?? 'owner' }
           })
         } catch (error) {
           subscription.close()
@@ -6366,7 +6573,7 @@ export async function createBrowserNativeV2Server(options) {
         response.write(`${JSON.stringify({
           kind: 'ready',
           sessionId,
-          role: snapshot.shared ? 'viewer' : 'owner',
+          role: snapshot.role,
           nextSeq,
         })}\n`)
         for (const event of snapshot.events) response.write(`${JSON.stringify({ kind: 'event', event })}\n`)
@@ -6412,6 +6619,7 @@ export async function createBrowserNativeV2Server(options) {
           session.principalId = toPrincipalId
           session.ownerToken = undefined
           session.ownerExpiresAt = 0
+          store.revokeEditor(session)
           let share
           try {
             share = await sessionShares.grant({ sessionId, ownerPrincipalId: toPrincipalId, viewerPrincipalId: fromPrincipalId })
@@ -6441,12 +6649,18 @@ export async function createBrowserNativeV2Server(options) {
         if (operation === 'share') {
           const sessionId = assertSessionId(body.sessionId)
           const viewerPrincipalId = assertPrincipalId(body.viewerPrincipalId)
+          const role = body.role === undefined ? 'viewer' : body.role
+          if (role !== 'viewer' && role !== 'editor') throw new BackendError('INVALID_REQUEST', 'role must be viewer or editor')
           const result = await store.exclusive(sessionId, async () => {
             const session = store.getForPrincipal(sessionId, principalId)
             if (!workspaces.identities.has(viewerPrincipalId)) {
               throw new BackendError('PRINCIPAL_NOT_FOUND', 'the viewer principal does not exist', 404)
             }
-            const share = await sessionShares.grant({ sessionId, ownerPrincipalId: principalId, viewerPrincipalId })
+            const share = await sessionShares.grant({ sessionId, ownerPrincipalId: principalId, viewerPrincipalId, role })
+            await recordCollaboration({
+              action: 'share.grant', sessionId, principalDigest: collaborationPrincipalDigest(principalId),
+              role, outcome: 'granted', granteeDigest: collaborationPrincipalDigest(viewerPrincipalId),
+            })
             return sessionResponse(session, {
               share: clone(share),
               shares: clone(sessionShares.listForOwner(sessionId, principalId)),
@@ -6480,8 +6694,18 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission, sessionAppendReceipts)
-        if (operation === 'append' && result.replayed !== true) sessionEvents.publish(result.sessionId, body.events)
+        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission, sessionAppendReceipts, recordCollaboration)
+        if (operation === 'append' && result.replayed !== true) {
+          sessionEvents.publish(result.sessionId, body.events)
+          await recordCollaboration({
+            action: 'session.append', sessionId: result.sessionId,
+            principalDigest: collaborationPrincipalDigest(principalId),
+            role: sessionShares.roleOf(result.sessionId, principalId) ?? 'owner',
+            outcome: 'accepted',
+            fromSeq: result.nextSeq - body.events.length,
+            toSeq: result.nextSeq - 1,
+          })
+        }
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return
@@ -6755,6 +6979,7 @@ export async function createBrowserNativeV2Server(options) {
     llm,
     egress,
     accessAudit,
+    collaborationAudit,
     sweepAttachments,
     durableHost,
     durableRecovery,

@@ -245,7 +245,8 @@ Backend wire DTO 不是 TypeScript same-process value，必须做运行时解析
 | `/api/browser-native/session/close` | POST | `handleToken`, `requestId` | owner release；close 幂等 |
 | `/api/browser-native/session/stat` | POST | `sessionId` | snapshot 或 not found |
 | `/api/browser-native/session/list` | GET | bounded query | bounded snapshot list |
-| `/api/browser-native/session/share` | POST | `sessionId`, `viewerPrincipalId`, `requestId` | owner-only viewer grant；viewer 只读，租约与写入保持 owner 专属 |
+| `/api/browser-native/session/share` | POST | `sessionId`, `viewerPrincipalId`, `role`, `requestId` | owner-only `viewer`/`editor` grant；viewer 只读，editor 需另行持有单写者 editor lease |
+| `/api/browser-native/session/editor-lease` | POST | `sessionId`, `action`, `editorToken`, `editorEpoch`, `requestId` | editor 的 `claim`/`renew`/`release`；owner 的 `revoke` |
 
 ### 7.3 Backend storage
 

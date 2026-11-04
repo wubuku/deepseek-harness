@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-138：editor 角色与双 editor 单租约仲裁
+
+```text
+changeId: BN-P2-138
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/session-shares.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/session-editor-collaboration.test.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/browser-native-dsh-plan-v2.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: share 只有 viewer 角色，协作者无法在不取得 owner token 的前提下写入；也没有同一 Session 两个 editor 的写权归属规则，无法证明并发写入不撕裂或可从审计追溯。
+existingExtensionPointsChecked: 复用 `SessionShareStore`、`sessionOperation` 的 owner/viewer 分派、`expectedNextSeq` 追加校验、`store.exclusive` 串行化、`assertOwnerToken`/owner lease 与 `SessionEventHub`；复用 observability journal 的 JSONL 分段、哈希尾校验、redact 与恢复流程。未改 Agent Loop、Session 事件类型或格式、模型/工具协议、普通 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: 双 editor 谁取得写权、旧租约是否仍可写、并发同 seq 是否产生重复事件，只能由真实 HTTP 并发请求与重启恢复证明；静态阅读无法证明 lease 与 `expectedNextSeq` 两层裁定同时成立。
+behaviorChange: `session/share` 新增 `role`（`viewer` 缺省，`editor` 可共编），分享文件继续 `version: 1` 并在读取时把缺失 `role` 归一为 viewer。backend 新增内存态单写者 editor lease（`editorToken`/`editorEpoch`/过期时间）：editor `open(access: write)` 或 `session/editor-lease` 的 `claim` 取得租约，第二个 editor 返回 409 `SESSION_EDITOR_LEASE_HELD`，他人或过期租约写入返回 409 `SESSION_EDITOR_LEASE_LOST`；`renew`/`release` 由持有者自管，owner 用 `revoke` 强制收回，owner 移交时清空。editor 可 `append`/`flush`，不能 `renew`/`close`/`handoff`/`transfer`/`export`/再授权；并发同 `expectedNextSeq` 仍只有一个 200，另一个 409 `SEQ_CONFLICT`。新增 `session-collaboration.jsonl` 审计（share grant、lease granted/denied、editor append seq 区间、revoke），经 `app.collaborationAudit()` 与 support bundle 的 `audit.collaboration` 暴露；`leaseSnapshot` 增加 `editorsHeld`。
+consumersUpdated: `README.md` 实时协作章节与导航；`hosted-deployment.md` 共享章节与已验证清单；`browser-native-dsh-plan-v2.md` endpoint 表；本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/session-editor-collaboration.test.mjs` 1/1 通过（日志 seq `[0,1,2,3]`，并发追加 `[200,409]`，audit 11 条，重启恢复 11 条）。`node --test` 同时跑 backend-v2、observability-persistence、principal-isolation、threat-model-invariants 与新增用例共 80/80 通过；`session-sharing.e2e.mjs` 通过（viewer 仍 `SESSION_READ_ONLY`，授权与拒绝审计保持）。`poc-gate --group contract` 全绿 39/39。
+syncReplaySteps: 上游同步后复跑新增用例与 `poc-gate --group contract`；确认 `sessionOperation` 仍以 principalId 解析 owner、`SHARED_READ_OPERATIONS` 未扩大、`expectedNextSeq` 校验仍在 lease 校验之后、journal 仍对三个 JSONL 做哈希尾校验与 redact；若 share 文件版本变化，同步 `session-shares.mjs` 的 role 归一与 README/plan 的 `role` 字段说明。
+deleteCondition: 正式产品以协作权限模型取代该 PoC，或 Session 共享被移除。
+status: implemented
+```
+
 ### BN-P2-137：一条 poc-gate 汇总合同、E2E、性能与混沌回归
 
 ```text

@@ -56,11 +56,11 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 | 主题 | 入口 |
 | --- | --- |
-| 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与只读共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
+| 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
@@ -1405,7 +1405,17 @@ node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.
 
 文中同时给出触发扩展的可测量条件：跨主机同 Session 写入、恢复时间超 RTO、`activeRequests` 接近准入上限或出现 admission 拒绝、`store.load()` 启动耗时随 Session 数线性增长、RPO = 0 的节点故障要求、按租户独立存储边界。未满足这些条件时继续单节点，不按“多实例 HA”宣称。
 
-## 实时协作与执行权移交
+## 实时协作、editor 共编与执行权移交
+
+`session/share` 的 `role` 支持 `viewer` 与 `editor`。viewer 只读；editor 可 `open(access: 'write')`、`append`、`flush` 与维护自己的编辑租约，但拿不到 owner token，不能 `renew`、`close`、`handoff`、`transfer`、`export` 或再授权。同一 Session 同时只允许一个活跃 editor lease：第二个人 `open(access: 'write')` 返回 409 `SESSION_EDITOR_LEASE_HELD` 与 `retryAfterMs`；只有当前持有者能用 `editorToken` + `editorEpoch` 写入，其他人或不匹配的旧租约返回 409 `SESSION_EDITOR_LEASE_LOST`。editor 可用 `POST /session/editor-lease` 的 `claim`/`renew`/`release` 维护租约，owner 用 `revoke` 强制收回；owner 移交时自动清空 editor lease。
+
+双 editor 的写入裁定是两层：lease 保证同一时刻只有一个 editor 可写，`expectedNextSeq` 保证即使两个请求同时到达（同一个人两个标签页或网络重放），也只有第一个追加被接受，另一个返回 409 `SEQ_CONFLICT`，日志不会出现重复或乱序 seq。owner 与 editor 之间不互斥，owner 仍可写入；冲突同样由 `expectedNextSeq` 拒绝，不产生撕裂。
+
+`tests/session-editor-collaboration.test.mjs` 用 owner、两个 editor 和一个 viewer 的真实 HTTP 面验证：alice 先取租约（epoch 1），bob 取租约被 409 拒绝；bob 用 alice 的租约追加返回 `SESSION_EDITOR_LEASE_LOST`；alice 追加 seq 2 并 flush；两个同 `expectedNextSeq` 的并发追加恰好一个 200、一个 `SEQ_CONFLICT`；alice release 后 bob 取得 epoch 2，alice 的旧租约追加被拒绝；owner `revoke` 后 bob 追加被拒绝；viewer 追加返回 `SESSION_READ_ONLY`；最终日志 seq 为 `[0,1,2,3]`。`app.collaborationAudit()` 记录 share grant、lease granted/denied、editor append 的 seq 区间与 revoke，写入 `session-collaboration.jsonl`，重启后恢复 11 条。复跑：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/session-editor-collaboration.test.mjs
+```
 
 `tests/collaboration-stream.test.mjs` 用两个独立 principal 验证只读协作者与执行权移交。只读者通过 `GET /api/browser-native/session/events?sessionId=…&fromSeq=…` 订阅 NDJSON：先回放 `fromSeq` 之后的已存事件，再持续接收 `append` 产生的增量；首行 `ready` 给出 `role: viewer` 与 `nextSeq`。执行权持有者可调用 `POST /api/browser-native/session/transfer` 把 Session 转给已有 viewer grant 的 principal。
 
@@ -1419,7 +1429,7 @@ node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.
 node --test docs/drafts/browser-native-dsh-poc/tests/collaboration-stream.test.mjs
 ```
 
-边界：订阅 hub 在 backend 进程内；authority 转发模式下，owner 与 viewer 必须命中同一 backend 才能收到实时增量，跨 backend fan-out 未实现。没有页面级 viewer UI，验证停在协议与 HTTP 客户端层。
+边界：订阅 hub 在 backend 进程内；authority 转发模式下，owner、viewer 与 editor 必须命中同一 backend 才能收到实时增量，跨 backend fan-out 未实现。editor lease 只在 backend 内存中，进程重启后需重新 `claim`；`app.collaborationAudit()` 与 `session-collaboration.jsonl` 持久化裁定记录，不持久化租约本身。没有页面级 viewer/editor UI，验证停在协议与 HTTP 客户端层。
 
 ## 离线与重连体验
 

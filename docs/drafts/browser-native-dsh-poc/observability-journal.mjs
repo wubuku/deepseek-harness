@@ -21,8 +21,10 @@ const GENESIS = 'GENESIS'
 const MAX_JOURNAL_BYTES = 4 * 1024 * 1024
 const MAX_RESTORED_ACCESS_DENIALS = 200
 const MAX_RESTORED_USAGE = 1_000
+const MAX_RESTORED_COLLABORATION = 200
 const ACCESS_DENIALS_FILE = 'access-denials.jsonl'
 const USAGE_FILE = 'usage.jsonl'
+const COLLABORATION_FILE = 'session-collaboration.jsonl'
 const METRICS_FILE = 'metrics.json'
 
 /**
@@ -137,8 +139,8 @@ export async function redactObservabilityJournal({ dataDir, shouldRemove }) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('observability redaction requires dataDir')
   if (typeof shouldRemove !== 'function') throw new TypeError('observability redaction requires shouldRemove')
   const directory = join(dataDir, 'observability')
-  const removed = { accessDenials: 0, usage: 0 }
-  for (const [file, name] of [[ACCESS_DENIALS_FILE, 'accessDenials'], [USAGE_FILE, 'usage']]) {
+  const removed = { accessDenials: 0, usage: 0, collaboration: 0 }
+  for (const [file, name] of [[ACCESS_DENIALS_FILE, 'accessDenials'], [USAGE_FILE, 'usage'], [COLLABORATION_FILE, 'collaboration']]) {
     const path = join(directory, file)
     const raw = await readIfExists(path)
     const parsed = parseLedger(raw, undefined)
@@ -276,6 +278,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   const restore = async () => {
     const denials = await readLedger(ACCESS_DENIALS_FILE, MAX_RESTORED_ACCESS_DENIALS)
     const usage = await readLedger(USAGE_FILE, MAX_RESTORED_USAGE)
+    const collaboration = await readLedger(COLLABORATION_FILE, MAX_RESTORED_COLLABORATION)
     let metrics
     let metricsError
     try {
@@ -291,14 +294,16 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
     return {
       accessDenials: denials.records,
       usage: usage.records,
-      truncated: denials.truncated || usage.truncated,
-      invalidLines: denials.invalidLines + usage.invalidLines,
+      collaboration: collaboration.records,
+      truncated: denials.truncated || usage.truncated || collaboration.truncated,
+      invalidLines: denials.invalidLines + usage.invalidLines + collaboration.invalidLines,
       metrics,
       metricsError,
       integrity: {
         accessDenials: denials.integrity,
         usage: usage.integrity,
-        verified: denials.integrity.verified && usage.integrity.verified,
+        collaboration: collaboration.integrity,
+        verified: denials.integrity.verified && usage.integrity.verified && collaboration.integrity.verified,
       },
     }
   }
@@ -334,7 +339,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
     const run = chain.then(async () => {
       tails.clear()
       const removed = await redactObservabilityJournal({ dataDir, shouldRemove })
-      await Promise.all([ACCESS_DENIALS_FILE, USAGE_FILE].map(file => ensureTail(file)))
+      await Promise.all([ACCESS_DENIALS_FILE, USAGE_FILE, COLLABORATION_FILE].map(file => ensureTail(file)))
       return removed
     })
     chain = run.then(() => undefined, error => {
@@ -348,6 +353,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   return {
     appendAccessDenial: entry => append(ACCESS_DENIALS_FILE, entry),
     appendUsage: entry => append(USAGE_FILE, entry),
+    appendCollaboration: entry => append(COLLABORATION_FILE, entry),
     persistMetrics,
     restore,
     redact,
