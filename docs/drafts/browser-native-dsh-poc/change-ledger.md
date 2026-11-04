@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-110：接近上限的大 Workspace 同步基线
+
+```text
+changeId: BN-P2-110
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs; docs/drafts/browser-native-dsh-poc/performance-baseline.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 性能基线只覆盖空 Workspace；“数千文件”同步耗时、请求数与容量上限没有可判定证据。
+existingExtensionPointsChecked: 复用真实 Workspace blob/commit API、preview 与 Worker 同步路径；不改 Session 格式、Worker 同步算法或 `MAX_ENTRIES`。
+whyDraftOnlyWasInsufficient: 小样本冷启动数字无法回答接近 2 000 entry 时的拉取时间、请求量与是否发生回写。
+behaviorChange: 无产品行为变化；新增性能 E2E 与基线记录。
+consumersUpdated: `performance-baseline.md` 新增“大 Workspace 同步”节，并在限制中记录 2 000 entry 上限。
+test: `node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs` 通过：1 990 文件、52 620 字节，冷拉取 6 022 ms（330 文件/s），1 次 manifest、1 990 次 blob 下载、0 次回写 commit；列表返回 1 990 项；2 000 文件会被 413 `WORKSPACE_TOO_LARGE` 拒绝。
+syncReplaySteps: 上游同步后重跑该 E2E；若提高 `MAX_ENTRIES`，用更大文件数重跑并更新基线。
+deleteCondition: Workspace 容量上限与目标容量确定并接入持续性能门禁后，把本基线并入常规性能套件。
+status: implemented
+```
+
 ### BN-P2-109：WebKit 替代路径评估收口
 
 ```text
