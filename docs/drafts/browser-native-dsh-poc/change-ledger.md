@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-139：PoC 到产品迁移映射与架构落差
+
+```text
+changeId: BN-P2-139
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/poc-to-product-migration-map.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: PoC 已有 73 个模块和大量验证结论，但缺少逐模块的产品归属判定与 PoC/产品架构落差，立项时无法区分可直接搬运的工具、必须重写的语义和只服务实验路线的代码。
+existingExtensionPointsChecked: 对照 `docs/architecture.md`、`packages/README.md` 与 `packages/session`、`packages/api`、`packages/host`、`packages/client`、`packages/storage`、`packages/attachment`、`packages/llm`、`packages/telemetry`、`packages/runtime-diagnostics`、`packages/experimental/webworker-runtime` 的 README；逐文件核对 PoC 模块头部职责与依赖。未改任何代码。
+whyDraftOnlyWasInsufficient: 逐模块判定必须覆盖实际存在的 73 个文件而不是抽样；架构落差必须落到具体产品包/seam，否则“需重构”无法转成立项任务。只有按文件清单穷举并核对依赖，才能发现 7 个可复用工具、39 个需重构模块和 27 个应丢弃模块的分布。
+behaviorChange: 仅文档。新增迁移映射，含判定口径、9 组逐模块表（73 个文件各出现一次）、组合模型/Session 权威/执行位置/存储/安全/观测/客户端七类落差、P0–P3 分期与风险；README 导航与产品就绪度段落新增入口。
+consumersUpdated: PoC README 导航与产品就绪度段落；本 ledger。
+tests: 文档型交付，无代码变更。`ls -1 *.mjs *.ts | wc -l` 为 73（27 个 `.mjs` + 46 个 `.ts`）；表中可直接复用 7、需重构 39、应丢弃 27，合计 73，且每个文件在表中恰好出现一次。迁移判定引用的行为证据来自已提交的 `poc-gate` 基线、`session-editor-collaboration.test.mjs`、`session-sharing.e2e.mjs`、`principal-data.e2e.mjs`、`offline-reconnect.e2e.mjs` 与 `chaos-regression-suite.md`；产品落点引用上述包 README。
+syncReplaySteps: 上游同步后若 `packages/` 新增/改名 seam、`webworker-runtime` 实验状态变化或 PoC 模块增删，重跑 `ls -1 *.mjs *.ts | wc -l` 并更新逐模块表与计数；确认 README 的产品就绪度段落与导航链接仍指向本文。
+deleteCondition: 迁移完成或 PoC 目录移除。
+status: implemented
+```
+
 ### BN-P2-138：editor 角色与双 editor 单租约仲裁
 
 ```text
