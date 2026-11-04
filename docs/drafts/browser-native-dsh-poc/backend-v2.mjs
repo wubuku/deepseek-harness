@@ -462,6 +462,19 @@ async function readBody(request) {
   }
 }
 
+/**
+ * Close one listener after dropping its keep-alive connections.
+ * @param {import('node:http').Server} server - Listener to close.
+ * @returns {Promise<void>} Resolves once the listener is down or was never started.
+ */
+function closeServer(server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise((resolveClose, reject) => {
+    server.closeAllConnections()
+    server.close(error => error ? reject(error) : resolveClose())
+  })
+}
+
 function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -1275,9 +1288,11 @@ function auditResourceFor(pathname) {
  * @param {import('node:http').IncomingMessage} request - Incoming request.
  * @param {URL} url - Parsed request URL.
  * @param {boolean} internal - The request proved the shared state token.
+ * @param {ReadonlySet<string> | undefined} allowedOrigins - Additional page origins
+ * admitted by the split API listener; only those may send `same-site` browser fetches.
  * @returns {void} Throws a 403 or 400 BackendError when the request is refused.
  */
-function assertLocalRequest(request, url, internal) {
+function assertLocalRequest(request, url, internal, allowedOrigins) {
   const host = request.headers.host
   if (typeof host !== 'string' || host.length === 0) throw new BackendError('HOST_FORBIDDEN', 'request host is required', 403)
   let selfOrigin
@@ -1292,7 +1307,8 @@ function assertLocalRequest(request, url, internal) {
   if (!url.pathname.startsWith('/api/browser-native/')) return
   if (!internal) {
     const site = request.headers['sec-fetch-site']
-    if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site)) {
+    if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site)
+      && !(allowedOrigins !== undefined && site === 'same-site')) {
       throw new BackendError('ORIGIN_FORBIDDEN', 'cross-site requests are not allowed', 403)
     }
     const origin = request.headers.origin
@@ -1303,7 +1319,7 @@ function assertLocalRequest(request, url, internal) {
       } catch {
         throw new BackendError('ORIGIN_FORBIDDEN', 'request origin is invalid', 403)
       }
-      if (declaredOrigin !== selfOrigin.origin) {
+      if (declaredOrigin !== selfOrigin.origin && allowedOrigins?.has(declaredOrigin) !== true) {
         throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
       }
     }
@@ -4739,6 +4755,13 @@ export async function createBrowserNativeV2Server(options) {
   const connectionsCheckingIntervalMs = timeoutMs(options.connectionsCheckingIntervalMs ?? 1_000, 'connectionsCheckingIntervalMs')
   let activeRequests = 0
   let servedOrigin
+  let servedPreviewOrigin
+  let servedApiOrigin
+  if (options.apiPort !== undefined && (!Number.isInteger(options.apiPort) || options.apiPort < 0 || options.apiPort > 65_535)) {
+    throw new Error('apiPort must be a TCP port')
+  }
+  const apiPort = options.apiPort
+  const splitApi = apiPort !== undefined
   const startedAt = Date.now()
   const metrics = createMetricsRegistry()
   const usageAudit = []
@@ -4873,7 +4896,7 @@ export async function createBrowserNativeV2Server(options) {
     })
   }
 
-  const server = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs }, async (request, response) => {
+  const handleRequest = async (role, request, response) => {
     let url
     activeRequests += 1
     let released = false
@@ -4913,7 +4936,34 @@ export async function createBrowserNativeV2Server(options) {
       routeLabel = metricRoute(url.pathname)
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
-      assertLocalRequest(request, url, internalStateRequest)
+      const apiOrigin = servedApiOrigin
+      const previewOrigin = servedPreviewOrigin
+      const allowedOrigins = role === 'api' && apiOrigin !== undefined && previewOrigin !== undefined
+        ? new Set([previewOrigin]) : undefined
+      assertLocalRequest(request, url, internalStateRequest, allowedOrigins)
+      if (role === 'api') {
+        const requestedOrigin = request.headers.origin
+        if (typeof requestedOrigin === 'string' && previewOrigin !== undefined && requestedOrigin === previewOrigin) {
+          response.setHeader('access-control-allow-origin', requestedOrigin)
+          response.setHeader('access-control-allow-credentials', 'true')
+          response.setHeader('vary', 'origin')
+          if (request.method === 'OPTIONS') {
+            response.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS')
+            response.setHeader('access-control-allow-headers',
+              request.headers['access-control-request-headers'] ?? 'content-type, x-browser-native-protocol, x-browser-native-identity-mode')
+            response.setHeader('access-control-max-age', '600')
+            response.writeHead(204)
+            response.end()
+            return
+          }
+        }
+      }
+      if (splitApi && role === 'api' && !url.pathname.startsWith('/api/browser-native/')) {
+        throw new BackendError('NOT_FOUND', 'route not found', 404)
+      }
+      if (splitApi && role === 'preview' && url.pathname.startsWith('/api/browser-native/')) {
+        throw new BackendError('NOT_FOUND', 'route not found', 404)
+      }
       if (sharedStateOrigin !== undefined && !internalStateRequest && isSharedStatePath(url.pathname)) {
         await proxySharedStateRequest(request, response, sharedStateOrigin, sharedStateToken)
         return
@@ -5652,6 +5702,11 @@ export async function createBrowserNativeV2Server(options) {
         })
         return
       }
+      if (role === 'preview' && request.method === 'GET' && url.pathname === '/preview-api-origin') {
+        response.setHeader('cache-control', 'no-store')
+        sendJson(response, 200, { origin: servedApiOrigin ?? servedOrigin })
+        return
+      }
       if (request.method === 'GET') {
         await serveStatic(response, distRoot, url.pathname)
         return
@@ -5663,13 +5718,20 @@ export async function createBrowserNativeV2Server(options) {
       if (!response.headersSent && !response.destroyed) sendError(response, error)
       else response.destroy()
     }
-  })
-  server.requestTimeout = requestTimeoutMs
-  server.headersTimeout = headersTimeoutMs
-  server.keepAliveTimeout = keepAliveTimeoutMs
-  server.maxConnections = maxConnections
+  }
+  const previewServer = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs },
+    (request, response) => { void handleRequest('preview', request, response) })
+  const apiServer = createServer({ connectionsCheckingInterval: connectionsCheckingIntervalMs },
+    (request, response) => { void handleRequest('api', request, response) })
+  for (const server of [previewServer, apiServer]) {
+    server.requestTimeout = requestTimeoutMs
+    server.headersTimeout = headersTimeoutMs
+    server.keepAliveTimeout = keepAliveTimeoutMs
+    server.maxConnections = maxConnections
+  }
   return {
-    server,
+    server: previewServer,
+    get apiOrigin() { return servedApiOrigin },
     store,
     workspaces,
     crossStoreLedger,
@@ -5681,15 +5743,28 @@ export async function createBrowserNativeV2Server(options) {
     durableRecovery,
     listen: (port = options.port ?? 4175, host = options.host ?? '127.0.0.1') => new Promise((resolveListen, reject) => {
       const onError = async error => {
+        await Promise.allSettled([closeServer(previewServer), closeServer(apiServer)])
         await releaseDataDirLock().catch(() => {})
         reject(error)
       }
-      server.once('error', onError)
-      server.listen(port, host, () => {
-        server.off('error', onError)
-        const address = server.address()
-        servedOrigin = `http://${host}:${address.port}`
-        resolveListen(servedOrigin)
+      previewServer.once('error', onError)
+      previewServer.listen(port, host, () => {
+        previewServer.off('error', onError)
+        const address = previewServer.address()
+        servedPreviewOrigin = `http://${host}:${address.port}`
+        servedOrigin = servedPreviewOrigin
+        if (apiPort === undefined) {
+          servedApiOrigin = undefined
+          resolveListen(servedOrigin)
+          return
+        }
+        apiServer.once('error', onError)
+        apiServer.listen(apiPort, host, () => {
+          apiServer.off('error', onError)
+          const apiAddress = apiServer.address()
+          servedApiOrigin = `http://${host}:${apiAddress.port}`
+          resolveListen(servedOrigin)
+        })
       })
     }),
     close: async () => {
@@ -5697,10 +5772,7 @@ export async function createBrowserNativeV2Server(options) {
         if (attachmentGcSweepTimer !== undefined) clearInterval(attachmentGcSweepTimer)
         clearInterval(metricsSnapshotTimer)
         for (const controller of workspaceDownloads.values()) controller.abort()
-        await new Promise((resolveClose, reject) => {
-          server.closeAllConnections()
-          server.close(error => error ? reject(error) : resolveClose())
-        })
+        await Promise.all([closeServer(previewServer), closeServer(apiServer)])
       } finally {
         try {
           await observabilityJournal.persistMetrics(metricsView())

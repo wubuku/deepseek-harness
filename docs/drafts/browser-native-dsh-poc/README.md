@@ -121,6 +121,20 @@ node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
 
 本机真实 provider 配置文件是仓库根目录下的 `docs/drafts/.env`。API key 只存在 Node backend；不会发送给页面、Dedicated Worker、Session event、响应 body 或日志。不要把 `.env` 加入提交。
 
+### 预览与 API 分离源
+
+`--api-port` 在同一个 backend 进程再开一个 listener：preview 与静态资源留在 `--port`，`/api/browser-native/*` 只在 `--api-port`。API listener 只向预览 origin 返回 CORS 头（`Access-Control-Allow-Origin` + `Allow-Credentials` + `Vary: Origin`），其它来源 403；preview listener 对 API 路径返回 404。页面通过 `GET /preview-api-origin` 发现 API origin，Worker 只把 `/api/browser-native/*` 改写到该 origin，VFS image、overlay 与 bundle 仍留在 preview origin。
+
+```sh
+node docs/drafts/browser-native-dsh-poc/run-v2.mjs \
+  --port 4185 \
+  --api-port 4186 \
+  --data-dir /tmp/browser-native-dsh-v2-split \
+  --llm scripted
+```
+
+分离部署的浏览器验收见 `tests/preview-api-origin-split.e2e.mjs`。
+
 ## Durable Workspace 增量验证
 
 在浏览器内验证 OPFS bytes、IndexedDB snapshot 和 Worker 重建恢复时，使用额外的 `browser-native-durable=1` 参数；不带该参数仍是原有内存 Workspace mirror：

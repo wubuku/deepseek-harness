@@ -53,6 +53,8 @@ export interface TunnelInitFrame {
   readonly t: 'init'
   readonly image: string
   readonly overlays: readonly string[]
+  /** Origin for worker-side API calls when the API is served separately. */
+  readonly apiOrigin?: string
 }
 
 /** Every frame the page sends the worker. */
@@ -170,7 +172,15 @@ export function parseInboundFrame(data: unknown): TunnelInboundFrame {
     if (!Array.isArray(frame.overlays) || frame.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('webworker tunnel: init frame needs an array of string overlay urls')
     }
-    return { t: 'init', image: frame.image, overlays: frame.overlays as string[] }
+    if (frame.apiOrigin !== undefined && typeof frame.apiOrigin !== 'string') {
+      throw new Error('webworker tunnel: init frame apiOrigin must be a string origin')
+    }
+    return {
+      t: 'init',
+      image: frame.image,
+      overlays: frame.overlays as string[],
+      ...(frame.apiOrigin === undefined ? {} : { apiOrigin: frame.apiOrigin }),
+    }
   }
   const id = frame.id
   if (typeof id !== 'string' && typeof id !== 'number') {

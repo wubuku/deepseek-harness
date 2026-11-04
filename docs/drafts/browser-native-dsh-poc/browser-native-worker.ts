@@ -109,6 +109,41 @@ installCryptoGlobals()
 
 console.info('browser-native dsh: worker entry active')
 
+/**
+ * Origin serving `/api/browser-native/` when the preview page and the API are
+ * deployed separately; `undefined` keeps every request on the worker's origin.
+ */
+let backendApiOrigin: string | undefined
+
+const nativeFetch = globalThis.fetch.bind(globalThis)
+
+/**
+ * Fetch that keeps backend routes on the separately served API origin.
+ *
+ * Backend modules request `/api/browser-native/` routes by relative path. When
+ * the preview and API use different origins, a relative request would arrive at
+ * the preview listener, which serves no API routes and answers `route not
+ * found`. Requests outside that prefix (VFS image, overlays, bundles) belong to
+ * the preview origin and pass through unchanged.
+ * @param input - Request URL, `URL`, or `Request`.
+ * @param init - Request options.
+ * @returns The underlying fetch response.
+ */
+function browserNativeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const raw = typeof input === 'string' || input instanceof URL ? String(input) : input.url
+  const url = new URL(raw, self.location.origin)
+  if (backendApiOrigin === undefined || !url.pathname.startsWith('/api/browser-native/')) {
+    return nativeFetch(input as RequestInfo, init)
+  }
+  const target = new URL(`${url.pathname}${url.search}`, backendApiOrigin)
+  if (input instanceof Request) return nativeFetch(new Request(target, input), init)
+  // A cross-origin principal cookie is same-site, so `include` reaches it while
+  // a caller's `same-origin` default would strip it.
+  return nativeFetch(target, { ...init, credentials: 'include' })
+}
+
+globalThis.fetch = browserNativeFetch
+
 let host: WorkerHost | undefined
 let shellRole = false
 let durableWorkspace = false
@@ -218,6 +253,8 @@ interface BrowserNativeRuntimeProbeRequest {
   readonly requestId: string
   readonly durableWorkspace: boolean
   readonly testFault?: 'outbox-abort' | 'opfs-unavailable'
+  /** API origin when the preview server serves API routes separately. */
+  readonly apiOrigin?: string
 }
 
 function isRuntimeProbeRequest(value: unknown): value is BrowserNativeRuntimeProbeRequest {
@@ -227,6 +264,7 @@ function isRuntimeProbeRequest(value: unknown): value is BrowserNativeRuntimePro
     && typeof data.requestId === 'string' && data.requestId.length > 0
     && typeof data.durableWorkspace === 'boolean'
     && (data.testFault === undefined || data.testFault === 'outbox-abort' || data.testFault === 'opfs-unavailable')
+    && (data.apiOrigin === undefined || typeof data.apiOrigin === 'string')
 }
 
 function failedProbeReport(
@@ -265,8 +303,9 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
     return
   }
   if (request.testFault === 'outbox-abort') sessionOutboxProbesToAbort = 1
+  if (request.apiOrigin !== undefined) backendApiOrigin = new URL(request.apiOrigin).origin
   runtimeProbePromise = probeBrowserNativeRuntime({
-    backendOrigin: self.location.origin,
+    backendOrigin: backendApiOrigin ?? self.location.origin,
     durableWorkspace,
     probeSessionOutbox: async () => await sessionOutbox.probe(),
     ...(request.testFault === 'opfs-unavailable' ? {
@@ -827,10 +866,18 @@ function workspaceTestResponse(requestId: string, response: Record<string, unkno
   workspaceTestPort?.postMessage({ ...response, requestId })
 }
 
+function browserNativeApiUrl(path: string): string {
+  return backendApiOrigin === undefined ? path : new URL(path, backendApiOrigin).toString()
+}
+
+function browserNativeCredentials(): RequestCredentials {
+  return backendApiOrigin === undefined ? 'same-origin' : 'include'
+}
+
 async function browserNativeJson(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(path, {
+  const response = await fetch(browserNativeApiUrl(path), {
     method: 'POST',
-    credentials: 'same-origin',
+    credentials: browserNativeCredentials(),
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ protocolVersion: 1, requestId: crypto.randomUUID(), ...body }),
   })
@@ -846,7 +893,7 @@ async function browserNativeJson(path: string, body: Record<string, unknown>): P
 }
 
 async function browserNativeGet(path: string): Promise<Record<string, unknown>> {
-  const response = await fetch(path, { credentials: 'same-origin' })
+  const response = await fetch(browserNativeApiUrl(path), { credentials: browserNativeCredentials() })
   const value: unknown = await response.json()
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('cross-store response is invalid')
   if (!response.ok) throw new Error(`cross-store query failed with ${String(response.status)}`)
@@ -857,8 +904,8 @@ async function runCrossStoreProbe(request: BrowserNativeWorkspaceTestRequest): P
   if (workspaceRuntime === undefined || !workspaceRuntime.isDurableWorkspace()) throw new Error('cross-store probe requires a durable Workspace')
   const path = request.path ?? `/dsh/home/workspace/cross-store-${crypto.randomUUID()}.txt`
   const content = request.content ?? 'browser-native cross-store checkpoint\n'
-  const identityResponse = await fetch('/api/browser-native/workspace/identity', {
-    credentials: 'same-origin',
+  const identityResponse = await fetch(browserNativeApiUrl('/api/browser-native/workspace/identity'), {
+    credentials: browserNativeCredentials(),
     headers: { 'x-browser-native-identity-mode': 'existing' },
   })
   const identity: unknown = await identityResponse.json()
@@ -2182,8 +2229,9 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       return
     }
     if (request.action === 'session-handoff') {
-      const response = await fetch('/api/browser-native/session/handoff', {
+      const response = await fetch(browserNativeApiUrl('/api/browser-native/session/handoff'), {
         method: 'POST',
+        credentials: browserNativeCredentials(),
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           protocolVersion: 1,
@@ -2233,8 +2281,9 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
         handoffSession: async (checkpoint: BrowserNativeExecutionHandoffCheckpoint, handoffId: string) => {
           const lease = workspaceRuntime.getWriterLease()
           if (lease === undefined) throw new Error('Workspace writer lease is unavailable')
-          const response = await fetch('/api/browser-native/session/handoff', {
+          const response = await fetch(browserNativeApiUrl('/api/browser-native/session/handoff'), {
             method: 'POST',
+            credentials: browserNativeCredentials(),
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               protocolVersion: 1,
@@ -2704,6 +2753,10 @@ self.addEventListener('message', (event: MessageEvent) => {
     }
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('browser-native worker: init frame needs an array of string overlay urls')
+    }
+    if (data.apiOrigin !== undefined) {
+      if (typeof data.apiOrigin !== 'string') throw new Error('browser-native worker: init frame apiOrigin must be a string origin')
+      backendApiOrigin = new URL(data.apiOrigin).origin
     }
     const preflight = evaluateBrowserNativeProfile(BROWSER_NATIVE_PROFILE_MANIFEST)
     if (!preflight.ok) throw new Error(formatBrowserNativePreflightFailure(preflight))

@@ -153,7 +153,7 @@ function browserNativeTestUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-async function probeBrowserNativeWorker(currentWorker: Worker): Promise<void> {
+async function probeBrowserNativeWorker(currentWorker: Worker, apiOrigin?: string): Promise<void> {
   const channel = new MessageChannel()
   const requestId = browserNativeTestUuid()
   await new Promise<void>((resolve, reject) => {
@@ -197,6 +197,7 @@ async function probeBrowserNativeWorker(currentWorker: Worker): Promise<void> {
         ...(browserNativeRuntimeProbeTest && browserNativeProbeFault !== undefined
           ? { testFault: browserNativeProbeFault }
           : {}),
+        ...(apiOrigin === undefined ? {} : { apiOrigin }),
       }, [channel.port2])
     } catch (error) {
       finish(error instanceof Error ? error : new Error('browser-native startup blocked: PROBE_POST_FAILED'))
@@ -277,7 +278,7 @@ function spawnBrowserNativeWorker(): Worker {
  */
 async function prepareBrowserNativeWorker(): Promise<Worker> {
   const currentWorker = spawnBrowserNativeWorker()
-  await probeBrowserNativeWorker(currentWorker)
+  await probeBrowserNativeWorker(currentWorker, browserNative ? await browserNativeApiOrigin() : undefined)
   markBoot('workerProbed')
   return currentWorker
 }
@@ -322,6 +323,26 @@ function showUnsupportedBrowser(issue: BrowserNativeSupportIssueCode): void {
   document.body.append(notice)
 }
 
+/**
+ * Read the preview server's API origin when the deployment serves API routes separately.
+ * @returns The API origin, or undefined when the page origin already serves the API.
+ */
+async function browserNativeApiOrigin(): Promise<string | undefined> {
+  try {
+    const response = await fetch(new URL('preview-api-origin', document.baseURI), { cache: 'no-store' })
+    if (!response.ok) return undefined
+    const value: unknown = await response.json()
+    const origin = value !== null && typeof value === 'object' && typeof (value as { origin?: unknown }).origin === 'string'
+      ? (value as { origin: string }).origin
+      : undefined
+    if (origin === undefined) return undefined
+    const resolved = new URL(origin).origin
+    return resolved === globalThis.location.origin ? undefined : resolved
+  } catch {
+    return undefined
+  }
+}
+
 async function bootBrowserNativePreview(): Promise<void> {
   try {
     const prepared = browserNativePrewarm ? prepareBrowserNativeWorker() : undefined
@@ -330,8 +351,9 @@ async function bootBrowserNativePreview(): Promise<void> {
     markBoot('sourceChosen')
     if (!browserNative || !pageLifecycle.unloading) {
       const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
+      const apiOrigin = browserNative ? await browserNativeApiOrigin() : undefined
       if (browserNative) await connectBrowserNativePageControl(currentWorker, { durable: browserNativeDurable })
-      if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker)
+      if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker, apiOrigin)
       if (browserNative && prepared === undefined) markBoot('workerProbed')
       markBoot('hostConnectStart')
       await connectWorkerHost(currentWorker, {
@@ -339,6 +361,7 @@ async function bootBrowserNativePreview(): Promise<void> {
         overlays: browserNative
           ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]
           : source.overlays,
+        ...(apiOrigin === undefined ? {} : { apiOrigin }),
       })
       markBoot('hostConnected')
     }

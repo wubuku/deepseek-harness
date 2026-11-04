@@ -54,6 +54,11 @@ export interface WorkerHostConnectOptions {
   readonly image?: string | URL
   /** Ordered data overlay URLs, resolved against the page like the base image. */
   readonly overlays?: readonly (string | URL)[]
+  /**
+   * Origin that serves browser-native API routes when it differs from the page.
+   * Omitted, every tunnel and worker request keeps resolving against the page.
+   */
+  readonly apiOrigin?: string | URL
 }
 
 /** Inputs for the optional pre-boot filesystem-source chooser. */
@@ -148,10 +153,14 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
   // subscription keeps that from surfacing as an unhandled rejection.
   void ready.promise.catch(() => {})
   try {
-    const tunnel = new WorkerTunnel(worker)
+    const apiOrigin = options?.apiOrigin === undefined
+      ? undefined
+      : new URL(options.apiOrigin, document.baseURI).origin
+    const tunnel = new WorkerTunnel(worker, apiOrigin)
     tunnel.init(
       new URL(options?.image ?? IMAGE_FILE_NAME, document.baseURI).href,
       (options?.overlays ?? []).map(overlay => new URL(overlay, document.baseURI).href),
+      apiOrigin,
     )
     const payload = await tunnel.bootPayload()
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {

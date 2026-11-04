@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-105：预览与 API 分离源部署与跨 origin Worker 路由
+
+```text
+changeId: BN-P2-105
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/run-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/preview-api-origin-split.e2e.mjs; apps/web/src/preview.ts; packages/experimental/webworker-runtime/src/client/client.ts; packages/experimental/webworker-runtime/src/client/index.ts; packages/experimental/webworker-runtime/src/transport/frames.ts; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 威胁模型 T5 与未闭环表把“静态预览与 `/api/browser-native/*` 共享 origin 与 cookie 作用域”列为残余风险；关闭条件要求 API 部署到独立 origin、CORS 仅放行预览 origin，并用跨 origin 页面断言路径不退化。
+existingExtensionPointsChecked: backend 已有单一请求处理器、loopback Host 校验与 `assertLocalRequest`；webworker-runtime 已有 `WorkerTunnel` 与 init frame 协议；页面已有 `browserNativeApiOrigin` 接线点。只在既有 listener、tunnel URL 解析与 init frame 上扩展，不改 Session、wire、profile 或 Agent Loop。
+whyDraftOnlyWasInsufficient: 同源访问能力由实际部署拓扑决定；文档不能阻止页面脚本直接调用同源 API，也不能证明分离后 Worker 与 boot 路径仍然工作。
+behaviorChange: `run-v2.mjs --api-port` 让同一进程监听两个端口，preview 端口只服务静态资源与 discovery，API 端口只服务 `/api/browser-native/*`；API 响应按预览 origin 白名单下发 CORS 头，其它 Origin 403，preflight 204，预览端口访问 API 路径返回 404。页面新增 `GET /preview-api-origin` discovery；Worker init/probe frame 携带 `apiOrigin`；Worker 仅把 `/api/browser-native/*` 改写到 API origin 并带 `credentials: 'include'`，其余资源留在 page origin。默认单端口模式保持原有同源行为。
+consumersUpdated: PoC README（分离源运行段）、威胁模型 T5 与未闭环表、`webworker-runtime` 的 `WorkerHostConnectOptions`/`TunnelInitFrame` 解析、`apps/web/src/preview.ts` 的 boot 与 prewarm 路径；无 SDK、CLI 或 profile 变更。
+test: `pnpm run typecheck` 通过；`pnpm run build:artifacts` 7/7 与 `pnpm run build:check` 2/2 通过；`build:preview` 成功；`tests/preview-api-origin-split.e2e.mjs` 通过（真实 Chrome、真实 backend 双端口、真实 preview dist）：discovery 返回 API origin，CORS 只对预览 origin 生效、陌生 Origin 403 且无 ACAO、preflight 204、preview 端口 API 404、Worker `state=synced` 且所有 `/api/browser-native/` 请求落在 API origin；`tests/local-request-guard.test.mjs` 与 `tests/backend-v2.test.mjs` 回归通过；同源 `tests/cross-store-reconciliation.e2e.mjs` 通过。
+syncReplaySteps: 上游同步后重跑 `build:preview`，再跑 split e2e 与同源 cross-store e2e；若 tunnel 前缀或 init frame 字段变化，同步更新 frames 解析与页面 discovery。
+deleteCondition: 默认部署也分离预览与 API origin（或上游提供等价的双 origin 部署）后，可移除 `--api-port`、页面 discovery 与 tunnel 的 origin 改写分支。
+status: implemented
+```
+
 ### BN-P2-104：HTML 预览内容隔离、严格 CSP 与注入脚本验证
 
 ```text

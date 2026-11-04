@@ -174,12 +174,31 @@ export class WorkerTunnel {
   /** Body-phase abort listeners, released when their stream settles. */
   private readonly releases = new Map<TunnelRequestId, () => void>()
 
+  /** Origin that resolves `/api/browser-native/` paths when the API is served separately. */
+  private readonly apiOrigin: string | undefined
+
+  /**
+   * Resolve a tunnel request URL; API routes move to the API origin, every page
+   * asset stays on the page origin.
+   * @param input - request path or URL sent by the worker host.
+   * @returns Absolute URL for the worker-side request frame.
+   */
+  private tunnelUrl(input: string | URL): string {
+    const resolved = new URL(String(input), globalThis.location.origin)
+    if (this.apiOrigin === undefined || !resolved.pathname.startsWith('/api/browser-native/')) {
+      return resolved.toString()
+    }
+    return new URL(`${resolved.pathname}${resolved.search}`, this.apiOrigin).toString()
+  }
+
   /**
    * Attach to a spawned worker and start consuming response frames.
    * @param worker - the host worker.
+   * @param apiOrigin - Origin for `/api/browser-native/` paths; omitted, all paths stay on the page origin.
    */
-  constructor(worker: Worker) {
+  constructor(worker: Worker, apiOrigin?: URL | string) {
     this.worker = worker
+    this.apiOrigin = apiOrigin === undefined ? undefined : new URL(apiOrigin).origin
     worker.addEventListener('message', (event: MessageEvent<ResponseFrame>) => {
       this.receive(event.data)
     })
@@ -206,9 +225,10 @@ export class WorkerTunnel {
    * Open the tunnel: the worker assembles its host from this frame.
    * @param image - VFS image URL the worker fetches.
    * @param overlays - Ordered data overlay URLs applied before boot.
+   * @param apiOrigin - Origin for worker-side API calls when it differs from the page.
    */
-  init(image: string, overlays: readonly string[] = []): void {
-    this.worker.postMessage({ t: 'init', image, overlays })
+  init(image: string, overlays: readonly string[] = [], apiOrigin?: string): void {
+    this.worker.postMessage({ t: 'init', image, overlays, ...(apiOrigin === undefined ? {} : { apiOrigin }) })
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */
@@ -223,7 +243,7 @@ export class WorkerTunnel {
       t: 'req',
       id,
       method: init?.method ?? 'GET',
-      url: new URL(input, globalThis.location.origin).toString(),
+      url: this.tunnelUrl(input),
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
       ...(body === undefined ? {} : { body }),
     }

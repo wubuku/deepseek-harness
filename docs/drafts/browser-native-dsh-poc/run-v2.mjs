@@ -33,7 +33,9 @@ function usage() {
   process.stdout.write(`Usage: node docs/drafts/browser-native-dsh-poc/run-v2.mjs [options]
 
 Options:
-  --port <number>       Listen port (default: 4185)
+  --port <number>       Preview listen port (default: 4185)
+  --api-port <number>   Serve the browser-native API from this second port
+                        (default: same origin as the preview)
   --host <name>         Listen host (default: 127.0.0.1)
   --data-dir <path>     Session data directory (default: /tmp/browser-native-dsh-v2)
   --dist-root <path>    Built Web dist directory (default: apps/web/dist)
@@ -83,6 +85,12 @@ function parseArgs(argv) {
       const raw = requiredValue(argv, index, option)
       values.port = Number(raw)
       if (!Number.isInteger(values.port) || values.port < 1 || values.port > 65535) throw new Error('--port must be an integer from 1 through 65535')
+      index += 1
+    } else if (option === '--api-port') {
+      const raw = requiredValue(argv, index, option)
+      const value = Number(raw)
+      if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error('--api-port must be an integer from 1 through 65535')
+      values.apiPort = value
       index += 1
     } else if (option === '--data-dir') {
       values.dataDir = requiredValue(argv, index, option)
@@ -142,6 +150,7 @@ const origin = await app.listen(options.port, options.host)
 const previewUrl = `${origin}/preview.html?browser-native=1&preview-fixture=none`
 process.stdout.write(`browser-native dsh v2 listening at ${origin}\n`)
 process.stdout.write(`browser-native preview: ${previewUrl}\n`)
+if (app.apiOrigin !== undefined) process.stdout.write(`browser-native api: ${app.apiOrigin}\n`)
 process.stdout.write(`llm mode: ${app.llm.mode}; model: ${app.llm.model}\n`)
 process.stdout.write(`admission: ≤${String(options.admission?.maxConcurrentTurns ?? 8)} concurrent turns, ≤${String(options.admission?.maxMountedSessions ?? 16)} mounted Sessions\n`)
 process.stdout.write(`session data: ${resolve(options.dataDir)}\n`)
