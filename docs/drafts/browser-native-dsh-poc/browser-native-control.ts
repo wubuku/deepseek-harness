@@ -5,6 +5,7 @@ import {
   type BrowserNativeControlNotice,
   type BrowserNativeOwnerNotice,
   type BrowserNativePagehideAck,
+  type BrowserNativeQueueStatus,
   type BrowserNativeWorkspaceLease,
   type BrowserNativeWorkspaceStatus,
 } from '../../../apps/web/src/browser-native-control-channel.ts'
@@ -14,6 +15,7 @@ export type {
   BrowserNativeControlNotice,
   BrowserNativeOwnerNotice,
   BrowserNativePagehideAck,
+  BrowserNativeQueueStatus,
   BrowserNativeWorkspaceLease,
   BrowserNativeWorkspaceStatus,
 } from '../../../apps/web/src/browser-native-control-channel.ts'
@@ -93,6 +95,11 @@ export function publishBrowserNativeWorkspaceStatus(notice: BrowserNativeWorkspa
 
 /** Send the current or released Workspace lease to the owning page. */
 export function publishBrowserNativeWorkspaceLease(notice: BrowserNativeWorkspaceLeaseNotice): void {
+  publishBrowserNativeControlNotice(notice)
+}
+
+/** Report this Worker's live admission queue position to the owning page. */
+export function publishBrowserNativeQueueStatus(notice: BrowserNativeQueueStatus): void {
   publishBrowserNativeControlNotice(notice)
 }
 

@@ -65,7 +65,30 @@ export function browserNativeWorkspaceStatusCopy(
   return `${dictionary[state]}${revisionLabel}${dirtyLabel}${message === undefined ? '' : ` — ${message}`}`
 }
 
-/** Format an explicit retry action for a Browser-Native writer lease conflict.
+/** Format the live admission queue position for the page language.
+ * @param language - Page language tag.
+ * @param position - Zero-free position of this request in the waiting queue.
+ * @param queued - Number of requests waiting, including this one.
+ * @param activeTurns - Turns currently holding an admission slot.
+ * @param limit - Concurrent turn limit, when the backend reports one.
+ * @returns Localized queue status text.
+ */
+export function browserNativeQueueStatusCopy(
+  language: string,
+  position: number,
+  queued: number,
+  activeTurns: number,
+  limit: number | undefined,
+): string {
+  const capacity = limit === undefined ? '' : language.startsWith('zh')
+    ? ` · ${String(activeTurns)}/${String(limit)} 运行中`
+    : ` · ${String(activeTurns)}/${String(limit)} active`
+  return language.startsWith('zh')
+    ? `等待模型执行槽位 · 队列第 ${String(position)} 位（共 ${String(queued)} 位）${capacity}`
+    : `Waiting for a model slot · position ${String(position)} of ${String(queued)}${capacity}`
+}
+
+/** Format the explicit retry action for a Browser-Native writer lease conflict.
  * @param language - Page language tag.
  * @param remainingMs - Time until the backend lease was expected to expire.
  * @returns Localized button label.

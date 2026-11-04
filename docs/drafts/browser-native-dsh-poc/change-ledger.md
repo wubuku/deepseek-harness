@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-096：排队实时位次与失败错误码组件化
+
+```text
+changeId: BN-P2-096
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-dashboard-16.md; apps/web/src/browser-native-control-channel.ts; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; packages/client/ui-chat/src/client/chat/MessageItem.tsx; packages/client/ui-chat/src/client/chat/MessageItem.module.css
+reason: 16 Session 验证发现两个产品可见缺口：排队只有超时错误、没有实时位次；turn 失败码以裸 `<code>` 渲染，不符合既有展示组件规范。
+existingExtensionPointsChecked: 复用后端已有 `GET /api/browser-native/admission` 快照（含 `queue[].requestId/position`）、Worker→页面 control channel、页面 `output` 状态呈现、`ui-primitives` 的 `Tag` 组件、turn error 节点与 `data-turn-error-code` 定位；未改 Agent Loop、Session format、admission 限流语义或 profile。
+whyDraftOnlyWasInsufficient: 位次变化只能在真实 Worker 等待 admission 期间观察；`<code>` 与 `Tag` 的差异需要真实渲染断言。
+behaviorChange: LLM 适配器在等待 admission 槽时每 400 ms 轮询同源 admission 快照，按 `requestId` 匹配自己的队列项，通过 control channel 发布 `queue` 状态（`queued` 含 position/queued/activeTurns/limit，准入或取消后 `idle`）；页面以 `aria-live="polite"` 的 `output[data-browser-native-queue-status]` 展示本地化位次。turn error 的代码由 `Tag`（danger）渲染，容器带 `data-turn-error-code`。
+consumersUpdated: PoC control channel 类型/校验、preview 页面控制与本地化 copy、16 Session E2E 与记录、ledger；DSH 产品 UI 仅替换错误码渲染方式，其余消费方不变。
+test: `pnpm run build:artifacts`、`pnpm run build:check` 通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs` 通过：17 行；reload 4,918 ms、首屏增量 2 ms、展开 83 ms、打开 65 ms、切换 78 ms、后台 turn 中切换 72 ms、失败后 49 ms；排队横幅 `position 2 of 2` → `position 1 of 1`（位次变化 2→1）；失败码由 `Tag` 渲染且裸 `<code>` 计数为 0；`pageerror` 为 0。
+syncReplaySteps: 上游同步后核对 admission 快照字段、control channel notice 联合类型与校验、`Tag` 导出与 turn error 节点；复跑本 E2E 与 `build:check`。
+deleteCondition: 排队位次改由推送/服务端 UI 承担，turn error 改用其他展示组件，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-095：产品就绪度 go/no-go 汇总
 
 ```text

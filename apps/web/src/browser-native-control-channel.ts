@@ -55,8 +55,19 @@ export interface BrowserNativePagehideAck {
   readonly error?: string
 }
 
+/** Live admission state for the model request this Worker is waiting on. */
+export interface BrowserNativeQueueStatus {
+  readonly type: 'queue'
+  readonly state: 'queued' | 'idle'
+  readonly position?: number
+  readonly queued?: number
+  readonly activeTurns?: number
+  readonly limit?: number
+}
+
 export type BrowserNativeControlNotice = BrowserNativeOwnerNotice | BrowserNativeWorkspaceStatus
   | BrowserNativeWorkspaceLease | BrowserNativeWorkspaceLeaseReleased | BrowserNativePagehideAck
+  | BrowserNativeQueueStatus
 
 export interface BrowserNativeControlReadyFrame {
   readonly type: 'control-ready'
@@ -152,6 +163,15 @@ function isNotice(value: unknown): value is BrowserNativeControlNotice {
       && typeof value.writerReleased === 'boolean'
       && hasBoundedOptionalString(value, 'error', BROWSER_NATIVE_CONTROL_MAX_TEXT_BYTES)
   }
+  if (value.type === 'queue') {
+    return hasExactKeys(value, ['type', 'state'], ['position', 'queued', 'activeTurns', 'limit'])
+      && (value.state === 'queued' || value.state === 'idle')
+      && hasBoundedOptionalInteger(value, 'position', 1)
+      && hasBoundedOptionalInteger(value, 'queued', 0)
+      && hasBoundedOptionalInteger(value, 'activeTurns', 0)
+      && hasBoundedOptionalInteger(value, 'limit', 1)
+      && (value.state === 'idle' || (typeof value.position === 'number' && typeof value.queued === 'number'))
+  }
   return false
 }
 
@@ -184,7 +204,7 @@ function browserNativeControlFrameError(value: unknown): string | undefined {
     return 'CONTROL_FRAME_INVALID'
   }
   if (!isPlainRecord(value.notice) || typeof value.notice.type !== 'string') return 'CONTROL_FRAME_INVALID'
-  const knownNotice = ['owner', 'released', 'unavailable', 'workspace', 'workspace-lease', 'workspace-lease-released', 'pagehide-ack']
+  const knownNotice = ['owner', 'released', 'unavailable', 'workspace', 'workspace-lease', 'workspace-lease-released', 'pagehide-ack', 'queue']
   if (!knownNotice.includes(value.notice.type)) return 'CONTROL_NOTICE_UNSUPPORTED'
   if (!isNotice(value.notice)) return hasOversizedNoticeString(value.notice) ? 'CONTROL_FIELD_TOO_LARGE' : 'CONTROL_FRAME_INVALID'
   try {

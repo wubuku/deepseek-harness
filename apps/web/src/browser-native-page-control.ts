@@ -1,4 +1,5 @@
 import {
+  browserNativeQueueStatusCopy,
   browserNativeRecoveryErrorCopy,
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
@@ -18,6 +19,7 @@ import {
   BrowserNativeControlReceiver,
   type BrowserNativeControlNotice,
   type BrowserNativePagehideAck,
+  type BrowserNativeQueueStatus,
   type BrowserNativeWorkspaceStatus,
 } from './browser-native-control-channel.ts'
 
@@ -232,6 +234,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
   const recoveryLocks = new BrowserNativeRecoveryLocks(typeof navigator.locks === 'undefined' ? undefined : navigator.locks)
   let recoveryStorage: Storage | undefined
   let workspaceStatus: HTMLElement | undefined
+  let queueStatus: HTMLElement | undefined
   let retryTimer: number | undefined
   const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
   let failedClosed = false
@@ -362,6 +365,47 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       workspaceStatus.append(button)
     }
   }
+  const showQueueStatus = (notice: BrowserNativeQueueStatus): void => {
+    queueStatus ??= (() => {
+      const element = document.createElement('output')
+      element.setAttribute('aria-live', 'polite')
+      element.setAttribute('data-browser-native-queue-status', '')
+      Object.assign(element.style, {
+        position: 'fixed',
+        left: '16px',
+        top: '72px',
+        zIndex: '2147483000',
+        pointerEvents: 'none',
+        maxWidth: 'min(440px, calc(100vw - 32px))',
+        padding: '9px 13px',
+        border: '1px solid #526174',
+        borderRadius: '10px',
+        background: '#111827',
+        color: '#f9fafb',
+        boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
+        font: '500 13px/1.4 system-ui, sans-serif',
+      })
+      document.body.append(element)
+      return element
+    })()
+    if (notice.state === 'idle' || notice.position === undefined) {
+      queueStatus.hidden = true
+      queueStatus.textContent = ''
+      queueStatus.dataset.state = 'idle'
+      return
+    }
+    queueStatus.hidden = false
+    queueStatus.dataset.state = 'queued'
+    queueStatus.dataset.position = String(notice.position)
+    queueStatus.dataset.queued = String(notice.queued ?? 0)
+    queueStatus.textContent = browserNativeQueueStatusCopy(
+      document.documentElement.lang,
+      notice.position,
+      notice.queued ?? 0,
+      notice.activeTurns ?? 0,
+      notice.limit,
+    )
+  }
   const showRecoveryResult = (success: boolean): void => {
     if (workspaceStatus === undefined) return
     workspaceStatus.querySelector('[data-browser-native-recovery-result]')?.remove()
@@ -461,6 +505,10 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__ = notice
       showWorkspaceStatus(notice)
       window.dispatchEvent(new CustomEvent('dsh-browser-native-workspace-status', { detail: notice }))
+      return
+    }
+    if (notice.type === 'queue') {
+      showQueueStatus(notice)
       return
     }
     if (notice.type === 'workspace-lease' && typeof notice.workspaceId === 'string'
@@ -619,5 +667,6 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     pagehideWaiters.clear()
     channel.port1.close()
     workspaceStatus?.remove()
+    queueStatus?.remove()
   }
 }

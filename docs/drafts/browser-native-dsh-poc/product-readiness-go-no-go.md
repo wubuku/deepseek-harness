@@ -55,7 +55,7 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 ## 立项前的必做项
 
 1. 把 Session 权威、检索索引、租户预算与费用结算、egress 代理、durable host 定为服务端交付物，并给出单实例/多实例边界。
-2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI；当前审批卡不展示参数，冲突不自动恢复，排队只有超时错误。
+2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI；当前审批卡不展示参数，冲突不自动恢复，导出没有入口；排队已在 `output[data-browser-native-queue-status]` 上显示实时位次并验证 2→1 变化（见[16 Session 仪表盘](session-dashboard-16.md)），但仍需并入正式 composer/会话状态区。
 3. 明确浏览器支持矩阵：如果 Safari/iOS 是目标，先解决 iOS OPFS 不可用；否则限定 Chromium 桌面试点。
 4. 把 observability、审计与预算记录迁到持久存储，并定义重启后的对账口径。
 5. 以“客户端执行、服务端权威”的安全模型做一次威胁建模；浏览器内 XSS、同机进程互认证与 preview origin 仍是已知未闭环项。

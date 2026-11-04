@@ -5,14 +5,16 @@
  * sidebar at that scale: first-page render, expanding the folded list, opening
  * a Session, switching to another, switching while a turn holds the admission
  * slot, and interaction after a model failure. It also checks that a queued
- * prompt reports its queue position and that the failure stays visible while
- * the list remains interactive.
+ * prompt reports a live queue position that advances when the request ahead is
+ * admitted, and that a terminal failure renders its code through the shipped
+ * Tag component rather than a bare `<code>` element.
  *
  * Usage:
  *   DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs
  */
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,7 +38,8 @@ const LIMITS = {
   postFailureMs: 1_500,
 }
 const HOLD_MARKER = 'DASHBOARD_HOLD'
-const QUEUE_MARKER = 'DASHBOARD_QUEUE'
+const QUEUE_MARKER = 'DASHBOARD_QUEUE_HEAD'
+const QUEUE_TAIL_MARKER = 'DASHBOARD_QUEUE_TAIL'
 const FAIL_MARKER = 'DASHBOARD_FAIL'
 
 function deferred() {
@@ -80,7 +83,7 @@ try {
     dataDir,
     distRoot: image.distRoot,
     llmMode: 'scripted',
-    admission: { maxConcurrentTurns: 1, queueTimeoutMs: 3_000 },
+    admission: { maxConcurrentTurns: 1, queueTimeoutMs: 25_000 },
     testHooks: {
       scriptedLlmFault: body => {
         const text = JSON.stringify(body.messages ?? [])
@@ -90,6 +93,11 @@ try {
         }
         if (text.includes(FAIL_MARKER)) {
           return { kind: 'error', code: 'DASHBOARD_INJECTED_FAILURE', message: 'scripted dashboard failure' }
+        }
+        if (text.includes(QUEUE_MARKER) || text.includes(QUEUE_TAIL_MARKER)) {
+          // Keep the admitted head request open so the queued prompt's advance
+          // to position 1 stays observable across the 400 ms queue poll.
+          return { kind: 'delayed-text', delayMs: 3_000, text: 'DASHBOARD_QUEUE_HEAD_COMPLETE' }
         }
         return undefined
       },
@@ -186,33 +194,72 @@ try {
   const openMs = await openSeeded(0)
   const switchMs = await openSeeded(15)
 
+  const readQueueNotice = async target => {
+    const notice = target.locator('[data-browser-native-queue-status]')
+    if (await notice.count() === 0) return undefined
+    const state = await notice.getAttribute('data-state')
+    if (state === null || await notice.isHidden()) return undefined
+    const position = Number(await notice.getAttribute('data-position'))
+    return {
+      state,
+      position,
+      queued: Number(await notice.getAttribute('data-queued')),
+      text: await notice.innerText(),
+    }
+  }
+  const admissionQueue = async () => (await fetch(`${origin}/api/browser-native/admission`).then(response => response.json())).queue ?? []
+
   const holdTurn = submitPrompt({ page, origin, requests: [], prompt: HOLD_MARKER, sessionId: 'dashboard-session-15', timeout: 120_000 })
   holdTurn.catch(() => {})
   await waitFor(async () => holdStarted || undefined, 'held turn occupies the admission slot', 30_000)
 
   const switchDuringTurnMs = await openSeeded(0)
+
+  // A Session-less direct model request takes the first queue place without a
+  // second preview tab, whose own boot requests would otherwise queue behind
+  // this held slot and delay the tab past the queue timeout.
+  const headRequestId = randomUUID()
+  const headRequest = fetch(`${origin}/api/browser-native/llm`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-browser-native-protocol': '1' },
+    body: JSON.stringify({
+      protocolVersion: 1,
+      requestId: headRequestId,
+      provider: 'scripted',
+      model: 'scripted',
+      messages: [{ role: 'user', content: QUEUE_TAIL_MARKER }],
+    }),
+  })
+  headRequest.catch(() => {})
+  await waitFor(async () => (await admissionQueue()).some(entry => entry.requestId === headRequestId) || undefined,
+    'direct request takes the first queue place', 15_000)
+
   const queuedTurn = submitPrompt({
     page,
     origin,
     requests: [],
     prompt: QUEUE_MARKER,
     sessionId: 'dashboard-session-00',
-    expectedReason: 'error',
     timeout: 120_000,
   })
   queuedTurn.catch(() => {})
-  const queueText = await waitFor(async () => {
-    const queued = page.getByText(/queue position \d+/).last()
-    return await queued.count() > 0 ? await queued.innerText() : undefined
-  }, 'queued prompt reports its queue position', 30_000)
-  assert.match(queueText, /queue position 1/)
-  const queuedFailure = await queuedTurn
-  const queuedTerminal = queuedFailure.session.events.findLast(event => event.type === 'turn/end' && event.data.turn === queuedFailure.turn)
-  assert.equal(queuedTerminal.data.reason.error.code, 'ADMISSION_TIMEOUT')
-  await page.locator('code').filter({ hasText: 'ADMISSION_TIMEOUT' }).last().waitFor({ timeout: 15_000 })
+  const secondQueueNotice = await waitFor(async () => {
+    const notice = await readQueueNotice(page)
+    return notice?.state === 'queued' && notice.position === 2 ? notice : undefined
+  }, 'queued prompt reports position 2 behind the direct request', 30_000)
+  assert.equal(secondQueueNotice.queued, 2, `queued prompt must see two waiters: ${secondQueueNotice.text}`)
 
   holdRelease.resolve()
   await holdTurn
+  const advancedQueueNotice = await waitFor(async () => {
+    const notice = await readQueueNotice(page)
+    return notice?.state === 'queued' && notice.position === 1 ? notice : undefined
+  }, 'queue position advances after the request ahead is admitted', 30_000)
+  assert.equal(advancedQueueNotice.queued, 1, `advanced queue must see one waiter: ${advancedQueueNotice.text}`)
+  const queuedCompleted = await queuedTurn
+  assert.equal(queuedCompleted.turn > 0, true)
+  const headResponse = await headRequest
+  await headResponse.text()
   const completedText = await waitFor(async () => {
     const text = await sessionRow(15).textContent()
     return text !== null && /Completed/.test(text) ? text : undefined
@@ -229,7 +276,12 @@ try {
   })
   const failureTerminal = failure.session.events.findLast(event => event.type === 'turn/end' && event.data.turn === failure.turn)
   assert.equal(failureTerminal.data.reason.error.code, 'DASHBOARD_INJECTED_FAILURE')
-  await page.locator('code').filter({ hasText: 'DASHBOARD_INJECTED_FAILURE' }).last().waitFor({ timeout: 15_000 })
+  const failureCode = page.locator('[data-turn-error-code="DASHBOARD_INJECTED_FAILURE"]').last()
+  await failureCode.waitFor({ timeout: 15_000 })
+  assert.equal(await page.locator('[data-turn-error-code="DASHBOARD_INJECTED_FAILURE"] code').count(), 0,
+    'failure code must render through the Tag component, not a bare <code> element')
+  assert.equal(await page.locator('code').filter({ hasText: 'DASHBOARD_INJECTED_FAILURE' }).count(), 0,
+    'failure code must not appear in a bare <code> element')
   await page.getByText('scripted dashboard failure', { exact: false }).last().waitFor({ timeout: 15_000 })
 
   const rowsAfterFailure = await rowTitles().count()
@@ -253,10 +305,15 @@ try {
     acceptableLimits: LIMITS,
     states: {
       failureVisible: true,
+      failureRenderedBy: 'Tag',
       listInteractiveAfterFailure: true,
       idleRowsWithoutStatus: true,
       backgroundCompletionStatus: completedText,
-      queueText,
+      queueNotice: {
+        second: secondQueueNotice.text,
+        advanced: advancedQueueNotice.text,
+        positionChange: '2 -> 1',
+      },
       queueStateInList: 'not surfaced in the dashboard; queued prompts render in the active composer',
     },
   }, null, 2))

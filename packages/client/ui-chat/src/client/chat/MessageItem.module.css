@@ -299,8 +299,7 @@
 }
 
 .turnErrorCode {
-  color: var(--dsw-alias-label-tertiary);
-  font: var(--dsw-font-markdown-code-block-small);
+  align-self: start;
 }
 
 .maxTokensTitle {

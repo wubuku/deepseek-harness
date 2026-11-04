@@ -45,7 +45,7 @@ import type {
   SessionPersistenceSnapshot,
   SessionPersistenceStatOptions,
 } from '@deepseek-ai/dsh-session-persistence'
-import { publishBrowserNativeOwner, publishBrowserNativeWorkspaceStatus, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
+import { publishBrowserNativeOwner, publishBrowserNativeQueueStatus, publishBrowserNativeWorkspaceStatus, takeBrowserNativeResumeOwner } from './browser-native-control.ts'
 import {
   BrowserNativeFileToolError,
   assertBrowserNativeEditSafe,
@@ -79,9 +79,11 @@ const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
 const LLM_ROUTE = '/api/browser-native/llm'
 const CONFIG_ROUTE = '/api/browser-native/config'
+const ADMISSION_ROUTE = '/api/browser-native/admission'
 const SESSION_OPEN_OWNER_RETRY_WINDOW_MS = 5_000
 const SESSION_OPEN_OWNER_RETRY_DELAY_MS = 100
 const MAX_TOOL_ARGUMENT_BYTES = 1024 * 1024
+const ADMISSION_QUEUE_POLL_MS = 400
 
 /**
  * Failure code for a browser-to-backend response stream that rejects while the
@@ -152,6 +154,12 @@ interface LlmStreamResponse {
   readonly kind?: 'chunk' | 'error'
   readonly chunk?: StreamChunk
   readonly error?: { readonly code?: string; readonly message?: string }
+}
+
+interface AdmissionSnapshot {
+  readonly activeTurns?: number
+  readonly queue?: readonly { readonly requestId?: string; readonly position?: number }[]
+  readonly limits?: { readonly maxConcurrentTurns?: number }
 }
 
 interface RuntimePersistenceModule {
@@ -226,6 +234,55 @@ function browserNativeFsVersion(vfs: BrowserNativeWorkspaceRuntime['vfs'], path:
 
 function requestId(): string {
   return globalThis.crypto.randomUUID()
+}
+
+/**
+ * Poll same-origin admission state while one model request waits for a turn
+ * slot, publishing every change of queue position to the owning page.
+ * @param request - Request id sent in the LLM body and matched by the backend queue.
+ * @param signal - Aborts the watch when the turn is cancelled.
+ * @returns A disposer that clears the last published queue state.
+ */
+function watchAdmissionQueue(request: string, signal?: AbortSignal): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let published = ''
+  const publish = (position: number | undefined, queued: number | undefined, activeTurns: number | undefined, limit: number | undefined): void => {
+    const notice = position === undefined
+      ? { type: 'queue' as const, state: 'idle' as const }
+      : {
+        type: 'queue' as const,
+        state: 'queued' as const,
+        position,
+        queued: queued ?? 0,
+        activeTurns: activeTurns ?? 0,
+        ...(limit === undefined ? {} : { limit }),
+      }
+    const key = JSON.stringify(notice)
+    if (key === published) return
+    published = key
+    publishBrowserNativeQueueStatus(notice)
+  }
+  const poll = async (): Promise<void> => {
+    if (stopped) return
+    try {
+      const response = await fetch(ADMISSION_ROUTE, { cache: 'no-store' })
+      if (response.ok) {
+        const snapshot = await readJson<AdmissionSnapshot>(response)
+        const entry = snapshot.queue?.find(candidate => candidate.requestId === request)
+        publish(entry?.position, snapshot.queue?.length, snapshot.activeTurns, snapshot.limits?.maxConcurrentTurns)
+      }
+    } catch (error) {
+      if (signal?.aborted === true || stopped) return
+    }
+    if (!stopped) timer = setTimeout(() => { void poll() }, ADMISSION_QUEUE_POLL_MS)
+  }
+  void poll()
+  return () => {
+    stopped = true
+    if (timer !== undefined) clearTimeout(timer)
+    publish(undefined, undefined, undefined, undefined)
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1207,30 +1264,36 @@ function createRemoteLlmAdapterClass(
         throw new LlmError(blocked, 'TOKEN_BUDGET_EXCEEDED')
       }
       const request = requestId()
-      const response = await fetch(LLM_ROUTE, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-browser-native-protocol': String(PROTOCOL_VERSION) },
-      body: JSON.stringify({
-        protocolVersion: PROTOCOL_VERSION,
-        requestId: request,
-        sessionId: options.sessionId,
-        ...(options.sessionId === undefined || activeSessionOwners.get(options.sessionId) === undefined ? {} : {
-          ownerToken: activeSessionOwners.get(options.sessionId)!.ownerToken,
-          ownerEpoch: activeSessionOwners.get(options.sessionId)!.ownerEpoch,
-        }),
-        provider: options.provider,
-        model: options.model,
-        ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
-        messages: options.messages
-          .filter(message => publication.isToolPublished('skill') || !isSkillCatalogMessage(message))
-          .map(toWireMessage),
-        tools: toWireTools(options.tools, publication),
-        temperature: options.temperature,
-        maxTokens: options.maxTokens,
-        reasoningEffort: options.reasoningEffort,
-      }),
-      signal: options.signal,
-    })
+      const stopQueueWatch = watchAdmissionQueue(request, options.signal)
+      let response: Response
+      try {
+        response = await fetch(LLM_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-browser-native-protocol': String(PROTOCOL_VERSION) },
+          body: JSON.stringify({
+            protocolVersion: PROTOCOL_VERSION,
+            requestId: request,
+            sessionId: options.sessionId,
+            ...(options.sessionId === undefined || activeSessionOwners.get(options.sessionId) === undefined ? {} : {
+              ownerToken: activeSessionOwners.get(options.sessionId)!.ownerToken,
+              ownerEpoch: activeSessionOwners.get(options.sessionId)!.ownerEpoch,
+            }),
+            provider: options.provider,
+            model: options.model,
+            ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
+            messages: options.messages
+              .filter(message => publication.isToolPublished('skill') || !isSkillCatalogMessage(message))
+              .map(toWireMessage),
+            tools: toWireTools(options.tools, publication),
+            temperature: options.temperature,
+            maxTokens: options.maxTokens,
+            reasoningEffort: options.reasoningEffort,
+          }),
+          signal: options.signal,
+        })
+      } finally {
+        stopQueueWatch()
+      }
       if (!response.ok || response.body === null) {
         const payload = await readJson(response)
         const error = responseError(payload, 'browser-native LLM request failed')

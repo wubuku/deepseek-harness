@@ -457,7 +457,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-que
 
 ## 16 Session 下的仪表盘 UI
 
-[16 Session 仪表盘验证](session-dashboard-16.md)在 17 行（16 个持久化种子 + preview 自身）规模下测量侧边栏：reload 到可交互 5.0 秒（Worker 冷启动主导），首屏增量 2 ms，折叠展开 96 ms，打开 70 ms，切换 74 ms，后台 turn 运行中切换 75 ms，失败后切换 38 ms，均在落定上限内，无需修改 UI。默认只渲染 5 行并显示 `Show N more sessions`；种子行显示 `Untitled`，idle 行无状态文案，后台 turn 完成后出现 `Completed`。排队没有实时位置 UI，唯一的可观察状态是 `queueTimeoutMs` 到期后的 `ADMISSION_TIMEOUT`（消息带 `queue position 1`）；失败码 `DASHBOARD_INJECTED_FAILURE` 渲染为 `<code>`，列表保持可交互。
+[16 Session 仪表盘验证](session-dashboard-16.md)在 17 行（16 个持久化种子 + preview 自身）规模下测量侧边栏：reload 到可交互 4.9 秒（Worker 冷启动主导），首屏增量 2 ms，折叠展开 83 ms，打开 65 ms，切换 78 ms，后台 turn 运行中切换 72 ms，失败后切换 49 ms，均在落定上限内。默认只渲染 5 行并显示 `Show N more sessions`；种子行显示 `Untitled`，idle 行无状态文案，后台 turn 完成后出现 `Completed`。排队时 Worker 每 400 ms 轮询 admission 快照，在页面 `output[data-browser-native-queue-status]` 上显示实时位次，并验证了 `position 2 of 2` → `position 1 of 1` 的位次变化；失败码 `DASHBOARD_INJECTED_FAILURE` 由 `Tag` 组件渲染（不再使用裸 `<code>`），列表保持可交互。
 
 ```sh
 DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs

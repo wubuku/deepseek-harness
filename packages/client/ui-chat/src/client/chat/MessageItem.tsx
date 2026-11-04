@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { PropsRenderFactories } from '@deepseek-ai/dsh-client-ui-slots'
 import type { UserTextFacts } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { JsonBlock, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
+import { JsonBlock, StateDot, Tag, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps, UserContentAttachment, UserContentData, UserContentInput,
 } from '../contract/slots.ts'
@@ -140,7 +140,11 @@ function TurnErrorItem({ node, t }: {
         <span className={css.turnErrorTitle}>{node.code === 'ACCOUNT_SIGNED_OUT' || node.code === 'INTERRUPTED' ? t('message.taskStopped') : t('message.turnError')}</span>
         <span className={css.turnErrorMessage}>{failureMessage(node.message, node.code, t)}</span>
       </div>
-      {node.code !== undefined && node.code !== 'INTERRUPTED' && <code className={css.turnErrorCode}>{node.code}</code>}
+      {node.code !== undefined && node.code !== 'INTERRUPTED' && (
+        <span className={css.turnErrorCode} data-turn-error-code={node.code}>
+          <Tag tone="danger">{node.code}</Tag>
+        </span>
+      )}
     </div>
   )
 }
