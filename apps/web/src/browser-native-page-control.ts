@@ -8,6 +8,7 @@ import {
   browserNativeSessionRetryCopy,
   browserNativeSupportBundleCopy,
   browserNativeSupportBundleResultCopy,
+  browserNativeTurnRetryCopy,
   browserNativeWorkspaceRecoveryExportCopy,
   browserNativeWorkspaceRecoveryResultCopy,
   browserNativeWorkspaceRecoveryWarningCopy,
@@ -651,6 +652,191 @@ export async function connectBrowserNativePageControl(
     exportControl.root.style.display = available ? 'flex' : 'none'
   }
   const workspaceApiUrl = (path: string): string => `${options.apiOrigin ?? ''}${path}`
+  let turnRetryPanel: { readonly root: HTMLElement; readonly message: HTMLElement; readonly button: HTMLButtonElement } | undefined
+  let turnRetrySessionId: string | undefined
+  let turnRetryTimer: number | undefined
+  let turnRetryBusy = false
+  let turnRetryHoldUntil = 0
+  let turnRetryTarget: { readonly sessionId: string; readonly turn: number; readonly reason: string } | undefined
+  const stopTurnRetryWatch = (): void => {
+    if (turnRetryTimer !== undefined) {
+      window.clearInterval(turnRetryTimer)
+      turnRetryTimer = undefined
+    }
+    turnRetrySessionId = undefined
+    turnRetryTarget = undefined
+    turnRetryPanel?.root.remove()
+    turnRetryPanel = undefined
+  }
+  const ensureTurnRetryPanel = (): NonNullable<typeof turnRetryPanel> => {
+    if (turnRetryPanel !== undefined) return turnRetryPanel
+    const root = document.createElement('output')
+    applyLiveRegion(root, 'alert')
+    root.setAttribute('data-browser-native-turn-retry', '')
+    Object.assign(root.style, {
+      position: 'fixed',
+      right: '16px',
+      bottom: '16px',
+      zIndex: '950',
+      pointerEvents: 'auto',
+      maxWidth: 'min(420px, calc(100vw - 32px))',
+      padding: '9px 13px',
+      border: `1px solid ${browserNativeSurface.border}`,
+      borderRadius: '10px',
+      background: browserNativeSurface.raised,
+      color: browserNativeSurface.label,
+      boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
+      font: '500 13px/1.4 system-ui, sans-serif',
+    })
+    const message = document.createElement('span')
+    message.setAttribute('data-browser-native-turn-retry-message', '')
+    message.style.display = 'block'
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.setAttribute('data-browser-native-turn-retry-button', '')
+    styleStatusAction(button, '600')
+    button.hidden = true
+    button.addEventListener('click', () => {
+      const target = turnRetryTarget
+      if (target !== undefined) void submitTurnRetry(target)
+    })
+    root.append(message, button)
+    document.body.append(root)
+    turnRetryPanel = { root, message, button }
+    return turnRetryPanel
+  }
+  const showTurnRetryPanel = (
+    target: { readonly sessionId: string; readonly turn: number; readonly reason: string },
+    state: 'failed' | 'submitted' | 'duplicate',
+    detail?: string,
+  ): void => {
+    turnRetryTarget = target
+    const panel = ensureTurnRetryPanel()
+    const copy = browserNativeTurnRetryCopy(document.documentElement.lang, target.turn, target.reason)
+    panel.root.dataset.state = state
+    panel.root.style.borderColor = state === 'failed' ? browserNativeSurface.warn : browserNativeSurface.success
+    panel.message.textContent = detail ?? copy.message
+    panel.button.hidden = state !== 'failed'
+    panel.button.textContent = copy.action
+    if (state !== 'failed') panel.root.setAttribute('aria-live', 'polite')
+  }
+  const submitComposerPrompt = async (prompt: string): Promise<void> => {
+    const composer = [...document.querySelectorAll<HTMLElement>('[data-composer-input][contenteditable="true"]')].at(-1)
+    if (composer === undefined) throw new Error('the composer is unavailable')
+    composer.focus()
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(composer)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    if (!document.execCommand('insertText', false, prompt)) throw new Error('the composer rejected the retry prompt')
+    const deadline = Date.now() + 2_000
+    const retained = (): boolean => ((composer.innerText ?? '').trim() === prompt.trim())
+    while (!retained() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    if (!retained()) throw new Error('the composer did not retain the retry prompt')
+    const send = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')]
+      .find(button => /^(Send message|发送消息)$/.test(button.getAttribute('aria-label') ?? ''))
+    if (send === undefined) throw new Error('the Send action is unavailable')
+    while (send.disabled && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    if (send.disabled) throw new Error('the Send action stayed disabled')
+    send.click()
+  }
+  const submitTurnRetry = async (target: { readonly sessionId: string; readonly turn: number; readonly reason: string }): Promise<void> => {
+    if (turnRetryBusy) return
+    const panel = ensureTurnRetryPanel()
+    turnRetryBusy = true
+    panel.button.disabled = true
+    panel.button.setAttribute('aria-busy', 'true')
+    try {
+      const response = await fetch(workspaceApiUrl('/api/browser-native/session/turn-retry'), {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: globalThis.crypto.randomUUID(),
+          sessionId: target.sessionId,
+          turn: target.turn,
+        }),
+      })
+      if (!response.ok) throw new Error(`Turn retry failed with HTTP ${String(response.status)}`)
+      const body: unknown = await response.json()
+      const retry = isRecord(body) && isRecord(body.retry) ? body.retry : undefined
+      if (retry === undefined || typeof retry.retryId !== 'string' || typeof retry.prompt !== 'string') {
+        throw new Error('Turn retry response is invalid')
+      }
+      const copy = browserNativeTurnRetryCopy(document.documentElement.lang, target.turn, target.reason)
+      if (!isRecord(body) || body.created !== true) {
+        showTurnRetryPanel(target, 'duplicate', copy.duplicate)
+        return
+      }
+      await submitComposerPrompt(retry.prompt)
+      const settled = await fetch(workspaceApiUrl('/api/browser-native/session/turn-retry/settle'), {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: globalThis.crypto.randomUUID(),
+          retryId: retry.retryId,
+        }),
+      })
+      if (!settled.ok) throw new Error(`Turn retry settlement failed with HTTP ${String(settled.status)}`)
+      turnRetryHoldUntil = Date.now() + 8_000
+      showTurnRetryPanel(target, 'submitted', copy.submitted)
+    } catch (error) {
+      console.warn('browser-native DSH: failed turn retry did not submit', error)
+      const copy = browserNativeTurnRetryCopy(document.documentElement.lang, target.turn, target.reason)
+      showTurnRetryPanel(target, 'failed', copy.failed)
+    } finally {
+      turnRetryBusy = false
+      panel.button.disabled = false
+      panel.button.removeAttribute('aria-busy')
+    }
+  }
+  const pollTurnRetry = async (sessionId: string): Promise<void> => {
+    if (turnRetryBusy || turnRetrySessionId !== sessionId || Date.now() < turnRetryHoldUntil) return
+    try {
+      const response = await fetch(workspaceApiUrl(
+        `/api/browser-native/session/turn-retry?sessionId=${encodeURIComponent(sessionId)}`,
+      ), { credentials: 'include', cache: 'no-store' })
+      if (!response.ok) return
+      const body: unknown = await response.json()
+      if (turnRetrySessionId !== sessionId || Date.now() < turnRetryHoldUntil) return
+      const retryable = isRecord(body) && isRecord(body.retryable)
+        && typeof body.retryable.turn === 'number' && Number.isSafeInteger(body.retryable.turn)
+        && typeof body.retryable.reason === 'string'
+        ? { turn: body.retryable.turn, reason: body.retryable.reason }
+        : undefined
+      if (retryable === undefined) {
+        turnRetryTarget = undefined
+        turnRetryPanel?.root.remove()
+        turnRetryPanel = undefined
+        return
+      }
+      const target = { sessionId, turn: retryable.turn, reason: retryable.reason }
+      const retries = isRecord(body) && Array.isArray(body.retries) ? body.retries : []
+      const existing = retries.find(record => isRecord(record) && record.turn === target.turn)
+      if (existing !== undefined) {
+        const copy = browserNativeTurnRetryCopy(document.documentElement.lang, target.turn, target.reason)
+        showTurnRetryPanel(target, 'duplicate', copy.duplicate)
+        return
+      }
+      showTurnRetryPanel(target, 'failed')
+    } catch (error) {
+      // Polling is advisory; the next interval retries after a transient failure.
+      console.warn('browser-native DSH: failed-turn poll did not complete', error)
+    }
+  }
+  const startTurnRetryWatch = (sessionId: string): void => {
+    if (turnRetrySessionId === sessionId && turnRetryTimer !== undefined) return
+    stopTurnRetryWatch()
+    turnRetrySessionId = sessionId
+    void pollTurnRetry(sessionId)
+    turnRetryTimer = window.setInterval(() => { void pollTurnRetry(sessionId) }, 1_000)
+  }
   const reloadAfterWorkspaceChange = (): void => {
     try {
       window.sessionStorage.clear()
@@ -1143,6 +1329,7 @@ export async function connectBrowserNativePageControl(
       }
       owners.set(notice.sessionId, notice.ownerToken)
       syncExportControl()
+      startTurnRetryWatch(notice.sessionId)
       if (!recoveryLocks.supported) {
         publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
         stopWorker()
@@ -1154,6 +1341,7 @@ export async function connectBrowserNativePageControl(
     if (notice.type === 'released' || notice.type === 'unavailable') {
       owners.delete(notice.sessionId)
       syncExportControl()
+      if (turnRetrySessionId === notice.sessionId) stopTurnRetryWatch()
       removeRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId))
       recoveryLocks.releaseResource({ kind: 'session', id: notice.sessionId })
     }
@@ -1268,6 +1456,7 @@ export async function connectBrowserNativePageControl(
     document.removeEventListener('click', handleFirstUseClick, true)
     document.removeEventListener('keydown', handleFirstUseKeydown, true)
     clearRetryTimer()
+    stopTurnRetryWatch()
     pagehideWaiters.clear()
     channel.port1.close()
     workspaceStatus?.remove()

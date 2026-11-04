@@ -29,6 +29,23 @@ deleteCondition: 正式工具策略提供路径范围与可执行拒绝提示，
 status: implemented
 ```
 
+### BN-P2-158：失败 turn 的页面重试与幂等结算
+
+```text
+changeId: BN-P2-158
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/turn-retry-ledger.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/turn-retry-ledger.test.mjs; docs/drafts/browser-native-dsh-poc/tests/turn-retry.e2e.mjs; docs/drafts/browser-native-dsh-poc/turn-retry.md; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 失败或中断的 turn 只能靠用户重新输入原始 prompt；没有可见重试入口、没有从 Session log 取回权威 prompt 的路径，也没有证明双击不会重复提交或重复结算。
+existingExtensionPointsChecked: 复用 Session `turn/end` reason、`user/message` 事件、既有 principal cookie 作用域、owner notice 和 preview 页面生命周期；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实页面点击经过 composer 和 backend 路由，才能验证可见状态、双击去重、服务端幂等与模型请求数同时成立。
+behaviorChange: 新增 durable `TurnRetryLedger`（sha256 意图键、原子写、串行队列、request/get/settle/list）。新增 `GET/POST /api/browser-native/session/turn-retry` 与 `POST .../settle`：只允许重试最后一个 `error`/`aborted`/`interrupted` turn，prompt 由服务端从原始 `user/message` 取回，viewer 返回 403。页面在 owner notice 后轮询，显示 `output` live region 重试条，用真实 composer 提交，成功后结算一次并展示 `failed|submitted` 状态。
+consumersUpdated: backend v2 路由与初始化、preview 页面控制、locale 文案、PoC README、turn-retry.md、新增单元测试与浏览器 E2E、本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/turn-retry-ledger.test.mjs` 5/5 通过；`pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`node docs/drafts/browser-native-dsh-poc/tests/turn-retry.e2e.mjs` 通过：可见状态 failed→submitted，双击只产生 1 次重试请求/1 次结算，重复请求 `created:false`、重复结算 `settled:false`，3 个 turn 只有 3 个模型请求与 2 条匹配 user/message，账本 1 条已结算。
+syncReplaySteps: 上游同步后重建 preview，复跑单元测试与 E2E；确认 GET 只返回最后一个 `turn/end` 的可重试性，重试成功后 `retryable` 消失且账本仍保留已结算记录。
+deleteCondition: 正式产品提供失败 turn 重试与幂等结算，或被等价的 Session API 门禁取代。
+status: implemented
+```
+
 ### BN-P2-146：Session 关闭后的 Worker 资源回收
 
 ```text

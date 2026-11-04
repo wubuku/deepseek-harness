@@ -26,6 +26,7 @@ import { createObservabilityJournal, redactObservabilityJournal } from './observ
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 import { buildPrincipalExport, verifyPrincipalExport } from './principal-export.mjs'
 import { SessionShareStore } from './session-shares.mjs'
+import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -463,6 +464,50 @@ function assertHandoffQuiescent(session) {
   if (pendingCalls.size > 0) {
     throw new BackendError('HANDOFF_BUSY', 'Session has unsettled DSH tool calls', 409)
   }
+}
+
+/**
+ * Public projection of one durable turn retry intent.
+ * @param {object} record - stored intent.
+ * @returns {object} response fields for the page.
+ */
+function turnRetryResponse(record) {
+  return {
+    retryId: record.retryId,
+    sessionId: record.sessionId,
+    turn: record.turn,
+    prompt: record.prompt,
+    requestedAt: record.requestedAt,
+    settledAt: record.settledAt,
+  }
+}
+
+/**
+ * Extract the text of one user message content field.
+ * @param {unknown} content - string or content-block array.
+ * @returns {string | undefined} joined text, or undefined when empty.
+ */
+function promptText(content) {
+  if (typeof content === 'string') return content.length === 0 ? undefined : content
+  if (!Array.isArray(content)) return undefined
+  const text = content
+    .filter(block => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+  return text.length === 0 ? undefined : text
+}
+
+/**
+ * Most recent Agent turn whose terminal reason permits a user-initiated retry.
+ * @param {object} session - stored Session carrying its events.
+ * @returns {{turn: number, reason: string} | undefined} The failed turn, when its user prompt is recoverable.
+ */
+function latestRetryableTurn(session) {
+  const terminal = session.events.findLast(event => event.type === 'turn/end')
+  if (terminal === undefined || !['error', 'aborted', 'interrupted'].includes(terminal.data.reason?.kind)) return undefined
+  const userMessage = session.events.slice(0, terminal.seq).findLast(event => event.type === 'user/message')
+  if (promptText(userMessage?.data.content ?? userMessage?.data.message?.content) === undefined) return undefined
+  return { turn: terminal.data.turn, reason: terminal.data.reason.kind }
 }
 
 async function readBody(request) {
@@ -5609,6 +5654,8 @@ export async function createBrowserNativeV2Server(options) {
   await crossStoreLedger.load()
   const sessionShares = new SessionShareStore(options.dataDir)
   await sessionShares.load()
+  const turnRetries = new TurnRetryLedger({ dir: join(options.dataDir, 'turn-retries'), now: options.testHooks?.now })
+  await turnRetries.load()
   const sessionEvents = new SessionEventHub()
   const sessionAppendReceipts = new Map()
   const sweepAttachments = async () => {
@@ -6212,6 +6259,70 @@ export async function createBrowserNativeV2Server(options) {
         const entries = retainedUsage()
         sendJson(response, 200, {
           entries: sessionId === null ? entries : entries.filter(entry => entry.sessionId === sessionId),
+        })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/turn-retry') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const body = await readBody(request)
+        const sessionId = assertSessionId(body.sessionId)
+        const turn = body.turn
+        if (!Number.isSafeInteger(turn) || turn < 1) {
+          throw new BackendError('INVALID_REQUEST', 'turn retry requires a positive integer turn')
+        }
+        let session
+        try {
+          session = store.getForPrincipal(sessionId, principalId)
+        } catch (error) {
+          const role = sessionShares.roleOf(sessionId, principalId)
+          if (role !== undefined) {
+            throw new BackendError('SESSION_READ_ONLY', 'a shared Session cannot be retried by its viewer', 403)
+          }
+          throw error
+        }
+        const retryable = latestRetryableTurn(session)
+        if (retryable === undefined || retryable.turn !== turn) {
+          throw new BackendError('TURN_RETRY_INVALID', 'turn retry requires the latest turn to have failed or been interrupted', 400, undefined, {
+            sessionId, turn, reason: retryable?.reason,
+          })
+        }
+        const terminal = session.events.findLast(event => event.type === 'turn/end')
+        const userMessage = session.events.slice(0, terminal.seq).findLast(event => event.type === 'user/message')
+        const prompt = promptText(userMessage?.data.content ?? userMessage?.data.message?.content)
+        if (prompt === undefined) {
+          throw new BackendError('TURN_RETRY_INVALID', 'turn retry requires the original user prompt', 400)
+        }
+        const outcome = await turnRetries.request({ sessionId, turn, prompt })
+        sendJson(response, 200, {
+          ok: true,
+          created: outcome.created,
+          retry: turnRetryResponse(outcome.record),
+        })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/turn-retry/settle') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const body = await readBody(request)
+        const retryId = body.retryId
+        if (typeof retryId !== 'string' || retryId.length === 0) {
+          throw new BackendError('INVALID_REQUEST', 'retryId is required')
+        }
+        const record = await turnRetries.get({ retryId })
+        if (record === undefined) throw new BackendError('TURN_RETRY_UNKNOWN', 'retry intent is unknown', 404)
+        store.getForPrincipal(record.sessionId, principalId)
+        const outcome = await turnRetries.settle({ retryId })
+        sendJson(response, 200, { ok: true, settled: outcome.settled, retry: turnRetryResponse(outcome.record) })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/turn-retry') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = url.searchParams.get('sessionId')
+        if (sessionId === null) throw new BackendError('INVALID_REQUEST', 'sessionId is required')
+        const session = store.getForPrincipal(sessionId, principalId)
+        const retryable = latestRetryableTurn(session)
+        sendJson(response, 200, {
+          ...(retryable === undefined ? {} : { retryable }),
+          retries: (await turnRetries.list({ sessionId })).map(turnRetryResponse),
         })
         return
       }

@@ -191,6 +191,33 @@ export function browserNativeSessionRetryCopy(language: string): string {
   return language.startsWith('zh') ? '重新打开该会话' : 'Retry opening this Session'
 }
 
+/** Copy for the failed-turn retry banner.
+ * @param language - Page language tag.
+ * @param turn - Failed Agent turn number.
+ * @param reason - Terminal reason kind recorded by the Session log.
+ * @returns Banner message, action label, submitted, duplicate, and failure text.
+ */
+export function browserNativeTurnRetryCopy(language: string, turn: number, reason: string): {
+  readonly message: string
+  readonly action: string
+  readonly submitted: string
+  readonly duplicate: string
+  readonly failed: string
+} {
+  const zh = language.startsWith('zh')
+  return {
+    message: zh
+      ? `第 ${String(turn)} 轮以 ${reason} 结束；可从原始提示重试。`
+      : `Turn ${String(turn)} ended as ${reason}; retry from its original prompt.`,
+    action: zh ? `重试第 ${String(turn)} 轮` : `Retry turn ${String(turn)}`,
+    submitted: zh ? `第 ${String(turn)} 轮重试已提交。` : `Retry submitted for turn ${String(turn)}.`,
+    duplicate: zh
+      ? `第 ${String(turn)} 轮已重试过，未再次提交。`
+      : `Turn ${String(turn)} was already retried; nothing was submitted.`,
+    failed: zh ? '重试失败，未提交新的轮次。' : 'Retry failed; no new turn was submitted.',
+  }
+}
+
 /** Format the user-initiated Session bundle action.
  * @param language - Page language tag.
  * @returns Localized button label.
