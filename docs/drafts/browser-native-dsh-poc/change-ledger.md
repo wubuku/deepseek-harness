@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-118：把六类故障注入收成一条命令的混沌回归套件
+
+```text
+changeId: BN-P2-118
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/chaos-suite.mjs; docs/drafts/browser-native-dsh-poc/chaos-regression-suite.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 断流、Worker 崩溃、OPFS 配额、durable 重启、lease 丢失与审计截断六个故障注入分散在独立测试文件里，逐条运行耗时且没有统一的全绿/失败清单。
+existingExtensionPointsChecked: 直接复用六个既有测试文件、其临时数据目录与清理逻辑；未修改故障注入、backend、Worker 或 Session 行为。
+whyDraftOnlyWasInsufficient: 只有实际串行运行并统一捕获退出码、超时与诊断尾部，才能得到可重复的一条命令结论；单文件测试不能给出失败清单。
+behaviorChange: 新增 `tests/chaos-suite.mjs`，固定顺序执行六个用例，逐用例独立超时，失败时打印退出码/超时、耗时与最后 40 行输出，汇总 `PASS n/n` 或 `FAIL k/n: <ids>`；支持 `--list` 与 `--filter`。子进程工作目录固定为仓库根，与既有测试的相对 dist 解析一致。
+consumersUpdated: 无目录外消费者；README 增加入口。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/chaos-suite.mjs` 实测 `chaos-suite: PASS 6/6`（stream-cut 17.3s、worker-crash 15.4s、opfs-quota 13.7s、durable-restart 0.6s、lease-loss 8.5s、audit-truncation 0.3s）。
+syncReplaySteps: 上游同步后复跑该命令；若测试文件改名，同步 `CASES` 列表与 `chaos-regression-suite.md` 的覆盖映射。
+deleteCondition: 正式 CI 提供等价的故障注入流水线后删除该编排脚本。
+status: implemented
+```
+
 ### BN-P2-117：托管模式单命令启动与数据目录升级核对
 
 ```text
