@@ -157,6 +157,19 @@ async function removeLedgerRecords(dataDir, matches) {
   return removed
 }
 
+/** Drop viewer grants that name an erased Session or principal. */
+async function removeShares(dataDir, matches) {
+  const path = join(dataDir, 'session-shares.json')
+  const raw = await readIfExists(path)
+  if (raw === '') return 0
+  const parsed = JSON.parse(raw)
+  if (!Array.isArray(parsed?.shares)) return 0
+  const kept = parsed.shares.filter(share => !matches(share))
+  const removed = parsed.shares.length - kept.length
+  if (removed > 0) await atomicWrite(path, `${JSON.stringify({ version: parsed.version ?? 1, shares: kept })}\n`)
+  return removed
+}
+
 /** Hashes referenced by the Workspace manifests and pending uploads that remain. */
 async function referencedWorkspaceHashes(dataDir) {
   const directory = join(dataDir, 'workspace-v2', 'workspaces')
@@ -270,6 +283,7 @@ export async function eraseSession({ dataDir, sessionId }) {
   const removedAttachments = await sweepAttachments(dataDir, referenced)
   const removedRuns = await removeDurableRuns(dataDir, new Set(removed))
   const removedLedgerRecords = await removeLedgerRecords(dataDir, identity => identity?.sessionId === sessionId)
+  const removedShares = await removeShares(dataDir, share => share?.sessionId === sessionId)
   const journal = await redactObservabilityJournal({
     dataDir,
     shouldRemove: (record, ledger) => ledger === 'usage'
@@ -283,6 +297,7 @@ export async function eraseSession({ dataDir, sessionId }) {
     removedAttachments,
     removedDurableRuns: removedRuns,
     removedLedgerRecords,
+    removedShares,
     removedJournalRecords: journal,
     removedWorkspaces: [],
   }
@@ -306,6 +321,7 @@ export async function erasePrincipal({ dataDir, principalId }) {
   const removedAttachments = await sweepAttachments(dataDir, await referencedAttachmentHashes(dataDir))
   const removedRuns = await removeDurableRuns(dataDir, new Set(removed))
   const removedLedgerRecords = await removeLedgerRecords(dataDir, record => record?.principalId === principalId)
+  const removedShares = await removeShares(dataDir, share => share?.ownerPrincipalId === principalId || share?.viewerPrincipalId === principalId)
   const principalDigest = createHash('sha256').update(principalId).digest('hex').slice(0, 16)
   const journal = await redactObservabilityJournal({
     dataDir,
@@ -322,6 +338,7 @@ export async function erasePrincipal({ dataDir, principalId }) {
     removedAttachments,
     removedDurableRuns: removedRuns,
     removedLedgerRecords,
+    removedShares,
     removedJournalRecords: journal,
     removedWorkspaces,
     ...swept,

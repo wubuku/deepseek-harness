@@ -136,6 +136,11 @@ try {
   assert.notEqual(kept.principal, erased.principal)
   assert.notEqual(kept.workspaceId, erased.workspaceId)
 
+  const grant = await call(erased.principal, '/api/browser-native/session/share', {
+    body: { protocolVersion: 1, requestId: randomUUID(), sessionId: erased.sessionId, viewerPrincipalId: kept.principal },
+  })
+  assert.equal(grant.status, 200, JSON.stringify(grant.body))
+
   const journal = createObservabilityJournal({ dataDir })
   const keptDigest = createHash('sha256').update(kept.principal).digest('hex').slice(0, 16)
   const erasedDigest = createHash('sha256').update(erased.principal).digest('hex').slice(0, 16)
@@ -163,6 +168,8 @@ try {
   assert.ok(sessionErasure.removedAttachments >= 1, 'the erased Session attachment must be removed')
   assert.equal(sessionErasure.removedJournalRecords.usage, 1)
   assert.equal(sessionErasure.removedJournalRecords.accessDenials, 1)
+  assert.equal(sessionErasure.removedShares, 1)
+  assert.deepEqual(JSON.parse(await readFile(join(dataDir, 'session-shares.json'), 'utf8')).shares, [])
   assert.deepEqual(await findResidue({ dataDir, needles: [erased.sessionId] }), [])
 
   const afterSessionErase = createObservabilityJournal({ dataDir })

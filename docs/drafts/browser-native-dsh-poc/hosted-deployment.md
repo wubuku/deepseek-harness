@@ -211,7 +211,7 @@ node docs/drafts/browser-native-dsh-poc/hosted/erase-data.mjs --data-dir /srv/br
 
 退出码：0 已删除且残留扫描为空，1 删除失败或仍有残留，2 用法错误，3 backend 仍在运行，4 目标不存在。
 
-删除 Session 会移除 Session 日志、durable running-turn 记录、cross-store ledger 记录、按 `sessionId` 归属的 usage 记录，以及不再被任何剩余 Session 引用的附件对象；Workspace 与其它 Session 保留。删除 principal 额外移除 identity 记录、该 Workspace 的 manifest、layout、上传暂存、附件目录，并清理不再被剩余 Workspace 引用的 blob、descriptor 与 chunk 对象，以及按 principal 归属的 usage 与拒绝审计。
+删除 Session 会移除 Session 日志、durable running-turn 记录、cross-store ledger 记录、该 Session 的 viewer 授权、按 `sessionId` 归属的 usage 记录，以及不再被任何剩余 Session 引用的附件对象；Workspace 与其它 Session 保留。删除 principal 额外移除 identity 记录、该 Workspace 的 manifest、layout、上传暂存、附件目录，并清理不再被剩余 Workspace 引用的 blob、descriptor 与 chunk 对象，以及按 principal 归属（owner 或 viewer）的共享授权、usage 与拒绝审计。
 
 审计链在删除后从 `GENESIS` 重建，并原子替换 ledger 与 head：幸存记录仍可验证，但删除前的链连续性不再保留。这是“审计记录必须真正删除”的直接后果。无法归因到 Session 或 principal 的拒绝审计（例如缺少身份时的 401）没有标识符，因此保留；它们不包含被删数据。
 
@@ -222,8 +222,25 @@ node docs/drafts/browser-native-dsh-poc/hosted/erase-data.mjs --data-dir /srv/br
 
 保留边界：删除只作用于当前 dataDir。已经导出的旧 bundle 仍包含删除前的数据，需要单独销毁；删除命令不撤销[备份与恢复](#备份与恢复)生成的备份。
 
+## Session 只读共享
+
+Session owner 可以把一个已持久化的 Session 授予另一个已有 principal 只读访问：
+
+```sh
+curl -X POST http://127.0.0.1:4185/api/browser-native/session/share \
+  -H 'content-type: application/json' \
+  -H "cookie: dsh-browser-native-principal=<owner>" \
+  -d '{"protocolVersion":1,"requestId":"share-1","sessionId":"<session>","viewerPrincipalId":"<viewer>"}'
+```
+
+授权写入 `session-shares.json`（`version: 1`，含 `sessionId`、owner、viewer 与 `grantedAt`），因此在 backend 重启后仍然有效。viewer 只能用 `session/open` 的 `access: "read"`、`session/read` 与 `session/stat`；响应带 `shared: true`，且不含 owner token。`open` 的 `access: "write"`、`append`、`flush`、`close`、`renew` 与 `handoff` 一律返回 403 `SESSION_READ_ONLY`，租约不会被 viewer 取得；`session/export` 与再次共享保持 owner 专属。viewer 的写尝试由统一拒绝审计记录：`resource: "session"`、`resourceId` 为 Session id、`principalDigest` 为 viewer 的摘要、`code` 为 `SESSION_READ_ONLY`，可从 `observability/access-denials.jsonl` 追溯。
+
+`tests/session-sharing.e2e.mjs` 使用两个真实 principal 的 HTTP 面：owner 写入并 flush 两个事件，viewer 在授权前读取得到 404；授权后读取到事件 0–1 且无 owner token；写 open、append、handoff、renew 均为 403 `SESSION_READ_ONLY`，viewer 不能转授；owner 继续 append 到 seq 2 并 flush；拒绝审计四条带正确 resource/resourceId/principalDigest/status；journal 恢复后哈希链验证通过；重启后 viewer 仍可只读打开，owner 打开不带 `shared`。导出保持 owner-only。
+
+未实现：授权撤销、有效期、viewer 侧 Catalog 列表、共享 Session 的 UI 呈现、按字段或其他更细粒度授权。
+
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session 只读共享的授权持久化、viewer 读取、写入与租约拒绝、拒绝审计与重启后保持。
 
-未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。
+未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理；共享的撤销/有效期与 UI 呈现。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。

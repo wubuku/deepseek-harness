@@ -24,6 +24,7 @@ import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal } from './observability-journal.mjs'
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
+import { SessionShareStore } from './session-shares.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -1805,7 +1806,10 @@ function sessionResponse(session, extra = {}) {
   }
 }
 
-async function sessionOperation(store, operation, body, principalId, testHooks = {}, admission) {
+/** Operations a Session viewer may perform; everything else requires the owner lease. */
+const SHARED_READ_OPERATIONS = new Set(['open', 'read', 'stat'])
+
+async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -1851,7 +1855,24 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
         throw error
       }
     }
-    const session = store.getForPrincipal(id, principalId)
+    let session
+    let shared = false
+    try {
+      session = store.getForPrincipal(id, principalId)
+    } catch (error) {
+      if (error?.code !== 'SESSION_NOT_FOUND' || !shares.isViewer(id, principalId)) throw error
+      if (!SHARED_READ_OPERATIONS.has(operation) || (operation === 'open' && body.access !== 'read')) {
+        throw new BackendError(
+          'SESSION_READ_ONLY',
+          'a shared Session is read-only for its viewer',
+          403,
+          undefined,
+          { sessionId: id },
+        )
+      }
+      session = store.get(id)
+      shared = true
+    }
     if (operation === 'open') {
       if (body.access !== 'read' && body.access !== 'write') throw new BackendError('INVALID_REQUEST', 'access must be read or write')
       if (body.access === 'write') {
@@ -1863,9 +1884,9 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
           throw error
         }
       }
-      return sessionResponse(session)
+      return sessionResponse(session, shared ? { shared: true } : {})
     }
-    if (operation === 'stat') return sessionResponse(session)
+    if (operation === 'stat') return sessionResponse(session, shared ? { shared: true } : {})
     if (operation === 'read') {
       const offset = body.offset === undefined ? 0 : boundedInteger(body.offset, 'offset', MAX_EVENTS)
       const length = body.length === undefined ? MAX_SESSION_READ_EVENTS : boundedInteger(body.length, 'length', MAX_SESSION_READ_EVENTS)
@@ -1878,6 +1899,7 @@ async function sessionOperation(store, operation, body, principalId, testHooks =
         durableThroughSeq: session.durableThroughSeq,
         ownerEpoch: session.ownerEpoch,
         hasMore: offset + page.length < session.events.length,
+        ...(shared ? { shared: true } : {}),
       })
     }
     if (operation === 'authorize-llm') {
@@ -4708,6 +4730,8 @@ export async function createBrowserNativeV2Server(options) {
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
   await crossStoreLedger.load()
+  const sessionShares = new SessionShareStore(options.dataDir)
+  await sessionShares.load()
   const sweepAttachments = async () => {
     const workspaces = []
     for (const workspaceId of await listAttachmentWorkspaces(options.dataDir)) {
@@ -4771,7 +4795,8 @@ export async function createBrowserNativeV2Server(options) {
       method: request.method,
       route: url.pathname,
       resource: auditResourceFor(url.pathname),
-      resourceId: url.searchParams.get('workspaceId') ?? null,
+      resourceId: url.searchParams.get('workspaceId')
+        ?? (typeof error.details?.sessionId === 'string' ? error.details.sessionId : null),
       principalDigest: principal === undefined ? null
         : createHash('sha256').update(principal).digest('hex').slice(0, 16),
       code: typeof error.code === 'string' ? error.code : 'UNKNOWN',
@@ -5738,6 +5763,23 @@ export async function createBrowserNativeV2Server(options) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        if (operation === 'share') {
+          const sessionId = assertSessionId(body.sessionId)
+          const viewerPrincipalId = assertPrincipalId(body.viewerPrincipalId)
+          const result = await store.exclusive(sessionId, async () => {
+            const session = store.getForPrincipal(sessionId, principalId)
+            if (!workspaces.identities.has(viewerPrincipalId)) {
+              throw new BackendError('PRINCIPAL_NOT_FOUND', 'the viewer principal does not exist', 404)
+            }
+            const share = await sessionShares.grant({ sessionId, ownerPrincipalId: principalId, viewerPrincipalId })
+            return sessionResponse(session, {
+              share: clone(share),
+              shares: clone(sessionShares.listForOwner(sessionId, principalId)),
+            })
+          })
+          sendJson(response, 200, result)
+          return
+        }
         if (operation === 'export' || operation === 'import') {
           const workspaceId = boundedString(body.workspaceId, 'workspaceId', MAX_CHECKPOINT_ID_LENGTH)
           // The Workspace cookie is path-scoped to /workspace, so this Session route
@@ -5763,7 +5805,7 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, principalId, options.testHooks, admission)
+        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return

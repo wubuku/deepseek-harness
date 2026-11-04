@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-125：Session 只读共享与 viewer 写权限拒绝
+
+```text
+changeId: BN-P2-125
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/session-shares.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/session-sharing.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/browser-native-dsh-plan-v2.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Session 只能由 owner principal 读写，没有跨 principal 只读访问；无法证明共享后 viewer 不可写、不可取得租约，也无法从拒绝审计追溯 viewer 的越权尝试。
+existingExtensionPointsChecked: 复用 `sessionOperation` 的 owner 校验与 `SESSION_NOT_FOUND` 语义、`sessionResponse` 的 owner/read 响应、`workspaces.identities` 的 principal 存在性、`recordAccessDenial` 的统一拒绝审计与 `observability-journal.mjs`；未改 Session 事件、owner epoch、durable 协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 共享语义只能由真实两个 principal 的 HTTP 请求证明，包括授权前 404、授权后只读、写操作 403、租约不泄露、审计字段与重启后仍有效。
+behaviorChange: 新增 `session-shares.mjs`（`session-shares.json`，version 1）持久化 viewer 授权；`POST /api/browser-native/session/share` 仅 owner 可调用且 viewer principal 必须存在；`sessionOperation` 在 owner 查询失败后允许已授权 viewer 执行 `open`（仅 read）/`read`/`stat` 并标记 `shared: true`，其余操作返回 403 `SESSION_READ_ONLY`；拒绝审计的 `resourceId` 回退到 `error.details.sessionId`，使 viewer 越权可追溯到具体 Session。
+consumersUpdated: `hosted-deployment.md` 新增“Session 只读共享”章节并更新已验证/未验证；`browser-native-dsh-plan-v2.md` endpoint 表新增 share 行；README 导航同步。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/session-sharing.e2e.mjs` PASS（两个 principal，无浏览器）：授权前 viewer 读取 404；授权后 read 得到事件 0–1 且无 owner token；写 open/append/handoff/renew 均 403 `SESSION_READ_ONLY`，viewer 转授 404；owner 继续 append 到 seq 2 并 flush；4 条拒绝审计带 resource `session`、正确 resourceId、viewer digest 与 403；journal `verified: true`；重启后 viewer 仍可只读打开、owner 打开不带 shared；`session/export` 保持 owner-only。`node --test tests/backend-v2.test.mjs` 70/70 通过；`tests/data-erasure.e2e.mjs` 回归通过。
+syncReplaySteps: 上游同步后复跑 `tests/session-sharing.e2e.mjs` 与 `tests/backend-v2.test.mjs`，核对 `session-shares.json` 版本与 share 路由。
+deleteCondition: 正式交付提供等价的共享授权与审计后删除本 PoC 模块；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-124：Session 与 principal 的彻底删除及残留验证
 
 ```text
@@ -21,9 +38,9 @@ file: docs/drafts/browser-native-dsh-poc/hosted/data-erasure.mjs; docs/drafts/br
 reason: PoC 没有任何删除入口：Session 日志只能留在磁盘，principal 的 Workspace、附件、usage 与拒绝审计无法清除，也没有可判定的残留检查。
 existingExtensionPointsChecked: 复用 `sessions/*.json` 与 `durable-runs.json` 的文件布局、`cross-store-operation-ledger.json` 记录、`observability-journal.mjs` 的 envelope 哈希与 head 锚点、`workspace-v2` 的 blob/descriptor/chunk 路径、以及既有 `findResidue` 所需的文件遍历；未改 Session 事件、Agent Loop 或正式 DSH package。
 whyDraftOnlyWasInsufficient: 删除是否彻底只能由真实数据目录证明：必须在两个 principal 的 Session、Workspace blob、附件、usage、拒绝审计存在时删除其中一个，并验证另一个完全不受影响、被删对象在重启后不可导出。
-behaviorChange: 新增 `hosted/data-erasure.mjs`（`eraseSession` / `erasePrincipal` / `findResidue`）与 `erase-data.mjs` CLI（退出码 0/1/2/3/4）。删除在 backend 停止时执行；`observability-journal.mjs` 新增 `redactObservabilityJournal`，按谓词移除 usage 或拒绝审计并从 `GENESIS` 重建 ledger 与 head。Session 删除移除日志、durable run、ledger 记录、按 sessionId 的 usage/拒绝审计与不再被引用的附件；principal 删除额外移除 identity、Workspace manifest/layout/暂存/附件目录，并清理不再被引用的 blob、descriptor 与 chunk。
+behaviorChange: 新增 `hosted/data-erasure.mjs`（`eraseSession` / `erasePrincipal` / `findResidue`）与 `erase-data.mjs` CLI（退出码 0/1/2/3/4）。删除在 backend 停止时执行；`observability-journal.mjs` 新增 `redactObservabilityJournal`，按谓词移除 usage 或拒绝审计并从 `GENESIS` 重建 ledger 与 head。Session 删除移除日志、durable run、ledger 记录、该 Session 的共享授权、按 sessionId 的 usage/拒绝审计与不再被引用的附件；principal 删除额外移除 identity、Workspace manifest/layout/暂存/附件目录、owner 或 viewer 的共享授权，并清理不再被引用的 blob、descriptor 与 chunk。
 consumersUpdated: `hosted-deployment.md` 新增“数据删除与保留”章节并更新已验证/未验证；README 导航同步。
-tests: `node docs/drafts/browser-native-dsh-poc/tests/data-erasure.e2e.mjs` 在 Chrome 156 / macOS 上 PASS：两个 principal 各有 Workspace 文件、blob、附件、两事件 Session、拒绝审计与 usage；删除一个 Session 后残留扫描为 0、journal 重建 `verified: true`、导出返回 404、另一 Session 导出逐事件一致；删除该 principal 后残留扫描找不到 principal/Workspace/文件哈希，identity 与 blob/descriptor/chunk 被清理，旧 cookie 在 existing 模式下 401，保留 principal 的 identity、Workspace 与 Session 正常。CLI 用法错误退出 2、目标不存在退出 4；运行中删除在测试内断言 `BACKEND_RUNNING`。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/data-erasure.e2e.mjs` 在 Chrome 156 / macOS 上 PASS：两个 principal 各有 Workspace 文件、blob、附件、两事件 Session、拒绝审计与 usage，其中一个 Session 还被共享给另一个 principal；删除该 Session 后残留扫描为 0、共享授权与 journal 重建一并清理（`verified: true`）、导出返回 404、另一 Session 导出逐事件一致；删除该 principal 后残留扫描找不到 principal/Workspace/文件哈希，identity 与 blob/descriptor/chunk 被清理，旧 cookie 在 existing 模式下 401，保留 principal 的 identity、Workspace 与 Session 正常。CLI 用法错误退出 2、目标不存在退出 4；运行中删除在测试内断言 `BACKEND_RUNNING`。
 syncReplaySteps: 上游同步后复跑 `tests/data-erasure.e2e.mjs`，核对 `redactObservabilityJournal` 的 head 与 `findResidue` 输出。
 deleteCondition: 正式交付提供等价的删除与残留验证工具后删除本 PoC 脚本；或 Browser-Native DSH PoC 被移除。
 status: implemented
