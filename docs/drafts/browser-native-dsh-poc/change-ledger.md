@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-103：drafts 索引分组与 PoC README 导航收敛
+
+```text
+changeId: BN-P2-103
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: drafts 索引已增至 114 条，单条编号清单过长，且 PoC README 有 106 个一级小节却没有入口导航；同一事实又在索引与各文档重复，读者难以定位当前结论。
+existingExtensionPointsChecked: 只重排文档导航与索引分组，不改任何结论、测试、协议或 packages/；索引编号保持原值，既有账本里的“drafts 索引 N”引用仍有效。
+whyDraftOnlyWasInsufficient: 导航收敛必须与旧引用兼容；若重新编号，37 个文档中的“drafts 索引 N”会全部失效，因此保留编号并新增主题分组与入口表。
+behaviorChange: 索引按 9 个主题分组（研究与方案、早期持久化、交接与传输、跨存储、能力与审批、跨标签与安全、性能与准入、格式与 durable、产品与就绪度），每组前加一行范围与建议先读，编号不变；新增第 114 条威胁模型，并同步第 73（审计持久化）、82（运行 journal）、89（重启对账）、102（参数与导出入口）、104（冲突重试、导出、键盘与实时区域）、110（a11y 断言与最新时延）、111（五项必做完成）的过时结论。PoC README 新增“## 导航”表，按 11 个主题链接代表小节，并指向索引的“三十分钟形成技术判断”锚点。
+consumersUpdated: drafts 索引、PoC README、ledger；其余文档与变更账本编号引用无需改动。
+test: `pnpm run test:docs` 19 通过、2 失败，失败仍是既有的 `.archify` repository-reference 与 concrete-term；markdown links 与 wrap 门禁通过，未改代码，未运行构建。
+syncReplaySteps: 上游同步若新增 PoC 文档，先在索引追加编号并归入对应主题，再在 PoC README 导航补充入口；复跑 `pnpm run test:docs` 并检查锚点在 VitePress 构建中可解析。
+deleteCondition: 索引迁入正式文档站点的自动生成目录，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-102：新 UI 状态的无障碍语义与键盘可达性
 
 ```text

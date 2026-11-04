@@ -50,6 +50,24 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 该批只证明一个 Worker Host 中三个 Agent Loop 的异步等待、取消隔离与 Session 隔离，不是并发容量基准。单 Worker 内 CPU 密集任务仍共享 JavaScript event loop；同步阻塞与 cooperative yield 结果见下节。真实 LLM 同时服务多个 Agent、更高并发数、容量上限或生产多 Session UI 尚未验证。
 
+## 导航
+
+下面的分组只给入口，详细结论与证据在各节与链接文档内；同一事实不在本页与索引页重复展开。完整条目与编号见 [drafts 索引](../README.md#三十分钟形成技术判断)。
+
+| 主题 | 入口 |
+| --- | --- |
+| 运行入口与拓扑 | [v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
+| Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
+| 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
+| 模型、预算与策略 | [双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
+| 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
+| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
+| 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用) |
+| 产品与就绪度 | [产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
+| 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
+
 ## 单 Worker CPU 阻塞与协作式让出
 
 [验证计划](single-worker-cpu-contention-validation-plan.md)与[实测进度](single-worker-cpu-contention-validation-progress.md)比较真实 DSH Agent Loop 在同一 Chrome Dedicated Worker 中执行有界同步 CPU 工具和分片 cooperative 工具的时序。同步工具运行 1900 ms 时，PoC backend 已释放 peer Session 的模型响应且主线程动画继续，但 Worker 直到同步工具返回才处理该响应与取消消息；匹配的 DSH `tool/call` 和 `tool/result` 各记录一次。分片工具每 8 ms 让出 Worker task 并检查 `AbortSignal`，使 peer Session 在该工具结束前完成；取消在下一个 cooperative 检查点被观察，本次 Chrome 计时约 12 ms。
