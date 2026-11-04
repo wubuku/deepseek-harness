@@ -3172,3 +3172,20 @@ syncReplaySteps: 上游同步后核对 composer、`data-chat-flow-kind="user"`�
 deleteCondition: 正式产品提供等效的端到端旅程验收并有真实模型证据；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-152：Skill 有无对照与渐进式披露
+
+```text
+changeId: BN-P2-152
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/skill-application.e2e.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/skill-application.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有 Skill 验证只证明工具能用，没有证明 Skill 正文确实改变模型行为，也没有证明正文只在 `skill` 结果之后进入上下文；目录加载与 fs 协同缺少一条请求层证据。
+existingExtensionPointsChecked: 复用验证 profile `browser-skill`、真实 `dsh-skill-filesystem`/`dsh-skill`/`dsh-tool-skill`、Workspace skill 根、`skill` 与 `read` 工具、Playwright 捕获的 `/llm` 请求体；未修改 `packages/`、默认 profile 或生产代码。
+whyDraftOnlyWasInsufficient: 静态阅读无法证明首轮请求不含正文、续接请求含正文，也无法证明同一探针在有无 Skill 时产生不同可见回复。
+behaviorChange: 仅新增 PoC 测试支撑分支与 validation E2E/文档；产品行为不变。
+consumersUpdated: Skill 应用 E2E、`skill-application.md`、PoC README 导航与章节、本 ledger。
+tests: `DSH_POC_LLM=scripted DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/skill-application.e2e.mjs` 通过。对照 turn 回复 ABSENT、0 工具调用、1 次请求；treatment 调用 `skill` 与 `read`，回复 `APPLIED:BROWSER_SKILL_APPLICATION_CODEWORD_7F3A`；首轮请求含目录 name/description 且不含正文 marker，后续 2 次请求含正文；页面/Worker 错误与跨源请求 0。真实模型复跑失败：OPENAI 端点 402、OPENAI_NEXT 403、ANTHROPIC 429（`UPSTREAM_LLM_RATE_LIMITED`/503），未获得真实回复。
+syncReplaySteps: 上游同步后复跑 scripted E2E；凭据恢复后复跑 `DSH_POC_LLM=real`，确认对照 ABSENT、treatment `skill → read`、首轮无正文、续接含正文。
+deleteCondition: 真实模型完成同等对照，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

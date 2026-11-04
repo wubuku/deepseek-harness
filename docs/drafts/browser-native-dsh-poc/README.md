@@ -59,7 +59,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
-| 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
+| 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
@@ -617,6 +617,8 @@ PoC backend 可在测试启动时注入 S3 blob adapter；默认 `run-v2.mjs` �
 ## DSH skill 文件系统集成
 
 [验证计划](worker-skill-filesystem-validation-plan.md)和[进度记录](worker-skill-filesystem-validation-progress.md)覆盖验证专用 profile 中真实 `dsh-skill-filesystem`、`dsh-skill` 和 `dsh-tool-skill` 的 Chrome Worker 闭环。scripted E2E 验证缺失根创建、DSH `read → edit → edit → skill`、frontmatter 目录更新、Session 正文投影、删除撤回、OPFS 保存失败隔离和同 Session 刷新恢复；真实 LLM E2E 验证模型调用 skill、刷新续聊、同源请求及凭据隔离。该能力没有加入默认 Browser profile，外部 VFS 删除依赖异步 Chokidar 通知，页面关闭后 watcher 不运行。
+
+[Skill 在浏览器端的应用验证](skill-application.md)补上“有无 Skill”的行为对照与渐进式披露的请求层证据：同一 Session 先跑无 Skill 的对照 turn（回复 ABSENT、无工具调用），写入 `SKILL.md` 后同一探针触发 `skill → read`，并使用 Workspace 文件内容作答；首轮请求只含目录 name/description，正文只在 `skill` 结果后的续接请求出现。scripted 证据通过，2026-11-05 三组真实模型端点分别返回 402/403/429，因此真实模型应用证据待配额恢复后复跑。
 
 复跑本批验收：
 

@@ -4246,6 +4246,44 @@ async function scriptedLlm(response, messages, tools, fault, isClientClosed = ()
     return
   }
 
+  const skillApplicationMarker = 'BROWSER_NATIVE_SKILL_APPLICATION_PROBE'
+  if (hasUserMarker(messages, skillApplicationMarker)) {
+    const markerIndex = messages.findLastIndex(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes(skillApplicationMarker))
+    const toolResults = messages.slice(markerIndex + 1).filter(message => message.role === 'tool')
+    const catalog = messages.findLast(message => message.role === 'user'
+      && typeof message.content === 'string' && message.content.includes('<available_skills>'))?.content ?? ''
+    const catalogHasSkill = catalog.includes('browser-proof')
+    if (toolResults.length === 0) {
+      if (catalogHasSkill && hasTool(tools, 'skill')) {
+        await scriptedWorkspaceToolCall(response, {
+          id: 'browser-native-skill-application-load',
+          name: 'skill',
+          arguments: { name: 'browser-proof' },
+        })
+      } else {
+        scriptedText(response, 'BROWSER_NATIVE_SKILL_APPLICATION_ABSENT')
+      }
+      return
+    }
+    if (toolResults.length === 1) {
+      await scriptedWorkspaceToolCall(response, {
+        id: 'browser-native-skill-application-read',
+        name: 'read',
+        arguments: { file_path: '/dsh/home/workspace/proof.txt' },
+      })
+      return
+    }
+    const readText = toolResults.at(-1)?.content
+    const contents = typeof readText === 'string'
+      ? readText.match(/BROWSER_SKILL_APPLICATION_CODEWORD_[A-Z0-9]+/)?.[0]
+      : undefined
+    scriptedText(response, contents === undefined
+      ? 'BROWSER_NATIVE_SKILL_APPLICATION_READ_FAILED'
+      : `BROWSER_NATIVE_SKILL_APPLICATION_APPLIED:${contents}`)
+    return
+  }
+
   const approvalSettlementMarker = [
     'BROWSER_NATIVE_APPROVAL_ALLOW_ONCE_E2E',
     'BROWSER_NATIVE_APPROVAL_QUEUE_E2E',
