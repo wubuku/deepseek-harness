@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-133：viewer 实时事件订阅与 Session 执行权移交
+
+```text
+changeId: BN-P2-133
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/session-event-hub.mjs; docs/drafts/browser-native-dsh-poc/session-shares.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/collaboration-stream.test.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 只读共享此前只能靠轮询 read 看到追问进度，且没有任何把执行权转给另一 principal 的入口；协作场景需要“实时看到推进”和“单一写者”同时成立。
+existingExtensionPointsChecked: 复用已有 viewer share、`sessionOperation` 的 owner/submit 校验、`session/flush` 与 durable handoff 语义；未改 Agent Loop、Session 事件类型、Session format、模型/工具协议或 `packages/`。
+whyDraftOnlyWasInsufficient: 回放与实时增量之间是否丢事件、移交后旧 token 是否还能写，只能通过真实 HTTP 流与两个 principal 并发观察；静态阅读无法证明“无双写”。
+behaviorChange: 新增 `session-event-hub.mjs`（进程内订阅/发布）；backend 新增 `GET /api/browser-native/session/events`（NDJSON，先回放后实时，`ready` 行给出 role/nextSeq）与 `POST /api/browser-native/session/transfer`（仅当前 owner、目标必须有 viewer grant、原子持久化 principal 变更并清空 owner lease，失败回滚并撤销新增 grant）；`append` 成功后向 hub 发布本批事件。`SessionShareStore` 新增 `revoke` 供移交回滚。
+consumersUpdated: PoC README 新增“实时协作与执行权移交”章节；本 ledger 登记；未新增生产入口。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/collaboration-stream.test.mjs` 1/1 通过；诊断输出回放 2 条、实时 2 条、移交后 1 条，双方 seq 均为 [0,1,2,3,4]，实时流无重复 seq，原持有者旧 token 追加返回 `SESSION_READ_ONLY`，无 grant 目标移交返回 `SHARE_REQUIRED`，原持有者移交返回 `SESSION_NOT_FOUND`。
+syncReplaySteps: 上游同步后复跑同一命令；确认 `sessionOperation` 仍以 principalId 解析 owner、viewer 允许的操作集合未扩大、`session/flush` 仍持久化 `principalId`。
+deleteCondition: 正式多端协作由 DSH 上游能力替代，或该 PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-132：用一条 `perf-gate` 收口关键性能预算并记录全绿基线
 
 ```text

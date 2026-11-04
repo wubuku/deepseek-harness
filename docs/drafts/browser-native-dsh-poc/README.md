@@ -60,7 +60,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
@@ -1403,6 +1403,22 @@ node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.
 ```
 
 文中同时给出触发扩展的可测量条件：跨主机同 Session 写入、恢复时间超 RTO、`activeRequests` 接近准入上限或出现 admission 拒绝、`store.load()` 启动耗时随 Session 数线性增长、RPO = 0 的节点故障要求、按租户独立存储边界。未满足这些条件时继续单节点，不按“多实例 HA”宣称。
+
+## 实时协作与执行权移交
+
+`tests/collaboration-stream.test.mjs` 用两个独立 principal 验证只读协作者与执行权移交。只读者通过 `GET /api/browser-native/session/events?sessionId=…&fromSeq=…` 订阅 NDJSON：先回放 `fromSeq` 之后的已存事件，再持续接收 `append` 产生的增量；首行 `ready` 给出 `role: viewer` 与 `nextSeq`。执行权持有者可调用 `POST /api/browser-native/session/transfer` 把 Session 转给已有 viewer grant 的 principal。
+
+移交后：新持有者 `open(access: 'write')` 重新领取 owner lease；原持有者保留 viewer grant，可继续读取同一日志；原 owner token 立即失效，用旧 token 追加返回 403 `SESSION_READ_ONLY`。没有 viewer grant 的目标返回 409 `SHARE_REQUIRED`，非持有者调用移交返回 404 `SESSION_NOT_FOUND`。
+
+实测：回放 2 条、实时追加 2 条、移交后新持有者追加 1 条，双方读到的 seq 都是 `[0,1,2,3,4]`，实时流无重复 seq，原持有者的流在移交后继续推进。
+
+复跑：
+
+```sh
+node --test docs/drafts/browser-native-dsh-poc/tests/collaboration-stream.test.mjs
+```
+
+边界：订阅 hub 在 backend 进程内；authority 转发模式下，owner 与 viewer 必须命中同一 backend 才能收到实时增量，跨 backend fan-out 未实现。没有页面级 viewer UI，验证停在协议与 HTTP 客户端层。
 
 ## 权限预设与审批生命周期
 

@@ -100,6 +100,18 @@ export class SessionShareStore {
       .sort((left, right) => left.viewerPrincipalId.localeCompare(right.viewerPrincipalId))
   }
 
+  /**
+   * Remove a read grant, used to roll back a failed ownership transfer.
+   * @param revoke - Session identifier and viewer principal.
+   * @returns True when a grant existed and was removed.
+   */
+  async revoke({ sessionId, viewerPrincipalId }) {
+    const key = `${sessionId}\u0000${viewerPrincipalId}`
+    if (!this.#shares.delete(key)) return false
+    await this.#persist()
+    return true
+  }
+
   /** Replace the share file atomically with the current records. */
   async #persist() {
     const temporary = `${this.#path}.${randomUUID()}.tmp`

@@ -25,6 +25,7 @@ import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal } from './observability-journal.mjs'
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 import { SessionShareStore } from './session-shares.mjs'
+import { SessionEventHub } from './session-event-hub.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -5036,6 +5037,7 @@ export async function createBrowserNativeV2Server(options) {
   await crossStoreLedger.load()
   const sessionShares = new SessionShareStore(options.dataDir)
   await sessionShares.load()
+  const sessionEvents = new SessionEventHub()
   const sweepAttachments = async () => {
     const workspaces = []
     for (const workspaceId of await listAttachmentWorkspaces(options.dataDir)) {
@@ -6131,6 +6133,110 @@ export async function createBrowserNativeV2Server(options) {
         }
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/events') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = assertSessionId(url.searchParams.get('sessionId') ?? undefined)
+        const fromSeqParam = url.searchParams.get('fromSeq')
+        const fromSeq = fromSeqParam === null ? 0 : boundedInteger(Number(fromSeqParam), 'fromSeq', MAX_EVENTS)
+        const subscription = sessionEvents.subscribe(sessionId)
+        let snapshot
+        try {
+          snapshot = await store.exclusive(sessionId, async () => {
+            let session
+            let shared = false
+            try {
+              session = store.getForPrincipal(sessionId, principalId)
+            } catch (error) {
+              if (error?.code !== 'SESSION_NOT_FOUND' || !sessionShares.isViewer(sessionId, principalId)) throw error
+              session = store.get(sessionId)
+              shared = true
+            }
+            if (fromSeq > session.events.length) throw new BackendError('INVALID_REQUEST', 'fromSeq is beyond the Session log')
+            return { events: clone(session.events.slice(fromSeq)), shared }
+          })
+        } catch (error) {
+          subscription.close()
+          throw error
+        }
+        const abort = new AbortController()
+        response.on('close', () => abort.abort())
+        response.writeHead(200, {
+          'content-type': 'application/x-ndjson; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-accel-buffering': 'no',
+        })
+        let nextSeq = fromSeq + snapshot.events.length
+        response.write(`${JSON.stringify({
+          kind: 'ready',
+          sessionId,
+          role: snapshot.shared ? 'viewer' : 'owner',
+          nextSeq,
+        })}\n`)
+        for (const event of snapshot.events) response.write(`${JSON.stringify({ kind: 'event', event })}\n`)
+        try {
+          while (!abort.signal.aborted && !response.writableEnded) {
+            const batch = await subscription.next()
+            if (batch === undefined) break
+            for (const event of batch) {
+              if (event.seq < nextSeq) continue
+              response.write(`${JSON.stringify({ kind: 'event', event })}\n`)
+              nextSeq = event.seq + 1
+            }
+          }
+        } finally {
+          subscription.close()
+        }
+        response.end()
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/transfer') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = assertSessionId(body.sessionId)
+        const toPrincipalId = assertPrincipalId(body.toPrincipalId)
+        if (!workspaces.identities.has(toPrincipalId)) {
+          throw new BackendError('PRINCIPAL_NOT_FOUND', 'the target principal does not exist', 404)
+        }
+        const result = await store.exclusive(sessionId, async () => {
+          const session = store.getForPrincipal(sessionId, principalId)
+          if (!sessionShares.isViewer(sessionId, toPrincipalId)) {
+            throw new BackendError('SHARE_REQUIRED', 'the target principal has no viewer grant for this Session', 409)
+          }
+          if (session.principalId === toPrincipalId) {
+            throw new BackendError('INVALID_REQUEST', 'the target principal already owns the Session')
+          }
+          const fromPrincipalId = assertPrincipalId(session.principalId)
+          const previous = {
+            principalId: session.principalId,
+            ownerToken: session.ownerToken,
+            ownerExpiresAt: session.ownerExpiresAt,
+          }
+          session.principalId = toPrincipalId
+          session.ownerToken = undefined
+          session.ownerExpiresAt = 0
+          let share
+          try {
+            share = await sessionShares.grant({ sessionId, ownerPrincipalId: toPrincipalId, viewerPrincipalId: fromPrincipalId })
+            await store.flush(session)
+          } catch (error) {
+            session.principalId = previous.principalId
+            session.ownerToken = previous.ownerToken
+            session.ownerExpiresAt = previous.ownerExpiresAt
+            try { await sessionShares.revoke({ sessionId, viewerPrincipalId: fromPrincipalId }) } catch { /* The transfer error is reported; a leftover additive grant does not change ownership. */ }
+            throw error
+          }
+          return sessionResponse(session, {
+            transferred: true,
+            fromPrincipalId,
+            toPrincipalId,
+            share: clone(share),
+            shares: clone(sessionShares.listForOwner(sessionId, toPrincipalId)),
+          })
+        })
+        sendJson(response, 200, result)
+        return
+      }
       if (request.method === 'POST' && url.pathname.startsWith('/api/browser-native/session/')) {
         const operation = url.pathname.split('/').at(-1)
         const body = await readBody(request)
@@ -6178,6 +6284,7 @@ export async function createBrowserNativeV2Server(options) {
           })
         }
         const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission)
+        if (operation === 'append') sessionEvents.publish(result.sessionId, body.events)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return
