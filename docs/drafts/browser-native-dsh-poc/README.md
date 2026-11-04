@@ -60,7 +60,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[多模态图片附件](image-attachment.md)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[Preset 切换：工具集、模型与审批](preset-switching.md)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型)、[失败 turn 的界面重试](turn-retry.md)、[跨 subagent 追踪](subagent-trace.md) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型)、[失败 turn 的界面重试](turn-retry.md)、[跨 subagent 追踪](subagent-trace.md)、[带过期时间的只读分享链接](share-link.md) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
@@ -1452,6 +1452,13 @@ node --test docs/drafts/browser-native-dsh-poc/tests/session-editor-collaboratio
 移交后：新持有者 `open(access: 'write')` 重新领取 owner lease；原持有者保留 viewer grant，可继续读取同一日志；原 owner token 立即失效，用旧 token 追加返回 403 `SESSION_READ_ONLY`。没有 viewer grant 的目标返回 409 `SHARE_REQUIRED`，非持有者调用移交返回 404 `SESSION_NOT_FOUND`。
 
 实测：回放 2 条、实时追加 2 条、移交后新持有者追加 1 条，双方读到的 seq 都是 `[0,1,2,3,4]`，实时流无重复 seq，原持有者的流在移交后继续推进。
+
+## 带过期时间的只读分享链接
+
+[分享链接](share-link.md)让 owner 不预先知道对方 principal 也能分享：`POST /session/share-link` 以 `expiresInMs` 生成一次性 bearer token，`POST /session/share-link/redeem` 由查看者用自己已有的 principal 兑换成 `viewer` 授权，`POST /session/share-link/revoke` 由 owner 撤销。share 文件只存 token 的 SHA-256，兑换后的授权带有 `linkId` 和与链接相同的 `expiresAt`；到期或撤销后 `roleOf` 立即返回空，读、写、导出全部回到 404 或只读拒绝。文件格式随之上到 v2（新增 `links`），旧 v1 授权文件仍可加载。
+
+实测：viewer 兑换后读到 2 条事件、`open(access:'write')` 403 `SESSION_READ_ONLY`、`append` 403、未拿到 owner lease；第二次兑换返回 409 `SHARE_LINK_USED`；1.5 s 链接到期后读到 404，再兑换返回 410 `SHARE_LINK_EXPIRED`；owner 撤销后读到 404、再兑换 410 `SHARE_LINK_REVOKED`、重复撤销 `revoked:false`；重启后已撤销与已到期的授权仍为 404；share 文件为 v2 且不含 token 明文。
+
 
 复跑：
 

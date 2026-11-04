@@ -3308,3 +3308,20 @@ syncReplaySteps: 上游同步后重建 preview 并复跑 trace 单测、scripted
 deleteCondition: 正式产品提供等价的委托链路追踪与按 trace 的成本归属，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-160：带过期时间的一次性只读分享链接
+
+```text
+changeId: BN-P2-160
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/session-shares.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/session-share-link.test.mjs; docs/drafts/browser-native-dsh-poc/tests/share-link.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/session-sharing.e2e.mjs; docs/drafts/browser-native-dsh-poc/share-link.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有 share 必须由 owner 先知道对方 principal，且授权永久有效、不可撤销；真实场景需要把带过期时间的 viewer 链接交给一个尚未建立授权的查看者，并能在到期或撤销后立刻收回读取能力。
+existingExtensionPointsChecked: 复用已有 `session-shares.json` 授权存储、`sessionOperation` 的 `roleOf` 只读判定、`dsh-browser-native-session-principal` cookie、`recordCollaboration` 审计、`SessionShareError` 错误面与 `store.exclusive` 串行区；未改 Session 日志、owner/editor 租约、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 backend 的兑换、到期轮询、撤销与重启，才能证明 token 不落盘、授权与链接同寿、非 owner 无法撤销、以及到期/撤销后读写导出在同一 `roleOf` 判定下失效。
+behaviorChange: `SessionShareStore` 的 share 文件升到 `version: 2`，新增 `links`（`linkId`/`tokenHash`/`expiresAt`/`redeemedBy`/`revokedAt`），v1 文件仍按 viewer 授权加载并在下次写入升级。新增 `createLink`（32 字节 token、只存 SHA-256、`expiresInMs` 上限 30 天）、`inspectLink`（未知 404、撤销/过期 410、已兑换 409，过期优先于已兑换）、`redeemLink`（单 Session 串行区内一次兑换，授权带 `linkId` 与链接 `expiresAt`，不降级已有 editor）、`revokeLink`（仅 owner：非 owner 经路由得 404，store 层 403；重复撤销 `revoked:false`）、`listLinksForOwner`；`roleOf` 对带 `expiresAt` 的授权按注入时钟判定，过期即失效。backend 新增 `POST /session/share-link`、`/share-link/redeem`、`/share-link/revoke`，兑换前校验 Session 存在，三个动作写 collaboration 审计；`SessionShareError` 纳入统一错误映射，使 404/410/409 按存储层语义返回。
+consumersUpdated: 新增 `tests/session-share-link.test.mjs`（7 组断言：token 不落盘、兑换、重复兑换、到期、撤销、非法输入、v1 兼容）、`tests/share-link.e2e.mjs`；`tests/session-sharing.e2e.mjs` 断言升级为 v2 且 `links: []`；新增 `share-link.md`；README 新增章节与导航；`hosted-deployment.md` 的 share 文件版本与未实现项更新；本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/session-share-link.test.mjs` 通过（`{"result":"passed","cases":7,"tokenLength":43}`）。`node docs/drafts/browser-native-dsh-poc/tests/share-link.e2e.mjs` 通过：viewer 兑换后读到 2 条事件、写 open/append 均 403 `SESSION_READ_ONLY`、无 owner lease；第二次兑换 409 `SHARE_LINK_USED`；1.5 s 链接到期后读 404、再兑换 410 `SHARE_LINK_EXPIRED`；撤销后读 404、再兑换 410 `SHARE_LINK_REVOKED`、重复撤销 `revoked:false`；重启后已撤销/已到期均为 404；share 文件 v2 且不含 token 明文；拒绝审计 2 条。`node docs/drafts/browser-native-dsh-poc/tests/session-sharing.e2e.mjs` 通过（v2 回归）。`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 72/72 通过。
+syncReplaySteps: 上游同步后复跑 share-link 单测、E2E 与 session-sharing 回归；若 Session 授权判定、share 文件版本或 `SessionShareError` 映射变化，同步更新 `session-shares.mjs`、路由与本文档；回滚到不识别 v2 的 backend 会 fail loud，需先导出 `session-shares.json` 备份。
+deleteCondition: 正式产品提供带过期与撤销的只读分享链接，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

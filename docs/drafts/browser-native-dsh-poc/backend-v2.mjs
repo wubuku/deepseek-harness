@@ -25,7 +25,7 @@ import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal, redactObservabilityJournal } from './observability-journal.mjs'
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 import { buildPrincipalExport, verifyPrincipalExport } from './principal-export.mjs'
-import { SessionShareStore } from './session-shares.mjs'
+import { SessionShareError, SessionShareStore } from './session-shares.mjs'
 import { buildTraceReport, traceIdFor } from './subagent-trace.mjs'
 import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
@@ -1492,6 +1492,7 @@ function parsePublicOrigin(value) {
 function sendError(response, error) {
   const detail = error instanceof BackendError || error instanceof WorkspaceError || error instanceof CrossStoreLedgerError
     || error instanceof EgressError || error instanceof AdmissionError || error instanceof DurableTurnError
+    || error instanceof SessionShareError
     ? error
     : new BackendError('INTERNAL', 'browser-native backend failed', 500)
   sendJson(response, detail.status, {
@@ -5653,7 +5654,7 @@ export async function createBrowserNativeV2Server(options) {
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
   await crossStoreLedger.load()
-  const sessionShares = new SessionShareStore(options.dataDir)
+  const sessionShares = new SessionShareStore(options.dataDir, { now: options.testHooks?.now })
   await sessionShares.load()
   const turnRetries = new TurnRetryLedger({ dir: join(options.dataDir, 'turn-retries'), now: options.testHooks?.now })
   await turnRetries.load()
@@ -7091,6 +7092,72 @@ export async function createBrowserNativeV2Server(options) {
             share: clone(share),
             shares: clone(sessionShares.listForOwner(sessionId, toPrincipalId)),
           })
+        })
+        sendJson(response, 200, result)
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/share-link') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = assertSessionId(body.sessionId)
+        const expiresInMs = body.expiresInMs === undefined
+          ? 60 * 60 * 1000
+          : boundedInteger(body.expiresInMs, 'expiresInMs', 30 * DAY_MS)
+        if (expiresInMs === 0) throw new BackendError('INVALID_REQUEST', 'expiresInMs must be at least 1')
+        const result = await store.exclusive(sessionId, async () => {
+          store.getForPrincipal(sessionId, principalId)
+          const link = await sessionShares.createLink({
+            sessionId,
+            ownerPrincipalId: principalId,
+            expiresAt: (options.testHooks?.now ?? Date.now)() + expiresInMs,
+          })
+          await recordCollaboration({
+            action: 'share.link.create', sessionId, principalDigest: collaborationPrincipalDigest(principalId),
+            role: 'viewer', outcome: 'created', linkId: link.linkId, expiresAt: link.expiresAt,
+          })
+          return { sessionId, link }
+        })
+        sendJson(response, 200, result)
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/share-link/redeem') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const token = boundedString(body.token, 'token', 200)
+        const inspected = sessionShares.inspectLink({ token })
+        const result = await store.exclusive(inspected.sessionId, async () => {
+          store.get(inspected.sessionId)
+          const redeemed = await sessionShares.redeemLink({ token, viewerPrincipalId: principalId })
+          await recordCollaboration({
+            action: 'share.link.redeem', sessionId: inspected.sessionId, principalDigest: collaborationPrincipalDigest(principalId),
+            role: 'viewer', outcome: 'granted', linkId: inspected.linkId,
+            granteeDigest: collaborationPrincipalDigest(principalId), expiresAt: redeemed.link.expiresAt,
+          })
+          return { sessionId: inspected.sessionId, role: 'viewer', share: clone(redeemed.share), link: redeemed.link }
+        })
+        sendJson(response, 200, result)
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/session/share-link/revoke') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = assertSessionId(body.sessionId)
+        const linkId = boundedString(body.linkId, 'linkId', 200)
+        const result = await store.exclusive(sessionId, async () => {
+          store.getForPrincipal(sessionId, principalId)
+          const outcome = await sessionShares.revokeLink({ sessionId, linkId, ownerPrincipalId: principalId })
+          await recordCollaboration({
+            action: 'share.link.revoke', sessionId, principalDigest: collaborationPrincipalDigest(principalId),
+            role: 'viewer', outcome: outcome.revoked ? 'revoked' : 'unchanged', linkId,
+          })
+          return {
+            revoked: outcome.revoked,
+            link: clone(outcome.link),
+            shares: clone(sessionShares.listForOwner(sessionId, principalId)),
+          }
         })
         sendJson(response, 200, result)
         return

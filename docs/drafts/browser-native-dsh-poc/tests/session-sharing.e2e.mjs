@@ -186,7 +186,8 @@ try {
   assert.ok(restored.accessDenials.some(entry => entry.code === 'SESSION_READ_ONLY' && entry.principalDigest === digest(viewer.principal)))
 
   const shareFile = JSON.parse(await readFile(join(dataDir, 'session-shares.json'), 'utf8'))
-  assert.equal(shareFile.version, 1)
+  assert.equal(shareFile.version, 2)
+  assert.deepEqual(shareFile.links, [], 'grant-only sharing writes no links')
   assert.deepEqual(shareFile.shares.map(share => [share.sessionId, share.ownerPrincipalId, share.viewerPrincipalId]),
     [[sessionId, owner.principal, viewer.principal]])
 
