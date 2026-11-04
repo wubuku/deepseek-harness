@@ -59,7 +59,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[多模态图片附件](image-attachment.md)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
-| 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
+| 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[Preset 切换：工具集、模型与审批](preset-switching.md)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
@@ -539,6 +539,16 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 ```sh
 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs
+```
+
+## Preset 切换：工具集、模型与审批
+
+[Preset 切换验证](preset-switching.md)把三类切换放进同一轮 Chrome E2E：`profile-preset-set` 按 Session 设置工具集（`read-only` 撤下 `write`/`edit`/`bash`），`session-orchestration-switch-route` 设置模型 route，`tool-policy-set` 设置审批策略。工具集通过 `agent.ctx.tools.restrict` 改变下一请求 schema，并由 `ctx.tools.guard` 拒绝 schema 之外的调用；restriction 只装在目标 Agent 上。
+
+隔离证据来自双 Session barrier：Session A 的首个请求被挂起时，Session B 切到 `read-only` 后请求从 7 个工具降到 5 个，越界的 `write` 返回 `tool "write" is denied by the active profile preset`；B 的 route 切到 `browser-native-recovery` 后下一轮使用该 model，且 preset 保持。对运行中的 A 切 route 返回 `MODEL_SWITCH_ACTIVE`；释放后 A 的 `write` 正常执行、续接请求仍是 7 个工具。审批策略是全局 profile 配置，组合阶段在两个 Session 都 idle 后执行：`write: deny` 使 B 的下一次调用返回 `denied by the profile tool policy`，并留下 `tool-policy/decided` 审计。
+
+```sh
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/profile-preset-switching.e2e.mjs
 ```
 
 ## 浏览器端会话检索与规模上限

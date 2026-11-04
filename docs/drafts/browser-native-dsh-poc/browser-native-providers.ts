@@ -77,6 +77,7 @@ import type { BrowserNativePermissionProbe } from './browser-native-permission-p
 import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
 import type { BrowserNativeTokenBudgetProbe } from './browser-native-token-budget.ts'
 import type { BrowserNativeSessionQueryProbe } from './browser-native-session-query.ts'
+import type { BrowserNativeProfilePresetProbe } from './browser-native-profile-preset.ts'
 
 const PROTOCOL_VERSION = 1
 const SESSION_ROUTE = '/api/browser-native/session'
@@ -1474,7 +1475,11 @@ function createSessionModule(
   }
 }
 
-function createLlmModule(publication: BrowserNativeCapabilityPublication, budget?: BrowserNativeTokenBudgetProbe): unknown {
+function createLlmModule(
+  publication: BrowserNativeCapabilityPublication,
+  budget?: BrowserNativeTokenBudgetProbe,
+  preset?: BrowserNativeProfilePresetProbe,
+): unknown {
   let module: unknown
   return () => {
     module ??= {
@@ -1498,23 +1503,32 @@ function createLlmModule(publication: BrowserNativeCapabilityPublication, budget
         const installAgentControls = (agent: NonNullable<ReturnType<typeof ctx.agents.get>>): void => {
           const agentId = String(agent.id)
           if (controlledAgents.has(agentId)) return
+          const sessionId = String(agent.session.id)
           agent.ctx.effect(() => {
             let disposeRestriction: (() => void) | undefined
             const refreshRestriction = (): void => {
               disposeRestriction?.()
               const registeredNames = new Set(agent.ctx.tools.schemas(agent).map(tool => tool.name))
-              const denied = publication.unavailableWorkspaceToolNames().filter(name => registeredNames.has(name))
-              disposeRestriction = denied.length === 0
+              const denied = new Set<string>(publication.unavailableWorkspaceToolNames())
+              for (const name of preset?.deniedTools(sessionId) ?? []) denied.add(name)
+              const targets = [...denied].filter(name => registeredNames.has(name))
+              disposeRestriction = targets.length === 0
                 ? undefined
-                : agent.ctx.tools.restrict({ deny: denied })
+                : agent.ctx.tools.restrict({ deny: targets })
             }
             const unsubscribe = publication.subscribe(refreshRestriction)
-            const disposeGuard = agent.ctx.tools.guard(({ name }) => publication.isToolPublished(name)
-              ? undefined
-              : 'browser-native capability is not currently published')
+            const unsubscribePreset = preset?.subscribe(refreshRestriction)
+            const disposeGuard = agent.ctx.tools.guard(({ name }) => {
+              if (!publication.isToolPublished(name)) return 'browser-native capability is not currently published'
+              if (preset !== undefined && !preset.allows(sessionId, name)) {
+                return `tool "${name}" is denied by the active profile preset`
+              }
+              return undefined
+            })
             refreshRestriction()
             return () => {
               unsubscribe()
+              unsubscribePreset?.()
               disposeRestriction?.()
               disposeGuard()
             }
@@ -1542,6 +1556,7 @@ export function createBrowserNativeStaticModules(
   toolPolicy?: BrowserNativeToolPolicyProbe,
   tokenBudget?: BrowserNativeTokenBudgetProbe,
   sessionQuery?: BrowserNativeSessionQueryProbe,
+  preset?: BrowserNativeProfilePresetProbe,
 ): Readonly<Record<string, StaticModuleFactory>> {
   const attachments = createBrowserNativeAttachmentModule(workspace, attachmentTestHooks)
   attachmentTestHooks?.onModuleReady?.(attachments)
@@ -1552,7 +1567,7 @@ export function createBrowserNativeStaticModules(
     '@deepseek-ai/dsh-browser-native-session-persistence': createSessionModule(
       workspace, sessionOutbox, publication, attachments.ensureSessionFiles,
     ),
-    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication, tokenBudget),
+    '@deepseek-ai/dsh-browser-native-llm': createLlmModule(publication, tokenBudget, preset),
     ...(permissionProbe === undefined ? {} : {
       '@deepseek-ai/dsh-browser-native-permission-probe': permissionProbe.factory,
     }),

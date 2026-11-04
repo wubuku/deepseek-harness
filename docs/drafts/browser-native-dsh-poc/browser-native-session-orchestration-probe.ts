@@ -7,6 +7,7 @@ import type {
 } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent-presets'
 import {
   BrowserNativeSessionMountCoordinator,
   type BrowserNativeSessionMountSnapshot,
@@ -23,7 +24,8 @@ interface OrchestrationRegistry {
   create(options: {
     readonly sessionId: SessionId
     readonly agentOptions: { readonly provider: string; readonly model: string }
-    readonly setup?: (agentCtx: Context, agent: Agent) => void
+    readonly meta?: { readonly cwd?: string; readonly agentPreset?: string }
+    readonly setup?: (agentCtx: Context, agent: Agent) => void | Promise<void>
   }): Promise<AgentHandle>
   get(id: SessionId): Agent | undefined
 }
@@ -161,8 +163,16 @@ export function createBrowserNativeSessionOrchestrationProbe(
           const handle = await currentRegistry.create({
             sessionId: runtime.sessionId(spec.sessionId),
             agentOptions: route,
-            setup(agentCtx) {
+            // Programmatic Agents must compose the same standard preset as
+            // composer-driven Sessions, or they expose only the minimal tool set.
+            meta: { agentPreset: 'standard' },
+            async setup(agentCtx) {
               agentCtx.effect(() => runtime.installModelSelection(agentCtx, selection), 'browser-native session route selection')
+              // Programmatic Agents mount the preset explicitly; without this
+              // the Session exposes only the registry's minimal tool surface.
+              const presets = agentCtx.get('agentPresets')
+              if (presets === undefined) throw new Error('browser-native session orchestration: agentPresets service is unavailable')
+              await presets.mount(agentCtx)
             },
           })
           handles.set(spec.sessionId, handle)

@@ -36,7 +36,8 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'approval-integrity'
     || searchParams.get('browser-native-test') === 'session-query'
     || searchParams.get('browser-native-test') === 'resource-lifecycle'
-    || searchParams.get('browser-native-test') === 'memory-isolation')
+    || searchParams.get('browser-native-test') === 'memory-isolation'
+    || searchParams.get('browser-native-test') === 'profile-preset')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
 const browserNativeProbeFault = requestedProbeFault === 'outbox-abort' || requestedProbeFault === 'opfs-unavailable'

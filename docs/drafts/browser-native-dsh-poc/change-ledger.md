@@ -3240,3 +3240,20 @@ syncReplaySteps: 上游同步后重建 `build:artifacts` 与 preview，复跑图
 deleteCondition: 正式浏览器附件提供等价的图片校验、对象持久化与历史渲染能力，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-156：Session 级工具集 preset 与在跑 Session 的切换隔离
+
+```text
+changeId: BN-P2-156
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-profile-preset.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/browser-native-session-orchestration-probe.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/tests/profile-preset-switching.e2e.mjs; docs/drafts/browser-native-dsh-poc/preset-switching.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 第 5 项要求浏览器端切换工具集、模型与审批组合并即时生效，同时证明切换不影响在跑 Session。既有证据只覆盖审批策略（`approval-policy.e2e.mjs`）、权限预设（`permission-approval-lifecycle.e2e.mjs`）与模型 route（`browser-native-session-orchestration.e2e.mjs`）；工具集没有用户选择的预设，也没有 Session 级隔离证据。另发现 `ctx.agents.create` 的程序化 Agent 未挂载 preset，模型请求只看到 `working_directory`。
+existingExtensionPointsChecked: 复用 `agent.ctx.tools.restrict({ deny })` 与 `ctx.tools.guard`（与 capability publication 相同的限制语义）、`agent.ctx.effect`、Session route selection、profile `tool-policy` 插件、preview 的 URL-gated test MessagePort 与 orchestration probe；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 Worker 中两个 Session 并行、一个请求在 barrier 内保持 `running`，才能证明 restriction 与 route 切换确实按 Session 隔离；静态检查无法覆盖请求 schema、guard 兜底和运行中 `MODEL_SWITCH_ACTIVE` 的实际时序。
+behaviorChange: 新增 `browser-native-profile-preset.ts`，按 Session 维护 `full`/`read-only` 工具集预设（`read-only` 拒绝 `write`/`edit`/`bash`），通过 `restrict` 改变下一请求 schema、通过 `guard` 拒绝 schema 外调用；preset 变化订阅后只刷新对应 Agent 的 restriction。LLM 模块接收 preset probe。orchestration probe 的程序化 Agent 现在显式 `agentPresets.mount(agentCtx)` 并记录 `agentPreset: 'standard'`，与 composer 创建的 Session 使用同一工具集。新增 roster `browser-profile-preset` 与 test-port action `profile-preset-state`/`profile-preset-set`。
+consumersUpdated: 新增 `tests/profile-preset-switching.e2e.mjs`、`preset-switching.md`、PoC README 导航与章节、本 ledger；`browser-native-session-orchestration.e2e.mjs` 复跑通过。
+tests: `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 后，`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/profile-preset-switching.e2e.mjs` 通过：Session A 首个请求 7 个工具并在 barrier 内保持 `running`；B 切 `read-only` 后请求 7→5（撤下 `write`/`edit`/`bash`），越界 `write` 返回 `tool "write" is denied by the active profile preset`；B route 切到 `browser-native-recovery` 后下一轮 model 为该值且 preset 保持；运行中 A 切 route 返回 `MODEL_SWITCH_ACTIVE`；释放后 A 的 `write` 成功、续接请求仍 7 个工具；恢复 B 为 `full` 并设置 `write: deny` 后 B 的下一次调用返回 `denied by the profile tool policy` 且产生 `tool-policy/decided`；dispose 后 `{disposedCount: 2, remainingCount: 0}`，页面错误 0、跨源请求 0。`browser-native-session-orchestration.e2e.mjs` 复跑通过。
+syncReplaySteps: 上游同步后重建 preview，复跑 preset E2E 与 orchestration E2E；若 `tools.restrict`/`guard`、`agents.create` 的 preset 挂载或 route selection 语义变化，同步更新预设模块与本文档。
+deleteCondition: 正式产品提供等价的可切换工具集/模型/审批组合与 Session 级隔离语义，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
