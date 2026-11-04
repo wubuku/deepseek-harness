@@ -2107,7 +2107,7 @@ async function createLlmConfig(options) {
     if (!baseUrl || !apiKey) throw new Error('Anthropic-compatible mode needs ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY')
     const apiVersion = options.llmApiVersion ?? env.ANTHROPIC_VERSION ?? '2023-06-01'
     const defaultMaxTokens = positiveInteger(options.llmMaxTokens ?? env.DSH_POC_LLM_MAX_TOKENS ?? 4096, 'llmMaxTokens')
-    return {
+    const primary = {
       mode,
       kind,
       model,
@@ -2120,6 +2120,8 @@ async function createLlmConfig(options) {
       timeoutMs: timeout,
       ...(contextWindow === undefined ? {} : { contextWindow }),
     }
+    const fallback = fallbackConfig(options.llmFallback, env, { kind, apiVersion, defaultMaxTokens, proxy, timeout, contextWindow, includeUsage: false })
+    return fallback === undefined ? primary : { ...primary, fallback }
   }
   const model = options.model ?? env.OPENAI_NEXT_GPT_MODEL
   if (typeof model !== 'string' || model.length === 0) throw new Error('OPENAI_NEXT_GPT_MODEL is required in real mode')
@@ -2130,7 +2132,8 @@ async function createLlmConfig(options) {
     ?? (grok ? (env.OPENAI_NEXT_GROK_COMPLETIONS_PATH ?? env.OPENAI_NEXT_GPT_COMPLETIONS_PATH) : env.OPENAI_NEXT_GPT_COMPLETIONS_PATH)
   const apiKey = options.llmApiKey ?? (grok ? env.OPENAI_NEXT_GROK_API_KEY : env.OPENAI_NEXT_GPT_API_KEY)
   if (!baseUrl || !path || !apiKey) throw new Error('real LLM mode needs the configured OpenAI Next base URL, completions path, model, and API key')
-  return {
+  const includeUsage = options.llmIncludeUsage === true
+  const primary = {
     mode,
     kind,
     model,
@@ -2139,8 +2142,58 @@ async function createLlmConfig(options) {
     apiKey,
     proxyConfigured: proxy !== undefined,
     timeoutMs: timeout,
-    includeUsage: options.llmIncludeUsage === true,
+    includeUsage,
     ...(contextWindow === undefined ? {} : { contextWindow }),
+  }
+  const fallback = fallbackConfig(options.llmFallback, env, { kind, apiVersion: env.ANTHROPIC_VERSION ?? '2023-06-01', defaultMaxTokens: 4096, proxy, timeout, contextWindow, includeUsage })
+  return fallback === undefined ? primary : { ...primary, fallback }
+}
+
+/**
+ * Build the secondary provider used when the primary fails before any output.
+ *
+ * Configuration is explicit: every field comes from `DSH_POC_LLM_FALLBACK_*` or
+ * from the `llmFallback` test option. A partially configured fallback is a load
+ * error, never a silent single-provider deployment.
+ * @param {object | undefined} override - Per-field overrides from server options.
+ * @param {Record<string, string | undefined>} env - Loaded environment.
+ * @param {object} defaults - Values shared with the primary provider.
+ * @returns {object | undefined} Provider config with the primary's field shape.
+ */
+function fallbackConfig(override, env, defaults) {
+  const settings = override ?? {}
+  const kind = settings.kind ?? env.DSH_POC_LLM_FALLBACK_PROVIDER ?? defaults.kind
+  if (kind !== 'openai' && kind !== 'anthropic') throw new Error('fallback LLM provider must be openai or anthropic')
+  const model = settings.model ?? env.DSH_POC_LLM_FALLBACK_MODEL
+  const baseUrl = settings.baseUrl ?? env.DSH_POC_LLM_FALLBACK_BASE_URL
+  const apiKey = settings.apiKey ?? env.DSH_POC_LLM_FALLBACK_API_KEY
+  const path = settings.path ?? env.DSH_POC_LLM_FALLBACK_PATH
+  if (model === undefined && baseUrl === undefined && apiKey === undefined) return undefined
+  if (!model || !baseUrl || !apiKey) {
+    throw new Error('fallback LLM needs DSH_POC_LLM_FALLBACK_MODEL, DSH_POC_LLM_FALLBACK_BASE_URL, and DSH_POC_LLM_FALLBACK_API_KEY')
+  }
+  const resolvedPath = path ?? (kind === 'anthropic' ? 'v1/messages' : 'chat/completions')
+  const url = new URL(resolvedPath, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString()
+  if (kind === 'anthropic') {
+    return {
+      mode: 'real', kind, model,
+      provider: settings.provider ?? 'anthropic-compatible',
+      url, apiKey,
+      apiVersion: settings.apiVersion ?? defaults.apiVersion,
+      defaultMaxTokens: settings.defaultMaxTokens ?? defaults.defaultMaxTokens,
+      proxyConfigured: defaults.proxy !== undefined,
+      timeoutMs: settings.timeoutMs === undefined ? defaults.timeout : timeoutMs(settings.timeoutMs, 'llmFallbackTimeoutMs'),
+      ...(defaults.contextWindow === undefined ? {} : { contextWindow: defaults.contextWindow }),
+    }
+  }
+  return {
+    mode: 'real', kind, model,
+    provider: settings.provider ?? (model.startsWith('grok-') ? 'grok' : 'gpt'),
+    url, apiKey,
+    proxyConfigured: defaults.proxy !== undefined,
+    timeoutMs: settings.timeoutMs === undefined ? defaults.timeout : timeoutMs(settings.timeoutMs, 'llmFallbackTimeoutMs'),
+    includeUsage: defaults.includeUsage,
+    ...(defaults.contextWindow === undefined ? {} : { contextWindow: defaults.contextWindow }),
   }
 }
 
@@ -4379,7 +4432,90 @@ function createAnthropicStream(response) {
   }
 }
 
-async function realLlm(response, request, config, body, recordUsage = () => {}) {
+const NDJSON_RESPONSE_HEADERS = {
+  'content-type': 'application/x-ndjson; charset=utf-8',
+  'cache-control': 'no-store',
+  'x-browser-native-protocol': String(PROTOCOL_VERSION),
+}
+
+/**
+ * Defer the 200 response head until the first stream item reaches the client.
+ *
+ * A provider that fails before its first item leaves the response untouched, so
+ * the caller can retry on the secondary provider without rewriting a partial
+ * body. `emitted` records whether the client already saw text or a tool call.
+ * @param {import('node:http').ServerResponse} response - Client response.
+ * @returns {object} Sink accepted by the stream translators.
+ */
+function createStreamSink(response) {
+  let headersWritten = false
+  const sink = {
+    emitted: false,
+    /**
+     * Write one NDJSON line, opening the 200 response first when needed.
+     * @param {string} line - Serialized stream item.
+     * @returns {void}
+     */
+    write(line) {
+      if (response.destroyed) return
+      if (!headersWritten) {
+        response.writeHead(200, NDJSON_RESPONSE_HEADERS)
+        headersWritten = true
+      }
+      sink.emitted = true
+      response.write(line)
+    },
+    /**
+     * End the response; an empty, successful stream still gets a 200 head.
+     * @returns {void}
+     */
+    end() {
+      if (response.destroyed || response.writableEnded) return
+      if (!headersWritten) {
+        response.writeHead(200, NDJSON_RESPONSE_HEADERS)
+        headersWritten = true
+      }
+      response.end()
+    },
+    get headersWritten() { return headersWritten },
+    get destroyed() { return response.destroyed },
+    get writableEnded() { return response.writableEnded },
+  }
+  return sink
+}
+
+/**
+ * Decide whether an attempt may move to the secondary provider.
+ *
+ * Only availability faults qualify: 5xx, 408/504, unreachable upstreams, and
+ * pre-output stream breaks. Credential, quota, invalid-request, and empty
+ * completion faults are the provider's answer and must surface unchanged.
+ * @param {unknown} error - Attempt failure.
+ * @returns {boolean} Whether the next attempt may run.
+ */
+function retryableFailure(error) {
+  const status = error?.details?.providerStatus
+  if (Number.isSafeInteger(status)) return status >= 500 || status === 408 || status === 504
+  return error?.code === 'UPSTREAM_LLM_UNAVAILABLE' || error?.code === 'UPSTREAM_LLM_TIMEOUT'
+    || error?.code === 'UPSTREAM_LLM_TRUNCATED' || error?.code === 'UPSTREAM_LLM_STREAM_FAILED'
+}
+
+/**
+ * Run one provider attempt and translate its stream for the client.
+ *
+ * An attempt that fails before emitting anything reports `retry` when a
+ * secondary provider is configured. An attempt that emitted text or a tool
+ * call never retries: a second provider would duplicate the visible output and
+ * could execute the same tool twice. Usage is reported only by the attempt that
+ * produced the client response, so one request cannot be billed twice.
+ * @param {import('node:http').ServerResponse} response - Client response.
+ * @param {import('node:http').IncomingMessage} request - Client request.
+ * @param {object} config - Provider config for this attempt.
+ * @param {object} body - Model request body.
+ * @param {{ canRetry: boolean }} options - Whether a secondary provider follows.
+ * @returns {Promise<{ status: 'retry', error: Error } | { status: 'complete', usage?: object }>} Attempt result.
+ */
+async function runLlmAttempt(response, request, config, body, { canRetry }) {
   const controller = new AbortController()
   let clientClosed = false
   let timedOut = false
@@ -4396,23 +4532,15 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
   }, config.timeoutMs)
   request.on('aborted', abortForClient)
   response.on('close', abortForResponseClose)
+  const sink = createStreamSink(response)
   let auditInput
   let auditOutput
-  let auditRecorded = false
-  const flushAudit = () => {
-    if (auditRecorded) return
-    auditRecorded = true
-    if (!Number.isSafeInteger(auditInput) || !Number.isSafeInteger(auditOutput)) return
-    recordUsage({
-      requestId: body.requestId,
-      sessionId: body.sessionId,
-      ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
-      inputTokens: auditInput,
-      outputTokens: auditOutput,
-    })
-  }
+  const usage = () => (Number.isSafeInteger(auditInput) && Number.isSafeInteger(auditOutput)
+    ? { inputTokens: auditInput, outputTokens: auditOutput }
+    : undefined)
+  const timeoutFailure = () => new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM did not respond within ${config.timeoutMs}ms`, 504)
+  let upstream
   try {
-    let upstream
     try {
       upstream = await fetch(config.url, {
         method: 'POST',
@@ -4421,17 +4549,17 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
         signal: controller.signal,
       })
     } catch (error) {
-      if (timedOut) throw new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM did not respond within ${config.timeoutMs}ms`, 504)
-      if (clientClosed) return
-      throw new BackendError('UPSTREAM_LLM_UNAVAILABLE', 'upstream LLM could not be reached', 502)
+      if (clientClosed) return { status: 'complete' }
+      const failure = timedOut ? timeoutFailure() : new BackendError('UPSTREAM_LLM_UNAVAILABLE', 'upstream LLM could not be reached', 502)
+      if (canRetry) return { status: 'retry', error: failure }
+      throw failure
     }
-    if (!upstream.ok || upstream.body === null) throw await upstreamFailure(upstream)
-    response.writeHead(200, {
-      'content-type': 'application/x-ndjson; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-browser-native-protocol': String(PROTOCOL_VERSION),
-    })
-    const stream = config.kind === 'anthropic' ? createAnthropicStream(response) : createOpenAiStream(response, config)
+    if (!upstream.ok || upstream.body === null) {
+      const failure = await upstreamFailure(upstream)
+      if (canRetry && retryableFailure(failure)) return { status: 'retry', error: failure }
+      throw failure
+    }
+    const stream = config.kind === 'anthropic' ? createAnthropicStream(sink) : createOpenAiStream(sink, config)
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -4447,9 +4575,9 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
           if (data !== '[DONE]') {
             try {
               const item = JSON.parse(data)
-              const usage = item.usage ?? item.message?.usage
-              const input = usage?.prompt_tokens ?? usage?.input_tokens
-              const output = usage?.completion_tokens ?? usage?.output_tokens
+              const reported = item.usage ?? item.message?.usage
+              const input = reported?.prompt_tokens ?? reported?.input_tokens
+              const output = reported?.completion_tokens ?? reported?.output_tokens
               if (Number.isSafeInteger(input)) auditInput = input
               if (Number.isSafeInteger(output)) auditOutput = output
             } catch {
@@ -4457,9 +4585,8 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
             }
           }
           if (stream.consume(data)) {
-            response.end()
-            flushAudit()
-            return
+            sink.end()
+            return { status: 'complete', usage: usage() }
           }
         }
         newline = buffer.indexOf('\n')
@@ -4467,28 +4594,72 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
       if (part.done) break
     }
     if (!stream.finished && !clientClosed) {
-      if (timedOut) writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
-      else if (!stream.finishAtEof()) writeStreamError(response, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
+      if (timedOut) {
+        const failure = timeoutFailure()
+        if (canRetry && !sink.emitted) return { status: 'retry', error: failure }
+        writeStreamError(sink, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
+      } else if (!stream.finishAtEof()) {
+        const failure = new BackendError('UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event', 502)
+        if (canRetry && !sink.emitted) return { status: 'retry', error: failure }
+        writeStreamError(sink, 'UPSTREAM_LLM_TRUNCATED', 'upstream LLM stream ended before a finish event')
+      }
     }
-    if (!response.writableEnded) response.end()
-    flushAudit()
+    if (!response.writableEnded) sink.end()
+    return { status: 'complete', usage: usage() }
   } catch (error) {
-    if (clientClosed) return
-    if (timedOut && response.headersSent) {
-      writeStreamError(response, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
-      return
+    if (clientClosed) return { status: 'complete' }
+    if (sink.emitted) {
+      // Text or a tool call already reached the loop; a retry would duplicate it.
+      if (timedOut) writeStreamError(sink, 'UPSTREAM_LLM_TIMEOUT', `upstream LLM did not finish within ${config.timeoutMs}ms`)
+      else writeStreamError(sink, 'UPSTREAM_LLM_STREAM_FAILED', 'upstream LLM stream failed before completion')
+      return { status: 'complete', usage: usage() }
     }
-    if (response.headersSent) {
-      writeStreamError(response, 'UPSTREAM_LLM_STREAM_FAILED', 'upstream LLM stream failed before completion')
-      return
-    }
-    throw error
+    const failure = timedOut ? timeoutFailure() : error
+    if (canRetry && retryableFailure(failure)) return { status: 'retry', error: failure }
+    throw failure
   } finally {
     clearTimeout(timeout)
     request.off('aborted', abortForClient)
     response.off('close', abortForResponseClose)
-    flushAudit()
+    if (!upstream?.body?.locked) await upstream?.body?.cancel?.().catch(() => {})
   }
+}
+
+/**
+ * Proxy a real provider request, falling back once before any client output.
+ *
+ * Usage is recorded at most once per client request, by the attempt that
+ * produced the response, and carries the provider that answered.
+ * @param {import('node:http').ServerResponse} response - Client response.
+ * @param {import('node:http').IncomingMessage} request - Client request.
+ * @param {object} config - Primary provider config, optionally with `fallback`.
+ * @param {object} body - Model request body.
+ * @param {(entry: object) => void} recordUsage - Ledger sink for provider usage.
+ * @returns {Promise<void>} Resolves after the client response ends.
+ */
+async function realLlm(response, request, config, body, recordUsage = () => {}) {
+  const attempts = config.fallback === undefined ? [config] : [config, config.fallback]
+  let lastFailure
+  for (const [index, attempt] of attempts.entries()) {
+    const result = await runLlmAttempt(response, request, attempt, body, { canRetry: index + 1 < attempts.length })
+    if (result.status === 'retry') {
+      lastFailure = result.error
+      continue
+    }
+    if (result.usage !== undefined) {
+      recordUsage({
+        requestId: body.requestId,
+        sessionId: body.sessionId,
+        ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
+        provider: attempt.provider,
+        attempt: index + 1,
+        ...(index > 0 ? { fallbackUsed: true } : {}),
+        ...result.usage,
+      })
+    }
+    return
+  }
+  throw lastFailure ?? new BackendError('UPSTREAM_LLM_FAILED', 'every configured LLM provider failed', 502)
 }
 
 async function safeStaticPath(root, pathname) {
@@ -5258,6 +5429,11 @@ export async function createBrowserNativeV2Server(options) {
           model: llm.model,
           ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
           ...(llm.contextWindow === undefined ? {} : { contextWindow: llm.contextWindow }),
+          ...(llm.fallback === undefined ? {} : {
+            fallbackProvider: llm.fallback.provider,
+            fallbackModel: llm.fallback.model,
+            fallbackProviderKind: llm.fallback.kind,
+          }),
         })
         return
       }

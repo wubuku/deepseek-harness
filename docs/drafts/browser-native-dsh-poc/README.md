@@ -459,8 +459,11 @@ DSH_POC_BROWSER=chrome DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules
 
 真实 LongCat-2.5 与 MiniMax 冒烟都完成文本、`echo` 工具调用、usage 和取消：文本 1,582/1,209 ms，工具 1,600/924 ms，取消 908/518 ms。确定性 fake upstream 另覆盖 401/429/529 分类、流内 `overloaded_error`、空响应、断流与取消时上游关闭。缺口包括 DSH retry 分类映射、Anthropic thinking signature 回放、附件/图片 block 和 `tool_result.is_error`。
 
+[provider 兼容性报告](dual-provider-compatibility.md)同时记录多 provider 回退：`DSH_POC_LLM_FALLBACK_*` 配置备用 provider，仅在 5xx、408/504、连接失败、超时或尚未发出任何流项就断流时回退；一旦文本或工具调用已到达 Worker 就不重试，因此不会重复执行工具。每次 `/llm` 只记一条 usage audit，带 `provider`、`attempt` 与 `fallbackUsed`，失败尝试不计费。`tests/llm-provider-fallback.test.mjs` 的 7 个确定性场景全部通过；真实 LongCat/MiniMax 冒烟覆盖重构后的单 provider 路径。
+
 ```sh
 node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/llm-provider-fallback.test.mjs
 DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
 ```
 

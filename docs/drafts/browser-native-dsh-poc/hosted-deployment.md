@@ -54,6 +54,7 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 | `DSH_POC_ENV_FILE` | 无 | backend-only dotenv；真实 provider 的凭据只在本进程内使用 |
 | `DSH_POC_MODEL` | provider 配置 | 真实模式模型名覆盖 |
 | `DSH_POC_LLM_TIMEOUT_MS` | `60000` | 上游模型请求超时 |
+| `DSH_POC_LLM_FALLBACK_PROVIDER` / `_MODEL` / `_BASE_URL` / `_PATH` / `_API_KEY` | 无 | 可选备用 provider；必须成套配置，否则启动失败。仅在主 provider 5xx/超时/连接失败/未输出即断流时使用，见[双 provider 兼容](dual-provider-compatibility.md#多-provider-回退与重试) |
 | `DSH_POC_OWNER_LEASE_MS` | `30000` | Session 写租约；同时作为挂载租约时长 |
 | `DSH_POC_MAX_CONCURRENT_TURNS` | `8` | 同时运行的模型 turn 上限，超出排队 |
 | `DSH_POC_MAX_MOUNTED_SESSIONS` | `16` | 已挂载 Session 上限 |

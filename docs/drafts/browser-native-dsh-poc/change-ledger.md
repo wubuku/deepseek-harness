@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-128：多 provider 回退与单次计费
+
+```text
+changeId: BN-P2-128
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/llm-provider-fallback.test.mjs; docs/drafts/browser-native-dsh-poc/dual-provider-compatibility.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 单 provider 的 5xx、超时或断流会让整个 turn 失败；引入第二个 provider 时又必须在“不重复工具执行、不重复计费、事件与成本账一致”的前提下才能安全回退。上一版 `realLlm` 在写出 200 头之后无法区分“已输出”和“未输出”，也没有记录是哪一个 provider 提供了响应。
+existingExtensionPointsChecked: 复用既有 `/llm` NDJSON wire、`BackendError` 错误码、`upstreamFailure` 分类、usage audit 与 `usage-report`；未改 Session 事件、Session format、Agent Loop、工具协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 只有真实 HTTP provider 的失败时序（5xx、连接重置、无输出断流、已输出断流）能证明回退不会重放文本或工具调用；只有同时检查 NDJSON 流、两个 upstream 的请求计数和 usage audit 才能证明“不重复执行、不重复计费”。
+behaviorChange: 新增 `DSH_POC_LLM_FALLBACK_PROVIDER|MODEL|BASE_URL|PATH|API_KEY` 与服务端 `llmFallback` 选项；部分配置即启动错误。`realLlm` 现在按尝试循环执行，只有在主 provider 返回 5xx、408/504、连接失败、超时，或 200 但零事件即断流且客户端尚未收到任何流项时才切到备用 provider。200 响应头延后到首个流项写出：失败尝试不留部分 body。任一文本或工具调用 chunk 发出后不再回退，改为在流内写 `UPSTREAM_LLM_STREAM_FAILED`/`UPSTREAM_LLM_TIMEOUT`。每个 `/llm` 只记录一条 usage audit，由产生响应的尝试上报，新增 `provider`、`attempt` 与回退时的 `fallbackUsed: true`；失败尝试 usage 丢弃。`/config` 增加 `fallbackProvider`、`fallbackModel`、`fallbackProviderKind`，不暴露 URL 或凭据。
+consumersUpdated: 新测试 `tests/llm-provider-fallback.test.mjs`；文档 `dual-provider-compatibility.md`（回退策略、7 场景结果、缺口更新）、`hosted-deployment.md`（环境变量表）、`README.md`（章节与复跑命令）。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/llm-provider-fallback.test.mjs` 7/7 PASS：500→回退且 audit 1 条 `provider=fallback-provider`/`attempt=2`/20+50 tokens 且 usage-report 合计一致；连接重置→回退；超时→回退；200 零事件断流→回退；已输出文本断流→不回退（fallback 请求 0、文本只出现一次）；已输出工具断流→不回退（`tool-call-delta` 恰好 1 次）；401→不回退且 audit 0 条。回归 `node --test .../backend-v2.test.mjs` 70/70 PASS；真实冒烟 `DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs` 在重构后通过 LongCat 与 MiniMax 的文本/工具/usage/取消场景。
+syncReplaySteps: 上游同步后复跑 fallback 合同测试、backend 合同测试与真实双 provider 冒烟；确认 `runLlmAttempt` 中的 `sink.emitted` 仍在回退判据内，且 audit 只在 `{ status: 'complete' }` 分支上报。
+deleteCondition: 正式 DSH 的 `llm-retry`/provider registry 接管回退后删除本 PoC 补丁；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-127：状态变更的严格 Origin 校验与跨站读取隔离
 
 ```text
