@@ -52,6 +52,11 @@ const PRINCIPAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|api[-_]?key|access[-_]?key)/i
 const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
+const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+// `sec-fetch-mode` is excluded: Node's fetch sends `cors`, and a non-browser
+// client must stay distinguishable from a page. Browsers always send at least
+// `sec-fetch-site` on subresource and fetch traffic.
+const BROWSER_PROVENANCE_HEADERS = ['origin', 'referer', 'sec-fetch-site', 'sec-fetch-dest']
 const ACCESS_AUDIT_LIMIT = 200
 const AUTH_TOKEN_FILE_NAME = 'browser-native-auth-token'
 const AUTH_TOKEN_HEADER = 'x-browser-native-auth'
@@ -1284,19 +1289,101 @@ function auditResourceFor(pathname) {
 }
 
 /**
+ * Parse a browser-supplied origin; `null`, opaque, and malformed values refuse.
+ * @param {unknown} value - Header value.
+ * @param {string} name - Header name used in the refusal.
+ * @returns {string | undefined} Serialized origin, or undefined when absent.
+ */
+function browserOrigin(value, name) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_048) {
+    throw new BackendError('ORIGIN_FORBIDDEN', `${name} is invalid`, 403)
+  }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new BackendError('ORIGIN_FORBIDDEN', `${name} is invalid`, 403)
+  }
+  if (parsed.origin === 'null') throw new BackendError('ORIGIN_FORBIDDEN', `${name} is opaque`, 403)
+  return parsed.origin
+}
+
+/**
+ * Refuse a request a foreign web page authored against the loopback API.
+ *
+ * A request that carries none of the browser-provenance headers is a
+ * non-browser client (SDK, curl, test harness); the loopback Host rule and
+ * principal authentication are its origin controls. As soon as any provenance
+ * header is present, the request is treated as browser authored: a state
+ * change must declare an exact serving `Origin` and must not be cross-site, so
+ * a cross-site form, a `no-cors` simple request, and a forged `Origin` all
+ * fail before any handler runs. Reads may not be cross-site, and same-site
+ * reads require an exact allowlisted `Origin`, so a sibling origin cannot read
+ * a response with strictly-same-site cookies. `Referer` covers browsers or
+ * proxies that strip `Origin` from a read.
+ * @param {import('node:http').IncomingMessage} request - Incoming request.
+ * @param {URL} selfOrigin - Origin implied by the request Host header.
+ * @param {ReadonlySet<string> | undefined} allowedOrigins - Split API allowlist.
+ * @param {URL | undefined} publicOrigin - Reverse-proxied external origin.
+ * @returns {void} Throws a 403 `BackendError` when the request is refused.
+ */
+function assertBrowserProvenance(request, selfOrigin, allowedOrigins, publicOrigin) {
+  const provenance = BROWSER_PROVENANCE_HEADERS.some(name => {
+    const value = request.headers[name]
+    return typeof value === 'string' && value.length > 0
+  })
+  if (!provenance) return
+  const exactOrigins = new Set([selfOrigin.origin])
+  if (publicOrigin !== undefined) exactOrigins.add(publicOrigin.origin)
+  if (allowedOrigins !== undefined) for (const origin of allowedOrigins) exactOrigins.add(origin)
+  const declared = browserOrigin(request.headers.origin, 'request origin')
+  const site = request.headers['sec-fetch-site']
+  const sameSiteAllowlisted = typeof site === 'string' && site === 'same-site'
+    && declared !== undefined && allowedOrigins?.has(declared) === true
+  if (STATE_CHANGING_METHODS.has(request.method ?? 'GET')) {
+    if (declared === undefined) {
+      throw new BackendError('ORIGIN_FORBIDDEN', 'state-changing requests must declare a same-origin Origin header', 403)
+    }
+    if (!exactOrigins.has(declared)) {
+      throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
+    }
+    if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site) && !sameSiteAllowlisted) {
+      throw new BackendError('ORIGIN_FORBIDDEN', 'cross-site state changes are not allowed', 403)
+    }
+    return
+  }
+  if (declared !== undefined && !exactOrigins.has(declared)) {
+    throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
+  }
+  if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site) && !sameSiteAllowlisted) {
+    throw new BackendError('ORIGIN_FORBIDDEN', 'cross-site reads are not allowed', 403)
+  }
+  if (typeof site === 'string' && site === 'same-site' && declared === undefined) {
+    throw new BackendError('ORIGIN_FORBIDDEN', 'same-site reads must declare an exact Origin header', 403)
+  }
+  if (declared === undefined) {
+    const referer = browserOrigin(request.headers.referer, 'request referer')
+    if (referer !== undefined && !exactOrigins.has(referer)) {
+      throw new BackendError('ORIGIN_FORBIDDEN', 'request referer does not match the serving origin', 403)
+    }
+  }
+}
+
+/**
  * Refuse requests a foreign web page could author against the loopback API.
  *
  * The Host header must name a loopback host: a DNS-rebinding page reaches the
  * server with its own hostname and is refused before any credential is read.
- * API requests additionally require a same-origin `Origin`/`Sec-Fetch-Site`,
- * and credential-shaped query parameters are refused so tokens never enter URL
+ * API requests additionally pass {@link assertBrowserProvenance}, and
+ * credential-shaped query parameters are refused so tokens never enter URL
  * history, Referer headers, or access logs. Server-to-server requests carrying
  * the shared state token bypass the browser-origin checks but not the Host rule.
  * @param {import('node:http').IncomingMessage} request - Incoming request.
  * @param {URL} url - Parsed request URL.
  * @param {boolean} internal - The request proved the shared state token.
  * @param {ReadonlySet<string> | undefined} allowedOrigins - Additional page origins
- * admitted by the split API listener; only those may send `same-site` browser fetches.
+ * admitted by the split API listener; only those may send `same-site` browser requests.
  * @param {URL | undefined} publicOrigin - Externally served origin when a TLS reverse
  * proxy terminates the connection; its host is the only additional host admitted.
  * @returns {void} Throws a 403 or 400 BackendError when the request is refused.
@@ -1315,26 +1402,7 @@ function assertLocalRequest(request, url, internal, allowedOrigins, publicOrigin
     throw new BackendError('HOST_FORBIDDEN', 'browser-native is reachable only through a loopback host or the configured public origin', 403)
   }
   if (!url.pathname.startsWith('/api/browser-native/')) return
-  if (!internal) {
-    const site = request.headers['sec-fetch-site']
-    if (typeof site === 'string' && !SAME_ORIGIN_SITE_VALUES.has(site)
-      && !(allowedOrigins !== undefined && site === 'same-site')) {
-      throw new BackendError('ORIGIN_FORBIDDEN', 'cross-site requests are not allowed', 403)
-    }
-    const origin = request.headers.origin
-    if (typeof origin === 'string') {
-      let declaredOrigin
-      try {
-        declaredOrigin = new URL(origin).origin
-      } catch {
-        throw new BackendError('ORIGIN_FORBIDDEN', 'request origin is invalid', 403)
-      }
-      if (declaredOrigin !== selfOrigin.origin && declaredOrigin !== publicOrigin?.origin
-        && allowedOrigins?.has(declaredOrigin) !== true) {
-        throw new BackendError('ORIGIN_FORBIDDEN', 'request origin does not match the serving origin', 403)
-      }
-    }
-  }
+  if (!internal) assertBrowserProvenance(request, selfOrigin, allowedOrigins, publicOrigin)
   for (const name of url.searchParams.keys()) {
     if (CREDENTIAL_QUERY_NAME.test(name)) {
       throw new BackendError('CREDENTIAL_IN_QUERY', 'credentials must not be sent in the request URL', 400)
@@ -5132,6 +5200,12 @@ export async function createBrowserNativeV2Server(options) {
       }
       url = new URL(request.url ?? '/', 'http://browser-native.invalid')
       routeLabel = metricRoute(url.pathname)
+      if (url.pathname.startsWith('/api/browser-native/')) {
+        // Refuse cross-origin embedding (img/script/link) so a foreign page
+        // cannot observe an API response even when the request guard is bypassed.
+        response.setHeader('cross-origin-resource-policy', 'same-origin')
+        response.setHeader('referrer-policy', 'no-referrer')
+      }
       const internalStateRequest = sharedStateToken !== undefined
         && request.headers['x-browser-native-state-token'] === sharedStateToken
       const apiOrigin = servedApiOrigin

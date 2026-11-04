@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-127：状态变更的严格 Origin 校验与跨站读取隔离
+
+```text
+changeId: BN-P2-127
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs; docs/drafts/browser-native-dsh-poc/tests/csrf-cross-site.e2e.mjs; docs/drafts/browser-native-dsh-poc/local-backend-hardening.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 上一版只在请求已经携带 `Origin`/`Sec-Fetch-Site` 时比对，没有规定“浏览器来源的请求必须声明精确同源 Origin”；跨站表单、`no-cors` `text/plain` 简单请求与同站兄弟 origin 的 `same-site` 读取因此缺少可判定的拒绝条件，也没有响应级隔离阻止跨站嵌入读取 API 响应。
+existingExtensionPointsChecked: 复用 `assertLocalRequest` 这一既有准入钩子与 `BackendError`/`ORIGIN_FORBIDDEN` 错误码；未改 Agent Loop、Session 事件、Session format、模型/工具协议、cordis 配置或正式 DSH package。
+whyDraftOnlyWasInsufficient: 浏览器是否真的把跨站表单与 no-cors 简单请求挡在状态变更之外，只能由真实 Chromium 证明；同时必须证明拒绝后 Workspace/Session 计数与 owner 不变，而不是只检查状态码。
+behaviorChange: `/api/browser-native/*` 请求只要携带任一浏览器来源头（`Origin`、`Referer`、`Sec-Fetch-Site`、`Sec-Fetch-Dest`）即按浏览器请求校验。状态变更（POST/PUT/PATCH/DELETE）必须声明精确同源 `Origin`（回环 Host origin、`DSH_POC_PUBLIC_ORIGIN` 或分离源允许列表），`Sec-Fetch-Site` 只允许 `same-origin`/`none`，`same-site` 仅在 `Origin` 精确命中允许列表时成立；`Origin: null`、仅伪造 `Origin`、仅外来 `Referer` 均 403。读取拒绝 `cross-site`，`same-site` 读取必须声明精确且已允许的 `Origin`，无 `Origin` 时外来 `Referer` 403。完全没有来源头的请求仍按非浏览器客户端放行。`sec-fetch-mode` 不计入来源头，因为 Node `fetch` 固定发送 `cors`。API 响应增加 `cross-origin-resource-policy: same-origin` 与 `referrer-policy: no-referrer`，使跨站 no-cors 嵌入在浏览器网络层被丢弃。
+consumersUpdated: `tests/local-request-guard.test.mjs` 新增 2 个合同测试（7/7）；新增 `tests/csrf-cross-site.e2e.mjs`；文档 `local-backend-hardening.md`、`hosted-deployment.md`、`README.md` 更新为准入规则与证据。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs` 7/7 PASS（新增跨站表单 403、`no-cors` `text/plain` 403、仅伪造 Origin 403、`Origin: null` 403、外来 Referer 403、精确 Origin + cross-site 403、攻击后 Workspace 数量不变、无来源头客户端 200、same-site 读取 403、同源读取 200 且带 CORP/referrer-policy/no-store）。`node --test .../backend-v2.test.mjs` 70/70 PASS。`node docs/drafts/browser-native-dsh-poc/tests/csrf-cross-site.e2e.mjs` 在 Chrome / macOS PASS：跨站表单 403；三个 `no-cors` `text/plain` 请求在浏览器网络层被 CORP 丢弃；CORS 读取与 EventSource 失败；`workspacesBefore=1`、`workspacesAfter=1`、`sessionsBefore=0`、`sessionsAfter=0`，owner Workspace id 不变。回归 `tests/browser-native-v2.e2e.mjs`、`tests/preview-api-origin-split.e2e.mjs`、`tests/first-use.e2e.mjs` PASS。
+syncReplaySteps: 上游同步后复跑上述三个合同/回归命令与跨站 E2E，核对 `BROWSER_PROVENANCE_HEADERS` 与 `assertBrowserProvenance` 仍位于 `assertLocalRequest` 的 API 分支。
+deleteCondition: 正式产品改用独立 CSRF token 或平台级同源隔离后删除本 PoC 准入补丁；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-126：首次使用空状态、引导与示例任务
 
 ```text

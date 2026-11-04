@@ -39,6 +39,8 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 
 运维者把 `preview` URL 交给使用者。该 URL 只用于首次 handshake：backend 校验一次性本地 token，返回 302 并设置 `HttpOnly; SameSite=Strict` cookie。`/api/browser-native/*` 没有该 cookie 或 `x-browser-native-auth` 头时返回 401，因此不能绕过 handshake 直接调用 API。`DSH_POC_PORT=0` 选择临时端口，便于脚本化 smoke。
 
+浏览器请求在路由前追加严格 Origin 校验：携带任一浏览器来源头（`Origin`/`Referer`/`Sec-Fetch-Site`/`Sec-Fetch-Dest`）时，状态变更必须声明精确同源 `Origin` 且 `Sec-Fetch-Site` 只能为 `same-origin`/`none`，读取拒绝 `cross-site`；API 响应带 `Cross-Origin-Resource-Policy: same-origin` 与 `referrer-policy: no-referrer`。跨站表单、`no-cors` `text/plain` 简单请求、CORS 读取和 EventSource 均在 0 副作用下失败（[本地后端请求准入](local-backend-hardening.md)、`tests/csrf-cross-site.e2e.mjs`）。不带任何来源头的非浏览器客户端（SDK、curl）仍按脚本通道放行，但同样受回环/代理 Host、进程令牌与 principal 授权约束。
+
 ## 配置
 
 | 变量 | 默认值 | 说明 |
@@ -241,6 +243,6 @@ curl -X POST http://127.0.0.1:4185/api/browser-native/session/share \
 
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session 只读共享的授权持久化、viewer 读取、写入与租约拒绝、拒绝审计与重启后保持。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；真实 Chromium 跨站攻击的 0 副作用拒绝（跨站表单、`no-cors` 简单请求、CORS 读取、EventSource）；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session 只读共享的授权持久化、viewer 读取、写入与租约拒绝、拒绝审计与重启后保持。
 
 未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理；共享的撤销/有效期与 UI 呈现。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。

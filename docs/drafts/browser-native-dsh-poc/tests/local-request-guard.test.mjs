@@ -25,9 +25,11 @@ async function start(options = {}) {
   return { app, origin, close, port: Number(new URL(origin).port) }
 }
 
-function call(port, { method = 'GET', path = '/', headers = {}, body } = {}) {
+function call(port, { method = 'GET', path = '/', headers = {}, body, rawBody } = {}) {
   return new Promise((resolve, reject) => {
-    const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body))
+    const payload = rawBody === undefined
+      ? (body === undefined ? undefined : Buffer.from(JSON.stringify(body)))
+      : Buffer.from(rawBody)
     const request = httpRequest({
       host: '127.0.0.1',
       port,
@@ -179,6 +181,106 @@ describe('browser-native loopback request guard', () => {
       })
       assert.equal(wrongToken.status, 403)
       assert.equal(json(wrongToken).error.code, 'ORIGIN_FORBIDDEN')
+    } finally {
+      await close()
+    }
+  })
+
+  it('refuses every browser-authored state change without a same-origin Origin', async () => {
+    const { close, port, origin } = await start()
+    try {
+      const browser = await identity(port)
+      const listBefore = json(await call(port, { path: '/api/browser-native/workspace/list', headers: { cookie: browser.cookie } }))
+      const createPath = '/api/browser-native/workspace/create'
+      const protocol = JSON.stringify({ protocolVersion: 1, requestId: 'guard-create-attempt' })
+
+      const crossSiteForm = await call(port, {
+        method: 'POST', path: createPath,
+        headers: {
+          cookie: browser.cookie,
+          origin: 'http://evil.example',
+          'sec-fetch-site': 'cross-site',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        rawBody: 'protocolVersion=1&requestId=guard-form-attempt',
+      })
+      assert.equal(crossSiteForm.status, 403)
+      assert.equal(json(crossSiteForm).error.code, 'ORIGIN_FORBIDDEN')
+
+      const noCorsSimple = await call(port, {
+        method: 'POST', path: createPath,
+        headers: {
+          cookie: browser.cookie,
+          origin: 'http://evil.example',
+          'sec-fetch-site': 'cross-site',
+          'content-type': 'text/plain',
+        },
+        rawBody: protocol,
+      })
+      assert.equal(noCorsSimple.status, 403, 'a text/plain simple request must not reach the handler')
+
+      const forgedOrigin = await call(port, {
+        method: 'POST', path: createPath,
+        headers: { cookie: browser.cookie, origin: 'http://evil.example', 'content-type': 'application/json' },
+        body: JSON.parse(protocol),
+      })
+      assert.equal(forgedOrigin.status, 403, 'a state change without Sec-Fetch-Site still needs an exact Origin')
+
+      const nullOrigin = await call(port, {
+        method: 'POST', path: createPath,
+        headers: { cookie: browser.cookie, origin: 'null', 'content-type': 'application/json' },
+        body: JSON.parse(protocol),
+      })
+      assert.equal(nullOrigin.status, 403, 'an opaque origin must be refused')
+
+      const foreignReferer = await call(port, {
+        method: 'POST', path: createPath,
+        headers: { cookie: browser.cookie, referer: 'http://evil.example/page', 'content-type': 'application/json' },
+        body: JSON.parse(protocol),
+      })
+      assert.equal(foreignReferer.status, 403, 'a foreign Referer must not stand in for Origin')
+
+      const exactOriginCrossSite = await call(port, {
+        method: 'POST', path: createPath,
+        headers: { cookie: browser.cookie, origin, 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
+        body: JSON.parse(protocol),
+      })
+      assert.equal(exactOriginCrossSite.status, 403, 'an exact Origin cannot excuse a cross-site Fetch metadata claim')
+
+      const listAfter = json(await call(port, { path: '/api/browser-native/workspace/list', headers: { cookie: browser.cookie } }))
+      assert.equal(listAfter.workspaces.length, listBefore.workspaces.length, 'refused state changes must not create a Workspace')
+
+      const accepted = await call(port, {
+        method: 'POST', path: createPath,
+        headers: { cookie: browser.cookie, 'content-type': 'application/json' },
+        body: { protocolVersion: 1, requestId: 'guard-create-accepted' },
+      })
+      assert.equal(accepted.status, 200, 'a non-browser client without browser provenance headers keeps working')
+      assert.equal(json(await call(port, { path: '/api/browser-native/workspace/list', headers: { cookie: browser.cookie } })).workspaces.length,
+        listAfter.workspaces.length + 1)
+    } finally {
+      await close()
+    }
+  })
+
+  it('refuses same-site reads without an exact Origin and keeps reads unembeddable', async () => {
+    const { close, port, origin } = await start()
+    try {
+      const browser = await identity(port)
+      const manifestPath = `/api/browser-native/workspace/manifest?protocolVersion=1&workspaceId=${browser.workspaceId}`
+
+      const sameSiteRead = await call(port, { path: manifestPath, headers: { cookie: browser.cookie, 'sec-fetch-site': 'same-site' } })
+      assert.equal(sameSiteRead.status, 403, 'a same-site sibling must not read without declaring its exact Origin')
+      assert.equal(json(sameSiteRead).error.code, 'ORIGIN_FORBIDDEN')
+
+      const foreignRefererRead = await call(port, { path: manifestPath, headers: { cookie: browser.cookie, referer: 'http://evil.example/page' } })
+      assert.equal(foreignRefererRead.status, 403)
+
+      const sameOriginRead = await call(port, { path: manifestPath, headers: { cookie: browser.cookie, origin, 'sec-fetch-site': 'same-origin' } })
+      assert.equal(sameOriginRead.status, 200)
+      assert.equal(sameOriginRead.headers['cross-origin-resource-policy'], 'same-origin')
+      assert.equal(sameOriginRead.headers['referrer-policy'], 'no-referrer')
+      assert.equal(sameOriginRead.headers['cache-control'], 'no-store')
     } finally {
       await close()
     }
