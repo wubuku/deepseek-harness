@@ -66,7 +66,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
 | 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[横向扩展可行性](multi-instance-feasibility.md) |
-| 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
+| 产品与就绪度 | [首次使用体验](#首次使用体验)、[用户旅程叙事 E2E](user-journey.md)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
 ## 单 Worker CPU 阻塞与协作式让出
@@ -159,6 +159,12 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 引导卡根节点使用 `pointer-events: none`，只有“填入示例任务”和“不再显示”两个按钮可交互，因此不会拦截页面其他控件；文案由 `apps/web/src/locales/browser-native-workspace.ts` 拥有，中英文各一套。点击发送、按 Enter 或关闭后写入本浏览器的 `dsh-browser-native-first-use-completed-v1` 标记并隐藏卡片，之后重载不再出现。该标记只表示“本浏览器已完成首次引导”，不代表 principal 在服务端已有或没有 Session；换浏览器或清空本地存储会再次显示。
 
 证据：`node docs/drafts/browser-native-dsh-poc/tests/first-use.e2e.mjs` 在 Chrome 156 / macOS 上 PASS，输出 `{"result":"passed","scope":"first-use-empty-state-guide-sample-task","emptyComposerAtFirstUse":true,"guideSteps":3,"sampleTask":"In three sentences, describe what you can do inside this browser Workspace.","sampleTurnReason":"completed","assistantMarker":"Browser-native DSH completed this turn:","guideDismissedAfterFirstTurn":true,"guideSuppressedAfterReload":true,"localizedTitle":"第一次在浏览器里运行 DSH"}`。测试不重新 fill composer：引导插入示例后直接点击 Send，断言 Session 收到同一 user message、`turn/end` reason 为 `completed` 且 assistant 文本来自 scripted 模型；另用 zh-CN 上下文验证关闭与重载抑制。
+
+## 用户旅程叙事 E2E
+
+[用户旅程叙事 E2E](user-journey.md)用一条脚本串起首次使用、3 个普通 turn、审批、viewer 协作与导出，并在每步同时断言可见 UI 与 durable Session 数据。首次使用 3,438 ms 内到达 `synced`，boot 时只打开 1 个 0 用户消息的 Session；3 个 turn 用时 2,935 ms、35 个事件；审批卡出现后 `Allow once` 在 1,029 ms 内结算为 `allowed-once` 并落下 29 字节文件；新 principal 取得 viewer 授权后读回同一 `seq` 序列，写操作与导出分别为 403 `SESSION_READ_ONLY` 与 404，owner 继续追加的第 5 个 turn 仍对 viewer 可见；导出 12 ms、33,782 字节、59 事件，与权威读取逐事件相等且 `attachments` 为 0。页面、Worker 错误与跨源请求均为 0。
+
+复跑需先构建 preview，再执行 `node docs/drafts/browser-native-dsh-poc/tests/user-journey.e2e.mjs`。
 
 ## 完整性与生命周期验证
 

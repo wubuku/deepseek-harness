@@ -3155,3 +3155,20 @@ syncReplaySteps: 上游同步后核对 append/branch/create 收据键、Workspac
 deleteCondition: 生产后端以持久化幂等表提供同等保证，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-151：用户旅程叙事 E2E——首次使用、多 turn、审批、协作与导出
+
+```text
+changeId: BN-P2-151
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/tests/user-journey.e2e.mjs; docs/drafts/browser-native-dsh-poc/user-journey.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 既有验证按能力分散，没有一条脚本证明同一条用户路径上的可见状态、Session 日志、Workspace 文件与导出包保持一致；首次使用、审批、viewer 协作与导出各自通过不能排除跨步骤的状态漂移。
+existingExtensionPointsChecked: 复用 durable preview、真实 composer、`approval-integrity` 测试通道与真实审批卡、scripted `BROWSER_NATIVE_APPROVAL_ALLOW_ONCE_E2E` 分支、`/session/share` viewer 授权、`/workspace/identity` 双 principal 与 `/session/export`；未修改 `packages/`、Agent Loop、Session 格式或默认 profile。
+whyDraftOnlyWasInsufficient: 静态检查无法给出首次使用到 `synced` 的时间、审批卡到 turn 结束的结算延迟、viewer 读回的事件序列，以及导出包是否与权威读取逐事件一致。
+behaviorChange: 仅新增 validation E2E 与文档，产品行为不变。
+consumersUpdated: 用户旅程 E2E、用户旅程文档、PoC README 导航与章节、本 ledger。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/user-journey.e2e.mjs` 通过。首次使用 3,438 ms；3 个 turn 2,935 ms / 35 事件；审批 1,029 ms 结算 `allowed-once` 并写入 29 字节文件；viewer 授权后读回 59 事件、写 403 `SESSION_READ_ONLY`、导出 404，第 5 个 turn 对 viewer 可见；导出 12 ms / 33,782 字节 / 59 事件，与 `session/read` 深度相等、`durableThroughSeq 58`、0 附件；1 次 `session/create`、33 次 `session/append`、7 次 `/llm`；页面/Worker 错误与跨源请求 0。
+syncReplaySteps: 上游同步后核对 composer、`data-chat-flow-kind="user"`、审批卡 `data-approval-key`、`/session/share` 角色与 `/session/export` 包字段；复跑本 E2E，并在真实模型可用时复跑 `golden-path.e2e.mjs`。
+deleteCondition: 正式产品提供等效的端到端旅程验收并有真实模型证据；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
