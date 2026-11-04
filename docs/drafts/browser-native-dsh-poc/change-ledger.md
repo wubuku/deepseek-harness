@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-109：WebKit 替代路径评估收口
+
+```text
+changeId: BN-P2-109
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/webkit-alternative-path.e2e.mjs; docs/drafts/browser-native-dsh-poc/browser-support-matrix.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 支持矩阵把 Safari/iOS 缺口归因于“没有 WebKit 自动化、未实测”；需要在真机不可得的前提下给出可判定的替代路径结论，而不是继续悬置。
+existingExtensionPointsChecked: 复用现有 preview 门禁、scripted backend 与 Playwright 安装；不改 `apps/web` 支持探测、Worker 或 VFS。
+whyDraftOnlyWasInsufficient: 只有依赖声明与自述，没有 WebKit 运行时证据；无法判断是 UA 门禁单独阻断，还是 OPFS/Worker 本身不可用。
+behaviorChange: 无产品行为变化；新增评估用 E2E 与文档结论。
+consumersUpdated: `browser-support-matrix.md` 的 Safari/iOS 行、缺口清单与新增“WebKit 替代路径评估结论”节。
+test: `node docs/drafts/browser-native-dsh-poc/tests/webkit-alternative-path.e2e.mjs` 通过：WebKit 26.4 有 Worker/MessageChannel/IndexedDB/SubtleCrypto，但 `getDirectory` 在页面与 Worker 均抛 UnknownError；真实 UA 命中 `NON_CHROMIUM_DESKTOP` 且 composer 0；伪造 Chromium UA 后启动失败于 `OPFS_SYNC_ACCESS_UNAVAILABLE`，无测试端口。
+syncReplaySteps: 上游同步后重跑该 E2E；若 Playwright WebKit 升级带来 OPFS 支持，重跑并更新结论。
+deleteCondition: 真实 Safari/iOS E2E 跑通且 OPFS 与 durable 证据齐备后，删除本评估结论并更新支持矩阵。
+status: implemented
+```
+
 ### BN-P2-108：同机进程启动令牌与握手 cookie
 
 ```text
