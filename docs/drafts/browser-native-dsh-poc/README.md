@@ -60,7 +60,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[多模态图片附件](image-attachment.md)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [Skill 在浏览器端的应用验证](skill-application.md)、[租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[Preset 切换：工具集、模型与审批](preset-switching.md)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型)、[失败 turn 的界面重试](turn-retry.md) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型)、[失败 turn 的界面重试](turn-retry.md)、[跨 subagent 追踪](subagent-trace.md) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
@@ -1703,6 +1703,12 @@ boot payload 预取同样无效：静态资源统一 `cache-control: no-store`�
 [重试与幂等结算](turn-retry.md)在预览页为最近一个以 `error`/`aborted`/`interrupted` 收束的 turn 显示重试条。backend 从 Session log 取回原始 `user/message`，客户端不提交 prompt；意图键为 `sha256(sessionId + turn + prompt)`，`request` 串行化且重复请求返回 `created:false`，`settle` 只在首次写入 `settledAt`。
 
 真实 Chrome scripted 验收中双击重试按钮只产生 1 次请求、1 次结算与 1 个新 turn；页面可见状态 `failed → submitted`，服务端重复请求 `created:false`、重复结算 `settled:false`，3 个 turn 只发出 3 个模型请求、2 条匹配 prompt 的 user/message。多 Session 同页只跟踪最后一个 owner，未结算的孤立意图需要手动重新输入。
+
+## 跨 subagent 追踪
+
+[委托链路追踪](subagent-trace.md)把 trace id 定义为委托树的根 Session id，子 Session 头里的 `parentSession`/`origin`/`delegationDepth` 让 backend 重启后重算出同一个 trace，不新增计数器。`GET /session/trace?sessionId=` 从任一成员返回整棵树：每行的 `parentSession`、`parentCallId`、`parentTurn` 指回父 Session 的 `subagent` 调用，并带工具策略审计计数与按 Session 的 usage/成本行；未配置定价时 `costUsd` 为 `null`。
+
+scripted Chrome 验收中父 Session 先越界写入被拒（父行 `audit.toolPolicy.deny:1`、子行全 0），随后真实在 Worker 内委托；父、子报告的 `traceId` 都等于根 Session id，子行 `parentCallId` 等于父 Session 的 `subagent` 调用 id、`parentTurn:1`。真实 provider 冒烟中 1 条 usage 记录带 `traceId === sessionId`，`usage.jsonl` 与报表行一致（2,349 输入 / 30 输出 token）。真实 `browser-subagent` roster 会报 `tool schema "subagent" is not currently published`，该时序问题未在本项修复。
 
 ## 系统级幂等
 

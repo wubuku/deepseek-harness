@@ -3291,3 +3291,20 @@ syncReplaySteps: 上游同步后重建 preview，复跑 preset E2E 与 orchestra
 deleteCondition: 正式产品提供等价的可切换工具集/模型/审批组合与 Session 级隔离语义，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-159：跨 subagent 的 trace id、父子链路、审计与成本归属
+
+```text
+changeId: BN-P2-159
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/subagent-trace.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/subagent-trace.test.mjs; docs/drafts/browser-native-dsh-poc/tests/subagent-trace.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/subagent-trace-real.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/runtime-test-support.mjs; docs/drafts/browser-native-dsh-poc/subagent-trace.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 父子 Session 已持久化 `parentSession`/`origin`/`delegationDepth`，但没有一个入口能把一次委托的父调用、子 Session、工具策略审计与用量/成本合并成一条链路；真实 LLM 的 usage 记录只带 principal 与 Session，日志无法按委托聚合。
+existingExtensionPointsChecked: 复用 Session 头的 `parentSession`/`origin`/`delegationDepth`、`tool/call`/`tool/result` 与 `tool-policy/decided` 事件、`buildUsageReport` 的按 Session 聚合、hash-chained `observability/usage.jsonl`、Session GET 路由与 `dsh-browser-native-session-principal` cookie；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实 Worker 内的父→子委托与真实持久化事件，才能证明子头部的祖先字段、父调用的轮次定位、审计归行与 usage 归属能拼回同一条链路；静态检查无法覆盖真实冒烟中 usage 回调附加 traceId 的时序。
+behaviorChange: 新增 `subagent-trace.mjs`：trace id 为根 Session id，`traceIdFor` 沿 `parentSession` 上溯并处理未知父与环；`buildTraceReport` 返回成员行（父 Session、父调用 id/轮次、来源、深度、turn 数、最后终止原因、usage、工具策略 allow/ask/deny 计数）、按行求和的 `totals` 与仅限成员的 `accessDenials`。backend 新增 `GET /api/browser-native/session/trace`，并在 real LLM usage 回调中附加 `traceId`（未知 Session 只跳过 trace 归属）。验证 roster `browser-subagent` 同时挂载 tool-policy，使链路可携带一次真实拒绝。`runtime-test-support.mjs` 新增带 principal cookie 的 `sessionGetRequest`。
+consumersUpdated: 新增 `tests/subagent-trace.test.mjs`、`tests/subagent-trace.e2e.mjs`、`tests/subagent-trace-real.e2e.mjs`、`subagent-trace.md`、PoC README 导航与章节、本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/subagent-trace.test.mjs` 5/5 通过（根 id、未知父/环、父调用与审计/成本重建、未定价、accessDenials 过滤）。`DSH_POC_PLAYWRIGHT_MODULE=/Users/yangjiefeng/node_modules/playwright/index.js node docs/drafts/browser-native-dsh-poc/tests/subagent-trace.e2e.mjs` 通过：父 Session 越界写被拒（父行 `audit.toolPolicy{allow:1,deny:1}`、子行全 0），父、子 `traceId` 均等于根 Session id，子行 `parentSession`/`parentCallId:"trace-subagent-call"`/`parentTurn:1`/`depth:1`，`sessions:2`、`turns:2`。`DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/subagent-trace-real.e2e.mjs` 通过：真实 provider `LongCat-2.5` 的 usage 行 `{requests:1,inputTokens:2349,outputTokens:30,totalTokens:2379,costUsd:null}`，`usage.jsonl` 1 条记录 `traceId === sessionId` 且 principal 一致。真实 `browser-subagent` roster 报 `tool schema "subagent" is not currently published`，真实冒烟改用 `browser` roster。
+syncReplaySteps: 上游同步后重建 preview 并复跑 trace 单测、scripted E2E 与真实 usage 冒烟；若 `subagent` 工具结果措辞、Session 头祖先字段或 usage 回调签名变化，同步更新 `subagent-trace.mjs` 与本文档。
+deleteCondition: 正式产品提供等价的委托链路追踪与按 trace 的成本归属，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```

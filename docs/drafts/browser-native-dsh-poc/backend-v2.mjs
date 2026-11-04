@@ -26,6 +26,7 @@ import { createObservabilityJournal, redactObservabilityJournal } from './observ
 import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 import { buildPrincipalExport, verifyPrincipalExport } from './principal-export.mjs'
 import { SessionShareStore } from './session-shares.mjs'
+import { buildTraceReport, traceIdFor } from './subagent-trace.mjs'
 import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
 
@@ -6314,6 +6315,19 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, { ok: true, settled: outcome.settled, retry: turnRetryResponse(outcome.record) })
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/trace') {
+        const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        const sessionId = url.searchParams.get('sessionId')
+        if (sessionId === null) throw new BackendError('INVALID_REQUEST', 'sessionId is required')
+        const session = store.getForPrincipal(sessionId, principalId)
+        sendJson(response, 200, buildTraceReport(store, retainedUsage(), {
+          pricing: usagePricing,
+          model: llm.model,
+          now: retentionClock(),
+          accessDenials: accessAuditEntries,
+        }, session))
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/turn-retry') {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const sessionId = url.searchParams.get('sessionId')
@@ -7238,7 +7252,17 @@ export async function createBrowserNativeV2Server(options) {
                 }
               }
               await realLlm(response, request, llm, body, entry => {
-                const recorded = usagePrincipalId === undefined ? entry : { ...entry, principalId: usagePrincipalId }
+                let traceId
+                try {
+                  traceId = traceIdFor(store, store.get(body.sessionId))
+                } catch {
+                  // Unknown Session ids leave the usage entry attributed by principal only.
+                }
+                const recorded = {
+                  ...entry,
+                  ...(usagePrincipalId === undefined ? {} : { principalId: usagePrincipalId }),
+                  ...(traceId === undefined ? {} : { traceId }),
+                }
                 usageAudit.push(recorded)
                 void observabilityJournal.appendUsage(recorded)
               })

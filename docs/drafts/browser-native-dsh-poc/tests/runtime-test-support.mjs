@@ -22,6 +22,23 @@ export async function sessionRequest(origin, operation, body = {}) {
 }
 
 /**
+ * Send a v2 Session GET request with the principal cookie captured for a Session.
+ * @param {string} origin - Same-origin backend URL.
+ * @param {string} operation - Session route suffix.
+ * @param {Record<string, string>} query - Query fields.
+ * @param {string} sessionId - Session whose principal cookie is reused.
+ * @returns {Promise<object>} Parsed success or failure for explicit assertions.
+ */
+export async function sessionGetRequest(origin, operation, query, sessionId) {
+  const cookie = sessionPrincipalCookies.get(sessionId)
+  if (cookie === undefined) throw new Error(`No browser Session principal was captured for ${String(sessionId)}`)
+  const url = new URL(`${origin}/api/browser-native/session/${operation}`)
+  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
+  const response = await fetch(url, { headers: { cookie } })
+  return { status: response.status, ...await response.json() }
+}
+
+/**
  * Poll observable state with a diagnostic deadline, not a fixed readiness sleep.
  * @param {() => Promise<unknown>} observe - Return a truthy result when ready.
  * @param {string} label - Failure context.

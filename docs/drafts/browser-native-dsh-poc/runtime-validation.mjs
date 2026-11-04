@@ -155,7 +155,7 @@ export async function createRuntimeValidationDist({
           config: { path: ':memory:', openAt: 'first-search' },
         })
       }
-      if (roster === 'browser-tool-policy' || roster === 'browser-profile-preset') {
+      if (roster === 'browser-tool-policy' || roster === 'browser-profile-preset' || roster === 'browser-subagent') {
         const insertion = entries.find(entry => Array.isArray(entry?.insert))
         if (insertion === undefined) throw new Error('validation profile has no root plugin insertion')
         insertion.insert.push({
