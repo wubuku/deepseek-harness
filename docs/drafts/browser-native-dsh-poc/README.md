@@ -467,6 +467,22 @@ node docs/drafts/browser-native-dsh-poc/tests/llm-provider-fallback.test.mjs
 DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/provider-compatibility.e2e.mjs
 ```
 
+## 弱网与移动延迟画像
+
+`tests/weak-network-profile.e2e.mjs` 用 Chrome DevTools Protocol `Network.emulateNetworkConditions` 对页面施加 200 ms RTT、187,500 B/s 下行（1.5 Mbps）与 93,750 B/s 上行（0.75 Mbps）。profile 在预览 bundle 已缓存后启用，因此测量的是 turn transport，不包含冷启动下载；Session、Workspace、composer 和 `/llm` 流量都走同一节流。
+
+确定性阶段用 scripted 模型：前缀立即输出，后缀固定延迟 1,500 ms。实测首字 1,790 ms，扣除脚本延迟后 transport overhead 290 ms；完整 turn 3,330 ms。连续三次 Stop 的中断确认延迟为 345/743/646 ms，三次都结算为 `aborted`，每次恰好新增一个 `turn/end`。真实 Anthropic-compatible MiniMax 阶段首字 2,213 ms、turn 2,617 ms，两次 `/llm` 响应均为 200；同一 profile 的另一次真实首字达到 10,813 ms，说明供应商 TTFT 波动远大于传输开销。
+
+可用性阈值判定：transport overhead ≤ 2 s、真实首字 ≤ 15 s、turn 完成 ≤ 20 s、取消确认 ≤ 2 s；四项都满足，因此在 200 ms RTT + 1.5 Mbps 下判定可用，中断率 3/3。结论的适用条件是供应商首字落在 15 s 内；超过该值时瓶颈在供应商而非网络 profile。
+
+```sh
+node docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs
+DSH_POC_LLM_PROVIDER=anthropic DSH_POC_WEAK_NETWORK_REAL=1 DSH_POC_ENV_FILE=docs/drafts/.env \
+  node docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs
+```
+
+scripted fault 是真实 DSH Worker/Host 的确定性时序注入；它不是移动设备、真实蜂窝网络、Safari 或后台标签页的证据。
+
 ## 黄金路径端到端
 
 [黄金路径回归](golden-path-e2e.md)用真实 LongCat-2.5 在预览 UI 走完整链路：提问、Read Only 下 `write` 被拒、按拒绝指引升级到 workspace-write、审批卡 Allow once、写工作区、刷新恢复、导出导入。

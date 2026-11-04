@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-129：200 ms RTT / 1.5 Mbps 下的 turn、首字与中断画像
+
+```text
+changeId: BN-P2-129
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 此前只有局域网或无限速下的 turn 延迟与取消证据，没有可判定的移动弱网可用性阈值；200 ms RTT 与 1.5 Mbps 是否仍能完成首字、turn 与中断，需要真实 Chrome 网络节流而不是推算。
+existingExtensionPointsChecked: 复用真实 DSH Worker/Host 预览、既有 `submitPrompt`/`sessionRequest` 浏览器测试辅助、scripted `delayed-text` fault 与 `onLlmClientClose` 之外不需要新增 backend 钩子；未改 Agent Loop、Session 事件、Session format、模型/工具协议或正式 DSH package。
+whyDraftOnlyWasInsufficient: 只有真实 Chromium 的 CDP 网络节流才能让 preview、Session API 与 `/llm` NDJSON 都承担同一 RTT 和带宽限制；scripted 固定延迟可把模型延迟从传输开销中分离，真实 provider 阶段则证明该 profile 下供应商路径仍可完成。
+behaviorChange: 新增 `tests/weak-network-profile.e2e.mjs`。测试在预览 bundle 缓存后施加 `Network.emulateNetworkConditions`（200 ms latency、187,500 B/s 下行、93,750 B/s 上行），scripted 阶段以 1,500 ms 后缀延迟测量首字与 turn，并连续三次 Stop 验证取消；可选 `DSH_POC_WEAK_NETWORK_REAL=1` 阶段用真实 Anthropic-compatible provider 测同一 profile。没有产品运行时行为变化。
+consumersUpdated: PoC README 新增“弱网与移动延迟画像”章节与本 ledger；未新增生产入口或文档。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/weak-network-profile.e2e.mjs` 通过：scripted 首字 1,790 ms、transport overhead 290 ms、turn 3,330 ms，三次取消确认 345/743/646 ms 且每次新增一个 `aborted` `turn/end`（累计 3，无多余 turn）；`DSH_POC_LLM_PROVIDER=anthropic DSH_POC_WEAK_NETWORK_REAL=1 DSH_POC_ENV_FILE=docs/drafts/.env node ...` 追加真实 MiniMax 阶段，首字 2,213 ms、turn 2,617 ms、两次 `/llm` 响应均 200。同一 profile 另一次真实首字为 10,813 ms，故阈值把传输与供应商 TTFT 分开：transport overhead ≤ 2 s、真实首字 ≤ 15 s、turn ≤ 20 s、取消确认 ≤ 2 s，四项均满足，中断率 3/3。
+syncReplaySteps: 上游同步后复跑 scripted 与真实两个命令；确认 CDP profile 在 `openPreview` 之后施加，`transportOverheadMs = firstTokenMs - SCRIPTED_MODEL_DELAY_MS` 仍成立，且中断断言仍以 `turn/end.reason.kind === 'aborted'` 计数。
+deleteCondition: 正式移动端弱网基线或 CI 网络 profile 接管该测量后删除本测试；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-128：多 provider 回退与单次计费
 
 ```text
