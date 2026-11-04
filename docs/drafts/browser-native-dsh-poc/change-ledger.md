@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-142：16 Session 长跑资源收敛与 mount unmount
+
+```text
+changeId: BN-P2-142
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-session-mount.ts; docs/drafts/browser-native-dsh-poc/browser-native-resource-metrics.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-session-mount.spec.ts; docs/drafts/browser-native-dsh-poc/tests/resource-lifecycle-long-run.e2e.mjs; docs/drafts/browser-native-dsh-poc/resource-lifecycle-long-run.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; apps/web/src/preview.ts
+reason: 需要证明 16 个 Session 在 100+ turn 的反复挂载/切换后 Worker 数量、事件监听、定时器与 JavaScript 堆收敛；仅有无拆卸语义的 `mount`/`dispose` 无法表达空闲投影移除，长跑也无法读取 Worker 侧注册计数。
+existingExtensionPointsChecked: 复用 preview 的 URL-gated test MessagePort、同源 Session API、dashboard 投影、`Agent.followup()`、`HeapProfiler.collectGarbage` 与既有 mounted-Session 上限；未改 Agent Loop、Session 事件类型/格式、正式 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: 静态文档和单次性能基线无法区分“transcript 正常增长”与“每轮泄漏”，也无法确认 Worker 内部的监听/定时器是否随 Session 切换累积；必须用真实 Chrome、16 个持久 Session 与强制 GC 的检查点逐轮对账。
+behaviorChange: `BrowserNativeSessionMountCoordinator` 新增 `unmount(sessionId)`，空闲投影可删除并在 active 指向时清空，`running`/`waiting`/`unknown` execution 以 `SESSION_EXECUTION_ACTIVE` 拒绝；新增 Worker 资源计数模块，在 Node timer shim 后包装 `EventTarget`、`setTimeout`、`setInterval` 与清理函数并通过 `resource-stats` 测试动作暴露；preview 增加 `browser-native-test=resource-lifecycle` 允许值。
+consumersUpdated: README 性能与容量导航新增长跑入口；新增 `resource-lifecycle-long-run.md`；本 ledger。测试动作只在 test MessagePort 存在时可达，默认 preview 与 Browser-Native 入口不启用。
+tests: 单测 `pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-session-mount.spec.ts` 通过。Preview 重建后 `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/resource-lifecycle-long-run.e2e.mjs` 通过：16 Session（preview 自身 + 15 个持久 Session），7 轮共 113 turn；Worker 始终 1；页面全局监听 50→50、页面短时定时器 0→0；Worker 监听 18→33、定时器 2→17，均在第一轮后持平；强制 GC 后页面堆 +10.28 MiB、Worker 堆 +3.85 MiB；无 pageerror。
+syncReplaySteps: 上游同步后重建 preview 并复跑长跑；确认 Worker 仍为 1、页面全局监听与短时定时器增长为 0、Worker 计数首轮后持平、堆在预算内；核对 `unmount` 的 active/执行中语义与测试动作仍只在 test 通道可用。
+deleteCondition: 正式多 Session UI 提供可观测的资源计数与 Session 关闭回收入口，或该 PoC-local 验证被正式性能门禁取代。
+status: implemented
+```
+
 ### BN-P2-141：移动端 server-host + UI-only 路径与 durable 内部认证
 
 ```text

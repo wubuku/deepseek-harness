@@ -103,9 +103,14 @@ import {
   BrowserNativeApprovalProjection,
   BrowserNativeApprovalProjectionError,
 } from './browser-native-approval-projection.ts'
+import {
+  installBrowserNativeResourceMetrics,
+  readBrowserNativeResourceMetrics,
+} from './browser-native-resource-metrics.ts'
 
 installAsyncContextHooks()
 installTimerGlobals()
+installBrowserNativeResourceMetrics()
 installCryptoGlobals()
 
 console.info('browser-native dsh: worker entry active')
@@ -321,7 +326,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
 interface BrowserNativeWorkspaceTestRequest {
   readonly type: 'browser-native-workspace-test-request'
   readonly requestId: string
-  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'tool-policy-state' | 'tool-policy-set' | 'tool-policy-rogue-allow' | 'budget-state' | 'budget-set' | 'session-query-probe' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark'
+  readonly action: 'ping' | 'write' | 'write-pattern' | 'write-content-workload' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'file-tool-metrics' | 'module-trace' | 'builtin-member-trace' | 'node-fs-read' | 'unsupported-builtin-probe' | 'permission-state' | 'tool-policy-state' | 'tool-policy-set' | 'tool-policy-rogue-allow' | 'budget-state' | 'budget-set' | 'session-query-probe' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'agent-inbox' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'abort-metadata-transactions' | 'quota-next-opfs-write' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'load-lazy-client-chunk' | 'close-vfs' | 'set-file-tool-delay' | 'cancel-file-search' | 'wait-file-tool-stage' | 'chunk-edit-probe' | 'content-chunking-probe' | 'reference-edit-probe' | 'session-handoff' | 'execution-handoff' | 'abort-session-outbox-appends' | 'session-outbox-probe' | 'cross-store-probe' | 'control-inject' | 'wait-attachment-opfs-staging-write' | 'attachment-opfs-write-state' | 'release-attachment-opfs-write' | 'reconcile-attachment-staging' | 'attachment-verify-state' | 'attachment-hydrate-probe' | 'isolation-probe' | 'egress-probe' | 'memory-current' | 'memory-inspect' | 'memory-list' | 'memory-isolated-write' | 'memory-isolated-read' | 'memory-tamper-read' | 'memory-benchmark' | 'resource-stats'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly urls?: Readonly<Record<string, string>>
   readonly targets?: BrowserNativeEgressTargets
@@ -503,6 +508,7 @@ function isWorkspaceTestRequest(value: unknown): value is BrowserNativeWorkspace
       && (data.sessionId === undefined || typeof data.sessionId === 'string')
       && (data.operationId === undefined || typeof data.operationId === 'string')
   }
+  if (data.action === 'resource-stats') return true
   if (data.action === 'abort-metadata-transactions') {
     return Number.isSafeInteger(data.count) && Number(data.count) > 0 && Number(data.count) <= 100
   }
@@ -2235,6 +2241,10 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
     }
     if (request.action === 'cross-store-probe') {
       workspaceTestResponse(request.requestId, await runCrossStoreProbe(request))
+      return
+    }
+    if (request.action === 'resource-stats') {
+      workspaceTestResponse(request.requestId, { ok: true, resourceStats: readBrowserNativeResourceMetrics() })
       return
     }
     if (request.action === 'session-handoff') {

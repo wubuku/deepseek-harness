@@ -200,6 +200,25 @@ export class BrowserNativeSessionMountCoordinator {
     }
   }
 
+  /**
+   * Remove an idle Session projection so repeated mount/unmount cycles do not
+   * retain stale mounts. An in-flight or unknown execution keeps the mount
+   * until it is settled, so unmounting cannot hide unresolved work.
+   * @param sessionId - Mounted Session to remove.
+   * @returns Whether a mount was removed.
+   */
+  unmount(sessionId: string): boolean {
+    this.assertLive()
+    const target = this.mounts.get(sessionId)
+    if (target === undefined) return false
+    if (target.execution !== undefined && ['running', 'waiting', 'unknown'].includes(target.execution.state)) {
+      throw new BrowserNativeSessionMountError('SESSION_EXECUTION_ACTIVE', `Session "${sessionId}" still has an unresolved execution`)
+    }
+    this.mounts.delete(sessionId)
+    if (this.activeSessionId === sessionId) this.activeSessionId = undefined
+    return true
+  }
+
   /** Rehydrate a mount after Worker replacement with a new execution identity. */
   reconnect(
     sessionId: string,

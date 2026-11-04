@@ -81,6 +81,23 @@ describe('Browser-Native Session mount coordinator', () => {
     expect(() => mounts.acceptLive('session-a', identity('session-a'), event(3, 'old-worker'))).toThrow(/identity changed/)
   })
 
+  it('removes idle mounts while retaining unresolved executions', () => {
+    const mounts = coordinator()
+    mounts.activate('session-a')
+    mounts.beginExecution('session-a', 'turn-a')
+    expect(() => mounts.unmount('session-a')).toThrow(/unresolved execution/)
+    mounts.settleExecution('session-a', 'turn-a', { settlement: 'confirmed' })
+
+    expect(mounts.unmount('session-a')).toBe(true)
+    expect(mounts.snapshots().map(snapshot => snapshot.sessionId)).toEqual(['session-b', 'session-c'])
+    expect(() => mounts.activate('session-a')).toThrow(/not mounted/)
+    expect(mounts.unmount('session-a')).toBe(false)
+
+    mounts.unmount('session-b')
+    mounts.unmount('session-c')
+    expect(mounts.snapshots()).toEqual([])
+  })
+
   it('converts every unresolved execution to unknown on disposal and ignores late results', () => {
     const mounts = coordinator()
     mounts.activate('session-a')

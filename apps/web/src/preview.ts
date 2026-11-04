@@ -35,6 +35,7 @@ const browserNativeWorkspaceTest = browserNative
     || searchParams.get('browser-native-test') === 'session-projection'
     || searchParams.get('browser-native-test') === 'approval-integrity'
     || searchParams.get('browser-native-test') === 'session-query'
+    || searchParams.get('browser-native-test') === 'resource-lifecycle'
     || searchParams.get('browser-native-test') === 'memory-isolation')
 const browserNativeRuntimeProbeTest = browserNative && searchParams.get('browser-native-test') === 'runtime-capability-probes'
 const requestedProbeFault = browserNativeRuntimeProbeTest ? searchParams.get('browser-native-probe-fault') : null
@@ -58,7 +59,7 @@ function markBoot(name: string): void {
 }
 
 interface BrowserNativeWorkspaceTestRequest {
-  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject'
+  readonly action: 'write' | 'write-pattern' | 'append' | 'mkdir' | 'read' | 'read-digest' | 'read-range' | 'usage' | 'permission-state' | 'multi-agent-start' | 'multi-agent-cancel' | 'multi-agent-status' | 'multi-agent-dispose' | 'session-orchestration-start' | 'session-orchestration-activate' | 'session-orchestration-park' | 'session-orchestration-cancel' | 'session-orchestration-followup' | 'session-orchestration-switch-route' | 'session-orchestration-status' | 'session-orchestration-dispose' | 'session-continuity-start' | 'session-continuity-queue' | 'session-continuity-cancel-keep-inbox' | 'session-continuity-resume' | 'session-continuity-fork' | 'session-continuity-followup' | 'session-continuity-status' | 'session-continuity-dispose' | 'session-mount-probe' | 'session-projection-probe' | 'approval-projection-probe' | 'cancel-session' | 'module-trace' | 'rename' | 'remove' | 'stat' | 'list' | 'chmod' | 'write-binary' | 'flush-local' | 'flush-workspace' | 'lease-info' | 'lease-timer-probe' | 'release-lease' | 'abort-next-metadata-transaction' | 'pause-local-save' | 'local-save-state' | 'release-local-save' | 'execution-handoff' | 'cross-store-probe' | 'control-inject' | 'resource-stats'
   readonly agents?: readonly { readonly sessionId: string; readonly prompt: string; readonly provider?: string; readonly model?: string }[]
   readonly controlInjection?: 'duplicate' | 'gap' | 'conflict' | 'max-text' | 'oversized-text'
     | 'escaped-frame-overflow' | 'unknown-field' | 'unknown-notice' | 'cyclic-extra'
@@ -118,6 +119,10 @@ interface BrowserNativeWorkspaceTestResponse {
   }
   readonly controlInjection?: string
   readonly sessionMount?: Record<string, unknown>
+  readonly resourceStats?: {
+    readonly listeners: { readonly added: number; readonly removed: number; readonly live: number }
+    readonly timers: { readonly scheduled: number; readonly cancelled: number; readonly fired: number; readonly live: number }
+  }
   readonly sessionProjection?: Record<string, unknown>
   readonly approvalProjection?: Record<string, unknown>
   readonly permission?: {
