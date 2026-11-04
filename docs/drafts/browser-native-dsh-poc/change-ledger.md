@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-132：用一条 `perf-gate` 收口关键性能预算并记录全绿基线
+
+```text
+changeId: BN-P2-132
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/tests/perf-gate.mjs; docs/drafts/browser-native-dsh-poc/perf-gate.md; docs/drafts/browser-native-dsh-poc/perf-gate-baseline.json; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 关键预算此前分散在 performance-baseline、long-transcript-rendering、large-workspace-sync 与 weak-network-profile 四个脚本，各自只断言自己的阈值；没有一条命令能同时判断“最近一批改动是否让任一预算退化”，也没有可比较的历史基线。
+existingExtensionPointsChecked: 只编排既有测量脚本与其 JSON 报告，复用各脚本已暴露的环境变量预算；未改 Worker、profile、Session 格式、Agent Loop、模型/工具协议或任何 `packages/` 代码。
+whyDraftOnlyWasInsufficient: 预算是否仍有余量只能由真实 Chrome 运行给出；四个套件的报告结构不同，必须实际运行并解析才能证明统一抽取和比较成立。
+behaviorChange: 新增 `tests/perf-gate.mjs`：按 `DSH_POC_PERF_GATE_SUITES` 运行 baseline/render/sync/network 四组子套件，抽取 12 个预算指标与 2 个只记录指标，输出 `metric/measured/baseline/budget/headroom/status` 表；任一子套件失败或指标超预算即以非零退出。`DSH_POC_PERF_GATE_UPDATE_BASELINE=1` 仅在全部通过时写入 `perf-gate-baseline.json`。没有产品运行时行为变化。
+consumersUpdated: PoC README 新增“性能回归守门”章节与导航入口；新文档记录预算表、用法与全绿基线；本 ledger 登记；未新增生产入口。
+tests: `DSH_POC_PERF_GATE_UPDATE_BASELINE=1 node docs/drafts/browser-native-dsh-poc/tests/perf-gate.mjs` 4/4 套件通过、14 项指标全部 pass，退出码 0。基线：coldStartMs=2177、hydrateMs=4892、turnMedianMs=147、fourSessionColdStartMs=2568.5、fourSessionHydrateMs=5195.5、domNodes=8192、scrollTaskMs=219.8、appendTaskMs=388.7、longTaskMs=0、sync9990Ms=5993、firstTokenMs=1708.7、transportOverheadMs=208.7、weakTurnCompletionMs=3266、abortAckMs=652。
+syncReplaySteps: 上游同步后复跑同一命令；确认四个子脚本仍各自打印包含 `result` 的 JSON、`DSH_POC_PERF_GATE_SUITES` 名称未变、预算环境变量仍被各脚本读取。
+deleteCondition: 四个测量脚本被合并或删除，或其报告不再输出上述字段。
+status: implemented
+```
+
 ### BN-P2-131：横向扩展可行性判定与单节点约束证据
 
 ```text

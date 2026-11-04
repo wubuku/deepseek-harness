@@ -64,7 +64,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
-| 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[横向扩展可行性](multi-instance-feasibility.md) |
+| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[横向扩展可行性](multi-instance-feasibility.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
@@ -1608,6 +1608,12 @@ Worker 崩溃用 CDP `Target.attachToTarget` + `Runtime.evaluate('self.close()')
 ## 性能基线
 
 [性能基线](performance-baseline.md)测量 1 个与 4 个并行 Session 的冷启动、hydrate、首个 scripted turn 与 JavaScript 堆。每个 Session 独立 `BrowserContext` 与 durable OPFS Workspace，因此 4 个 Session 就是 4 个标签页与 4 个 Dedicated Worker。冷启动 `synced` 中位数 2.32 秒（1 个）与 3.08 秒（4 个并行），hydrate 1.94 秒与 2.71 秒；page 堆约 42.7 MB、Worker 每页约 37.2 MB，两种规模下都不增长，单页合计约 79.9 MB。测量前对 page 与每个 Worker 强制 GC，两次独立运行得到相同的堆数字。harness 以 `DSH_POC_PERF_COLD_BUDGET_MS`、`DSH_POC_PERF_HYDRATE_BUDGET_MS`、`DSH_POC_PERF_HEAP_BUDGET_MB` 提供可收紧或放宽的回归阈值。
+
+## 性能回归守门
+
+[性能回归守门](perf-gate.md)把冷启动、hydrate、turn 延迟、DOM 节点、滚动与追加、9,990 文件同步和弱网首字收成一条 `tests/perf-gate.mjs`：它运行四组已有测量套件，抽取统一指标，与预算和 `perf-gate-baseline.json` 比较，超阈值或套件失败即非零退出。
+
+2026-11-04 全绿基线：冷启动 2 177 ms、hydrate 4 892 ms、scripted turn 中位数 147 ms、DOM 8 192 节点、滚动 219.8 ms、长消息追加 388.7 ms、9,990 文件同步 5 993 ms、200 ms RTT + 1.5 Mbps 下首字 1 708.7 ms、turn 完成 3 266 ms、中止确认 652 ms。`DSH_POC_PERF_GATE_SUITES=baseline,network` 可只跑部分套件，`DSH_POC_PERF_GATE_UPDATE_BASELINE=1` 在全部通过时重写基线。
 
 ## 会话规模曲线
 

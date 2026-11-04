@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-11-04T11:05:09.719Z",
+  "note": "Green perf-gate baseline. Regenerate with DSH_POC_PERF_GATE_UPDATE_BASELINE=1.",
+  "metrics": {
+    "coldStartMs": 2177,
+    "hydrateMs": 4892,
+    "turnMedianMs": 147,
+    "fourSessionColdStartMs": 2568.5,
+    "fourSessionHydrateMs": 5195.5,
+    "domNodes": 8192,
+    "scrollTaskMs": 219.8,
+    "appendTaskMs": 388.7,
+    "longTaskMs": 0,
+    "sync9990Ms": 5993,
+    "firstTokenMs": 1708.7,
+    "transportOverheadMs": 208.7,
+    "weakTurnCompletionMs": 3266,
+    "abortAckMs": 652
+  }
+}
