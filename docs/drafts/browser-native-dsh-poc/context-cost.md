@@ -57,4 +57,4 @@ DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/
 
 ## 边界
 
-只验证一个 OpenAI-compatible 网关和一个模型；缓存字段名（`prompt_tokens_details.cached_tokens`、`prompt_cache_hit_tokens`）按现有 provider 兼容层读取，其他网关若不返回该字段，脚本会在缓存断言处失败而不是静默跳过。裁剪对比是单 turn 单工具结果，未覆盖多工具、并行 `read` 与长会话多次裁剪的累积效果；压缩阈值来自测试 profile 覆盖，生产窗口由 profile 配置决定。provider 侧的缓存 TTL、跨进程共享与计费折扣不在本测量范围内。
+只验证一个 OpenAI-compatible 网关和一个模型；缓存字段名（`prompt_tokens_details.cached_tokens`、`prompt_cache_hit_tokens`）按现有 provider 兼容层读取，其他网关若不返回该字段，脚本会在缓存断言处失败而不是静默跳过。裁剪对比是单 turn 单工具结果，未覆盖多工具、并行 `read` 与长会话多次裁剪的累积效果；压缩阈值来自测试 profile 覆盖，生产窗口由 profile 配置决定。provider 侧的缓存 TTL、跨进程共享与计费折扣不在本测量范围内。Anthropic 协议侧的 `cache_control` 另有独立实测，结论是不依赖显式标记，见[Provider 侧 Prompt Caching 实测](prompt-caching.md)。

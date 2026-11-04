@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-140：Anthropic prompt caching 真实端点实测与 usage 拆分
+
+```text
+changeId: BN-P2-140
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/prompt-caching.e2e.mjs; docs/drafts/browser-native-dsh-poc/prompt-caching.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/dual-provider-compatibility.md; docs/drafts/browser-native-dsh-poc/context-cost.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 产品是否可以把 provider prompt caching 当作成本或延迟依赖，取决于 `cache_control` 是否真的产生 cache creation 与命中；此前只有 OpenAI-compatible 网关的 cached_tokens 证据，Anthropic 协议的缓存字段被解析丢弃，无法用 ledger 判断。
+existingExtensionPointsChecked: 复用 backend 的 `anthropicRequestBody` 翻译、`createAnthropicStream` 的 usage 事件、外层 provider usage 解析与 observability usage ledger、`/api/browser-native/llm` 测试通道；对照产品 `packages/llm/llm-deepseek` 的 cache 字段归一。未改 Agent Loop、Session 事件类型/格式、普通 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: `cache_control` 是否到达 provider、provider 是否只是复用完全相同的 prompt、以及缓存命中是否改变输入成本，只能通过真实端点的逐次 usage 观察；静态文档无法区分“未发送标记”“发送但无 cache creation”“provider 自动复用”三种情况。
+behaviorChange: wire LLM 请求新增可选 `promptCaching`；为 true 时 Anthropic 翻译把 system 变成单个 text block 并在末尾放 `cache_control: {type:'ephemeral'}`，默认仍为字符串。`createAnthropicStream` 解析 `cache_read_input_tokens`/`cache_creation_input_tokens` 并写入 usage chunk（`cacheReadTokens`/`cacheWriteTokens`，total 为四项之和）；ledger 的 `inputTokens` 对 Anthropic 归一为完整 prompt（uncached + read + write），继续与 OpenAI 语义一致。仅 PoC 测试通道使用该开关，Worker 未默认开启。
+consumersUpdated: `README.md` 模型/预算导航新增入口；`dual-provider-compatibility.md` 缺口更新为已实测；`context-cost.md` 边界链接新实测；新增 `prompt-caching.md` 记录方法与结论；本 ledger。
+tests: 确定性段通过：标记请求的 system 为 `[{type:'text',...,cache_control:{type:'ephemeral'}}]`，默认请求为字符串，模拟 usage 解析得 `inputTokens 12 / outputTokens 5 / cacheReadTokens 11 / cacheWriteTokens 7 / total 35`。真实 MiniMax-M3（`ANTHROPIC_*`，流式，3+3 次独特随机前缀）：缓存标记模式 prompt 20,934 / uncached 6,982 / read 13,952 / write 0 / 命中率 66.6%；无标记模式 20,823 / 6,784 / 14,039 / 0 / 67.4%；输入成本情景 8,377.2 vs 8,187.9（+2.3%），`explicitCacheCreationReported:false`、`automaticProviderCaching:true`、`markerChangedCost:false`。结论：不依赖显式 `cache_control`；官方 Anthropic 未实测。
+syncReplaySteps: 上游同步后复跑 `node docs/drafts/browser-native-dsh-poc/tests/prompt-caching.e2e.mjs`（确定性段）与带 `DSH_POC_ENV_FILE` 的真实段；确认 `anthropicRequestBody` 仍只在 `promptCaching:true` 时加一个 breakpoint、usage chunk 仍保留 cache 字段、ledger 的 Anthropic 完整 prompt 归仍未回退，且 README/dual-provider/context-cost 链接有效。
+deleteCondition: 产品 LLM provider 层直接提供 prompt caching 结论，或 Anthropic 协议路径被移除。
+status: implemented
+```
+
 ### BN-P2-139：PoC 到产品迁移映射与架构落差
 
 ```text

@@ -4499,10 +4499,19 @@ function anthropicRequestBody(config, body) {
     }
     appendAnthropicMessage(messages, message.role === 'assistant' ? 'assistant' : 'user', blocks)
   }
+  // A cache breakpoint after the system block covers the preceding tools and
+  // system prompt, so the wire opt-in adds exactly one marker.
+  const systemPayload = system.length === 0
+    ? {}
+    : {
+        system: body.promptCaching === true
+          ? [{ type: 'text', text: system.join('\n\n'), cache_control: { type: 'ephemeral' } }]
+          : system.join('\n\n'),
+      }
   return {
     model: config.model,
     max_tokens: body.maxTokens ?? config.defaultMaxTokens,
-    ...(system.length === 0 ? {} : { system: system.join('\n\n') }),
+    ...systemPayload,
     messages,
     ...(Array.isArray(body.tools) && body.tools.length > 0 ? {
       tools: body.tools.map(tool => ({
@@ -4668,9 +4677,20 @@ function createAnthropicStream(response) {
   let stopReason
   let inputTokens
   let outputTokens
+  let cacheReadTokens
+  let cacheWriteTokens
   const writeUsage = () => {
     if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) return
-    writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } } })
+    // Anthropic reports `input_tokens` as the uncached portion; the DSH usage
+    // event keeps the same split and derives its total from all four counts.
+    const usage = {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0),
+      ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+      ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    }
+    writeStream(response, { kind: 'chunk', chunk: { type: 'usage', usage } })
   }
   const finishStream = () => {
     if (blocks.size === 0) {
@@ -4693,6 +4713,8 @@ function createAnthropicStream(response) {
         const usage = item.message?.usage
         if (Number.isSafeInteger(usage?.input_tokens)) inputTokens = usage.input_tokens
         if (Number.isSafeInteger(usage?.output_tokens)) outputTokens = usage.output_tokens
+        if (Number.isSafeInteger(usage?.cache_read_input_tokens)) cacheReadTokens = usage.cache_read_input_tokens
+        if (Number.isSafeInteger(usage?.cache_creation_input_tokens)) cacheWriteTokens = usage.cache_creation_input_tokens
         return false
       }
       case 'content_block_start': {
@@ -4744,6 +4766,8 @@ function createAnthropicStream(response) {
         if (typeof item.delta?.stop_reason === 'string') stopReason = item.delta.stop_reason
         if (Number.isSafeInteger(item.usage?.input_tokens)) inputTokens = item.usage.input_tokens
         if (Number.isSafeInteger(item.usage?.output_tokens)) outputTokens = item.usage.output_tokens
+        if (Number.isSafeInteger(item.usage?.cache_read_input_tokens)) cacheReadTokens = item.usage.cache_read_input_tokens
+        if (Number.isSafeInteger(item.usage?.cache_creation_input_tokens)) cacheWriteTokens = item.usage.cache_creation_input_tokens
         return false
       }
       case 'message_stop':
@@ -4924,9 +4948,11 @@ async function runLlmAttempt(response, request, config, body, { canRetry }) {
               const input = reported?.prompt_tokens ?? reported?.input_tokens
               const output = reported?.completion_tokens ?? reported?.output_tokens
               const details = reported?.prompt_tokens_details
-              const cached = details?.cached_tokens ?? reported?.prompt_cache_hit_tokens
-              const written = details?.cache_write_tokens ?? reported?.prompt_cache_write_tokens
-              if (Number.isSafeInteger(input)) auditInput = input
+              const cached = details?.cached_tokens ?? reported?.prompt_cache_hit_tokens ?? reported?.cache_read_input_tokens
+              const written = details?.cache_write_tokens ?? reported?.prompt_cache_write_tokens ?? reported?.cache_creation_input_tokens
+              if (Number.isSafeInteger(input)) auditInput = config.kind === 'anthropic'
+                ? input + (Number.isSafeInteger(cached) ? cached : 0) + (Number.isSafeInteger(written) ? written : 0)
+                : input
               if (Number.isSafeInteger(output)) auditOutput = output
               if (Number.isSafeInteger(cached)) auditCacheRead = cached
               if (Number.isSafeInteger(written)) auditCacheWrite = written

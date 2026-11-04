@@ -59,7 +59,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 运行入口与拓扑 | [一键全量回归](poc-gate.md)、[托管模式部署、备份恢复、数据删除与 viewer/editor 共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
-| 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
+| 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |

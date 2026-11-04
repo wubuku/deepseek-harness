@@ -93,7 +93,7 @@ fallback 通过 `DSH_POC_LLM_FALLBACK_PROVIDER`、`DSH_POC_LLM_FALLBACK_MODEL`�
 ## 缺口
 
 - Worker 侧 adapter 把 backend error code 原样作为 `LlmError.code`，而 DSH `llm-retry` 默认可重试集合使用 `RATE_LIMIT`/`SERVER`/`TIMEOUT` 等分类。当前 `UPSTREAM_LLM_RATE_LIMITED` 等前缀码不会自动重试；需要后续在 Worker 映射到正式分类，本轮只报告分类与 `retryAfterMs`。
-- Anthropic `thinking` 的 `signature_delta` 没有可持久化的 DSH block 字段，因此本 PoC 不把历史 reasoning 回传给 provider；多轮 thinking replay、interleaved thinking 和 prompt caching 未验证。
+- Anthropic `thinking` 的 `signature_delta` 没有可持久化的 DSH block 字段，因此本 PoC 不把历史 reasoning 回传给 provider；多轮 thinking replay 与 interleaved thinking 未验证。Prompt caching 已在 MiniMax Anthropic 兼容端点实测，结论是不依赖显式 `cache_control`，见[Provider 侧 Prompt Caching 实测](prompt-caching.md)。
 - 附件、图片和文件 block 没有翻译到 Anthropic `image`/`document` block；当前 wire DTO 只支持文本。
 - `tool_result` 的 `is_error` 在 OpenAI wire 中丢失，翻译层无法区分失败结果；工具失败以文本附加说明。
 - 未覆盖 Anthropic beta headers、`stop_sequences`、`top_p`/`top_k`、`metadata`、限流注入和真实错误状态的自然触发。
