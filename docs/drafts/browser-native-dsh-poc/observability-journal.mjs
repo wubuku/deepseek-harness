@@ -10,7 +10,7 @@
  * response a client already received, so write failures are counted instead of
  * thrown.
  */
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
@@ -108,6 +108,70 @@ function parseLedger(raw, head) {
 }
 
 /**
+ * Read a ledger file, treating absence as empty text.
+ * @param path - Ledger or head path.
+ * @returns File contents or the empty string when the file does not exist.
+ */
+async function readIfExists(path) {
+  try {
+    return await readFile(path, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return ''
+    throw error
+  }
+}
+
+/**
+ * Rewrite both ledgers without matching records and re-anchor their chains.
+ *
+ * Erasure needs the records gone rather than hidden, so surviving envelopes are
+ * re-linked from {@link GENESIS} and both the ledger and its head anchor are
+ * replaced atomically. A subsequent restore verifies the new chain; the previous
+ * chain is intentionally not retained.
+ * @param options - Journal location and record predicate.
+ * @param options.dataDir - Backend data directory that owns the journal.
+ * @param options.shouldRemove - Predicate receiving the record and ledger name.
+ * @returns Removed record counts per ledger.
+ */
+export async function redactObservabilityJournal({ dataDir, shouldRemove }) {
+  if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('observability redaction requires dataDir')
+  if (typeof shouldRemove !== 'function') throw new TypeError('observability redaction requires shouldRemove')
+  const directory = join(dataDir, 'observability')
+  const removed = { accessDenials: 0, usage: 0 }
+  for (const [file, name] of [[ACCESS_DENIALS_FILE, 'accessDenials'], [USAGE_FILE, 'usage']]) {
+    const path = join(directory, file)
+    const raw = await readIfExists(path)
+    const parsed = parseLedger(raw, undefined)
+    const kept = []
+    for (const record of parsed.records) {
+      if (shouldRemove(record, name)) removed[name] += 1
+      else kept.push(record)
+    }
+    if (removed[name] === 0) continue
+    let prev = GENESIS
+    const rebuilt = []
+    for (const [index, record] of kept.entries()) {
+      const seq = index + 1
+      const hash = envelopeHash(prev, seq, record)
+      rebuilt.push(JSON.stringify({ v: LEDGER_VERSION, seq, prev, hash, record }))
+      prev = hash
+    }
+    const temporary = `${path}.${randomUUID()}.tmp`
+    await writeFile(temporary, rebuilt.length === 0 ? '' : `${rebuilt.join('\n')}\n`, 'utf8')
+    await rename(temporary, path)
+    const head = join(directory, `${file}.head.json`)
+    if (kept.length === 0) {
+      await rm(head, { force: true })
+    } else {
+      const headTemporary = `${head}.${randomUUID()}.tmp`
+      await writeFile(headTemporary, `${JSON.stringify({ version: LEDGER_VERSION, seq: kept.length, hash: prev })}\n`, 'utf8')
+      await rename(headTemporary, head)
+    }
+  }
+  return removed
+}
+
+/**
  * Create the observability journal for one backend data directory.
  * @param options - Journal location and clock.
  * @param options.dataDir - Backend data directory that owns the journal.
@@ -178,15 +242,6 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
       process.stderr.write(`browser-native observability: ${file} write failed: ${String(error)}\n`)
     })
     return chain
-  }
-
-  const readIfExists = async path => {
-    try {
-      return await readFile(path, 'utf8')
-    } catch (error) {
-      if (error?.code === 'ENOENT') return ''
-      throw error
-    }
   }
 
   const readHead = async file => {

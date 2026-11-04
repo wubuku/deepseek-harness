@@ -200,8 +200,30 @@ node docs/drafts/browser-native-dsh-poc/hosted/import-data.mjs --bundle /srv/bac
 
 实测结果（2026-11-04，Chrome 156，macOS）：脚本输出 `{"result":"passed","files":16,...}`，journal `verified: true`，usage 汇总 120/30/150 token 与 `0.00036 USD`，`continuedSeq: 2`。
 
+## 数据删除与保留
+
+删除在停止状态执行：运行中的 backend 持有内存状态与 lock，在线重写数据目录会与它竞争。
+
+```sh
+node docs/drafts/browser-native-dsh-poc/hosted/erase-data.mjs --data-dir /srv/browser-native-dsh-data --session <sessionId>
+node docs/drafts/browser-native-dsh-poc/hosted/erase-data.mjs --data-dir /srv/browser-native-dsh-data --principal <principalId>
+```
+
+退出码：0 已删除且残留扫描为空，1 删除失败或仍有残留，2 用法错误，3 backend 仍在运行，4 目标不存在。
+
+删除 Session 会移除 Session 日志、durable running-turn 记录、cross-store ledger 记录、按 `sessionId` 归属的 usage 记录，以及不再被任何剩余 Session 引用的附件对象；Workspace 与其它 Session 保留。删除 principal 额外移除 identity 记录、该 Workspace 的 manifest、layout、上传暂存、附件目录，并清理不再被剩余 Workspace 引用的 blob、descriptor 与 chunk 对象，以及按 principal 归属的 usage 与拒绝审计。
+
+审计链在删除后从 `GENESIS` 重建，并原子替换 ledger 与 head：幸存记录仍可验证，但删除前的链连续性不再保留。这是“审计记录必须真正删除”的直接后果。无法归因到 Session 或 principal 的拒绝审计（例如缺少身份时的 401）没有标识符，因此保留；它们不包含被删数据。
+
+`tests/data-erasure.e2e.mjs` 用两个独立 principal 填充数据（Workspace 文件与 blob、附件、两事件 Session、一条拒绝审计、一条 usage），然后：
+
+- 删除其中一个 Session：其日志、附件、usage 与拒绝审计消失，残留扫描找不到 Session id；journal 重建后 `verified: true`；重启后该 Session 的 `session/export` 返回 404；另一个 principal 的 Session 导出与删除前逐事件一致。
+- 删除其 principal：identity、Workspace manifest 与 blob 对象、Session 日志、usage 与拒绝审计全部消失，残留扫描找不到 principal、Workspace 与文件哈希；重启后旧 cookie 在 `x-browser-native-identity-mode: existing` 下返回 401，Session 导出不可恢复；保留 principal 的 identity、Workspace 与 Session 仍可正常读取。
+
+保留边界：删除只作用于当前 dataDir。已经导出的旧 bundle 仍包含删除前的数据，需要单独销毁；删除命令不撤销[备份与恢复](#备份与恢复)生成的备份。
+
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响。
 
-未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。
+未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。
