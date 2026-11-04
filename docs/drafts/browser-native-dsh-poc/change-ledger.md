@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-111：Workspace entry 上限提高到 10 000
+
+```text
+changeId: BN-P2-111
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs; docs/drafts/browser-native-dsh-poc/performance-baseline.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: BN-P2-110 的基线确认 2 000 entry 上限使“数千文件”只能贴近容量边界；需要给出提高上限、分区 Workspace 或写入产品约束的明确判定。
+existingExtensionPointsChecked: 复用既有 `MAX_ENTRIES` 校验点（commit、pull manifest、changes、条目写入）；不改 Session 格式、Worker 同步算法、blob 布局或 VS Code 风格 API。
+whyDraftOnlyWasInsufficient: 仅记录“接近上限”无法区分容量边界是产品约束还是实现常量；无法判断同步在 10 000 entry 下是否仍然可用。
+behaviorChange: Workspace 接受最多 10 000 个条目（含目录项），超过仍返回 413 `WORKSPACE_TOO_LARGE`；单常量提升，无协议或持久化格式变化。
+consumersUpdated: `performance-baseline.md` 的“大 Workspace 同步”与“限制”节改为 9 990 文件基线、10 000 上限和“超过 10 000 是产品约束”的结论；E2E 默认文件数提升。
+decision: 提高上限到 10 000，不做分区 Workspace。提高上限是一个常量的可控改动，9 990 文件冷同步约 10 s、1 002 文件/s，仍在秒级；分区 Workspace 需要改动 client Workspace 选择、manifest 分区、principal 与 durable 存储，成本远高于当前收益，留作超过 10 000 entry 时的后续工作。
+test: `node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs` 通过：9 990 文件、268 620 字节，冷拉取 9 971 ms（1 002 文件/s、26 940 字节/s），1 次 manifest、9 990 次 blob 下载、0 次回写 commit，列表返回 9 990 项。
+syncReplaySteps: 上游同步后重跑该 E2E；若再次调整 `MAX_ENTRIES`，同步更新基线文件数与结论。
+deleteCondition: 分区 Workspace 或增量 manifest 实现后，用更大规模替换本基线并把 10 000 上限移出产品约束。
+status: implemented
+```
+
 ### BN-P2-110：接近上限的大 Workspace 同步基线
 
 ```text

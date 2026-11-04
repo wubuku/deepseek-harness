@@ -130,28 +130,28 @@ Chrome 156.0.8078.79 输出（节选）：
 
 ## 大 Workspace 同步
 
-`tests/large-workspace-sync.e2e.mjs` 先用真实 Workspace API 预置 1 990 个文件（每文件约 26 字节），再重载 preview，计时到 Worker `synced` 且 revision 与 commit 收据一致。backend 指标差值确认 1 次 manifest 拉取、1 990 次 blob 下载，且同步过程中没有回写 commit。
+`tests/large-workspace-sync.e2e.mjs` 先用真实 Workspace API 预置 9 990 个文件（每文件约 27 字节），再重载 preview，计时到 Worker `synced` 且 revision 与 commit 收据一致。backend 指标差值确认 1 次 manifest 拉取、9 990 次 blob 下载，且同步过程中没有回写 commit。
 
 ```sh
 node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
 # 调整文件数（受 Workspace 上限约束）：
-DSH_POC_WORKSPACE_FILES=1490 node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
+DSH_POC_WORKSPACE_FILES=4990 node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
 ```
 
 Chrome 156.0.8078.79 输出：
 
 ```json
-{"result":"passed","files":1990,"totalBytes":52620,
- "seed":{"ms":43561,"filesPerSecond":46},
- "sync":{"ms":6022,"filesPerSecond":330,"bytesPerSecond":8738},
- "requests":{"total":1992,"manifests":1,"blobDownloads":1990,"commits":0}}
+{"result":"passed","files":9990,"totalBytes":268620,
+ "seed":{"ms":337540,"filesPerSecond":30},
+ "sync":{"ms":9971,"filesPerSecond":1002,"bytesPerSecond":26940},
+ "requests":{"total":9992,"manifests":1,"blobDownloads":9990,"commits":0}}
 ```
 
-- 冷拉取 1 990 个文件约 6.0 s，约 330 文件/s、3 ms/文件；比 300 文件样本的 60 文件/s 明显更快，说明 Worker 的 blob 拉取是并发的，固定启动开销在小样本中占比更高。
-- `seed` 的 43.6 s 是测试夹具逐 blob `PUT`（16 并发）的成本，不代表产品路径；真实一次工具 turn 通常把多个变更放进一次 commit，预置耗时不参与同步结论。
-- Workspace 有 2 000 entry 硬上限（含目录项）：2 000 文件加 `bench` 目录会返回 413 `WORKSPACE_TOO_LARGE`，所以本基线取 1 990 文件。“数千文件”目前等于接近上限，不是可线性扩展的容量。
+- 冷拉取 9 990 个文件约 10.0 s，约 1 002 文件/s、1 ms/文件；比 1 990 文件样本的 330 文件/s 更快，说明 Worker 的 blob 拉取并发扩展，固定启动开销在大样本中占比更低。
+- `seed` 的 337.5 s 是测试夹具逐 blob `PUT`（64 并发）的成本，不代表产品路径；真实一次工具 turn 通常把多个变更放进一次 commit，预置耗时不参与同步结论。
+- Workspace entry 上限为 10 000（含目录项）。2 000 entry 时同步已证明可用，但“数千文件”等于贴近容量边界，无法容纳更大代码库；本轮把上限提高到 10 000，并以 9 990 文件作为基线。分区 Workspace、增量 manifest 与更大容量属于后续工作，超过 10 000 entry 是明确的产品约束（返回 413 `WORKSPACE_TOO_LARGE`）。
 - 未测大文件（MiB 级）、附件、并发标签页、跨重启后的增量同步、真实网络与移动设备；数字来自本机回环与 scripted backend。
 
 ## 限制
 
-只在单台 macOS 开发机、headless Chrome、`--enable-precise-memory-info` 下采样，未覆盖 Windows/Linux、Safari/WebKit、Firefox、有头模式、低内存设备、真实网络与真实模型延迟。只测 1 与 4 个 Session，未测 8 个以上、长会话增长、附件与工具结果堆积后的稳态内存，也未长时间运行观察泄漏。计时以 Node `Date.now()` 为单位，含 Playwright 自身开销；堆只统计 page 与 Dedicated Worker 的 JavaScript 堆，不含 OS RSS、GPU 进程、共享内存或 OPFS 占用。Workspace 同步只测接近 2 000 entry 上限的一次冷拉取，未测增量、并发标签页与更大容量；2 000 entry 上限本身是待决议的产品约束。
+只在单台 macOS 开发机、headless Chrome、`--enable-precise-memory-info` 下采样，未覆盖 Windows/Linux、Safari/WebKit、Firefox、有头模式、低内存设备、真实网络与真实模型延迟。只测 1 与 4 个 Session，未测 8 个以上、长会话增长、附件与工具结果堆积后的稳态内存，也未长时间运行观察泄漏。计时以 Node `Date.now()` 为单位，含 Playwright 自身开销；堆只统计 page 与 Dedicated Worker 的 JavaScript 堆，不含 OS RSS、GPU 进程、共享内存或 OPFS 占用。Workspace 同步只测接近 10 000 entry 上限的一次冷拉取，未测增量、并发标签页与更大容量；超过 10 000 entry 是当前产品约束，不是待决议项。

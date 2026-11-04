@@ -7,7 +7,7 @@ import { ChunkObjectWorkspaceBlobStore } from './chunk-object-store.mjs'
 const COOKIE_NAME = 'dsh-browser-native-principal'
 const SESSION_COOKIE_NAME = 'dsh-browser-native-session-principal'
 const COOKIE_MAX_AGE_SECONDS = 31_536_000
-const MAX_ENTRIES = 2_000
+const MAX_ENTRIES = 10_000
 const MAX_PATH_LENGTH = 512
 const DEFAULT_WRITER_LEASE_MS = 30_000
 export const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024

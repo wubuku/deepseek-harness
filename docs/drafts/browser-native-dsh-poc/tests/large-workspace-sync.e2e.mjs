@@ -17,7 +17,7 @@ import { openPreview, waitForPreview } from './runtime-test-support.mjs'
 const require = createRequire(import.meta.url)
 const playwright = await import(process.env.DSH_POC_PLAYWRIGHT_MODULE ?? require.resolve('playwright'))
 const { chromium } = playwright.default ?? playwright
-const fileCount = Number(process.env.DSH_POC_WORKSPACE_FILES ?? 1_990)
+const fileCount = Number(process.env.DSH_POC_WORKSPACE_FILES ?? 9_990)
 const dataDir = resolve(process.env.DSH_POC_DATA_DIR ?? await mkdtemp(join(tmpdir(), 'dsh-large-sync-')))
 const previewUrlPath = '/preview.html?browser-native=1&browser-native-test=cross-store&preview-fixture=none'
 
@@ -84,7 +84,7 @@ try {
       assert.equal(response.status, 200, `blob ${file.path}: ${await response.text()}`)
     }
   }
-  await Promise.all(Array.from({ length: 16 }, upload))
+  await Promise.all(Array.from({ length: 64 }, upload))
   const commit = await fetch(`${origin}/api/browser-native/workspace/commit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie },
