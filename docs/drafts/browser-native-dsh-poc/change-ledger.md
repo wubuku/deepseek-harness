@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-117：托管模式单命令启动与数据目录升级核对
+
+```text
+changeId: BN-P2-117
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/hosted/check-data.mjs; docs/drafts/browser-native-dsh-poc/tests/hosted-deployment-smoke.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 托管启动要手工拼 CLI 参数、自行构建 preview、自行判断数据目录是否兼容；干净环境无法按文档一条命令启动，也没有升级前的只读取证。
+existingExtensionPointsChecked: 复用 `createBrowserNativeV2Server` 已有选项、本地 token 门禁与 `/auth/handshake`、`hostedAuth`、durable preview 参数、`WorkspaceStore` 的 chunk-object 要求，以及 Session/Workspace/identity/ledger 现有版本常量；未改 backend 路由、Session 格式或 Workspace 写入协议。
+whyDraftOnlyWasInsufficient: 只有真实启动进程并打开页面，才能验证 handshake cookie、token 文件权限、durable 首次同步与 SIGTERM 锁清理；静态阅读模块不能证明这些运行时事实。
+behaviorChange: 新增 `hosted/start-hosted.mjs`（环境变量配置、缺产物时构建 preview、默认开启 `browser-native-durable=1`、本地 token 始终开启，hosted bearer 可选）与只读 `hosted/check-data.mjs`（报告 Session v4、Workspace/identity/ledger v1、chunk-object 布局与 backend lock）；新增部署冒烟与 `hosted-deployment.md` 配置/升级说明。
+consumersUpdated: 无目录外消费者；README 导航增加托管部署入口。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/hosted-deployment-smoke.e2e.mjs`（Chrome）通过：全新临时数据目录启动、无 token 健康检查 401、带 token 200、handshake 302 且设置 cookie、existing identity 无 cookie 401、token 文件 0600、preview Workspace 达到 `synced`、SIGTERM 退出 0 且锁删除、`check-data --json` 退出 0 且 `compatible: true`。另用 v3 Session 的合成目录验证 `check-data` 退出 1。
+syncReplaySteps: 上游同步后重跑冒烟与 `check-data`，核对 `createBrowserNativeV2Server` 选项名与数据目录路径（`sessions/`、`workspace-v2/`、`cross-store-operation-ledger.json`）。
+deleteCondition: 正式产品提供部署入口与升级工具后删除本目录的启动/核对脚本。
+status: implemented
+```
+
 ### BN-P2-116：把新增 UI 状态统一到 locale 字典
 
 ```text
