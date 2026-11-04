@@ -60,7 +60,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[Provider 侧 Prompt Caching 实测](prompt-caching.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作、editor 共编与执行权移交](#实时协作editor-共编与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入)、[分支与 turn 回滚](#会话分支与-turn-回滚的数据模型) |
 | 数据治理与保留 | [用户数据导出与保留策略](#用户数据导出与保留策略)、[租户成本报表](tenant-cost-report.md) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
@@ -1661,6 +1661,12 @@ boot payload 预取同样无效：静态资源统一 `cache-control: no-store`�
 [导出/导入](session-export-import.md)定义可移植包 `dsh-session-bundle` v1：携带 `sessionFormatVersion: 4`、Session 头与事件、`durableThroughSeq`，以及被事件引用的 content-addressed 附件（base64 + sha256 + 字节数）。导入先做完整纯校验再落盘：版本不匹配、事件序号断档、事件无类型、附件缺失、摘要或字节数不符、id 冲突全部拒绝，并且被拒 id 不出现在 `session/list`、源 Session 不被修改。
 
 8 个坏数据用例分别得到 `UNSUPPORTED_BUNDLE_VERSION`(409)、`SESSION_FORMAT_UNSUPPORTED`(422)、`INVALID_BUNDLE`(400)、`ATTACHMENT_MISSING`/`ATTACHMENT_DIGEST_MISMATCH`/`ATTACHMENT_SIZE_MISMATCH`/`SESSION_ALREADY_EXISTS`(409)。合法包以新 id 导入后事件与附件读回一致，附件对象幂等复用。包体受 8 MB 请求上限约束，只适合小附件。
+
+## 会话分支与 turn 回滚的数据模型
+
+[分支与回滚](session-branch-rollback.md)把 fork 语义落到 PoC 存储：`session/branch` 要求边界是已完成的 `turn/end`，子 Session 头带 `parentSession`/`isSeeded`，`inheritedEventCount = boundarySeq + 1`，继承前缀逐项不变，随后追加 child-owned `session/end-seed`；`branch` 元数据记录 `intent`、边界 turn 与分叉时的 Workspace revision。源 Session 从不被改写，回滚是截断到目标 turn 的新世代，不是原地删除。
+
+验证中源 Session 有 7 个事件：从 turn 1 分叉得到 5 个事件（前缀 0..3 + seq 4 的 `end-seed`）、`nextSeq 5`；回滚到 turn 2 得到 8 个事件；源事件、头与 `nextSeq 7` 全部不变，Workspace revision 不变。分叉请求按 `requestId` 重放返回同一结果；子 Session 继续追加后序号 `0..8` 连续；导出携带 1 个 `sha256` 附件且字节一致。非法 `atSeq`/`atTurn` 返回 400 `SESSION_BRANCH_BOUNDARY_INVALID`，共享 viewer 返回 403 `SESSION_READ_ONLY`。
 
 ## 刷新与 Worker 崩溃时的在途 turn
 

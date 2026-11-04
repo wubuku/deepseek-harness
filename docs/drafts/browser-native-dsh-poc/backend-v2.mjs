@@ -1600,6 +1600,7 @@ function recordOf(session) {
     durableThroughSeq: session.events.length - 1,
     ownerEpoch: session.ownerEpoch,
     handoffs: Object.fromEntries(session.handoffs),
+    ...(session.branch === undefined ? {} : { branch: session.branch }),
   }
 }
 
@@ -1646,6 +1647,7 @@ class FormalSessionStore {
         principalId,
         header: clone(raw.header),
         inheritedEventCount: raw.inheritedEventCount ?? 0,
+        ...(raw.branch === undefined ? {} : { branch: clone(raw.branch) }),
         events: clone(raw.events),
         durableThroughSeq: raw.durableThroughSeq ?? raw.events.length - 1,
         ownerToken: undefined,
@@ -1777,6 +1779,54 @@ class FormalSessionStore {
       lastActivityAt: this.now(),
     }
     this.sessions.set(id, session)
+    return session
+  }
+
+  /**
+   * Create a child Session from an inclusive source prefix that ends a turn.
+   *
+   * The child inherits the source events unchanged, appends the child-owned
+   * end-seed marker, and records the workspace revision observed at the cut.
+   * The source Session is never mutated; append-only lineage stays readable.
+   * @param source - Session whose prefix is inherited.
+   * @param newId - Id for the child Session.
+   * @param boundarySeq - Inclusive source event seq; must be a `turn/end`.
+   * @param branchMeta - Intent, boundary turn, and workspace revision at the cut.
+   * @returns The persisted child Session.
+   */
+  async branch(source, newId, boundarySeq, branchMeta) {
+    const boundary = source.events[boundarySeq]
+    if (boundary === undefined) {
+      throw new BackendError('SESSION_BRANCH_BOUNDARY_INVALID', 'branch boundary is outside the Session log', 400, undefined, {
+        sessionId: source.id, boundarySeq, nextSeq: source.events.length,
+      })
+    }
+    if (boundary.type !== 'turn/end') {
+      throw new BackendError('SESSION_BRANCH_BOUNDARY_INVALID', 'branch boundary must be a completed turn', 400, undefined, {
+        sessionId: source.id, boundarySeq, eventType: boundary.type,
+      })
+    }
+    const inheritedEventCount = boundarySeq + 1
+    const header = {
+      ...clone(source.header),
+      id: newId,
+      createdAt: this.now(),
+      parentSession: source.id,
+      isSeeded: true,
+    }
+    const session = this.create(newId, header, inheritedEventCount, source.principalId)
+    session.events = clone(source.events.slice(0, inheritedEventCount))
+    session.events.push({
+      type: 'session/end-seed', seq: inheritedEventCount, time: boundary.time, data: { inherited: true },
+    })
+    session.branch = {
+      intent: branchMeta.intent,
+      parentSessionId: source.id,
+      boundarySeq,
+      boundaryTurn: boundary.data.turn,
+      workspaceRevision: branchMeta.workspaceRevision,
+    }
+    await this.flush(session)
     return session
   }
 
@@ -2120,6 +2170,7 @@ function sessionResponse(session, extra = {}) {
     inheritedEventCount: session.inheritedEventCount,
     nextSeq: session.events.length,
     revision: revisionOf(session),
+    ...(session.branch === undefined ? {} : { branch: clone(session.branch) }),
     ...extra,
   }
 }
@@ -2134,7 +2185,7 @@ function collaborationPrincipalDigest(principalId) {
   return createHash('sha256').update(principalId).digest('hex').slice(0, 16)
 }
 
-async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts, collaborationAudit) {
+async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts, collaborationAudit, branchReceipts, workspaceRevisionOf) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -2179,6 +2230,57 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
         admission?.releaseMount(id)
         throw error
       }
+    }
+    if (operation === 'branch') {
+      let source
+      try {
+        source = store.getForPrincipal(id, principalId)
+      } catch (error) {
+        const role = shares.roleOf(id, principalId)
+        if (role === undefined) throw error
+        throw new BackendError(
+          role === 'editor' ? 'SESSION_OWNER_REQUIRED' : 'SESSION_READ_ONLY',
+          role === 'editor' ? 'this operation requires the Session owner lease' : 'a shared Session is read-only for its viewer',
+          403, undefined, { sessionId: id },
+        )
+      }
+      store.assertOwner(source, body.ownerToken, body.ownerEpoch)
+      const newId = assertSessionId(body.newSessionId)
+      if (newId === id) throw new BackendError('INVALID_REQUEST', 'branch target must differ from the source Session')
+      const intent = body.intent ?? 'branch'
+      if (intent !== 'branch' && intent !== 'rollback') throw new BackendError('INVALID_REQUEST', 'intent must be branch or rollback')
+      let boundarySeq
+      if (body.atSeq !== undefined) {
+        boundarySeq = boundedInteger(body.atSeq, 'atSeq', Math.max(0, source.events.length - 1))
+      }
+      if (body.atTurn !== undefined) {
+        const atTurn = boundedInteger(body.atTurn, 'atTurn', 1_000_000)
+        const boundary = source.events.findLastIndex(event => event.type === 'turn/end' && event.data.turn === atTurn)
+        if (boundary < 0) {
+          throw new BackendError('SESSION_BRANCH_BOUNDARY_INVALID', 'Session has no completed turn with that number', 400, undefined, {
+            sessionId: id, atTurn, lastTurn: source.events.findLast(event => event.type === 'turn/end')?.data.turn,
+          })
+        }
+        if (boundarySeq !== undefined && boundarySeq !== boundary) {
+          throw new BackendError('SESSION_BRANCH_BOUNDARY_INVALID', 'atSeq and atTurn select different boundaries', 400)
+        }
+        boundarySeq = boundary
+      }
+      if (boundarySeq === undefined) throw new BackendError('INVALID_REQUEST', 'atSeq or atTurn is required')
+      if (source.events[boundarySeq]?.type !== 'turn/end' || source.events[boundarySeq].seq !== boundarySeq) {
+        throw new BackendError('SESSION_BRANCH_BOUNDARY_INVALID', 'branch boundary must be a completed turn', 400, undefined, {
+          sessionId: id, boundarySeq, eventType: source.events[boundarySeq]?.type,
+        })
+      }
+      const receiptKey = `${principalId}\u0000branch\u0000${body.requestId}`
+      const replay = branchReceipts.get(receiptKey)
+      if (replay !== undefined) return clone(replay)
+      const workspaceRevision = workspaceRevisionOf(principalId)
+      const child = await store.branch(source, newId, boundarySeq, { intent, workspaceRevision })
+      const result = sessionResponse(child)
+      branchReceipts.set(receiptKey, clone(result))
+      while (branchReceipts.size > MAX_SESSION_APPEND_RECEIPTS) branchReceipts.delete(branchReceipts.keys().next().value)
+      return result
     }
     let session
     let shared
@@ -5805,6 +5907,7 @@ export async function createBrowserNativeV2Server(options) {
       throw new BackendError('AUTH_REQUIRED', 'local process authentication is required', 401)
     }
   }
+  const branchReceipts = new Map()
   const handleRequest = async (role, request, response) => {
     let url
     activeRequests += 1
@@ -6732,7 +6835,14 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission, sessionAppendReceipts, recordCollaboration)
+        const result = await sessionOperation(
+          store, operation, body, principalId, sessionShares, options.testHooks, admission,
+          sessionAppendReceipts, recordCollaboration, branchReceipts,
+          ownerPrincipalId => workspaces.revision(
+            { headers: { cookie: `dsh-browser-native-principal=${ownerPrincipalId}` } },
+            workspaces.workspaceIdForPrincipal(ownerPrincipalId),
+          ).revision,
+        )
         if (operation === 'append' && result.replayed !== true) {
           sessionEvents.publish(result.sessionId, body.events)
           await recordCollaboration({

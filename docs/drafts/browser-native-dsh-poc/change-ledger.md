@@ -3104,3 +3104,20 @@ syncReplaySteps: 上游同步后核对 admission 语义、share/role 判定、�
 deleteCondition: 正式多租户准入或容量验证覆盖等效的 principal × Session 并发、审批、协作与挂载上限；或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-148：Session 分支与 turn 回滚的持久化模型、幂等与一致性
+
+```text
+changeId: BN-P2-148
+upstreamBaseline: research branch; 2026-11-05; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/session-branch-rollback.test.mjs; docs/drafts/browser-native-dsh-poc/session-branch-rollback.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: PoC 没有从某个 turn 分叉新 Session 或回滚到指定 turn 的持久化模型；事件序号、附件引用、Workspace revision 与源 Session 不被修改都没有可验证的定义。
+existingExtensionPointsChecked: 复用正式 Session fork 语义（`parentSession`、`isSeeded`、`inheritedEventCount`、child-owned `session/end-seed`）、PoC 的 owner lease、principal 共享角色、content-addressed Workspace 附件、Workspace revision 查询、`session/export`；没有修改正式 `packages/` Session 格式或 Agent Loop。
+whyDraftOnlyWasInsufficient: 仅描述 fork 不能证明子日志序号连续、附件仍可解析、Workspace revision 不被写、源 Session 逐项不变，也不能证明重放与越权路径的行为。
+behaviorChange: 新增 `session/branch` 路由与 `FormalSessionStore.branch`。边界必须是已完成的 `turn/end`；子 Session 继承源前缀（同一 seq）、追加 `session/end-seed`，头写 `parentSession`/`isSeeded`，记录 `inheritedEventCount`；持久化 `branch = { intent, parentSessionId, boundarySeq, boundaryTurn, workspaceRevision }` 并通过 `read`/`sessionResponse` 返回。`intent` 支持 `branch` 与 `rollback`；回滚生成截断到目标 turn 的新世代，不原地删除源事件。严格 owner 才能分叉，共享 viewer 得到 403 `SESSION_READ_ONLY`。相同 `requestId` 重放返回同一响应，不重复创建。
+consumersUpdated: PoC backend、branch/rollback 数据模型测试、PoC README 生命周期表与章节、本 ledger。`sessionResponse` 与持久化记录新增可选 `branch` 字段；对无分支 Session 的输出不变。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/session-branch-rollback.test.mjs` 通过：源 7 事件，turn 1 分叉 `inheritedEventCount 4`/`nextSeq 5`/前缀逐项相等/`end-seed` 在 seq 4；turn 2 回滚 `inheritedEventCount 7`/`nextSeq 8`；源事件、头、`nextSeq 7` 与 Workspace revision 全不变；重放同 `requestId` 得到相同响应；子 Session 继续追加后 seq `0..8` 连续；导出 1 个 `sha256` 附件且字节一致；非法 `atSeq`/`atTurn` 返回 400 `SESSION_BRANCH_BOUNDARY_INVALID`，viewer 返回 403。相关回归：`attachment-backend.test.mjs` 5/5，`session-export-import.e2e.mjs` passed。
+syncReplaySteps: 上游同步后核对 Session fork 的 `inheritCount`/`end-seed` 语义与 `SessionHeader` 字段名；若正式分支 API 出现，改为复用其实现并保留本测试的事件序号、附件、Workspace revision 与源不变断言。复跑 branch 测试与 export/import、attachment 回归。
+deleteCondition: 正式 DSH 提供被测 UI 可用的分支/回滚并覆盖等效一致性；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
