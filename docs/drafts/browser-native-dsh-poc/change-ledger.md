@@ -12,6 +12,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-112：Workspace 冷同步分页与 blob 批量
+
+```text
+changeId: BN-P2-112
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/browser-native-workspace-store.ts; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs; docs/drafts/browser-native-dsh-poc/performance-baseline.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 9 990 文件冷同步要 9 971 ms，并产生 9 990 次单 blob 请求；固定页面启动成本之外，网络请求数与 manifest 整包响应是主要可控成本。
+existingExtensionPointsChecked: 复用既有 Workspace manifest、blob 授权与 SHA-256 校验、durable store 写入锁、commit/CAS/lease 路径；未改变 Session 事件、上传协议或文件工具语义。
+whyDraftOnlyWasInsufficient: 单个整包 manifest 与逐 blob 下载在 10 000 规模下不可观测分页行为，也无法验证批量响应仍按 manifest 引用授权和逐块校验。
+behaviorChange: `GET /workspace/manifest` 新增可选 `offset`/`limit`（最多 1 000 条，响应带 `nextOffset`），未带参数时保持整包；新增 `POST /workspace/blob-batch`，一次返回最多 256 个、合计最多 8 MiB 的已引用 blob（base64），Worker 冷同步按批取回、逐批 SHA-256 校验后写入 VFS 或 durable cache；超过 256 KiB 的单文件仍走流式下载。
+consumersUpdated: Worker `loadManifest` 逐页合并并校验跨页 revision 与重复路径；`BrowserDurableWorkspaceStore.cacheBlobs` 在同一 storage-writer 会话内最多 16 并发写入；内存 store 提供同语义实现。`performance-baseline.md` 更新前后对比。
+decision: 先做分页与批量，不做服务端合并流。批量 JSON 响应可用现成 HTTP 与逐块 hash 校验，8 MiB/256 条上限限制内存；tar/二进制合并流需要新的客户端解析与错误定位，收益在当前规模不显著。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 通过，新增分页、批量顺序/content、未引用 blob 404、重复 hash 400 用例；`node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs` 9 990 文件通过：冷拉取 5 441 ms（批量前 9 971 ms），10 次 manifest 分页、40 次 blob 批量、0 次单 blob 下载、0 次回写 commit。
+syncReplaySteps: 上游同步后重跑上述两个命令；若调整分页或批量上限，同步更新 `performance-baseline.md` 对比数字。
+deleteCondition: 引入服务端合并流或推送式同步后，重新评估批量端点与分页参数。
+status: implemented
+```
+
 ### BN-P2-111：Workspace entry 上限提高到 10 000
 
 ```text

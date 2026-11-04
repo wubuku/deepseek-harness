@@ -57,6 +57,8 @@ export interface DurableWorkspaceStore {
   clear(workspaceId: string): Promise<void>
   /** Cache a verified immutable blob without changing the workspace snapshot. */
   cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void>
+  /** Cache several already-verified blobs under one storage-writer session. */
+  cacheBlobs(workspaceId: string, blobs: readonly { hash: string; content: Uint8Array }[]): Promise<void>
   /** Cache bytes from a synchronous range source without assembling the file in JS memory. */
   cacheBlobFromRanges(
     workspaceId: string,
@@ -246,6 +248,10 @@ export class MemoryDurableWorkspaceStore implements DurableWorkspaceStore {
   async cacheBlob(workspaceId: string, hash: string, content: Uint8Array): Promise<void> {
     if (await sha256(content) !== hash) throw new Error(`browser-native workspace: memory blob hash mismatch (${hash})`)
     this.blobs.set(`${workspaceId}:${hash}`, content.slice())
+  }
+
+  async cacheBlobs(workspaceId: string, blobs: readonly { hash: string; content: Uint8Array }[]): Promise<void> {
+    for (const blob of blobs) await this.cacheBlob(workspaceId, blob.hash, blob.content)
   }
 
   async cacheBlobFromRanges(
@@ -1040,6 +1046,16 @@ export class BrowserDurableWorkspaceStore implements DurableWorkspaceStore {
     return this.withStorageWriter(workspaceId, async () => {
       await this.recoverDownloads(workspaceId)
       await this.cacheVerifiedBytes(workspaceId, hash, content)
+    })
+  }
+
+  async cacheBlobs(workspaceId: string, blobs: readonly { hash: string; content: Uint8Array }[]): Promise<void> {
+    return this.withStorageWriter(workspaceId, async () => {
+      await this.recoverDownloads(workspaceId)
+      for (let offset = 0; offset < blobs.length; offset += 16) {
+        await Promise.all(blobs.slice(offset, offset + 16)
+          .map(async blob => await this.cacheVerifiedBytes(workspaceId, blob.hash, blob.content)))
+      }
     })
   }
 

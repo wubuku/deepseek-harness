@@ -8,6 +8,9 @@ const COOKIE_NAME = 'dsh-browser-native-principal'
 const SESSION_COOKIE_NAME = 'dsh-browser-native-session-principal'
 const COOKIE_MAX_AGE_SECONDS = 31_536_000
 const MAX_ENTRIES = 10_000
+const MAX_MANIFEST_PAGE_ENTRIES = 1_000
+const MAX_BLOB_BATCH_ENTRIES = 256
+const MAX_BLOB_BATCH_BYTES = 8 * 1024 * 1024
 const MAX_PATH_LENGTH = 512
 const DEFAULT_WRITER_LEASE_MS = 30_000
 export const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024
@@ -671,6 +674,35 @@ export class WorkspaceStore {
   manifest(request, workspaceId) {
     const principalId = this.principalFromRequest(request)
     return this.snapshot(this.requireWorkspace(principalId, workspaceId))
+  }
+
+  /**
+   * Return one stable manifest page ordered by path.
+   * @param {object} request - Request carrying the browser principal cookie.
+   * @param {string} workspaceId - Workspace owned by that principal.
+   * @param {number} offset - Zero-based entry offset.
+   * @param {number} limit - Page size, at most `MAX_MANIFEST_PAGE_ENTRIES`.
+   * @returns {object} Manifest revision, digest, page entries, and `nextOffset` while more remain.
+   * @throws {WorkspaceError} INVALID_REQUEST for a non-integer offset or out-of-range limit.
+   */
+  manifestPage(request, workspaceId, offset, limit) {
+    if (!Number.isSafeInteger(offset) || offset < 0
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_MANIFEST_PAGE_ENTRIES) {
+      throw new WorkspaceError('INVALID_REQUEST', `manifest offset and limit must be integers within 1..${MAX_MANIFEST_PAGE_ENTRIES}`)
+    }
+    const principalId = this.principalFromRequest(request)
+    const workspace = this.requireWorkspace(principalId, workspaceId)
+    const entries = stableManifest(workspace.entries)
+    if (offset > entries.length) throw new WorkspaceError('INVALID_REQUEST', 'manifest offset exceeds the entry count')
+    const page = entries.slice(offset, offset + limit)
+    const nextOffset = offset + page.length < entries.length ? offset + page.length : undefined
+    return {
+      workspaceId: workspace.id,
+      revision: workspace.revision,
+      digest: manifestDigest(workspace.entries),
+      entries: page,
+      ...(nextOffset === undefined ? {} : { nextOffset }),
+    }
   }
 
   revision(request, workspaceId) {
@@ -1427,6 +1459,42 @@ export class WorkspaceStore {
       const bytes = await this.blobStore.get(hash)
       if (hashBytes(bytes) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
       return bytes
+    })
+  }
+
+  /**
+   * Return several referenced blobs in one response for cold Workspace sync.
+   * @param {object} request - Request carrying the browser principal cookie.
+   * @param {string} workspaceId - Workspace owned by that principal.
+   * @param {readonly string[]} hashes - Unique SHA-256 hashes, at most `MAX_BLOB_BATCH_ENTRIES`.
+   * @returns {Promise<{blobs: {hash: string, bytes: number, data: string}[]}>} Base64 blobs in request order.
+   * @throws {WorkspaceError} BLOB_NOT_FOUND, INVALID_REQUEST, BLOB_BATCH_TOO_LARGE (413), or BLOB_CORRUPT.
+   */
+  async getBlobs(request, workspaceId, hashes) {
+    if (!Array.isArray(hashes) || hashes.length === 0 || hashes.length > MAX_BLOB_BATCH_ENTRIES
+      || hashes.some(hash => typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash))
+      || new Set(hashes).size !== hashes.length) {
+      throw new WorkspaceError('INVALID_REQUEST', `blob batch must contain 1 through ${MAX_BLOB_BATCH_ENTRIES} unique SHA-256 hashes`)
+    }
+    const principalId = this.principalFromRequest(request)
+    return await this.exclusive(workspaceId, async () => {
+      const workspace = this.requireWorkspace(principalId, workspaceId)
+      const referenced = new Set([...workspace.entries.values()]
+        .filter(entry => entry.kind === 'file' && entry.hash !== undefined)
+        .map(entry => entry.hash))
+      const blobs = []
+      let totalBytes = 0
+      for (const hash of hashes) {
+        if (!referenced.has(hash)) throw new WorkspaceError('BLOB_NOT_FOUND', 'blob is not referenced by this workspace', 404)
+        const bytes = await this.blobStore.get(hash)
+        totalBytes += bytes.byteLength
+        if (totalBytes > MAX_BLOB_BATCH_BYTES) {
+          throw new WorkspaceError('BLOB_BATCH_TOO_LARGE', 'blob batch exceeds the response byte limit', 413)
+        }
+        if (hashBytes(bytes) !== hash) throw new WorkspaceError('BLOB_CORRUPT', 'stored blob failed SHA-256 verification', 500)
+        blobs.push({ hash, bytes: bytes.byteLength, data: Buffer.from(bytes).toString('base64') })
+      }
+      return { blobs }
     })
   }
 

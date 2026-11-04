@@ -1715,6 +1715,74 @@ describe('browser-native DSH v2 backend', () => {
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes)
   })
 
+  it('pages the workspace manifest and returns referenced blobs in one batch', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const identity = await openWorkspaceIdentity(origin)
+    const contents = ['alpha\n', 'beta\n', 'gamma\n'].map(value => Buffer.from(value))
+    const uploaded = []
+    for (const content of contents) uploaded.push(await uploadWorkspaceBlob(origin, identity, content))
+    const committed = await postWorkspace(origin, identity, 'commit', {
+      operationId: randomUUID(),
+      baseRevision: 0,
+      changes: uploaded.map((blob, index) => ({
+        path: `batch/file-${String(index)}.txt`, kind: 'file', hash: blob.hash, bytes: blob.bytes, mode: 0o600,
+      })),
+    })
+    assert.equal(committed.response.status, 200, JSON.stringify(committed.value))
+
+    const pageQuery = `protocolVersion=1&workspaceId=${identity.workspaceId}&limit=2`
+    const firstPage = await (await fetch(`${origin}/api/browser-native/workspace/manifest?${pageQuery}&offset=0`, {
+      headers: { cookie: identity.cookie },
+    })).json()
+    assert.equal(firstPage.entries.length, 2)
+    assert.equal(firstPage.nextOffset, 2)
+    const secondPage = await (await fetch(`${origin}/api/browser-native/workspace/manifest?${pageQuery}&offset=2`, {
+      headers: { cookie: identity.cookie },
+    })).json()
+    assert.equal(secondPage.entries.length, 2)
+    assert.equal(secondPage.nextOffset, undefined)
+    assert.equal(firstPage.revision, secondPage.revision)
+    assert.equal(firstPage.digest, secondPage.digest)
+
+    const batch = await fetch(`${origin}/api/browser-native/workspace/blob-batch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: identity.cookie },
+      body: JSON.stringify(envelope('blob-batch', {
+        workspaceId: identity.workspaceId,
+        hashes: uploaded.map(blob => blob.hash),
+      })),
+    })
+    const batchBody = await batch.json()
+    assert.equal(batch.status, 200, JSON.stringify(batchBody))
+    assert.deepEqual(batchBody.blobs.map(blob => ({ hash: blob.hash, bytes: blob.bytes })), uploaded.map(blob => ({ hash: blob.hash, bytes: blob.bytes })))
+    assert.deepEqual(batchBody.blobs.map(blob => Buffer.from(blob.data, 'base64')), contents)
+
+    const unreferenced = await fetch(`${origin}/api/browser-native/workspace/blob-batch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: identity.cookie },
+      body: JSON.stringify(envelope('blob-batch-unreferenced', {
+        workspaceId: identity.workspaceId,
+        hashes: ['0'.repeat(64)],
+      })),
+    })
+    const unreferencedBody = await unreferenced.json()
+    assert.equal(unreferenced.status, 404)
+    assert.equal(unreferencedBody.error.code, 'BLOB_NOT_FOUND')
+
+    const duplicate = await fetch(`${origin}/api/browser-native/workspace/blob-batch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: identity.cookie },
+      body: JSON.stringify(envelope('blob-batch-duplicate', {
+        workspaceId: identity.workspaceId,
+        hashes: [uploaded[0].hash, uploaded[0].hash],
+      })),
+    })
+    const duplicateBody = await duplicate.json()
+    assert.equal(duplicate.status, 400)
+    assert.equal(duplicateBody.error.code, 'INVALID_REQUEST')
+  })
+
   it('returns an authenticated revision-only response whose size does not depend on manifest entries', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })

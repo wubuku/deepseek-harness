@@ -130,7 +130,7 @@ Chrome 156.0.8078.79 输出（节选）：
 
 ## 大 Workspace 同步
 
-`tests/large-workspace-sync.e2e.mjs` 先用真实 Workspace API 预置 9 990 个文件（每文件约 27 字节），再重载 preview，计时到 Worker `synced` 且 revision 与 commit 收据一致。backend 指标差值确认 1 次 manifest 拉取、9 990 次 blob 下载，且同步过程中没有回写 commit。
+`tests/large-workspace-sync.e2e.mjs` 先用真实 Workspace API 预置 9 990 个文件（每文件约 27 字节），再重载 preview，计时到 Worker `synced` 且 revision 与 commit 收据一致。backend 指标差值确认 manifest 按 1 000 条分页（10 次请求）、blob 按 256 条与 8 MiB 上限打包（40 次 `blob-batch` 请求、0 次单 blob 下载），且同步过程中没有回写 commit。
 
 ```sh
 node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
@@ -138,17 +138,28 @@ node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
 DSH_POC_WORKSPACE_FILES=4990 node docs/drafts/browser-native-dsh-poc/tests/large-workspace-sync.e2e.mjs
 ```
 
-Chrome 156.0.8078.79 输出：
+批量前后对比（同一 Chrome 156.0.8078.79、同一 9 990 文件夹具）：
+
+| 指标 | 批量前 | 批量后 |
+| --- | --- | --- |
+| 冷拉取到 `synced` | 9 971 ms | 5 441 ms |
+| manifest 请求 | 1（整包） | 10（每页 1 000 条） |
+| blob 网络请求 | 9 990 | 40（每批最多 256 个） |
+| 回写 commit | 0 | 0 |
+
+批量后输出：
 
 ```json
 {"result":"passed","files":9990,"totalBytes":268620,
- "seed":{"ms":337540,"filesPerSecond":30},
- "sync":{"ms":9971,"filesPerSecond":1002,"bytesPerSecond":26940},
- "requests":{"total":9992,"manifests":1,"blobDownloads":9990,"commits":0}}
+ "seed":{"ms":290545,"filesPerSecond":34},
+ "sync":{"ms":5441,"filesPerSecond":1836,"bytesPerSecond":49370},
+ "requests":{"manifests":10,"blobBatches":40,"blobDownloads":0,"commits":0}}
 ```
 
-- 冷拉取 9 990 个文件约 10.0 s，约 1 002 文件/s、1 ms/文件；比 1 990 文件样本的 330 文件/s 更快，说明 Worker 的 blob 拉取并发扩展，固定启动开销在大样本中占比更低。
-- `seed` 的 337.5 s 是测试夹具逐 blob `PUT`（64 并发）的成本，不代表产品路径；真实一次工具 turn 通常把多个变更放进一次 commit，预置耗时不参与同步结论。
+- 冷拉取从约 10.0 s 降到 5.4 s（1 836 文件/s）；其中约 5.0 s 是页面启动到 Worker 可用的固定成本（990 文件样本同样为 5.0 s），文件传输与 VFS 装配只占数百毫秒。
+- Worker 先按 256 个或 8 MiB 分批取回缺失 blob，逐批用 SHA-256 校验后再写入 VFS 或本地缓存；超过 256 KiB 的单文件仍走原有流式下载，避免把大文件塞进批量响应。
+- 单 blob 与 blob 批量响应都在服务端按 Workspace manifest 引用授权，并重新校验 SHA-256；增量回写、CAS、lease 与 commit 路径未改动。
+- `seed` 的 290.5 s 是测试夹具逐 blob `PUT`（64 并发）的成本，不代表产品路径；真实一次工具 turn 通常把多个变更放进一次 commit，预置耗时不参与同步结论。
 - Workspace entry 上限为 10 000（含目录项）。2 000 entry 时同步已证明可用，但“数千文件”等于贴近容量边界，无法容纳更大代码库；本轮把上限提高到 10 000，并以 9 990 文件作为基线。分区 Workspace、增量 manifest 与更大容量属于后续工作，超过 10 000 entry 是明确的产品约束（返回 413 `WORKSPACE_TOO_LARGE`）。
 - 未测大文件（MiB 级）、附件、并发标签页、跨重启后的增量同步、真实网络与移动设备；数字来自本机回环与 scripted backend。
 

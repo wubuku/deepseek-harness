@@ -43,6 +43,10 @@ const WORKSPACE_ROOT = '/dsh/home/workspace'
 const WORKSPACE_API = '/api/browser-native/workspace'
 const SYNC_DEBOUNCE_MS = 100
 const WORKSPACE_BLOB_CHUNK_BYTES = 1024 * 1024
+const MANIFEST_PAGE_ENTRIES = 1_000
+const BLOB_BATCH_ENTRIES = 256
+const BLOB_BATCH_BYTES = 8 * 1024 * 1024
+const BLOB_BATCH_ENTRY_BYTES = 256 * 1024
 
 interface WorkspaceEntry {
   readonly path: string
@@ -170,6 +174,13 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
 }
 
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const output = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) output[index] = binary.charCodeAt(index)
+  return output
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   const value: unknown = await response.json()
   if (!isRecord(value)) throw new Error('browser-native workspace: backend returned a non-object response')
@@ -243,6 +254,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
   private accessMode: WorkspaceAccessMode = 'writer'
   private verifiedDownloads = false
   private observerCache: BrowserObserverCache | undefined
+  private prefetchedBlobs: Map<string, Uint8Array> | undefined
 
   constructor(
     private readonly onStatus = statusMessage,
@@ -333,6 +345,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
           return { hash: entry.hash, bytes: entry.bytes }
         }), this.observerCacheLimits)
       }
+      if (this.accessMode === 'writer') await this.prefetchMissingBlobs(files)
       for (const entry of files) {
         const path = assertWorkspacePath(entry.path)
         if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
@@ -343,6 +356,12 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
             const backing = await this.openObserverBlob(entry.hash, entry.bytes)
             vfs.seedExternal(`${WORKSPACE_ROOT}/${path}`, backing, { mode: entry.mode })
           }
+          this.knownBlobHashes.add(entry.hash)
+          continue
+        }
+        const prefetched = this.prefetchedBlobs?.get(entry.hash)
+        if (prefetched !== undefined) {
+          vfs.seed(`${WORKSPACE_ROOT}/${path}`, prefetched, { mode: entry.mode })
           this.knownBlobHashes.add(entry.hash)
           continue
         }
@@ -365,6 +384,7 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
         }
         this.knownBlobHashes.add(entry.hash)
       }
+      this.prefetchedBlobs = undefined
       this.revision = manifest.revision
       if (this.accessMode === 'writer') {
         if (this.store !== undefined && typeof this.store.reconcileBlobs === 'function') {
@@ -1472,18 +1492,120 @@ class BrowserNativeWorkspaceMirror implements VfsMutationSink {
     return output
   }
 
+  private async prefetchMissingBlobs(files: readonly WorkspaceEntry[]): Promise<void> {
+    const workspaceId = this.workspaceId
+    if (workspaceId === undefined) return
+    const store = this.store
+    const missing = new Map<string, number>()
+    for (const entry of files) {
+      const path = assertWorkspacePath(entry.path)
+      if (entry.hash === undefined || entry.bytes === undefined) throw new Error(`browser-native workspace: invalid file metadata for ${path}`)
+      if (store !== undefined && await store.openBlob(workspaceId, entry.hash, entry.bytes) !== undefined) continue
+      const knownBytes = missing.get(entry.hash)
+      if (knownBytes !== undefined && knownBytes !== entry.bytes) {
+        throw new Error(`browser-native workspace: conflicting sizes for blob ${entry.hash}`)
+      }
+      missing.set(entry.hash, entry.bytes)
+    }
+    if (missing.size === 0) return
+    const collection = store === undefined ? new Map<string, Uint8Array>() : undefined
+    let batch: { hash: string; bytes: number }[] = []
+    let batchBytes = 0
+    const flush = async (): Promise<void> => {
+      if (batch.length === 0) return
+      const downloaded = await this.downloadBlobBatch(batch)
+      if (store !== undefined) {
+        await store.cacheBlobs(workspaceId, downloaded.map(blob => ({ hash: blob.hash, content: blob.content })))
+      } else {
+        for (const blob of downloaded) collection!.set(blob.hash, blob.content)
+      }
+      batch = []
+      batchBytes = 0
+    }
+    for (const [hash, bytes] of missing) {
+      if (bytes > BLOB_BATCH_ENTRY_BYTES) {
+        await flush()
+        if (store === undefined) {
+          collection!.set(hash, await this.downloadBlob(hash, bytes))
+        } else {
+          const streamed = await this.cacheDownloadedBlob(hash, bytes)
+          if (!streamed) await store.cacheBlob(workspaceId, hash, await this.downloadBlob(hash, bytes))
+        }
+        continue
+      }
+      if (batch.length === BLOB_BATCH_ENTRIES || batchBytes + bytes > BLOB_BATCH_BYTES) await flush()
+      batch.push({ hash, bytes })
+      batchBytes += bytes
+    }
+    await flush()
+    this.prefetchedBlobs = collection
+  }
+
+  private async downloadBlobBatch(entries: readonly { hash: string; bytes: number }[]): Promise<{ hash: string; bytes: number; content: Uint8Array }[]> {
+    const workspaceId = this.workspaceId
+    if (workspaceId === undefined) throw new Error('browser-native workspace: blob batching requires a workspace identity')
+    const response = await fetch(`${WORKSPACE_API}/blob-batch`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: crypto.randomUUID(),
+        workspaceId,
+        hashes: entries.map(entry => entry.hash),
+      }),
+    })
+    const raw = await readJson(response)
+    if (!Array.isArray(raw.blobs) || raw.blobs.length !== entries.length) {
+      throw new Error('browser-native workspace: backend returned an invalid blob batch')
+    }
+    const downloaded: { hash: string; bytes: number; content: Uint8Array }[] = []
+    for (const [index, entry] of entries.entries()) {
+      const blob = raw.blobs[index]
+      if (!isRecord(blob) || blob.hash !== entry.hash || typeof blob.data !== 'string'
+        || !Number.isSafeInteger(blob.bytes) || blob.bytes !== entry.bytes) {
+        throw new Error(`browser-native workspace: invalid blob batch entry for ${entry.hash}`)
+      }
+      const bytes = decodeBase64(blob.data)
+      if (bytes.byteLength !== entry.bytes || await sha256(bytes) !== entry.hash) {
+        throw new Error(`browser-native workspace: batched blob failed SHA-256 verification for ${entry.hash}`)
+      }
+      downloaded.push({ hash: entry.hash, bytes: entry.bytes, content: bytes })
+    }
+    return downloaded
+  }
+
   private async loadManifest(): Promise<WorkspaceManifest> {
     if (this.workspaceId === undefined) throw new Error('browser-native workspace: cannot load a manifest before identity')
-    const response = await fetch(
-      `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}`,
-      { credentials: 'same-origin' },
-    )
-    const raw = await readJson(response)
-    if (raw.workspaceId !== this.workspaceId || !Number.isSafeInteger(raw.revision)
-      || typeof raw.revision !== 'number' || raw.revision < 0) {
-      throw new Error('browser-native workspace: backend returned an invalid manifest')
+    const entries: WorkspaceEntry[] = []
+    const paths = new Set<string>()
+    let revision: number | undefined
+    let offset = 0
+    for (;;) {
+      const response = await fetch(
+        `${WORKSPACE_API}/manifest?protocolVersion=${String(PROTOCOL_VERSION)}&workspaceId=${encodeURIComponent(this.workspaceId)}&offset=${String(offset)}&limit=${String(MANIFEST_PAGE_ENTRIES)}`,
+        { credentials: 'same-origin' },
+      )
+      const raw = await readJson(response)
+      if (raw.workspaceId !== this.workspaceId || !Number.isSafeInteger(raw.revision)
+        || typeof raw.revision !== 'number' || raw.revision < 0) {
+        throw new Error('browser-native workspace: backend returned an invalid manifest')
+      }
+      revision ??= raw.revision
+      if (raw.revision !== revision) throw new Error('browser-native workspace: manifest revision changed across pages')
+      for (const entry of manifestEntries(raw.entries)) {
+        if (paths.has(entry.path)) throw new Error(`browser-native workspace: duplicate manifest path ${entry.path}`)
+        paths.add(entry.path)
+        entries.push(entry)
+      }
+      if (raw.nextOffset === undefined) break
+      if (!Number.isSafeInteger(raw.nextOffset) || typeof raw.nextOffset !== 'number'
+        || raw.nextOffset <= offset || raw.nextOffset > entries.length + MANIFEST_PAGE_ENTRIES) {
+        throw new Error('browser-native workspace: backend returned an invalid manifest page offset')
+      }
+      offset = raw.nextOffset
     }
-    return { workspaceId: this.workspaceId, revision: raw.revision, entries: manifestEntries(raw.entries) }
+    return { workspaceId: this.workspaceId, revision: revision ?? 0, entries }
   }
 
   private async loadManifestRevision(): Promise<number> {

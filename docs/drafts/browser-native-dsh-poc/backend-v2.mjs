@@ -5198,6 +5198,17 @@ export async function createBrowserNativeV2Server(options) {
         if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
           throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
         }
+        if (url.searchParams.has('limit') || url.searchParams.has('offset')) {
+          const offset = url.searchParams.get('offset') ?? '0'
+          const limit = url.searchParams.get('limit') ?? '1000'
+          sendJson(response, 200, workspaces.manifestPage(
+            request,
+            url.searchParams.get('workspaceId'),
+            Number(offset),
+            Number(limit),
+          ))
+          return
+        }
         sendJson(response, 200, workspaces.manifest(request, url.searchParams.get('workspaceId')))
         return
       }
@@ -5315,6 +5326,12 @@ export async function createBrowserNativeV2Server(options) {
           'x-chunk-count': String(result.chunkCount),
           'x-total-bytes': String(result.totalBytes),
         })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/blob-batch') {
+        const body = await readBody(request)
+        assertProtocol(body)
+        sendJson(response, 200, await workspaces.getBlobs(request, body.workspaceId, body.hashes))
         return
       }
       if (request.method === 'GET' && /^\/api\/browser-native\/workspace\/blob\/[a-f0-9]{64}$/.test(url.pathname)) {

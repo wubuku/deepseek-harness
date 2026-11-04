@@ -103,6 +103,7 @@ try {
 
   requestEpoch += 1
   const blobDownloadsBefore = await routeCounts('/workspace/blob/')
+  const blobBatchesBefore = await routeCounts('/workspace/blob-batch')
   const manifestsBefore = await routeCounts('/workspace/manifest')
   const reloadStartedAt = Date.now()
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -123,13 +124,17 @@ try {
 
   const requests = workspaceRequests.filter(request => request.epoch === requestEpoch)
   const blobDownloadsAfter = await routeCounts('/workspace/blob/')
+  const blobBatchesAfter = await routeCounts('/workspace/blob-batch')
   const manifestsAfter = await routeCounts('/workspace/manifest')
   const blobDownloads = blobDownloadsAfter - blobDownloadsBefore
+  const blobBatches = blobBatchesAfter - blobBatchesBefore
   const manifestPulls = manifestsAfter - manifestsBefore
   const commits = requests.filter(request => request.path.endsWith('/workspace/commit'))
   assert.equal(commits.length, 0, 'a clean pull must not write back')
-  assert.equal(blobDownloads, fileCount, `expected ${String(fileCount)} blob downloads, got ${String(blobDownloads)}`)
-  assert.ok(manifestPulls >= 1, 'the reload pulls the manifest at least once')
+  assert.equal(blobDownloads, 0, 'small blobs must arrive through the batch route')
+  assert.ok(blobBatches >= 1, 'the reload downloads blobs in batches')
+  assert.ok(blobBatches <= Math.ceil(fileCount / 256), `expected at most ${String(Math.ceil(fileCount / 256))} blob batches, got ${String(blobBatches)}`)
+  assert.equal(manifestPulls, Math.ceil(fileCount / 1_000), `expected ${String(Math.ceil(fileCount / 1_000))} manifest pages, got ${String(manifestPulls)}`)
   assert.deepEqual(pageErrors, [])
 
   process.stdout.write(`${JSON.stringify({
@@ -138,7 +143,7 @@ try {
     totalBytes,
     seed: { ms: seedMs, filesPerSecond: Math.round(fileCount / (seedMs / 1_000)) },
     sync: { ms: syncMs, filesPerSecond: Math.round(fileCount / (syncMs / 1_000)), bytesPerSecond: Math.round(totalBytes / (syncMs / 1_000)) },
-    requests: { total: requests.length, manifests: manifestPulls, blobDownloads, commits: 0 },
+    requests: { manifests: manifestPulls, blobBatches, blobDownloads, commits: 0 },
   })}\n`)
 } finally {
   await page.close().catch(() => {})
