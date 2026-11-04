@@ -68,9 +68,12 @@ try {
   await pageA.waitForFunction(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state === 'synced', undefined, { timeout: 60_000 })
 
   await pageA.locator('[data-browser-native-session-export]').waitFor({ state: 'visible', timeout: 30_000 })
+  const exportButton = pageA.locator('[data-browser-native-session-export]')
+  assert.equal(await exportButton.getAttribute('aria-busy'), null)
+  await exportButton.focus()
   const [download] = await Promise.all([
     pageA.waitForEvent('download'),
-    pageA.locator('[data-browser-native-session-export]').click(),
+    pageA.keyboard.press('Enter'),
   ])
   const downloadedPath = await download.path()
   const downloadedBundle = JSON.parse(await readFile(downloadedPath, 'utf8'))
@@ -79,6 +82,10 @@ try {
   assert.match(downloadedBundle.session.id, /.+/)
   assert.equal(download.suggestedFilename(), `dsh-session-${downloadedBundle.session.id}.json`)
   await pageA.locator('[data-browser-native-session-export-root][data-export-state="downloaded"]').waitFor({ timeout: 10_000 })
+  assert.equal(await exportButton.getAttribute('aria-busy'), null)
+  const exportResult = pageA.locator('[data-browser-native-session-export-result]')
+  assert.equal(await exportResult.getAttribute('role'), 'status')
+  assert.equal(await exportResult.getAttribute('aria-live'), 'polite')
 
   const pageB = await context.newPage()
   trackRequests(pageB, [])
@@ -90,6 +97,10 @@ try {
   }, 'session lease conflict surfaced in the preview status', 30_000)
   assert.match(conflict, /This Session is open in another tab/)
   assert.match(conflict, /session is already owned by another browser/i)
+  const conflictStatus = pageB.locator('[data-browser-native-workspace-status]')
+  assert.equal(await conflictStatus.getAttribute('role'), 'alert')
+  assert.equal(await conflictStatus.getAttribute('aria-live'), 'assertive')
+  assert.equal(await conflictStatus.getAttribute('aria-atomic'), 'true')
 
   const failure = await submitPrompt({
     page: pageA,
@@ -151,7 +162,10 @@ try {
   while (recoveryAttempts < 3 && recoveredState !== 'synced') {
     recoveryAttempts += 1
     const retryButton = pageB.locator('[data-browser-native-session-retry]')
-    if (await retryButton.count() === 1) await retryButton.click({ timeout: 10_000 })
+    if (await retryButton.count() === 1) {
+      await retryButton.focus()
+      await pageB.keyboard.press('Enter')
+    }
     recoveredState = await waitFor(async () => {
       try {
         const state = await pageB.evaluate(() => window.__DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?.state)

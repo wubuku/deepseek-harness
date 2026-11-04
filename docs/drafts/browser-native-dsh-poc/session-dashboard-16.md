@@ -21,14 +21,27 @@ scripted 后端固定四类请求：`DASHBOARD_HOLD` 用 `barrier-text` 占住�
   "scope": "browser-session-dashboard-16",
   "sessions": 16,
   "rows": 17,
-  "timings": { "reloadMs": 4918, "listMs": 2, "expandMs": 83, "openMs": 65, "switchMs": 78, "switchDuringTurnMs": 72, "postFailureMs": 49 },
-  "acceptableLimits": { "reloadMs": 8000, "listMs": 1500, "expandMs": 1500, "openMs": 3000, "switchMs": 1000, "switchDuringTurnMs": 2000, "postFailureMs": 1500 }
+  "timings": { "reloadMs": 4851, "listMs": 2, "expandMs": 94, "openMs": 65, "switchMs": 79, "switchDuringTurnMs": 72, "postFailureMs": 49 },
+  "acceptableLimits": { "reloadMs": 8000, "listMs": 1500, "expandMs": 1500, "openMs": 3000, "switchMs": 1000, "switchDuringTurnMs": 2000, "postFailureMs": 1500 },
+  "states": {
+    "failureVisible": true,
+    "failureRenderedBy": "Tag",
+    "listInteractiveAfterFailure": true,
+    "idleRowsWithoutStatus": true,
+    "backgroundCompletionStatus": "CompletedDASHBOARD_SESSION_15now",
+    "queueNotice": {
+      "second": "Waiting for a model slot · position 2 of 2 · 1/1 active",
+      "advanced": "Waiting for a model slot · position 1 of 1 · 1/1 active",
+      "positionChange": "2 -> 1"
+    },
+    "queueStateInList": "not surfaced in the dashboard; queued prompts render in the active composer"
+  }
 }
 ```
 
 - `reloadMs` 是整页 reload 到 preview 可交互，约 4.9 秒，由 Worker 冷启动主导（与[冷启动拆解](cold-start-prewarm.md)的量级一致），不是列表渲染成本；上限取 8 秒。
 - `listMs` 是在 preview 可交互后到首屏 5 行出现的增量，本次为 2 ms：17 行列表已在可交互前完成，未形成额外阻塞。
-- 折叠展开 83 ms、打开 65 ms、切换 78 ms、后台 turn 运行中切换 72 ms、失败后切换 49 ms，均在对应上限内，无需修改列表 UI 代码。
+- 折叠展开 94 ms、打开 65 ms、切换 79 ms、后台 turn 运行中切换 72 ms、失败后切换 49 ms，均在对应上限内，无需修改列表 UI 代码。
 
 ## 状态与交互的实际情况
 
@@ -36,7 +49,7 @@ scripted 后端固定四类请求：`DASHBOARD_HOLD` 用 `barrier-text` 占住�
 - **标题**：种子 Session 在列表加载时没有 `session/title` 投影，显示本地化的 `Untitled`；`list` 快照只含 header/revision/eventCount，不返回事件，所以标题不会在加载时从首条消息推导。真实 turn 之后该行标题会变成首条 `user/message` 文本（本次为 `DASHBOARD_SESSION_15`）。测试用 `data-row-key="session:<id>"` 定位行，不依赖标题文本。
 - **idle 行无状态文案**：`sessionStatuses` 对 idle 只渲染空的首列占位（`showStatus` 仅在非 idle 时输出 `StateDot` 与 visually-hidden 文案）。种子行文本只有 `Untitled` 与时间。
 - **后台 turn 完成后出现 `Completed`**：`dashboard-session-15` 的 turn 在查看另一个 Session 时完成，其行文本出现 `Completed`，随后打开该行即清除。
-- **排队显示实时位置**：Worker 的 LLM 适配器在请求等待 admission 槽时每 400 ms 轮询同源 `/api/browser-native/admission`，按 `requestId` 匹配自己的队列项，并把位置变化发布到页面；页面用 `output[data-browser-native-queue-status]`（`aria-live="polite"`）显示。本次断言了 `position 2 of 2` 在队列前项被准入后变为 `position 1 of 1`，即位次变化可见；准入或被取消后该状态隐藏。排队的超时错误仍保留 `ADMISSION_TIMEOUT` 与 `queue position N` 文案。
+- **排队显示实时位置**：Worker 的 LLM 适配器在请求等待 admission 槽时每 400 ms 轮询同源 `/api/browser-native/admission`，按 `requestId` 匹配自己的队列项，并把位置变化发布到页面；页面用 `output[data-browser-native-queue-status]`（`role="status"`、`aria-live="polite"`、`aria-atomic="true"`）显示。本次断言了 `position 2 of 2` 在队列前项被准入后变为 `position 1 of 1`，即位次变化可见；同一断言还校验实时区域的三个属性。准入或被取消后该状态隐藏。排队的超时错误仍保留 `ADMISSION_TIMEOUT` 与 `queue position N` 文案。
 - **失败态组件化**：`DASHBOARD_INJECTED_FAILURE` 通过既有 `Tag` 组件（danger 色调）渲染在 `[data-turn-error-code]` 容器内，附 `scripted dashboard failure` 文案；测试断言该错误码不再出现在裸 `<code>` 元素里。失败后列表仍有 17 行，点击其他行可在 49 ms 内切换。`pageerror` 为 0。
 
 ## 可接受上限

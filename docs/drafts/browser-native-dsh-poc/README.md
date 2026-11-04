@@ -1566,7 +1566,7 @@ Chrome 156 实测：Worker realm 无凭据环境变量；白名单外目标返�
 
 ## 产品可见性
 
-[产品可见性](product-visibility.md)检查失败码、准入排队位置、Session 租约冲突与导出入口是否到达 preview。`TurnErrorNodeView` 用 `Tag` 渲染 `turn/end` 的 `error.code`；`ADMISSION_TIMEOUT` 消息包含超时瞬间的 `queue position N`，排队中的 prompt 立即可见，且 `output[data-browser-native-queue-status]` 每 400 ms 轮询显示实时位次（E2E 断言 2→1）。第二个标签页打开同一 Session 时发布 `session-conflict` 状态条并提供重载恢复按钮；持有写租约后页面显示本地化导出按钮，下载 `dsh-session-<id>.json`。缺口：位次是轮询的最终一致视图，尚未并入正式 composer/会话状态区；导出只取本页最近取得的 Session，导入仍只有 HTTP 入口。
+[产品可见性](product-visibility.md)检查失败码、准入排队位置、Session 租约冲突与导出入口是否到达 preview。`TurnErrorNodeView` 用 `Tag` 渲染 `turn/end` 的 `error.code`；`ADMISSION_TIMEOUT` 消息包含超时瞬间的 `queue position N`，排队中的 prompt 立即可见，且 `output[data-browser-native-queue-status]` 每 400 ms 轮询显示实时位次（E2E 断言 2→1，并校验 `role="status"`/`aria-live="polite"`/`aria-atomic="true"`）。第二个标签页打开同一 Session 时发布 `session-conflict` 状态条（`role="alert"`/`aria-live="assertive"`）并提供重载按钮；E2E 用焦点 + Enter 而非鼠标点击验证键盘路径。持有写租约后页面显示本地化导出按钮，键盘激活后下载 `dsh-session-<id>.json`，导出期间 `aria-busy`、结果区 `role="status"`。缺口：阻塞态不自动移动焦点，未做 VoiceOver/NVDA 人工朗读、窄窗口重叠与对比度实测；位次仍是轮询的最终一致视图；导出只取本页最近取得的 Session，导入仍只有 HTTP 入口。
 
 ## 浏览器支持矩阵
 

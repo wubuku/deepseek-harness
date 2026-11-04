@@ -204,6 +204,9 @@ try {
       state,
       position,
       queued: Number(await notice.getAttribute('data-queued')),
+      role: await notice.getAttribute('role'),
+      ariaLive: await notice.getAttribute('aria-live'),
+      ariaAtomic: await notice.getAttribute('aria-atomic'),
       text: await notice.innerText(),
     }
   }
@@ -248,6 +251,9 @@ try {
     return notice?.state === 'queued' && notice.position === 2 ? notice : undefined
   }, 'queued prompt reports position 2 behind the direct request', 30_000)
   assert.equal(secondQueueNotice.queued, 2, `queued prompt must see two waiters: ${secondQueueNotice.text}`)
+  assert.equal(secondQueueNotice.role, 'status')
+  assert.equal(secondQueueNotice.ariaLive, 'polite')
+  assert.equal(secondQueueNotice.ariaAtomic, 'true')
 
   holdRelease.resolve()
   await holdTurn

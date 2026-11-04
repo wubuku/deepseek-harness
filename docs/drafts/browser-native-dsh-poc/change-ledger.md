@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-102：新 UI 状态的无障碍语义与键盘可达性
+
+```text
+changeId: BN-P2-102
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/session-dashboard-16.e2e.mjs; docs/drafts/browser-native-dsh-poc/product-visibility.md; docs/drafts/browser-native-dsh-poc/session-dashboard-16.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 续接项要求为新 UI 状态补齐无障碍与键盘可达性；排队横幅、Session 冲突、恢复与导出结果此前只有 `aria-live="polite"` 或 `role="status"`，阻塞错误不会打断朗读，键盘路径也没有自动化断言。
+existingExtensionPointsChecked: 只改 preview 页控制层的 DOM 语义与既有 E2E 的激活方式，复用原生 `output`/`button` 与既有的 workspace 状态枚举；不改协议、backend、packages/ 或会话数据。
+whyDraftOnlyWasInsufficient: 实时区域语义与键盘激活必须有真实浏览器事件才能证明；单测无法覆盖 Tab 焦点、Enter 激活与 `aria-busy` 生命周期。
+behaviorChange: 状态条按状态分流语义：阻塞态（error/conflict/stale/identity-*/recovery-*/lease-conflict/session-conflict 等）为 `role="alert"` + `aria-live="assertive"`，其余为 `role="status"` + `aria-live="polite"`，统一 `aria-atomic="true"`；排队横幅与恢复/导出结果显式声明实时区域；导出期间按钮 `aria-busy="true"`。`product-visibility.e2e` 的重试与导出改为 `focus()` + `Enter`，并断言冲突状态条与导出结果区的语义；`session-dashboard-16.e2e` 断言排队横幅三个属性随位次变化仍成立。
+consumersUpdated: 产品可见性文档新增无障碍与键盘可达性节与残余缺口；16 Session 仪表盘记录更新实时区域断言与本次输出；PoC README 产品可见性段落同步；ledger。
+test: `pnpm run typecheck` 5/5；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs` 输出 `sessionRecovery.attempts=1`、`finalState=synced`、导出 `dsh-session-bundle` v1；`session-dashboard-16.e2e.mjs` 输出位次 `2 -> 1` 且 `failureRenderedBy=Tag`、`pageerror=0`。
+syncReplaySteps: 上游同步后若 workspace 状态枚举新增阻塞态，先更新 `isBlockingWorkspaceState` 与产品可见性文档；复跑上面两个 Chrome E2E；若新增浮层动作按钮，补焦点与 Enter 激活断言。
+deleteCondition: 正式 composer/会话状态区接管这些状态并具备等价语义，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-101：立项前必做第 5 项——“客户端执行、服务端权威”威胁建模
 
 ```text

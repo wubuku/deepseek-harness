@@ -282,11 +282,21 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       font: `${weight} 13px/1.3 system-ui, sans-serif`,
     })
   }
+  const isBlockingWorkspaceState = (state: BrowserNativeWorkspaceStatus['state']): boolean => state === 'error'
+    || state === 'conflict' || state === 'local-corrupt' || state === 'local-newer-version'
+    || state === 'recovery-conflict' || state === 'recovery-unavailable'
+    || state === 'identity-missing' || state === 'identity-mismatch' || state === 'stale'
+    || state === 'lease-conflict' || state === 'session-conflict'
+  const applyLiveRegion = (element: HTMLElement, mode: 'status' | 'alert'): void => {
+    element.setAttribute('role', mode)
+    element.setAttribute('aria-live', mode === 'alert' ? 'assertive' : 'polite')
+    element.setAttribute('aria-atomic', 'true')
+  }
   const showWorkspaceStatus = (notice: BrowserNativeWorkspaceStatus): void => {
     clearRetryTimer()
     workspaceStatus ??= (() => {
       const element = document.createElement('output')
-      element.setAttribute('aria-live', 'polite')
+      applyLiveRegion(element, 'status')
       element.setAttribute('data-browser-native-workspace-status', '')
       Object.assign(element.style, {
         position: 'fixed',
@@ -315,11 +325,9 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     )
     workspaceStatus.dataset.state = notice.state
     if (notice.workspaceId !== undefined) workspaceId = notice.workspaceId
-    workspaceStatus.style.borderColor = notice.state === 'error' || notice.state === 'conflict'
-      || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
-      || notice.state === 'recovery-conflict' || notice.state === 'recovery-unavailable'
-      || notice.state === 'identity-missing' || notice.state === 'identity-mismatch' || notice.state === 'stale'
-      || notice.state === 'session-conflict' ? '#f87171'
+    applyLiveRegion(workspaceStatus, isBlockingWorkspaceState(notice.state) ? 'alert' : 'status')
+    workspaceStatus.style.borderColor = isBlockingWorkspaceState(notice.state)
+      ? '#f87171'
       : notice.state === 'synced' ? '#34d399' : '#fbbf24'
     if ((notice.workspaceId !== undefined && (notice.state === 'conflict' || notice.state === 'error'))
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
@@ -383,7 +391,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
   const showQueueStatus = (notice: BrowserNativeQueueStatus): void => {
     queueStatus ??= (() => {
       const element = document.createElement('output')
-      element.setAttribute('aria-live', 'polite')
+      applyLiveRegion(element, 'status')
       element.setAttribute('data-browser-native-queue-status', '')
       Object.assign(element.style, {
         position: 'fixed',
@@ -426,7 +434,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     workspaceStatus.querySelector('[data-browser-native-recovery-result]')?.remove()
     const result = document.createElement('span')
     result.dataset.browserNativeRecoveryResult = ''
-    result.setAttribute('role', 'status')
+    applyLiveRegion(result, 'status')
     result.style.display = 'block'
     result.style.marginTop = '6px'
     result.textContent = browserNativeWorkspaceRecoveryResultCopy(document.documentElement.lang, success)
@@ -462,7 +470,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
     })
     const result = document.createElement('span')
     result.dataset.browserNativeSessionExportResult = ''
-    result.setAttribute('role', 'status')
+    applyLiveRegion(result, 'status')
     result.style.color = '#f9fafb'
     root.append(button, result)
     document.body.append(root)
@@ -472,6 +480,7 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       if (sessionId === undefined || workspaceId === undefined) return
       const language = document.documentElement.lang
       button.disabled = true
+      button.setAttribute('aria-busy', 'true')
       result.textContent = ''
       delete root.dataset.exportState
       void downloadSessionBundle(workspaceId, sessionId).then(() => {
@@ -480,7 +489,10 @@ export async function connectBrowserNativePageControl(worker: Worker, options: {
       }).catch(() => {
         root.dataset.exportState = 'failed'
         result.textContent = browserNativeSessionExportResultCopy(language, false)
-      }).finally(() => { button.disabled = false })
+      }).finally(() => {
+        button.disabled = false
+        button.removeAttribute('aria-busy')
+      })
     })
     return control
   }
