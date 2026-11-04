@@ -32,6 +32,8 @@ Environment:
   DSH_POC_MAX_MOUNTED_SESSIONS Mounted Sessions allowed at once (default: 16)
   DSH_POC_WORKSPACE_CHUNK_OBJECTS       Require chunk-object storage (default: 0)
   DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS  Verify downloaded chunks (default: 0)
+  DSH_POC_INPUT_USD_PER_1M     Input token price for the usage report; pair with the output price
+  DSH_POC_OUTPUT_USD_PER_1M    Output token price; both prices or neither
   DSH_POC_HOSTED_ISSUER        Hosted token issuer; requires the audience and secret
   DSH_POC_HOSTED_AUDIENCE      Hosted token audience
   DSH_POC_HOSTED_SECRET        HS256 shared secret, at least 32 bytes
@@ -72,6 +74,23 @@ function booleanEnv(name, fallback) {
   if (raw === '1' || raw === 'true') return true
   if (raw === '0' || raw === 'false') return false
   throw new Error(`${name} must be 1 or 0`)
+}
+
+/** Read the optional per-million token price pair; both present or none. */
+function usagePricingFromEnv() {
+  const input = env.DSH_POC_INPUT_USD_PER_1M
+  const output = env.DSH_POC_OUTPUT_USD_PER_1M
+  if (input === undefined && output === undefined) return undefined
+  if (input === undefined || output === undefined) {
+    throw new Error('DSH_POC_INPUT_USD_PER_1M and DSH_POC_OUTPUT_USD_PER_1M must be set together')
+  }
+  const rates = { inputUsdPer1M: Number(input), outputUsdPer1M: Number(output) }
+  for (const [name, value] of Object.entries(rates)) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${name === 'inputUsdPer1M' ? 'DSH_POC_INPUT_USD_PER_1M' : 'DSH_POC_OUTPUT_USD_PER_1M'} must be a non-negative number`)
+    }
+  }
+  return rates
 }
 
 /** Read the hosted token verifier settings; all three present or none. */
@@ -131,6 +150,7 @@ function readConfiguration() {
     },
     workspaceChunkObjects: booleanEnv('DSH_POC_WORKSPACE_CHUNK_OBJECTS', false),
     workspaceVerifiedDownloads: booleanEnv('DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS', false),
+    usagePricing: usagePricingFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,
   }
@@ -148,6 +168,7 @@ function report(app, origin, options, authMode) {
   process.stdout.write(`hosted: auth ${authMode}\n`)
   process.stdout.write(`hosted: llm ${app.llm.mode}; model ${app.llm.model}\n`)
   process.stdout.write(`hosted: admission ≤${String(options.admission.maxConcurrentTurns)} concurrent turns, ≤${String(options.admission.maxMountedSessions)} mounted Sessions\n`)
+  process.stdout.write(`hosted: usage pricing ${options.usagePricing === undefined ? 'disabled' : `$${String(options.usagePricing.inputUsdPer1M)}/M input, $${String(options.usagePricing.outputUsdPer1M)}/M output`}\n`)
 }
 
 /** Start the server and keep it alive until SIGINT or SIGTERM. */
@@ -186,6 +207,7 @@ async function main() {
     admission: options.admission,
     workspaceChunkObjects: options.workspaceChunkObjects,
     workspaceVerifiedDownloads: options.workspaceVerifiedDownloads,
+    ...(options.usagePricing === undefined ? {} : { usagePricing: options.usagePricing }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),
     ...(options.stateAuthorityToken === undefined ? {} : { stateAuthorityToken: options.stateAuthorityToken }),
     requireLocalAuth: true,

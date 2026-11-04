@@ -57,6 +57,7 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 | `DSH_POC_MAX_MOUNTED_SESSIONS` | `16` | 已挂载 Session 上限 |
 | `DSH_POC_WORKSPACE_CHUNK_OBJECTS` | `0` | 数据目录由 chunk-object 布局创建时必须设为 `1` |
 | `DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS` | `0` | 下载分块时重新校验；要求 chunk objects 为 `1` |
+| `DSH_POC_INPUT_USD_PER_1M` / `DSH_POC_OUTPUT_USD_PER_1M` | 无 | 成本报表的每百万 token 单价；两项同时设置，见[租户成本报表](tenant-cost-report.md) |
 | `DSH_POC_HOSTED_ISSUER` / `..._AUDIENCE` / `..._SECRET` | 无 | 三项必须同时设置；HS256 共享密钥至少 32 字节；`sub` 映射为稳定 principal |
 | `DSH_POC_HOSTED_CLOCK_TOLERANCE_SECONDS` | `30` | token 的 `exp`/`nbf` 容差 |
 | `DSH_POC_STATE_AUTHORITY_ORIGIN` / `..._TOKEN` | 无 | 指向共享 Session/Workspace authority；token 32–200 字符 |

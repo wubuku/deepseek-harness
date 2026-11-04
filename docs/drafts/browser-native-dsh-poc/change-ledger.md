@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-119：按 principal/Session 汇总 token 与费用并可导出
+
+```text
+changeId: BN-P2-119
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/usage-report.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/hosted/export-usage-report.mjs; docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs; docs/drafts/browser-native-dsh-poc/tests/usage-report.e2e.mjs; docs/drafts/browser-native-dsh-poc/tenant-cost-report.md; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: usage 审计只按 Session 返回 provider 上报条目，没有按租户汇总、没有费用换算，也没有导出；无法回答某个 principal 或 Session 花了多少 token 与费用。
+existingExtensionPointsChecked: 复用 `usageAudit` provider 上报条目、`sendJson`、本地 token 门禁、Session 的 `principalId` owner 记录与 `auditPrincipal`；未改 Session 事件格式、Workspace 写入或 provider 协议。
+whyDraftOnlyWasInsufficient: 只有用真实 provider 跑两轮请求，才能证明报表 token 与 provider 上报一致、费用按单价正确求和，CSV 与 JSON 同源；脚本化响应不能提供真实 usage。
+behaviorChange: 新增 `GET /api/browser-native/usage-report`（JSON 或 CSV 附件），按 principal 与 Session 汇总 `requests/inputTokens/outputTokens/totalTokens/costUsd`；新增 `DSH_POC_INPUT_USD_PER_1M`/`DSH_POC_OUTPUT_USD_PER_1M` 价格配置与 `hosted/export-usage-report.mjs` 导出脚本。real 模式的 usage 条目新增 `principalId`：优先取 bearer/principal 解析，LLM 代理位于 path-scoped 身份 cookie 之外时回退到 `store.get(sessionId).principalId`；无法解析的条目保持无归属，不被丢弃。
+consumersUpdated: `/usage-audit` 条目新增可选 `principalId` 字段；observability journal 持久化同一字段；托管启动帮助与配置表增加价格项。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs` 5 项通过（分组、价格、无价格、无归属、CSV）；`node --test .../backend-v2.test.mjs` 67 项通过；真实模型 `usage-report.e2e.mjs` 用两个 context/principal 通过：provider 上报 2 请求、4,692 输入、52 输出、4,744 总计，报表逐项相等，`costUsd=0.005995`（1.25/2.5 美元每百万），CSV 2 行汇总相等。另以 scripted 托管进程验证 `export-usage-report.mjs` 的 JSON/CSV 导出路径。
+syncReplaySteps: 上游同步后核对 `usageAudit` 条目字段、`/api/browser-native/usage-report` 路由、价格选项与 Session owner 回退；复跑上述单测、真实模型 E2E 与导出脚本；价格变更后需重启进程，报表按当前价格重算。
+deleteCondition: 正式计费服务提供不可变用量账本与财务报表后删除本目录端点与脚本。
+status: implemented
+```
+
 ### BN-P2-118：把六类故障注入收成一条命令的混沌回归套件
 
 ```text

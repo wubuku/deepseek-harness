@@ -22,6 +22,7 @@ import { AdmissionError, createAdmissionController } from './admission-v2.mjs'
 import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createObservabilityJournal } from './observability-journal.mjs'
+import { buildUsageReport, normalizeUsagePricing, usageReportCsv } from './usage-report.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -4526,6 +4527,7 @@ export async function createBrowserNativeV2Server(options) {
   if (options.workspaceVerifiedDownloads === true && options.workspaceChunkObjects !== true) {
     throw new TypeError('workspaceVerifiedDownloads requires workspaceChunkObjects: true')
   }
+  const usagePricing = normalizeUsagePricing(options.usagePricing)
   const sharedStateOrigin = options.stateAuthorityOrigin === undefined
     ? undefined : new URL(options.stateAuthorityOrigin).origin
   const sharedStateToken = options.stateAuthorityToken
@@ -5125,6 +5127,23 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, {
           entries: sessionId === null ? usageAudit : usageAudit.filter(entry => entry.sessionId === sessionId),
         })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/usage-report') {
+        const format = url.searchParams.get('format') ?? 'json'
+        if (format !== 'json' && format !== 'csv') throw new BackendError('INVALID_REQUEST', 'format must be json or csv')
+        const report = buildUsageReport(usageAudit, { pricing: usagePricing, model: llm.model })
+        if (format === 'csv') {
+          const filename = `usage-report-${report.generatedAt.slice(0, 10)}.csv`
+          response.writeHead(200, {
+            'content-type': 'text/csv; charset=utf-8',
+            'content-disposition': `attachment; filename="${filename}"`,
+            'cache-control': 'no-store',
+          })
+          response.end(usageReportCsv(report))
+          return
+        }
+        sendJson(response, 200, report)
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/auth/exchange') {
@@ -5762,9 +5781,20 @@ export async function createBrowserNativeV2Server(options) {
                 response.off('close', onClose)
               }
             } else {
+              let usagePrincipalId = workspaces.auditPrincipal(request)
+              if (usagePrincipalId === undefined && typeof body.sessionId === 'string') {
+                // The LLM proxy is outside the path-scoped identity cookies, so attribute
+                // usage through the Session owner recorded at Session creation.
+                try {
+                  usagePrincipalId = store.get(body.sessionId).principalId
+                } catch {
+                  // Unknown or unsupported Session ids leave this entry unattributed.
+                }
+              }
               await realLlm(response, request, llm, body, entry => {
-                usageAudit.push(entry)
-                void observabilityJournal.appendUsage(entry)
+                const recorded = usagePrincipalId === undefined ? entry : { ...entry, principalId: usagePrincipalId }
+                usageAudit.push(recorded)
+                void observabilityJournal.appendUsage(recorded)
               })
             }
           }, waitMs => { modelQueueWaitMs = waitMs })
