@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## 产品就绪度
 
-[产品就绪度 go/no-go](product-readiness-go-no-go.md)汇总本 PoC 已落档的验证结论、环境限制与必须的服务端依赖，按能力给出判定与立项前必做项。结论是“有条件 GO”：浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担；纯浏览器零服务端依赖不成立。
+[产品就绪度 go/no-go](product-readiness-go-no-go.md)汇总本 PoC 已落档的验证结论、环境限制与必须的服务端依赖，按能力给出判定与立项前必做项。结论是“有条件 GO”：浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担；纯浏览器零服务端依赖不成立。[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)把这五项定为试点交付物，逐项写明单实例已验证边界、多实例前置条件与不得声称的范围：试点只支持单进程同源服务，多实例/跨主机 HA 未实现也未验证。
 
 ## Summary
 

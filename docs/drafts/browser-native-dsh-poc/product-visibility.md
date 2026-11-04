@@ -4,9 +4,9 @@
 
 ## 失败分类
 
-`turn/end` 的 `reason.kind === 'error'` 携带结构化 `{ code, message }`。正式 `packages/client/ui-chat` 的 `TurnErrorNodeView` 把 `code` 渲染为 `<code>` 元素，并显示 `message` 文本。backend 的 provider 错误映射（`UPSTREAM_LLM_AUTH_FAILED`、`RATE_LIMITED`、`UNAVAILABLE`、`TIMEOUT` 等）因此无需额外 UI 即可到达用户。
+`turn/end` 的 `reason.kind === 'error'` 携带结构化 `{ code, message }`。正式 `packages/client/ui-chat` 的 `TurnErrorNodeView` 用既有 `Tag` 组件（danger 色调）渲染 `code`，容器带 `data-turn-error-code`，并显示 `message` 文本。backend 的 provider 错误映射（`UPSTREAM_LLM_AUTH_FAILED`、`RATE_LIMITED`、`UNAVAILABLE`、`TIMEOUT` 等）因此无需额外 UI 即可到达用户。
 
-`tests/product-visibility.e2e.mjs` 用 `scriptedLlmFault` 注入 `UPSTREAM_LLM_AUTH_FAILED`，断言四层一致：`turn/end.reason.error.code`、DOM `<code>` 文本、`turn/end.reason.error.message`、DOM 消息文本。这是 scripted 注入，不是真实 provider 的 401。
+`tests/product-visibility.e2e.mjs` 用 `scriptedLlmFault` 注入 `UPSTREAM_LLM_AUTH_FAILED`，断言四层一致：`turn/end.reason.error.code`、`[data-turn-error-code]` 文本、`turn/end.reason.error.message`、DOM 消息文本。这是 scripted 注入，不是真实 provider 的 401。
 
 ## 准入排队位置
 
@@ -15,9 +15,10 @@
 preview 的行为分两段：
 
 - 提交后 `user/message` 立即进入 Session，即使用户仍排在别的 turn 后面，自己的 prompt 已可见。
-- 超时后 turn 以 `ADMISSION_TIMEOUT` 结束，UI 同时显示 `<code>ADMISSION_TIMEOUT</code>` 与含 `queue position 1` 的消息。
+- 等待 admission 时，Worker 每 400 ms 轮询同源 admission 快照，在 `output[data-browser-native-queue-status]`（`aria-live="polite"`）上显示本地化位次；前项被准入后位次会前移，准入或取消后隐藏。
+- 超时后 turn 以 `ADMISSION_TIMEOUT` 结束，UI 同时以 `Tag` 渲染代码并显示含 `queue position 1` 的消息。
 
-E2E 把 `maxConcurrentTurns` 设为 1、`queueTimeoutMs` 设为 3 秒，用 `barrier-text` 固定 A 页的 turn，再让 C 页提交并等待超时。它断言排队中 prompt 已渲染、终止码、终止消息中的位置、DOM 中的代码与位置文本。
+E2E 把 `maxConcurrentTurns` 设为 1、`queueTimeoutMs` 设为 3 秒，用 `barrier-text` 固定 A 页的 turn，再让 C 页提交并等待超时。它断言排队中 prompt 已渲染、终止码、终止消息中的位置、组件化代码与位置文本。实时位次及位次前移的独立断言见[16 Session 仪表盘](session-dashboard-16.md)。
 
 ## Session 租约冲突
 
@@ -43,7 +44,7 @@ DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-vis
 
 ## 缺口
 
-- 排队位置只在超时终止消息里出现一次，排队期间没有实时位置、预计等待或队列徽标；用户无法在等待中知道自己的名次。
-- `queuePosition` 是超时瞬间的值；前面的 turn 结算后位置会前移，但消息不会更新。
+- 排队位置是 400 ms 轮询的最终一致视图，不显示预计等待时间；轮询频率是 PoC 常量，不是服务端推送。
+- 队列超时消息里的 `queuePosition` 是超时瞬间的值；实时横幅会在前项结算后前移，但终止消息本身不会重写。
 - 冲突状态没有自动恢复路径：另一个标签页关闭或租约过期后，B 页仍需刷新才会重新打开 Session，E2E 未覆盖该恢复。
 - 非租约类 `session/open` 失败仍只发布 `unavailable`，状态条没有专门文案；本轮只补齐 Session 租约冲突。

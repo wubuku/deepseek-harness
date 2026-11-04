@@ -88,7 +88,7 @@ try {
   })
   const failureTerminal = failure.session.events.findLast(event => event.type === 'turn/end' && event.data.turn === failure.turn)
   assert.equal(failureTerminal.data.reason.error.code, 'UPSTREAM_LLM_AUTH_FAILED')
-  const codeText = await pageA.locator('code').filter({ hasText: 'UPSTREAM_LLM_AUTH_FAILED' }).last().innerText()
+  const codeText = await pageA.locator('[data-turn-error-code="UPSTREAM_LLM_AUTH_FAILED"]').last().innerText()
   assert.equal(codeText.trim(), 'UPSTREAM_LLM_AUTH_FAILED')
   await pageA.getByText('visibility probe: upstream rejected the key', { exact: false }).last().waitFor({ timeout: 10_000 })
 
@@ -122,7 +122,7 @@ try {
       const terminal = queuedResult.session.events.findLast(event => event.type === 'turn/end' && event.data.turn === queuedResult.turn)
       assert.equal(terminal.data.reason.error.code, 'ADMISSION_TIMEOUT')
       assert.match(terminal.data.reason.error.message, /queue position 1/)
-      const queuedCode = await pageC.locator('code').filter({ hasText: 'ADMISSION_TIMEOUT' }).last().innerText()
+      const queuedCode = await pageC.locator('[data-turn-error-code="ADMISSION_TIMEOUT"]').last().innerText()
       assert.equal(queuedCode.trim(), 'ADMISSION_TIMEOUT')
       await pageC.getByText(/queue position 1/).last().waitFor({ timeout: 10_000 })
       holdRelease.resolve()

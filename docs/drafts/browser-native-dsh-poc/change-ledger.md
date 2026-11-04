@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-097：服务端交付物与单实例/多实例边界
+
+```text
+changeId: BN-P2-097
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/server-delivery-boundaries.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/README.md; docs/drafts/browser-native-dsh-poc/product-visibility.md; docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs
+reason: 立项前必做第 1 项要求把 Session 权威、检索索引、租户预算与费用、egress 代理、durable host 定为服务端交付物并给出单实例/多实例边界；此前这些结论分散在运行、检索、预算与安全文档中，没有一处可判定边界。
+existingExtensionPointsChecked: 直接汇总已落档的 Session 持久化/owner epoch、session-query 规模、token 预算、egress 与凭据隔离、durable host 与重启恢复证据；未新增代码路径，也未把未验证的共享存储或 HA 写成已支持。
+whyDraftOnlyWasInsufficient: 需要逐项写出试点交付物、单实例已验证边界、多实例前置条件、共同不变量与不得声称的范围，供立项决策直接引用。
+behaviorChange: 新增决策页；试点明确只支持单进程同源服务，多实例/跨主机接管/handoff 均为未实现未验证；同步修正产品可见性文档与 E2E 的 `Tag`/实时位次现状，并在 drafts 索引登记。
+consumersUpdated: PoC README、drafts README 索引（新增 112，更新 104/110）、change ledger、product-visibility 文档与 E2E 选择器。
+test: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/product-visibility.e2e.mjs` 通过，输出仍为 `UPSTREAM_LLM_AUTH_FAILED`、`ADMISSION_TIMEOUT`（含位置）与 `sessionLeaseConflict`；本项不改 packages，故未重跑 build:check。
+syncReplaySteps: 上游同步后核对五类交付物是否仍由 backend 承担、owner/epoch 与审计口径是否变化；更新本页边界并复跑 product-visibility E2E。
+deleteCondition: 服务端交付物拆分或试点部署形态改变，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-096：排队实时位次与失败错误码组件化
 
 ```text
