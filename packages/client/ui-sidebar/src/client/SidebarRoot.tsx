@@ -16,7 +16,7 @@
  * scrollbar indirection away while it is elsewhere, so a list the user is not
  * pointing at carries no bar.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, isDarwinDesktop, ShortcutKeys, Tooltip,
@@ -170,6 +170,8 @@ export function SidebarRoot({
   }, [pointerInside])
 
   const buildVersion = localBuildVersion()
+  const brandId = useId()
+  const newSessionLabelId = useId()
 
   const darwinDesktop = isDarwinDesktop()
   // Rail resting state is the whale mark; hovering swaps in the panel icon
@@ -220,7 +222,7 @@ export function SidebarRoot({
             the collapsed rail's logo is the expand toggle below instead. */}
         {wide && (() => {
           const identity = (
-            <span className={css.brandIdentity} aria-hidden="true">
+            <span className={css.brandIdentity} id={brandId} aria-hidden="true">
               <span className={css.brandMark}>
                 {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo size={24} /> })}
               </span>
@@ -244,10 +246,11 @@ export function SidebarRoot({
               <button
                 type="button"
                 className={clsx(css.brand, css.wide)}
-                aria-label={t('session.new.label')}
+                aria-labelledby={`${brandId} ${newSessionLabelId}`}
                 aria-keyshortcuts={newShortcut?.aria}
                 onClick={() => { startSession() }}
               >
+                <span className={css.visuallyHidden} id={newSessionLabelId}>{t('session.new.label')}</span>
                 {identity}
               </button>
             )

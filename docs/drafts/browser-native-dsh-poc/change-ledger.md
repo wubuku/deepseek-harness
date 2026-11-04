@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-143：axe-core 可访问性审计与 label-in-name 修复
+
+```text
+changeId: BN-P2-143
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: packages/client/ui-sidebar/src/client/SidebarRoot.tsx; packages/client/ui-sidebar/src/client/SidebarRoot.module.css; packages/client/ui-sidebar/tests/sidebar-root.client.spec.tsx; packages/client/ui-sidebar/tests/sidebar-snapshot.client.spec.tsx; packages/client/ui-sidebar/tests/__snapshots__/sidebar-snapshot.client.spec.tsx.snap; packages/client/ui-settings-account/src/client/AccountMenu.tsx; packages/client/ui-settings-account/tests/account.client.spec.tsx; docs/drafts/browser-native-dsh-poc/tests/accessibility-audit.e2e.mjs; docs/drafts/browser-native-dsh-poc/accessibility-audit.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/browser-native-dsh-poc/package.json; docs/drafts/browser-native-dsh-poc/package-lock.json
+reason: 新增状态（导出、失败、排队、离线/恢复、协作冲突、移动端）此前没有自动化的可访问性门禁；主界面已有两个 serious 违规，静默存在。
+existingExtensionPointsChecked: 复用 UI 现有 `t` 词条、`aria-labelledby`/`aria-label` 与既有 `useId`，axe-core 通过 preview 的 URL-gated test 通道注入；未改 Agent Loop、Session format、正式 profile 或根依赖。
+whyDraftOnlyWasInsufficient: 只靠代码审阅无法证明 axe 的实际判定结果，也无法覆盖固定定位状态条与移动端页面的组合；必须在真实 Chrome 渲染后按状态扫描。
+behaviorChange: 品牌按钮的 accessible name 改为 `aria-labelledby`（品牌可见文本 + 视觉隐藏的 New session 文案），账号菜单宽布局的 accessible name 改为 `<菜单名>: <可见文本>`；两处均只改名称，未新增用户可见文案。组件测试的精确名称查询改为正则，侧边栏快照按新标记重新生成。PoC 目录新增 `axe-core@4.14.0` devDependency 与审计脚本。
+consumersUpdated: 侧边栏/账号组件测试与快照、PoC README 产品导航、新增 accessibility-audit.md、本 ledger。`packages/` 已运行最新 `build:artifacts`，随后 `build:check` 通过。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/accessibility-audit.e2e.mjs` 通过：main、export、failure、queued、offline-recovery、collaboration-session-conflict、mobile-ui-only 共 7 个状态均为 0 个 serious/critical，pageerror 0；仅剩 main 类状态的 `landmark-one-main`/`page-has-heading-one`/`region` 与移动端的 `region` 等 moderate 项。`pnpm exec vitest run --project thread-safe packages/client/ui-sidebar/tests/sidebar-root.client.spec.tsx packages/client/ui-sidebar/tests/sidebar-snapshot.client.spec.tsx` 22/22 通过；`packages/client/ui-settings-account/tests` 388/388 通过。
+syncReplaySteps: 上游同步后重建 preview，复跑审计脚本；确认品牌/账号名称仍包含可见文本、两个组件测试套件仍通过，且审计仍只阻断 serious/critical。
+deleteCondition: 正式客户端提供 axe 或等价的可访问性门禁并覆盖这些状态；或该 PoC-local 审计被移除。
+status: implemented
+```
+
 ### BN-P2-142：16 Session 长跑资源收敛与 mount unmount
 
 ```text
