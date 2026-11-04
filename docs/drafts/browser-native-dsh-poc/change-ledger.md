@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-135：usage ledger 记录缓存读写拆分，并用真实 provider 测量裁剪与缓存成本
+
+```text
+changeId: BN-P2-135
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/tests/context-cost.e2e.mjs; docs/drafts/browser-native-dsh-poc/context-cost.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: usage ledger 只保存下次汇总需要的 `inputTokens`/`outputTokens`，provider 在流式 usage 中返回的 `prompt_tokens_details.cached_tokens` 与 `cache_write_tokens` 在解析时被丢弃，导致“system prompt 是否真的命中缓存”和“裁剪省下多少 billed input”都无法从审计数据判断，成本策略只能靠猜。
+existingExtensionPointsChecked: 复用 `runLlmAttempt` 的 provider SSE 用量解析、`realLlm` 的 usage sink、`usage-audit` 接口、`buildUsageReport` 的计费口径、`createRuntimeValidationDist` 的 profile 覆盖入口与既有 `tool-result-pruner`/`compaction-basic` 插件配置；未改 Agent Loop、Session 事件类型或格式、模型/工具协议、普通 profile，也未改 `packages/`。
+whyDraftOnlyWasInsufficient: 缓存是否命中取决于真实网关对请求前缀的逐字节比较，裁剪是否省钱取决于真实 compaction 压力线与真实 token 计数；两者都只能由真实 provider 请求与返回的 usage 证明，静态阅读无法区分“缓存未命中”与“缓存字段被丢弃”。
+behaviorChange: `backend-v2.mjs` 在解析 provider usage 时同时读取 `prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` 与 `cache_write_tokens`，把 `cacheReadTokens`/`cacheWriteTokens` 写进 usage ledger 条目；`inputTokens` 仍为 provider 完整 prompt 计数，成本汇总口径不变。`runtime-validation.mjs` 新增 `toolResultPrunerThresholdChars` 覆盖，用于在同一窗口下对比默认裁剪与等价关闭。新增 `tests/context-cost.e2e.mjs` 与 `context-cost.md`。
+consumersUpdated: `usage-audit` 响应条目新增两个可选缓存字段（旧消费者忽略即可）；PoC README 新增“上下文成本与缓存策略”章节与导航入口；本 ledger 登记。
+tests: `DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/context-cost.e2e.mjs` 1/1 通过。实测：system prompt 摘要恒为 `56b6afb1d117e9f7`；4 轮 billed input 2,350/2,398/2,431/2,477，缓存读恒为 2,304，合计 9,656 中 9,216 为缓存命中（95.4%）；默认裁剪 billed input 5,111、峰值 2,735、压缩 0 次，关闭裁剪 21,601、峰值 19,225、压缩 1 次（2,747），省 16,490（76.3%）。输出 `{"result":"passed","model":"LongCat-2.5","systemPromptDigests":["56b6afb1d117e9f7"],"cache":{"requests":4,"billedInput":9656,"cacheReadTokens":9216,"cacheReadRatio":0.954},"pruning":{"default-pruner":{"totalBilledInput":5111,"peakRequestInput":2735,"compactionRequests":0,"prunedEvents":1},"pruner-disabled":{"totalBilledInput":21601,"peakRequestInput":19225,"compactionRequests":1,"compactionBilledInput":2747,"prunedEvents":0},"savings":16490,"savingsRatio":0.763}}`。
+syncReplaySteps: 上游同步后先 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，再以 `DSH_POC_ENV_FILE` 复跑同一命令；确认 `tool-result-pruner` 的 `Config` 仍是阈值来源、`runLlmAttempt` 的 usage 解析仍是唯一 provider 用量入口、`buildUsageReport` 仍按 `inputTokens` 计费。
+deleteCondition: 正式成本审计直接消费 provider usage 拆分字段，或该 PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-134：断网可见状态、Session 请求等待队列与按 requestId 幂等重放
 
 ```text

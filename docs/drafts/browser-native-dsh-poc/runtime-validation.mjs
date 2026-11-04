@@ -29,11 +29,11 @@ function findPluginEntry(value, id) {
 
 /**
  * Serve the real preview with reproducible VFS files and an optional browser-only preset.
- * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent' | 'browser-tool-policy' | 'browser-budget' | 'browser-session-query', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number, memoryIsolation?: boolean}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap; memoryIsolation adds the Session memory tool that only the memory validation publishes.
+ * @param {{distRoot?: string, roster?: 'browser' | 'original' | 'browser-skill' | 'browser-multi-agent' | 'browser-cpu-contention' | 'browser-session-orchestration' | 'browser-session-continuity' | 'browser-subagent' | 'browser-tool-policy' | 'browser-budget' | 'browser-session-query', largeFileChars?: number, timedQuestionTimeout?: number, contextWindow?: number, compactHeadroomTokens?: number, compactMaxTokens?: number, memoryIsolation?: boolean, toolResultPrunerThresholdChars?: number}} options - Built preview and validation fixtures; contextWindow, compactHeadroomTokens, and compactMaxTokens override the profile's model window, compaction headroom, and summary cap; toolResultPrunerThresholdChars overrides the tool-result pruner threshold so a run can compare trimmed and untrimmed requests; memoryIsolation adds the Session memory tool that only the memory validation publishes.
  * @returns {Promise<{distRoot: string, roster: string, cleanup: () => Promise<void>}>} Private image and cleanup owner.
  */
 export async function createRuntimeValidationDist({
-  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens, memoryIsolation = false,
+  distRoot = 'apps/web/dist', roster = 'browser', largeFileChars = 0, timedQuestionTimeout, contextWindow, compactHeadroomTokens, compactMaxTokens, memoryIsolation = false, toolResultPrunerThresholdChars,
 } = {}) {
   if (!['browser', 'original', 'browser-skill', 'browser-multi-agent', 'browser-cpu-contention', 'browser-session-orchestration', 'browser-session-continuity', 'browser-subagent', 'browser-tool-policy', 'browser-budget', 'browser-session-query'].includes(roster)) {
     throw new Error('roster must be browser, original, browser-skill, browser-multi-agent, browser-cpu-contention, browser-session-orchestration, browser-session-continuity, browser-subagent, browser-tool-policy, browser-budget, or browser-session-query')
@@ -65,7 +65,7 @@ export async function createRuntimeValidationDist({
       ? 'runtime-validation.cordis.patch.yml'
       : roster === 'browser-skill' ? 'worker-skill-filesystem-validation.cordis.patch.yml' : 'browser-native-profile.cordis.patch.yml'
     let profilePatch = await readFile(new URL(patch, here), 'utf8')
-    if (memoryIsolation || timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget' || roster === 'browser-session-query') {
+    if (memoryIsolation || timedQuestionTimeout !== undefined || contextWindow !== undefined || compactHeadroomTokens !== undefined || compactMaxTokens !== undefined || toolResultPrunerThresholdChars !== undefined || roster === 'browser-multi-agent' || roster === 'browser-cpu-contention' || roster === 'browser-session-orchestration' || roster === 'browser-session-continuity' || roster === 'browser-subagent' || roster === 'browser-tool-policy' || roster === 'browser-budget' || roster === 'browser-session-query') {
       const entries = load(profilePatch)
       if (!Array.isArray(entries)) throw new Error('validation profile must be a Cordis patch list')
       if (memoryIsolation) {
@@ -86,6 +86,14 @@ export async function createRuntimeValidationDist({
           ...(compactHeadroomTokens === undefined ? {} : { headroomTokens: compactHeadroomTokens }),
           ...(compactMaxTokens === undefined ? {} : { maxTokens: compactMaxTokens }),
         }
+      }
+      if (toolResultPrunerThresholdChars !== undefined) {
+        if (!Number.isSafeInteger(toolResultPrunerThresholdChars) || toolResultPrunerThresholdChars <= 0) {
+          throw new Error('toolResultPrunerThresholdChars must be a positive safe integer')
+        }
+        const pruner = findPluginEntry(entries, 'tool-result-pruner')
+        if (pruner === undefined) throw new Error('validation profile has no tool-result-pruner entry')
+        pruner.config = { ...pruner.config, thresholdChars: toolResultPrunerThresholdChars }
       }
       if (timedQuestionTimeout !== undefined) {
         const preset = entries.find(entry => entry?.id === 'preset-standard')

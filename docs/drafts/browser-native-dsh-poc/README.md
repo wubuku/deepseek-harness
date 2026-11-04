@@ -59,7 +59,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 运行入口与拓扑 | [托管模式部署、备份恢复、数据删除与只读共享](hosted-deployment.md)、[混沌回归套件](chaos-regression-suite.md)、[v2 运行入口](#v2-运行入口)、[Worker 拓扑的阻塞与终止隔离](#worker-拓扑的阻塞与终止隔离)、[单 Worker CPU 阻塞与协作式让出](#单-worker-cpu-阻塞与协作式让出) |
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
-| 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
+| 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[上下文成本与缓存策略](#上下文成本与缓存策略)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
@@ -1439,6 +1439,24 @@ node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
 ```
 
 边界：排队只发生在 Worker 进程内，页面刷新后由既有 durable outbox 与 seq 冲突对账接管，不继承排队计数；只有 Session HTTP 请求在发送前等待连接，模型请求本身不排队；`requestId` 幂等缓存随 backend 进程消失，跨进程重试仍依赖 outbox 与 seq 对账；未覆盖 Service Worker 后台重放。
+
+## 上下文成本与缓存策略
+
+[上下文成本](context-cost.md)记录真实 provider（`LongCat-2.5`）下 system prompt 稳定性与工具结果裁剪对 billed input 的影响。此前 usage ledger 只记录 `inputTokens`/`outputTokens`，provider 的 `prompt_tokens_details.cached_tokens` 在解析时被丢弃，缓存命中不可观测；现在 ledger 在完整 prompt 计数之外并列记录 `cacheReadTokens`/`cacheWriteTokens`，成本汇总口径不变。
+
+缓存段：单 Session 连续 4 个不调用工具的短 turn，system prompt 摘要恒为 `56b6afb1d117e9f7`；4 次请求 billed input 依次为 2,350 / 2,398 / 2,431 / 2,477，缓存读恒为 2,304，合计 9,656 billed input 中 9,216 为缓存命中（95.4%）。
+
+裁剪段：600 行、约 54k 字符的日志文件用一次 `read` 读入，在 8,192 token 窗口下对比默认裁剪与阈值 1,000,000（等价关闭）。默认裁剪 billed input 5,111、单请求峰值 2,735、无压缩请求；关闭裁剪 21,601、峰值 19,225、触发 1 次压缩（2,747）。默认阈值省 16,490 token（76.3%），并让本例无需压缩。
+
+默认策略：保留 `tool-result-pruner` 默认阈值；system prompt 逐轮字节稳定，动态快照与时间采样不进请求前缀；ledger 必须记录缓存拆分；依赖完整日志的任务改用 `read` 的 `offset`/`limit` 分页而不是调高阈值。
+
+复跑：
+
+```sh
+DSH_POC_ENV_FILE=docs/drafts/.env node docs/drafts/browser-native-dsh-poc/tests/context-cost.e2e.mjs
+```
+
+边界：只覆盖一个 OpenAI-compatible 网关与一个模型；缓存字段由 provider 兼容层读取，网关不返回该字段时脚本在断言处失败而不是跳过；裁剪对比是单 turn 单工具结果，未覆盖并行工具与长会话累积裁剪；provider 侧缓存 TTL 与计费折扣不在测量范围。
 
 ## 权限预设与审批生命周期
 

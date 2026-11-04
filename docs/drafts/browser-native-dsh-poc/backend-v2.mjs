@@ -2280,12 +2280,18 @@ function fallbackConfig(override, env, defaults) {
 /** Map an OpenAI-compatible usage object to the adapter's token usage fields. */
 function streamUsage(value) {
   if (value === null || typeof value !== 'object') return undefined
-  const inputTokens = value.prompt_tokens
+  const promptTokens = value.prompt_tokens
   const outputTokens = value.completion_tokens
-  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) return undefined
+  if (!Number.isSafeInteger(promptTokens) || !Number.isSafeInteger(outputTokens)) return undefined
+  const cached = value.prompt_tokens_details?.cached_tokens ?? value.prompt_cache_hit_tokens
+  const written = value.prompt_tokens_details?.cache_write_tokens
+  const cacheReadTokens = Number.isSafeInteger(cached) && cached >= 0 ? cached : undefined
+  const cacheWriteTokens = Number.isSafeInteger(written) && written >= 0 ? written : undefined
   return {
-    inputTokens,
+    inputTokens: cacheReadTokens === undefined ? promptTokens : Math.max(0, promptTokens - cacheReadTokens),
     outputTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
     ...(Number.isSafeInteger(value.total_tokens) ? { totalTokens: value.total_tokens } : {}),
   }
 }
@@ -4615,8 +4621,17 @@ async function runLlmAttempt(response, request, config, body, { canRetry }) {
   const sink = createStreamSink(response)
   let auditInput
   let auditOutput
+  let auditCacheRead
+  let auditCacheWrite
+  // `inputTokens` stays the provider's full prompt count so the ledger and cost
+  // report keep one billing total; the cache breakdown is reported beside it.
   const usage = () => (Number.isSafeInteger(auditInput) && Number.isSafeInteger(auditOutput)
-    ? { inputTokens: auditInput, outputTokens: auditOutput }
+    ? {
+        inputTokens: auditInput,
+        outputTokens: auditOutput,
+        ...(Number.isSafeInteger(auditCacheRead) ? { cacheReadTokens: auditCacheRead } : {}),
+        ...(Number.isSafeInteger(auditCacheWrite) ? { cacheWriteTokens: auditCacheWrite } : {}),
+      }
     : undefined)
   const timeoutFailure = () => new BackendError('UPSTREAM_LLM_TIMEOUT', `upstream LLM did not respond within ${config.timeoutMs}ms`, 504)
   let upstream
@@ -4658,8 +4673,13 @@ async function runLlmAttempt(response, request, config, body, { canRetry }) {
               const reported = item.usage ?? item.message?.usage
               const input = reported?.prompt_tokens ?? reported?.input_tokens
               const output = reported?.completion_tokens ?? reported?.output_tokens
+              const details = reported?.prompt_tokens_details
+              const cached = details?.cached_tokens ?? reported?.prompt_cache_hit_tokens
+              const written = details?.cache_write_tokens ?? reported?.prompt_cache_write_tokens
               if (Number.isSafeInteger(input)) auditInput = input
               if (Number.isSafeInteger(output)) auditOutput = output
+              if (Number.isSafeInteger(cached)) auditCacheRead = cached
+              if (Number.isSafeInteger(written)) auditCacheWrite = written
             } catch {
               // A provider heartbeat line that is not JSON carries no usage.
             }
