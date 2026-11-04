@@ -77,6 +77,14 @@ try {
     `dsh.browser-native.owner.${encodeURIComponent(sessionId)}`,
   ), firstTurn.sessionId)
   assert.equal(typeof ownerToken, 'string')
+  const sessionResources = async () => page.evaluate(async () => {
+    const result = await window.__DSH_BROWSER_NATIVE_WORKSPACE_TEST__?.({ action: 'resource-stats' })
+    return result?.sessionResources
+  })
+  const heldResources = await sessionResources()
+  assert.ok(heldResources?.handles > 0, JSON.stringify(heldResources))
+  assert.ok(heldResources?.owners > 0, JSON.stringify(heldResources))
+  assert.ok(heldResources?.flushers > 0, JSON.stringify(heldResources))
 
   const activeMarker = 'BROWSER_NATIVE_HANDOFF_ACTIVE_TURN_E2E'
   let activeTurn
@@ -193,6 +201,16 @@ try {
 
   const persisted = await readFile(join(dataDir, 'sessions', `${firstTurn.sessionId}.json`), 'utf8')
   assert.equal(persisted.includes(ownerToken), false)
+
+  // The Worker keeps a write handle with a lease-renewal timer, owner entry and
+  // durability flusher for every open Session. Handoff removes the lease, so
+  // the next renewal must release all three instead of retaining them.
+  const released = await waitFor(async () => {
+    const resources = await sessionResources()
+    return resources !== undefined && resources.handles === 0 && resources.owners === 0 && resources.flushers === 0
+      ? resources : undefined
+  }, 'released session handle, owner and flusher after handoff', 10_000)
+  assert.deepEqual(released, { handles: 0, owners: 0, flushers: 0 })
 
   const earlyClaim = await page.evaluate(async sessionId => {
     const response = await fetch('/api/browser-native/session/open', {

@@ -26,7 +26,7 @@ import { installCryptoGlobals } from '../../../packages/experimental/webworker-r
 import { isShellStartFrame } from '../../../packages/experimental/webworker-runtime/src/shell/process/protocol.ts'
 import { runShellProcess } from '../../../packages/experimental/webworker-runtime/src/shell/process/host.ts'
 import { installProcessGlobal } from '../../../packages/experimental/webworker-runtime/src/node/globals/process.ts'
-import { createBrowserNativeStaticModules, flushBrowserNativeSession } from './browser-native-providers.ts'
+import { browserNativeSessionResourceStats, createBrowserNativeStaticModules, flushBrowserNativeSession } from './browser-native-providers.ts'
 import { requireActiveModuleLoader } from '../../../packages/experimental/webworker-runtime/src/module-system/module-loader.ts'
 import { createBrowserNativeMultiAgentProbe } from './browser-native-multi-agent-probe.ts'
 import type { BrowserNativeMultiAgentRuntime } from './browser-native-multi-agent-probe.ts'
@@ -2244,7 +2244,11 @@ async function handleWorkspaceTestRequest(request: BrowserNativeWorkspaceTestReq
       return
     }
     if (request.action === 'resource-stats') {
-      workspaceTestResponse(request.requestId, { ok: true, resourceStats: readBrowserNativeResourceMetrics() })
+      workspaceTestResponse(request.requestId, {
+        ok: true,
+        resourceStats: readBrowserNativeResourceMetrics(),
+        sessionResources: browserNativeSessionResourceStats(),
+      })
       return
     }
     if (request.action === 'session-handoff') {

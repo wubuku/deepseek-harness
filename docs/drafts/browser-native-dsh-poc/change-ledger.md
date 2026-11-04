@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-146：Session 关闭后的 Worker 资源回收
+
+```text
+changeId: BN-P2-146
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-close-resources.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: Session 失去写租约后，Worker 仍保留写句柄、owner 条目与持久化 flusher，续租定时器也不再停止；打开失败路径同样可能残留 flusher 闭包。没有可观测计数证明“关闭后无残留”。
+existingExtensionPointsChecked: 复用既有 handoff/`SESSION_OWNERSHIP_LOST` 路径、`resource-stats` 测试通道与长跑收敛脚本；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实写租约被 handoff 后，才可能触发 Worker 续租失败并暴露句柄/定时器/flusher 残留；静态检查无法证明实际释放。
+behaviorChange: 续租确认所有权丢失时立即关闭句柄并清理续租定时器；`untrack()` 在 writer 尚未登记时也释放对应 flusher。新增 `browserNativeSessionResourceStats()` 并在 `resource-stats` 返回 `sessionResources`。handoff E2E 增加关闭前/后的资源计数断言。
+consumersUpdated: Worker 测试通道、handoff E2E、PoC README 产品导航、新增 session-close-resources.md、本 ledger。
+tests: `DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/session-owner-handoff.e2e.mjs` 通过：handoff 前 handles/owners/flushers 均大于 0，handoff 后收敛到 0，随后新 owner append 与 stale append 409 仍通过；`resource-lifecycle-long-run.e2e.mjs` 回归通过，16 Session/113 turn 的监听与定时器仍收敛。
+syncReplaySteps: 上游同步后重建 preview，复跑 handoff 与长跑脚本；确认 `sessionResources` 仍随真实写句柄变化、handoff 后归零。
+deleteCondition: 正式客户端提供 Session 关闭/删除的资源回收门禁，或被等价的可观测门禁取代。
+status: implemented
+```
+
 ### BN-P2-145：暗色主题对比度与设计 token 复用
 
 ```text

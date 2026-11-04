@@ -97,6 +97,8 @@ const ADMISSION_QUEUE_POLL_MS = 400
  */
 export const BROWSER_NATIVE_STREAM_INTERRUPTED = 'BROWSER_NATIVE_STREAM_INTERRUPTED'
 const activeSessionOwners = new Map<string, { readonly ownerToken: string; readonly ownerEpoch: number }>()
+const liveSessionHandles = new Set<RemoteSessionHandle>()
+
 const activeSessionFlushers = new Map<string, () => Promise<{
   readonly ownerEpoch: number
   readonly nextSeq: number
@@ -121,6 +123,18 @@ export async function flushBrowserNativeSession(sessionId: string): Promise<{
   const flush = activeSessionFlushers.get(sessionId)
   if (flush === undefined) throw new Error(`browser-native Session "${sessionId}" has no live writer`)
   return await flush()
+}
+
+/**
+ * Report tracked Session resources so tests can prove close/handoff reclamation.
+ * @returns Counts of live handles, write leases, and durability flushers.
+ */
+export function browserNativeSessionResourceStats(): {
+  readonly handles: number
+  readonly owners: number
+  readonly flushers: number
+} {
+  return { handles: liveSessionHandles.size, owners: activeSessionOwners.size, flushers: activeSessionFlushers.size }
 }
 
 interface ErrorPayload {
@@ -450,8 +464,12 @@ class RemoteSessionHandle implements BrowserNativeSessionHandle {
         })
         if (this.ownershipLost) {
           publishSessionConflict(`session ${String(this.id)} write ownership was lost: ${error instanceof Error ? error.message : String(error)}`)
+          // The lease is gone for good, so release the handle now instead of
+          // retaining its flusher, renewal state, and captured workspace.
+          void this.close()
+        } else {
+          this.scheduleRenewal()
         }
-        this.scheduleRenewal()
       })
     }, this.owner.renewAfterMs)
   }
@@ -964,8 +982,14 @@ function createRemoteSessionPersistenceClass(
 
     private untrack(handle: RemoteSessionHandle): void {
       this.handles.delete(handle)
-      if (this.writers.get(handle.id) === handle) {
+      liveSessionHandles.delete(handle)
+      const writer = this.writers.get(handle.id)
+      if (writer === handle) {
         this.writers.delete(handle.id)
+        activeSessionFlushers.delete(String(handle.id))
+      } else if (writer === undefined) {
+        // An open that registered a flusher but failed before becoming a writer
+        // has no map entry to test against, so release it by association.
         activeSessionFlushers.delete(String(handle.id))
       }
     }
@@ -1051,6 +1075,7 @@ function createRemoteSessionPersistenceClass(
         }
       }
       this.handles.add(handle)
+      liveSessionHandles.add(handle)
       if (access === 'write') {
         this.writers.set(id, handle)
         if (owner !== undefined) {
