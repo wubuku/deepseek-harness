@@ -10,7 +10,24 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 任何修改 `docs/drafts` 之外文件的实施者，都必须在提交该修改前增加一条记录，写明当前 DSH 版本、文件、必要性、被检查过的扩展点、测试、上游同步步骤和删除条件。没有登记的目录外修改视为 PoC 未完成，而不是“实现细节”。
 
-当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
+当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
+
+### BN-P2-126：首次使用空状态、引导与示例任务
+
+```text
+changeId: BN-P2-126
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/tests/first-use.e2e.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 新用户第一次打开 preview 时只看到空白对话与固定状态条，没有说明 Worker、同源代理与浏览器 Workspace 的边界，也没有可运行的示例任务；无法证明“第一次就能跑通一个 turn”。
+existingExtensionPointsChecked: 复用 preview 的 `connectBrowserNativePageControl` 页面控制层、`applyLiveRegion`、Workspace `synced` 通知，以及既有 composer 契约（`[data-composer-input][contenteditable="true"]` 与 Send 按钮 aria-label）；未改 Agent Loop、Session 事件、composer 组件或正式 DSH package。
+whyDraftOnlyWasInsufficient: 首次使用是否闭环只能由真实 Chrome 证明：引导必须在空 composer 上出现、示例必须进入现有 composer 状态、点击 Send 后由真实 Agent Loop 产生持久化 turn，且不再重复出现。
+behaviorChange: 页面控制在 Workspace `synced` 后、composer 挂载且无可见 dialog 时，为本浏览器没有 `dsh-browser-native-first-use-completed-v1` 标记的 principal 显示非模态引导卡：说明 Dedicated Worker、同源 LLM proxy 与浏览器 Workspace，列出三步，并给出一条本地化示例任务；点击“填入示例任务”只把文本插入现有 composer（不发送），按 Send 或 Enter 后写入标记并隐藏，关闭按钮同样写入标记。卡片根节点 `pointer-events: none`，仅两个按钮可交互；文案由 `locales/browser-native-workspace.ts` 拥有。
+consumersUpdated: README 导航与“首次使用体验”章节；本账本。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/first-use.e2e.mjs` 在 Chrome 156 / macOS 上 PASS：引导出现且 composer 为空、三条步骤、示例任务文本；点击后 composer 文本等于示例；直接点击 Send（不重新 fill）后 Session 收到该 user message、`turn/end` reason `completed`、assistant 文本包含 `Browser-native DSH completed this turn:`；引导消失、重载不再出现；第二个 zh-CN 上下文显示“第一次在浏览器里运行 DSH”，点击关闭后标记持久化、重载不出现。回归：`tests/browser-native-v2.e2e.mjs`、`tests/browser-support-gate.e2e.mjs`、`tests/durable-workspace-recovery.e2e.mjs` PASS；`pnpm run typecheck` 与 scoped oxlint PASS。
+syncReplaySteps: 上游同步后复跑 `tests/first-use.e2e.mjs` 与上述三个回归测试，核对 `data-composer-input` 选择器与 Send 按钮 aria-label。
+deleteCondition: 正式产品提供等价的首次使用空状态与引导后删除本 PoC UI；或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
 
 ### BN-P2-125：Session 只读共享与 viewer 写权限拒绝
 

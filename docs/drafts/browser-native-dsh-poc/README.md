@@ -65,7 +65,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
 | 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用) |
-| 产品与就绪度 | [产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
+| 产品与就绪度 | [首次使用体验](#首次使用体验)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
 ## 单 Worker CPU 阻塞与协作式让出
@@ -150,6 +150,14 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 浏览器原生模式的左下角提供 Workspace 切换器：列出当前 principal 拥有的 Workspace（短 id、文件数、revision），可新建或切换。切换沿用同一 principal cookie，只更新服务端记录的 active Workspace，然后刷新页面；刷新前清空本标签页的 `sessionStorage` 恢复记录，避免旧 Workspace 的 lease/receipt 被新 Worker 恢复。每个 Worker 启动时只读取 active Workspace 的 manifest，切换前后的文件与 Session 不共享；backend 仍按 `workspaceId` 的 owner 授权，跨 principal 的显式 Workspace id 返回 403/404，writer lease 仍按 Workspace 独立计量。
 
 证据：`node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 覆盖列表、创建、切换、文件数、跨 principal 隔离与切换后旧 Workspace 不含新文件；`node docs/drafts/browser-native-dsh-poc/tests/workspace-switching.e2e.mjs` 在 Chrome 中通过点击“新建工作区”得到空 Workspace、再切回原 Workspace 并恢复其文件，输出 `{"result":"passed","firstWorkspaceId":"...","secondWorkspaceId":"...","switchedBack":true}`。
+
+## 首次使用体验
+
+第一次打开 preview 的浏览器 principal 在 Workspace 同步完成、composer 挂载且没有可见 dialog 时，会看到一张非模态引导卡：说明本页在 Dedicated Worker 中运行真实 DSH Agent Loop、模型请求经同源后端代理、Workspace 文件留在当前浏览器，并列出“写任务 → 按发送 → 看到工作区已同步”三步。卡片提供一条本地化示例任务；点击“填入示例任务”只把文本插入现有 composer，不代替用户发送，用户仍可通过 Send 按钮或 Enter 触发第一次模型调用。
+
+引导卡根节点使用 `pointer-events: none`，只有“填入示例任务”和“不再显示”两个按钮可交互，因此不会拦截页面其他控件；文案由 `apps/web/src/locales/browser-native-workspace.ts` 拥有，中英文各一套。点击发送、按 Enter 或关闭后写入本浏览器的 `dsh-browser-native-first-use-completed-v1` 标记并隐藏卡片，之后重载不再出现。该标记只表示“本浏览器已完成首次引导”，不代表 principal 在服务端已有或没有 Session；换浏览器或清空本地存储会再次显示。
+
+证据：`node docs/drafts/browser-native-dsh-poc/tests/first-use.e2e.mjs` 在 Chrome 156 / macOS 上 PASS，输出 `{"result":"passed","scope":"first-use-empty-state-guide-sample-task","emptyComposerAtFirstUse":true,"guideSteps":3,"sampleTask":"In three sentences, describe what you can do inside this browser Workspace.","sampleTurnReason":"completed","assistantMarker":"Browser-native DSH completed this turn:","guideDismissedAfterFirstTurn":true,"guideSuppressedAfterReload":true,"localizedTitle":"第一次在浏览器里运行 DSH"}`。测试不重新 fill composer：引导插入示例后直接点击 Send，断言 Session 收到同一 user message、`turn/end` reason 为 `completed` 且 assistant 文本来自 scripted 模型；另用 zh-CN 上下文验证关闭与重载抑制。
 
 ## 完整性与生命周期验证
 

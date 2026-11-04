@@ -239,3 +239,56 @@ export function browserNativeWorkspaceRecoveryResultCopy(language: string, succe
   if (language.startsWith('zh')) return success ? '恢复包已下载，请妥善保管。' : '恢复包导出失败；本地数据未更改。'
   return success ? 'Recovery bundle downloaded. Store it securely.' : 'Recovery export failed; local data was not changed.'
 }
+
+/** Format the first-use guide shown on a browser's first visit.
+ *
+ * The guide names the first turn's three steps and offers one sample task; the
+ * page inserts that task into the existing composer instead of submitting a
+ * request, so the user still controls the first model call.
+ * @param language - Page language tag.
+ * @returns Localized guide copy and the sample task text.
+ */
+export function browserNativeFirstUseCopy(language: string): {
+  readonly label: string
+  readonly title: string
+  readonly body: string
+  readonly steps: readonly string[]
+  readonly sampleAction: string
+  readonly sampleTask: string
+  readonly dismiss: string
+  readonly filled: string
+  readonly composerMissing: string
+} {
+  if (language.startsWith('zh')) {
+    return {
+      label: '首次使用引导',
+      title: '第一次在浏览器里运行 DSH',
+      body: '这个预览在 Dedicated Worker 中运行真实 DSH Agent Loop；模型请求经同源后端代理，工作区文件保存在当前浏览器。',
+      steps: [
+        '在下方输入框写下任务，或使用示例任务。',
+        '按发送按钮，等待助手回复完成。',
+        '顶部显示“工作区已同步”后，这次运行已持久化。',
+      ],
+      sampleAction: '填入示例任务',
+      sampleTask: '请用三句话介绍你在这个浏览器工作区里能完成的事情。',
+      dismiss: '不再显示',
+      filled: '示例任务已填入输入框，按发送开始第一次运行。',
+      composerMissing: '未找到对话输入框；请在页面底部输入任务。',
+    }
+  }
+  return {
+    label: 'First-run guide',
+    title: 'Run DSH in the browser for the first time',
+    body: 'This preview runs the real DSH Agent Loop in a Dedicated Worker; model requests go through the same-origin backend proxy, and Workspace files stay in this browser.',
+    steps: [
+      'Write a task in the composer below, or use the sample task.',
+      'Press Send and wait for the assistant reply to finish.',
+      'Once the header shows “Workspace synced”, the run is persisted.',
+    ],
+    sampleAction: 'Use the sample task',
+    sampleTask: 'In three sentences, describe what you can do inside this browser Workspace.',
+    dismiss: 'Don’t show again',
+    filled: 'Sample task inserted. Press Send to run your first turn.',
+    composerMissing: 'No composer was found; type a task at the bottom of the page.',
+  }
+}

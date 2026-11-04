@@ -1,4 +1,5 @@
 import {
+  browserNativeFirstUseCopy,
   browserNativeQueueStatusCopy,
   browserNativeRecoveryErrorCopy,
   browserNativeSessionExportCopy,
@@ -28,6 +29,8 @@ import {
 } from './browser-native-control-channel.ts'
 
 type BrowserNativePageNotice = BrowserNativeControlNotice
+
+const BROWSER_NATIVE_FIRST_USE_STORAGE_KEY = 'dsh-browser-native-first-use-completed-v1'
 
 declare global {
   interface Window {
@@ -312,6 +315,7 @@ export async function connectBrowserNativePageControl(
   }
   const showWorkspaceStatus = (notice: BrowserNativeWorkspaceStatus): void => {
     clearRetryTimer()
+    if (notice.state === 'synced') void checkFirstUse()
     workspaceStatus ??= (() => {
       const element = document.createElement('output')
       applyLiveRegion(element, 'status')
@@ -530,6 +534,195 @@ export async function connectBrowserNativePageControl(
     }
     window.location.reload()
   }
+  let firstUsePanel: { readonly root: HTMLElement; readonly status: HTMLElement } | undefined
+  let firstUseChecked = false
+  let firstUseCompleted = false
+  const hideFirstUseGuide = (): void => {
+    firstUsePanel?.root.remove()
+    firstUsePanel = undefined
+  }
+  const markFirstUseCompleted = (): void => {
+    if (firstUseCompleted) return
+    firstUseCompleted = true
+    try {
+      window.localStorage.setItem(BROWSER_NATIVE_FIRST_USE_STORAGE_KEY, '1')
+    } catch (error) {
+      console.warn('browser-native DSH: the first-use marker could not be stored', error)
+    }
+    hideFirstUseGuide()
+  }
+  const firstUseMarkerPresent = (): boolean => {
+    try {
+      return window.localStorage.getItem(BROWSER_NATIVE_FIRST_USE_STORAGE_KEY) === '1'
+    } catch (error) {
+      console.warn('browser-native DSH: the first-use marker could not be read', error)
+      return true
+    }
+  }
+  const composerElement = (): HTMLElement | undefined => [
+    ...document.querySelectorAll<HTMLElement>('[data-composer-input][contenteditable="true"]'),
+  ].at(-1)
+  const hasOpenDialog = (): boolean => [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+    .some(dialog => typeof dialog.checkVisibility === 'function'
+      ? dialog.checkVisibility()
+      : dialog.getClientRects().length > 0)
+  const waitForFirstUseSurface = async (): Promise<boolean> => {
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline) {
+      if (failedClosed || pageLeaving) return false
+      if (composerElement() !== undefined && !hasOpenDialog()) return true
+      await new Promise((resolveDelay) => { window.setTimeout(resolveDelay, 250) })
+    }
+    return false
+  }
+  const insertComposerText = (input: HTMLElement, text: string): void => {
+    input.focus()
+    const selection = document.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(input)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    // oxlint-disable-next-line typescript/no-deprecated -- Chromium-only; no replacement API inserts into a focused contenteditable.
+    if (document.execCommand('insertText', false, text)) return
+    input.textContent = text
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }))
+  }
+  const showFirstUseGuide = (): void => {
+    if (firstUseCompleted || firstUsePanel !== undefined) return
+    const copy = browserNativeFirstUseCopy(document.documentElement.lang)
+    const root = document.createElement('section')
+    root.setAttribute('data-browser-native-first-use', '')
+    root.setAttribute('role', 'complementary')
+    root.setAttribute('aria-label', copy.label)
+    Object.assign(root.style, {
+      position: 'fixed',
+      left: '50%',
+      top: '56px',
+      transform: 'translateX(-50%)',
+      zIndex: '2147483000',
+      pointerEvents: 'none',
+      width: 'min(440px, calc(100vw - 32px))',
+      maxHeight: 'calc(100vh - 120px)',
+      overflow: 'auto',
+      padding: '14px 16px',
+      border: '1px solid #526174',
+      borderRadius: '12px',
+      background: '#111827',
+      color: '#f9fafb',
+      boxShadow: '0 8px 28px rgb(0 0 0 / 32%)',
+      font: '500 13px/1.45 system-ui, sans-serif',
+    })
+    const title = document.createElement('h2')
+    title.setAttribute('data-browser-native-first-use-title', '')
+    title.textContent = copy.title
+    Object.assign(title.style, { margin: '0 0 6px', fontSize: '15px', fontWeight: '600', lineHeight: '1.3' })
+    const body = document.createElement('p')
+    body.textContent = copy.body
+    Object.assign(body.style, { margin: '0 0 8px', color: '#d1d5db' })
+    const steps = document.createElement('ol')
+    Object.assign(steps.style, { margin: '0 0 10px', paddingLeft: '20px', color: '#d1d5db' })
+    for (const step of copy.steps) {
+      const item = document.createElement('li')
+      item.textContent = step
+      steps.append(item)
+    }
+    const task = document.createElement('code')
+    task.setAttribute('data-browser-native-first-use-task', '')
+    task.textContent = copy.sampleTask
+    Object.assign(task.style, {
+      display: 'block',
+      margin: '0 0 10px',
+      padding: '7px 9px',
+      borderRadius: '8px',
+      background: '#1f2937',
+      color: '#e5e7eb',
+      font: '500 12px/1.4 ui-monospace, monospace',
+    })
+    const actions = document.createElement('div')
+    Object.assign(actions.style, { display: 'flex', gap: '8px', flexWrap: 'wrap' })
+    const sample = document.createElement('button')
+    sample.type = 'button'
+    sample.setAttribute('data-browser-native-first-use-sample', '')
+    sample.textContent = copy.sampleAction
+    Object.assign(sample.style, {
+      pointerEvents: 'auto',
+      border: '1px solid #34d399',
+      borderRadius: '8px',
+      background: '#064e3b',
+      color: '#ecfdf5',
+      padding: '6px 11px',
+      font: '600 13px/1.2 system-ui, sans-serif',
+      cursor: 'pointer',
+    })
+    const dismiss = document.createElement('button')
+    dismiss.type = 'button'
+    dismiss.setAttribute('data-browser-native-first-use-dismiss', '')
+    dismiss.textContent = copy.dismiss
+    Object.assign(dismiss.style, {
+      pointerEvents: 'auto',
+      border: '1px solid #526174',
+      borderRadius: '8px',
+      background: 'transparent',
+      color: '#e5e7eb',
+      padding: '6px 11px',
+      font: '500 13px/1.2 system-ui, sans-serif',
+      cursor: 'pointer',
+    })
+    const status = document.createElement('output')
+    status.setAttribute('data-browser-native-first-use-status', '')
+    applyLiveRegion(status, 'status')
+    Object.assign(status.style, { display: 'block', marginTop: '8px', color: '#a7f3d0', minHeight: '1.2em' })
+    sample.addEventListener('click', () => {
+      const input = composerElement()
+      if (input === undefined) {
+        status.textContent = copy.composerMissing
+        return
+      }
+      input.focus()
+      // Chromium rejects the insert while focus is still moving from the button;
+      // defer one task so the composer owns the selection before the edit.
+      window.setTimeout(() => {
+        const target = input.isConnected ? input : composerElement()
+        if (target === undefined) {
+          status.textContent = copy.composerMissing
+          return
+        }
+        insertComposerText(target, copy.sampleTask)
+        status.textContent = copy.filled
+      }, 0)
+    })
+    dismiss.addEventListener('click', markFirstUseCompleted)
+    actions.append(sample, dismiss)
+    root.append(title, body, steps, task, actions, status)
+    document.body.append(root)
+    firstUsePanel = { root, status }
+  }
+  const checkFirstUse = async (): Promise<void> => {
+    if (firstUseChecked || firstUseCompleted || failedClosed) return
+    firstUseChecked = true
+    if (firstUseMarkerPresent()) {
+      firstUseCompleted = true
+      return
+    }
+    if (!await waitForFirstUseSurface()) return
+    if (!pageLeaving) showFirstUseGuide()
+  }
+  const isComposerSubmit = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) return false
+    const button = target.closest('button[aria-label]')
+    const label = button?.getAttribute('aria-label')
+    return label === 'Send message' || label === '发送消息'
+  }
+  const handleFirstUseClick = (event: MouseEvent): void => {
+    if (isComposerSubmit(event.target)) markFirstUseCompleted()
+  }
+  const handleFirstUseKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+    if (!(event.target instanceof Element) || !event.target.closest('[data-composer-input]')) return
+    markFirstUseCompleted()
+  }
+  document.addEventListener('click', handleFirstUseClick, true)
+  document.addEventListener('keydown', handleFirstUseKeydown, true)
   let workspaceSwitcherLoaded = false
   const createWorkspaceSwitcher = (): WorkspaceSwitcherElements => {
     const copy = browserNativeWorkspaceSwitcherCopy(document.documentElement.lang)
@@ -930,6 +1123,8 @@ export async function connectBrowserNativePageControl(
 
   return () => {
     window.removeEventListener('pagehide', handlePageHide)
+    document.removeEventListener('click', handleFirstUseClick, true)
+    document.removeEventListener('keydown', handleFirstUseKeydown, true)
     clearRetryTimer()
     pagehideWaiters.clear()
     channel.port1.close()
@@ -937,5 +1132,6 @@ export async function connectBrowserNativePageControl(
     queueStatus?.remove()
     exportControl?.root.remove()
     workspaceSwitcher?.root.remove()
+    firstUsePanel?.root.remove()
   }
 }
