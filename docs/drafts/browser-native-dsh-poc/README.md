@@ -536,9 +536,13 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 [profile 工具策略验证](approval-policy-configuration.md)用真实模型在同一个 Session 内验证 `write` 的 ask→deny→allow→ask 变更即时生效。deny 由 `ctx.tools.guard` 单调执行：即使先注册一个 prepended `allow` 监听器，模型仍收到 `tool "write" is denied by the profile tool policy`，文件不存在，且该调用没有进入审批。三次决策分别在 `tool-policy/decided` 审计中留下一条 `deny`/`allow`/`ask`，ask 路径同时产生 `approval/asked` + `allowed-once`。策略来自验证 roster 的 profile `config`，正式 product profile 未注册该插件。
 
+同一插件还支持按工具名的路径范围：`paths` 声明允许前缀与越界决策，目标路径先归一化 `..` 再按段匹配。真实模型越界写被拒时，拒绝原因同时列出目标与允许路径；模型改用允许路径后写入成功，审计带 `path` 与 `allowedPaths`。
+
 ```sh
 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs
+DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
+  node docs/drafts/browser-native-dsh-poc/tests/approval-policy-paths.e2e.mjs
 ```
 
 ## Preset 切换：工具集、模型与审批

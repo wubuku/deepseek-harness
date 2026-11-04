@@ -10,7 +10,24 @@ description: "Browser-Native PoC 的 profile 工具策略（allow/ask/deny）验
 
 验证 roster `browser-tool-policy` 在 `runtime-validation.mjs` 里插入 `browser-native-tool-policy` 静态模块，profile `config` 为 `tools: { write: ask, edit: deny, read: allow }`、`default: allow`。插件是 [browser-native-tool-policy.ts](browser-native-tool-policy.ts)，只存在于验证镜像，正式 product profile 不注册。`allow` 与 `ask` 走 `tools/pre-execute` waterfall；`deny` 同时注册 `ctx.tools.guard`，因此在任何 waterfall 返回 `allow` 之后、以及审批 `allowed-once` 之后仍会被复核。
 
-每次决策在开启的 turn 内追加 `tool-policy/decided` Session 事件，字段为 `tool`、`callId`、`policy`。`ask` 路径仍产生既有 `approval/asked` 与 `approval/decided` 对，审计可同时按 callId 关联工具结果、策略决策与审批结果。
+每次决策在开启的 turn 内追加 `tool-policy/decided` Session 事件，字段为 `tool`、`callId`、`policy`；路径规则命中时还带归一化后的 `path` 与命中的 `allowedPaths`。`ask` 路径仍产生既有 `approval/asked` 与 `approval/decided` 对，审计可同时按 callId 关联工具结果、策略决策与审批结果。
+
+## 路径范围规则
+
+`browser-native-tool-policy` 的 profile `config` 还接受 `paths`：按工具名声明允许的路径前缀与越界决策。目标路径先做 `.`/`..` 归一化，再按段比较前缀，因此 `allowed/../forbidden.txt` 不会被当作允许路径；缺少路径参数或参数不是字符串也按越界处理。允许前缀内的目标沿用该工具的 `tools` 决策，前缀外使用 `outside`。
+
+```yaml
+tools:
+  write: allow
+  read: allow
+paths:
+  write:
+    allow: ['/dsh/home/workspace/allowed']
+    outside: deny
+    # argument: file_path  # 默认值；参数名不同的工具可覆盖
+```
+
+越界拒绝的模型可见原因同时给出目标与允许路径，例如 `tool "write" is denied by the profile tool policy: "/dsh/home/workspace/forbidden/report.txt" is outside the allowed paths; use one of: /dsh/home/workspace/allowed`，模型据此可以改写到允许目录。`outside: ask` 时审批卡原因同样列出允许路径。
 
 ## 真实模型证据
 
@@ -37,10 +54,29 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/approval-policy.e2e.mjs
 ```
 
+## 实测：真实模型越界写后改用允许路径
+
+`tests/approval-policy-paths.e2e.mjs` 在 `browser-tool-policy` roster 上把策略替换为 `write` 仅允许 `/dsh/home/workspace/allowed`、其余 `deny`。真实模型按提示先写 `/dsh/home/workspace/forbidden/policy-paths-denied.txt`，收到拒绝原因后按原因中的允许路径重写；两次调用都来自同一个 turn 的真实模型请求。
+
+```json
+{
+  "scope": "real-model-path-scoped-tool-policy",
+  "turns": { "pathPolicy": 2 },
+  "writeCalls": 2,
+  "deniedReason": "Error: tool \"write\" is denied by the profile tool policy: \"/dsh/home/workspace/forbidden/policy-paths-denied.txt\" is outside the allowed paths; use one of: /dsh/home/workspace/allowed",
+  "audit": { "deny": 1, "allow": 1, "deniedPath": "/dsh/home/workspace/forbidden/policy-paths-denied.txt" },
+  "files": { "deniedAbsent": true, "allowed": "POLICY_PATHS_ALLOWED_OK\n" },
+  "pageErrors": 0
+}
+```
+
+越界文件不存在，允许目录文件内容正确；拒绝调用只有一条 `tool-policy/decided`，且该事件带归一化 `path` 与 `allowedPaths`。路径匹配与校验的单元测试为 `tests/browser-native-tool-policy.spec.ts`。
+
 ## 残余缺口
 
-- 策略只按工具名匹配，没有参数、路径、命令内容或 agent scope 规则；`fs_write` 写入工作区外的控制仍由 sandbox/审批层负责。
-- 策略来源是验证 profile 的 `cordis.patch.yml`；正式产品 profile 尚未注册该插件，也没有用户可编辑策略的 UI。
+- 策略只按工具名与文件路径匹配，没有命令内容、进程参数或 agent scope 规则；工作区外的控制仍由 sandbox/审批层负责。
+- 路径规则只认一个参数名（默认 `file_path`），不覆盖一次调用涉及多个路径的工具；也没有符号链接解析，允许前缀内的符号链接指向外部时仍按字面前缀放行。
+- 策略来源是验证 profile 的 `cordis.patch.yml` 或 test port；正式产品 profile 尚未注册该插件，也没有用户可编辑策略的 UI。
 - test port 的 `setPolicy` 替换内存快照，证明即时生效，但不等于正式配置热加载；没有策略版本号或审批记录关联的配置摘要。
 - `deny` 的单调性依赖 `ctx.tools.guard`；已证明一个 prepended allow 监听器不能绕过，但没有覆盖恶意插件移除或替换 guard 注册、或绕过 `ctx.tools` registry 直接执行工具的场景。
 - 审计事件只落在 Session log，客户端没有专门的策略决策视图；`tool-policy/decided` 在 `SessionEventMap` 中由 PoC 模块声明，删除 PoC 后这些历史事件应仅作为普通日志保留。

@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-157：工具策略的路径范围规则
+
+```text
+changeId: BN-P2-157
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-tool-policy.ts; docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-policy.spec.ts; docs/drafts/browser-native-dsh-poc/tests/approval-policy-paths.e2e.mjs; docs/drafts/browser-native-dsh-poc/approval-policy-configuration.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 现有审批策略只按工具名匹配，无法表达“只允许写指定目录”。真实模型越界写只会被笼统拒绝，没有可执行的改道提示，也没有路径级审计。
+existingExtensionPointsChecked: 复用 `tools/pre-execute` waterfall、`ctx.tools.guard` 与既有 `tool-policy/decided` 事件；只在 PoC 的 profile config 增加可选 `paths`，未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有真实模型看到带允许路径的拒绝原因，才能验证它会改写到允许位置；静态检查无法证明模型侧的可执行提示与实际文件结果。
+behaviorChange: `ToolPolicyConfig` 新增可选 `paths`（工具名 → `allow` 前缀、`outside` 决策、可选参数名）。目标路径先归一化 `.`/`..` 再按段比较前缀；缺少路径或非字符串按越界处理。拒绝原因同时列出归一化目标与允许前缀；`tool-policy/decided` 事件新增可选 `path`/`allowedPaths`。无 `paths` 配置时快照与既有行为不变。
+consumersUpdated: 策略插件、PoC README 审批章节、approval-policy-configuration.md、本 ledger、新增单元测试与真实模型 E2E。
+tests: `pnpm exec vitest run --config docs/drafts/browser-native-dsh-poc/vitest.config.ts docs/drafts/browser-native-dsh-poc/tests/browser-native-tool-policy.spec.ts` 8/8 通过；`pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/approval-policy-paths.e2e.mjs` 真实模型通过：2 次 write，越界调用收到含允许路径的拒绝、文件未创建、审计 deny=1/allow=1，允许路径写入成功，pageErrors=0。
+syncReplaySteps: 上游同步后重建 preview，复跑单元测试与真实模型脚本；确认无 `paths` 时 `tool-policy/decided` 仍只有 tool/callId/policy 三个字段。
+deleteCondition: 正式工具策略提供路径范围与可执行拒绝提示，或被等价的策略门禁取代。
+status: implemented
+```
+
 ### BN-P2-146：Session 关闭后的 Worker 资源回收
 
 ```text
