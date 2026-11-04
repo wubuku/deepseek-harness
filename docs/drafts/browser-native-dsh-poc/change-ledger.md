@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-141：移动端 server-host + UI-only 路径与 durable 内部认证
+
+```text
+changeId: BN-P2-141
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/mobile-ui-only.html; docs/drafts/browser-native-dsh-poc/tests/mobile-ui-only.e2e.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/mobile-ui-only.md; docs/drafts/browser-native-dsh-poc/browser-support-matrix.md; docs/drafts/browser-native-dsh-poc/product-readiness-go-no-go.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: iOS 上 OPFS 同步访问不可用，Worker + OPFS 的完整 Harness 无法启动；需要验证一条不依赖 Worker 存储的移动路径，同时证明服务端确实执行 turn、浏览器只渲染 UI。
+existingExtensionPointsChecked: 复用 `/session/durable`、`/session/durable/stream`、Session store、durable host、LLM proxy、principal cookie 与本地 auth；页面作为 backend 静态路由 `/mobile`。未改 Web UI、Agent Loop、Session 事件格式、正式 profile 或 `packages/`。
+whyDraftOnlyWasInsufficient: 仅靠支持矩阵与 WebKit 探测只能证明 Worker 路径失败，不能证明移动端可用；必须有真实 WebKit 移动视口、在移除 `navigator.storage` 后完成服务端 turn 的证据，并确认 durable host 能在本地 token 门禁打开时调用自己的 LLM proxy。
+behaviorChange: 新增 `/mobile` 与 `/mobile.html` 的 UI-only 页面；它只使用 fetch/DOM，不创建 Worker、不访问 OPFS/IndexedDB，提交走 durable host 并把 NDJSON 事件渲染为 transcript。`durable-host-v2.mjs` 接受可选 `authToken`，内部 `/llm` 请求带 `x-browser-native-auth`，修复 hosted token 门禁下 durable turn 401 的缺口。支持矩阵新增 Worker+OPFS 与 server-host UI-only 两列；产品就绪度把 iOS 归入 UI-only。
+consumersUpdated: README 产品与就绪度导航新增入口；browser-support-matrix 试点结论、矩阵、门禁、证据与缺口同步；product-readiness go/no-go 第 3 项改为 Worker 限定桌面、iOS 只能 UI-only；新增 mobile-ui-only.md；本 ledger。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/mobile-ui-only.e2e.mjs` 通过：WebKit 26.4 + iPhone 13（390×664），`navigator.storage === undefined`，`Worker` 构造 0 次，durable 202 + stream 200，`durablePhase:"completed"`，服务端 Session 6 条事件且含 `assistant/message` 与 probe 文本。回归：`durable-host.test.mjs`、`durable-host-restart.test.mjs`、`durable-multi-host.test.mjs`、`durable-approval.test.mjs`、`durable-cancellation.test.mjs`、`durable-tool-attach.test.mjs` 共 8/8 通过。
+syncReplaySteps: 上游同步后复跑移动 E2E；确认 `/mobile` 仍无 Worker/存储调用、durable 内部请求仍带 token、durable 六项回归仍通过，且支持矩阵与产品就绪度链接有效。
+deleteCondition: iOS 设备提供可用的 OPFS 同步访问并接入 Worker 路径，或 `/mobile` UI-only 路径被正式客户端取代。
+status: implemented
+```
+
 ### BN-P2-140：Anthropic prompt caching 真实端点实测与 usage 拆分
 
 ```text

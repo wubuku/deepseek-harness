@@ -5077,6 +5077,17 @@ async function serveStatic(response, root, pathname) {
   response.end(body)
 }
 
+async function serveMobilePage(response) {
+  const body = await readFile(join(HERE, 'mobile-ui-only.html'))
+  response.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  })
+  response.end(body)
+}
+
 const HOSTED_TOKEN_MAX_BYTES = 8_192
 const HOSTED_SECRET_MIN_BYTES = 32
 const HOSTED_CLOCK_TOLERANCE_SECONDS = 30
@@ -5614,6 +5625,7 @@ export async function createBrowserNativeV2Server(options) {
     admission,
     model: llm.model,
     originOf: () => servedOrigin,
+    authToken,
     timeoutMs: durableTurnTimeoutMs,
     approvalTimeoutMs: durableApprovalTimeoutMs,
     requiresApproval: call => call.name === 'write',
@@ -6970,6 +6982,10 @@ export async function createBrowserNativeV2Server(options) {
         // address behind a container port mapping or TLS proxy.
         const requestOrigin = `http://${String(request.headers.host)}`
         sendJson(response, 200, { origin: publicOrigin?.origin ?? servedApiOrigin ?? requestOrigin })
+        return
+      }
+      if (request.method === 'GET' && (url.pathname === '/mobile' || url.pathname === '/mobile.html')) {
+        await serveMobilePage(response)
         return
       }
       if (request.method === 'GET') {

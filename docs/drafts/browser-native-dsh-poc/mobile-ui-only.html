@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DSH mobile · UI only</title>
+<style>
+  :root { color-scheme: light dark; --fg: #111; --muted: #5c6370; --bg: #fff; --line: #d7dbe0; --accent: #2f6fed; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #eceff4; --muted: #9aa3af; --bg: #14171c; --line: #2b313a; --accent: #7aa2ff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; padding: 14px calc(16px + env(safe-area-inset-left)) 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  .capability { margin-top: 4px; color: var(--muted); font-size: 12px; }
+  main { padding: 16px calc(16px + env(safe-area-inset-left)) 120px; }
+  .entry { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+  .entry.user { border-color: var(--accent); }
+  .entry .role { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  form { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 8px; padding: 10px calc(12px + env(safe-area-inset-left)) calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+  textarea { flex: 1; min-height: 44px; max-height: 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: inherit; font: inherit; resize: none; }
+  button { min-width: 72px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; }
+  button:disabled { opacity: 0.5; }
+  .status { min-height: 1.5em; margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .status.error { color: #c0392b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DSH mobile · server-host execution</h1>
+  <div class="capability" data-mobile-storage>probing browser storage</div>
+</header>
+<main data-mobile-transcript></main>
+<div class="status" data-mobile-status aria-live="polite">ready</div>
+<form data-mobile-form>
+  <textarea data-mobile-input rows="1" placeholder="Ask the server-hosted agent" aria-label="Prompt"></textarea>
+  <button data-mobile-send type="submit">Send</button>
+</form>
+<script>
+window.__DSH_MOBILE_UI_ONLY__ = true
+window.__DSH_WORKER_REQUESTS__ = 0
+const NativeWorker = window.Worker
+window.Worker = function (...args) {
+  window.__DSH_WORKER_REQUESTS__ += 1
+  return new NativeWorker(...args)
+}
+
+const params = new URLSearchParams(location.search)
+const sessionId = params.get('sessionId') ?? `mobile-${crypto.randomUUID()}`
+const transcript = document.querySelector('[data-mobile-transcript]')
+const statusLine = document.querySelector('[data-mobile-status]')
+const storageLine = document.querySelector('[data-mobile-storage]')
+const form = document.querySelector('[data-mobile-form]')
+const input = document.querySelector('[data-mobile-input]')
+const send = document.querySelector('[data-mobile-send]')
+
+storageLine.textContent = navigator.storage && navigator.storage.getDirectory
+  ? 'OPFS API present but unused · no Worker storage'
+  : 'OPFS unavailable · server-side Session only'
+
+function setStatus(text, error = false) {
+  statusLine.textContent = text
+  statusLine.classList.toggle('error', error)
+}
+
+function appendEntry(role, text) {
+  if (text.length === 0) return
+  const entry = document.createElement('div')
+  entry.className = `entry ${role}`
+  entry.dataset.mobileRole = role
+  const label = document.createElement('span')
+  label.className = 'role'
+  label.textContent = role
+  entry.append(label, document.createTextNode(text))
+  transcript.append(entry)
+}
+
+function eventText(event) {
+  const content = event.data?.content ?? event.data?.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text).join('')
+}
+
+async function readStream(response, onItem) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const part = await reader.read()
+    buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
+    let newline = buffer.indexOf('\n')
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim()
+      buffer = buffer.slice(newline + 1)
+      if (line.length > 0) onItem(JSON.parse(line))
+      newline = buffer.indexOf('\n')
+    }
+    if (part.done) break
+  }
+  const tail = buffer.trim()
+  if (tail.length > 0) onItem(JSON.parse(tail))
+}
+
+form.addEventListener('submit', async event => {
+  event.preventDefault()
+  const prompt = input.value.trim()
+  if (prompt.length === 0 || send.disabled) return
+  appendEntry('user', prompt)
+  input.value = ''
+  send.disabled = true
+  setStatus('server host running')
+  const turnId = `mobile-turn-${crypto.randomUUID()}`
+  window.__DSH_LAST_TURN_ID__ = turnId
+  try {
+    const started = await fetch('/api/browser-native/session/durable', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        requestId: crypto.randomUUID(),
+        sessionId,
+        turnId,
+        prompt,
+      }),
+    })
+    if (!started.ok) throw new Error(`server host refused the turn (${started.status})`)
+    const stream = await fetch(`/api/browser-native/session/durable/stream?turnId=${encodeURIComponent(turnId)}&fromSeq=0`)
+    if (!stream.ok) throw new Error(`server host stream failed (${stream.status})`)
+    let completed = false
+    await readStream(stream, item => {
+      if (item.kind === 'settled') {
+        completed = true
+        setStatus(`completed · ${item.phase ?? 'settled'}`)
+        return
+      }
+      if (item.kind !== 'event') return
+      const entry = item
+      if (entry.type === 'user/message' && typeof entry.data?.content === 'string') {
+        appendEntry('server user', entry.data.content)
+        return
+      }
+      if (entry.type === 'assistant/message') appendEntry('assistant', eventText(entry))
+      if (entry.type === 'tool/call') appendEntry('tool', `${entry.data?.name ?? 'tool'} ${entry.data?.arguments ?? ''}`)
+      if (entry.type === 'tool/result') appendEntry('tool result', eventText(entry))
+      if (entry.type === 'turn/end') {
+        const reason = entry.data?.reason?.kind ?? 'completed'
+        completed = reason === 'completed'
+        setStatus(`turn ${reason}`)
+      }
+    })
+    if (!completed) setStatus('turn settled without completion', true)
+  } catch (error) {
+    console.error(error)
+    setStatus(String(error?.message ?? error), true)
+  } finally {
+    send.disabled = false
+    input.focus()
+  }
+})
+</script>
+</body>
+</html>

@@ -193,7 +193,7 @@ function journalText(value, name) {
 
 /**
  * Create the server-owned durable turn host.
- * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, journalPath?: string}} options - Session store, admission controller, served origin, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, and the running-turn journal path.
+ * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, authToken?: string, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, journalPath?: string}} options - Session store, admission controller, served origin, local process token for the internal model route, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, and the running-turn journal path.
  * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, recover: Function, version: number}} Host operations.
  */
 export function createDurableTurnHost({
@@ -201,6 +201,7 @@ export function createDurableTurnHost({
   admission,
   model,
   originOf,
+  authToken,
   timeoutMs,
   approvalTimeoutMs = 60_000,
   requiresApproval = () => false,
@@ -353,7 +354,10 @@ export function createDurableTurnHost({
       try {
         response = await fetch(`${origin}/api/browser-native/llm`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            ...(typeof authToken === 'string' ? { 'x-browser-native-auth': authToken } : {}),
+          },
           body: JSON.stringify({
             protocolVersion: 1,
             requestId: run.turnId,
