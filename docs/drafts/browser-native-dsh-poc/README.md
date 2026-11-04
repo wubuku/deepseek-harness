@@ -63,7 +63,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
-| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
+| 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
 | 性能与容量 | [性能基线](#性能基线)、[多 Session 争用上限](#多-session-争用上限)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用) |
 | 产品与就绪度 | [产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[浏览器支持矩阵](#浏览器支持矩阵)、[产品就绪度](#产品就绪度) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
@@ -1099,9 +1099,9 @@ Chrome 156 E2E 中，页面在模型 barrier 中关闭，400 ms 后重开标签�
 
 ## 提示注入驱动的危险动作
 
-[提示注入驱动的危险动作](prompt-injection-boundaries.md)记录恶意工具输出诱导外传/越权写入时的边界。Worker 工具面没有 web fetch，网络出口只经 `/api/browser-native/egress/fetch`；`egress-proxy-v2.mjs` 在 host/path 匹配前拒绝解码后出现分隔符、NUL 或 `.`/`..` 段的 pathname，堵住 `/search/%2e%2e/collect` 这类前缀绕过。未配置 egress 的部署该路由为 404。
+[提示注入驱动的危险动作](prompt-injection-boundaries.md)记录恶意工具输出诱导外传/越权写入时的边界。Worker 工具面没有 web fetch，网络出口只经 `/api/browser-native/egress/fetch`；`egress-proxy-v2.mjs` 在 host/path 匹配前拒绝解码后出现分隔符、NUL 或 `.`/`..` 段的 pathname，堵住 `/search/%2e%2e/collect` 这类前缀绕过。未配置 egress 的部署该路由为 404。模型可见的 tool 消息另加“数据非指令”标签，真实模型单样本验证见[工具输出可信标注](tool-output-trust.md)。
 
-`tests/prompt-injection-boundaries.test.mjs` 4/4：攻击者 origin 403 `EGRESS_HOST_NOT_ALLOWED` 且请求计数 0；允许 origin 的编码穿越 403 且上游计数 0；前缀外路径 403；URL 内嵌凭据 400；`Authorization` 头 400；GET-only 能力 POST 405；合法请求 200 且上游计数恰为 1；写 `/etc/passwd`、`../../outside/...`、`..%2f...`、`C:/...` 均 400 `INVALID_PATH` 且根外 canary 不变；跨 principal 附件读取 403 且响应不含内容。审批强制点由 `permission-approval-lifecycle.e2e.mjs` 等既有 E2E 覆盖：默认 `approvalPolicy=ask`，Reject 后不落盘；PoC 文件工具标记 `permission: not-required`，Workspace 内写入靠路径边界与 egress 白名单约束，不靠人工审批。未跑真实模型 smoke（本批未改 LLM 代码）。
+`tests/prompt-injection-boundaries.test.mjs` 4/4：攻击者 origin 403 `EGRESS_HOST_NOT_ALLOWED` 且请求计数 0；允许 origin 的编码穿越 403 且上游计数 0；前缀外路径 403；URL 内嵌凭据 400；`Authorization` 头 400；GET-only 能力 POST 405；合法请求 200 且上游计数恰为 1；写 `/etc/passwd`、`../../outside/...`、`..%2f...`、`C:/...` 均 400 `INVALID_PATH` 且根外 canary 不变；跨 principal 附件读取 403 且响应不含内容。审批强制点由 `permission-approval-lifecycle.e2e.mjs` 等既有 E2E 覆盖：默认 `approvalPolicy=ask`，Reject 后不落盘；PoC 文件工具标记 `permission: not-required`，Workspace 内写入靠路径边界与 egress 白名单约束，不靠人工审批。真实模型注入 smoke 另由 `tests/tool-output-trust.e2e.mjs` 覆盖（`LongCat-2.5`，只有 `read`，无 `bash`/根外 `write`）。
 
 ## 资源耗尽防护
 

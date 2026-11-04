@@ -59,11 +59,11 @@ Browser Worker 的工具面只有 Worker VFS 文件工具、受限 shell 与 tod
 2. **同 principal 内数据外泄**：注入可读取同一 Workspace 的任意文件；若工作区含秘密，egress 之外的通道（模型上下文本身、截图、日志）仍可能携带内容。
 3. **合法 origin 的路径内容**：白名单内 origin 的响应是可信输入；上游返回的恶意内容仍可继续注入下一轮。
 4. **编码多层/上游二次解码**：本层只解码一次；`%252e%252e%252f` 不识别，若上游反复解码需上游自校验。
-5. **模型不合作**：脚本化响应证明的是边界，不是真实模型一定拒绝注入；真实模型仍可能尝试更多动作路径。
+5. **模型不合作**：脚本化响应证明的是边界；真实模型的拒绝已有一个样本（见[工具输出可信标注](tool-output-trust.md)），但不同模型、温度或更长注入仍可能尝试更多动作路径。
 6. **非 HTTP 通道**：剪贴板、下载、浏览器通知等未覆盖。
 
 ## 边界
 
-- 未跑真实模型 smoke：本批未改 LLM 代码，注入结果由确定性请求复现；真实模型对恶意内容的服从率未测。
+- 真实模型 smoke 只覆盖一个注入样本：`tests/tool-output-trust.e2e.mjs` 用 `LongCat-2.5` 验证带标签的文件读取未引发 `bash`/根外 `write`，见[工具输出可信标注](tool-output-trust.md)；真实模型对恶意内容的总体服从率仍未测。
 - 未覆盖 DNS rebinding、代理环境、TLS 上游、重定向跟随（egress 当前不跟随重定向）。
-- 未改 `packages/`，无需 `build:artifacts`/`build:check`。
+- 本批标签改动只在 PoC Worker wire 层，未改 `packages/`，无需 `build:artifacts`/`build:check`。

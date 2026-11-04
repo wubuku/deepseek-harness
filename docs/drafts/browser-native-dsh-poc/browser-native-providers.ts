@@ -27,6 +27,7 @@ import type {
   SessionLogOffset,
   Session,
 } from '@deepseek-ai/dsh-session'
+import { labelUntrustedToolOutput } from './browser-native-trust-label.ts'
 import type { BrowserNativeWorkspaceReceiptEvent } from './browser-native-session-events.ts'
 import type { BrowserNativeWorkspaceRuntime, WorkspaceReceipt, WorkspaceToolOperation } from './browser-native-workspace.ts'
 import type {} from '@deepseek-ai/dsh-working-directory'
@@ -1157,7 +1158,7 @@ function toWireMessage(message: RequestMessage): WireMessage {
   if (message.role === 'tool') {
     return {
       role: 'tool',
-      content: textFromContent(message.content),
+      content: labelUntrustedToolOutput(textFromContent(message.content)),
       tool_call_id: message.source.callId,
     }
   }
