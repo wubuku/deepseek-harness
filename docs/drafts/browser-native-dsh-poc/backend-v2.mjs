@@ -4805,6 +4805,7 @@ export async function createBrowserNativeV2Server(options) {
       usageEntries: observabilityRestore.usage.length,
       truncated: observabilityRestore.truncated,
       invalidLines: observabilityRestore.invalidLines,
+      integrity: observabilityRestore.integrity,
       ...(observabilityRestore.metricsError === undefined ? {} : { metricsError: observabilityRestore.metricsError }),
     },
     previousProcess: observabilityRestore.metrics ?? null,
@@ -5638,7 +5639,7 @@ export async function createBrowserNativeV2Server(options) {
           protocolVersion: PROTOCOL_VERSION,
           capturedAt: Date.now(),
           ...observabilityReconciliation,
-          journal: { healthy, writeFailures },
+          journal: { healthy, writeFailures, integrity: observabilityRestore.integrity },
           current: {
             usageEntries: usageAudit.length,
             accessDenials: accessAuditEntries.length,

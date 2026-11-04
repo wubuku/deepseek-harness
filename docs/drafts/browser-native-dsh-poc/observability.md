@@ -23,11 +23,19 @@ description: "Browser-Native PoC 的可观测性：HTTP/模型/队列/租约/dur
 
 - `observability/access-denials.jsonl`：每条拒绝访问一行，与证据包的 `accessDenials` 同源；重启恢复最近 200 条。
 - `observability/usage.jsonl`：real 模式下每次 provider 调用的 usage 一行；重启恢复最近 1 000 条。
-- `observability/metrics.json`：指标快照，每 10 秒与每次 metrics scrape 原子重写；崩溃后丢失最多 10 秒。
+- 两本 journal 的每行是 `{v:2, seq, prev, hash, record}`：`hash` 是 `sha256(prev + "\n" + seq + "\n" + JSON.stringify(record))`，`prev` 指向上一条的 `hash`，首条 `prev` 为 `GENESIS`。每次追加同时原子重写 `<file>.head.json`（`seq` 与 `hash`）。
+- `observability/metrics.json`：指标快照，每 10 秒与每次 metrics scrape 原子重写；崩溃后最多丢失 10 秒。
 - 写失败不改变已返回给客户端的响应：journal 记录 `healthy=false` 与累计 `writeFailures`，由 `reconciliation` 暴露。
-- JSONL 超过 4 MiB 时轮转为 `<file>.1`；恢复时截断与坏行计入 `restored.truncated`/`restored.invalidLines`。
+- JSONL 超过 4 MiB 时轮转为 `<file>.1` 并从头开始新链；恢复时读原文件与本文件。
 
-`reconciliation` 返回 `processStartedAt`、`recoveredTurns`、`durableJournalHealthy`、`restored`（`accessDenials`、`usageEntries`、`truncated`、`invalidLines`、可选 `metricsError`）、`previousProcess`（上进程最后一次快照的 `capturedAt` 与 `view`，无快照时为 `null`）、`journal`（`healthy`、`writeFailures`）与 `current`（`usageEntries`、`accessDenials`、`metrics`）。
+`reconciliation` 返回 `processStartedAt`、`recoveredTurns`、`durableJournalHealthy`、`restored`（`accessDenials`、`usageEntries`、`truncated`、`invalidLines`、`integrity`、可选 `metricsError`）、`previousProcess`（上进程最后一次快照的 `capturedAt` 与 `view`，无快照时为 `null`）、`journal`（`healthy`、`writeFailures`、`integrity`）与 `current`（`usageEntries`、`accessDenials`、`metrics`）。
+
+## 完整性校验
+
+- 恢复时逐行重算 `hash` 并检查 `prev`/`seq` 链接；被改写的记录报 `brokenAt` 与 `invalidLines`，记录本身仍返回供排查。
+- 尾行必须与 `.head.json` 的 `seq`/`hash` 一致；末尾被截断时报 `truncated=true`，并给出 `headSeq` 与 `tailSeq`。head 文件缺失但 journal 非空时同样标记不完整。
+- `integrity.verified` 只在链、行格式与 head 三者全部一致时为 `true`；`restored.integrity` 与 `journal.integrity` 都暴露同一结果。
+- 残余：同机同用户进程可重算整条链并重写 head，单个文件校验无法阻止这种重放；需要外部只追加采集或签名锚点。
 
 ## JSON 快照字段
 

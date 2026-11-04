@@ -14,7 +14,7 @@ description: "Browser-Native PoC 的 Session/租户 token 预算验证：计量�
 
 每次实际阻断会向该 Session 追加一条 `budget/exceeded` 事件，包含 `scope`、`tenantId`、`sessionId`、当前输入/输出 token 与实际限额。同一 meter 状态下重复拒绝只记一次；拒绝之间用量继续增长时按新的 meter 状态再记一次。
 
-计量对照不依赖 Worker 自己的日志：PoC backend 在转发上游 SSE 时独立解析 provider 原始 usage 字段，按 `requestId`/`sessionId` 记录到 `usageAudit`，并追加到 `<dataDir>/observability/usage.jsonl`；真实模式通过 `GET /api/browser-native/usage-audit?sessionId=...` 暴露，重启后 `GET /api/browser-native/observability/reconciliation` 报告恢复的 usage 条数与上一次 metrics 快照。E2E 用这个记录与插件 meter 对照，而不是用同一份 Session 日志自证。
+计量对照不依赖 Worker 自己的日志：PoC backend 在转发上游 SSE 时独立解析 provider 原始 usage 字段，按 `requestId`/`sessionId` 记录到 `usageAudit`，并追加到 `<dataDir>/observability/usage.jsonl`（每行是带 `prev`/`hash` 链的信封，见[完整性校验](observability.md#完整性校验)）；真实模式通过 `GET /api/browser-native/usage-audit?sessionId=...` 暴露，重启后 `GET /api/browser-native/observability/reconciliation` 报告恢复的 usage 条数与上一次 metrics 快照。E2E 用这个记录与插件 meter 对照，而不是用同一份 Session 日志自证。
 
 ## 真实模型证据
 

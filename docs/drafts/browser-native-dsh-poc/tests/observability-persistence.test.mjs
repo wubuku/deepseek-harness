@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -73,6 +73,9 @@ test('journal persists access denials, usage entries, and the last metrics snaps
     assert.equal(restored.metrics.capturedAt, 1_760_000_000_000)
     assert.equal(restored.metrics.view.requests.total, 3)
     assert.equal(restored.metricsError, undefined)
+    assert.equal(restored.integrity.verified, true, JSON.stringify(restored.integrity))
+    assert.equal(restored.integrity.accessDenials.entries, 1)
+    assert.equal(restored.integrity.usage.entries, 2)
     assert.deepEqual(second.status(), { healthy: true, writeFailures: 0, path: journalDirectory(dataDir) })
     await second.close()
   } finally {
@@ -88,8 +91,13 @@ test('journal keeps the newest entries, counts torn lines, and survives a corrup
     await journal.persistMetrics({ metricsVersion: 1 })
     await journal.close()
 
-    const denials = Array.from({ length: 205 }, (_, index) => JSON.stringify({ at: index, route: '/denial', status: 401 }))
-    await writeFile(join(directory, 'access-denials.jsonl'), `${denials.join('\n')}\nnot-json\n[1,2]\n`, 'utf8')
+    const writer = createObservabilityJournal({ dataDir })
+    for (let index = 0; index < 205; index += 1) {
+      await writer.appendAccessDenial({ at: index, route: '/denial', status: 401 })
+    }
+    await writer.persistMetrics({ metricsVersion: 1 })
+    await writer.close()
+    await appendFile(join(directory, 'access-denials.jsonl'), 'not-json\n[1,2]\n', 'utf8')
     await writeFile(join(directory, 'metrics.json'), JSON.stringify({ version: 1, capturedAt: 'yesterday', view: {} }), 'utf8')
 
     const restored = await createObservabilityJournal({ dataDir }).restore()
@@ -97,8 +105,61 @@ test('journal keeps the newest entries, counts torn lines, and survives a corrup
     assert.equal(restored.accessDenials[0].at, 5, 'older entries beyond the limit are dropped')
     assert.equal(restored.truncated, true)
     assert.equal(restored.invalidLines, 2)
+    assert.equal(restored.integrity.accessDenials.verified, false)
     assert.equal(restored.metrics, undefined)
     assert.equal(typeof restored.metricsError, 'string')
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('a rewritten record breaks the hash chain at its sequence', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-observability-tamper-'))
+  try {
+    const journal = createObservabilityJournal({ dataDir })
+    await journal.appendUsage({ requestId: 'usage-1', inputTokens: 10, outputTokens: 2 })
+    await journal.appendUsage({ requestId: 'usage-2', inputTokens: 20, outputTokens: 4 })
+    await journal.appendUsage({ requestId: 'usage-3', inputTokens: 30, outputTokens: 6 })
+    await journal.close()
+
+    const path = join(journalDirectory(dataDir), 'usage.jsonl')
+    const lines = (await readFile(path, 'utf8')).trim().split('\n')
+    const tampered = JSON.parse(lines[1])
+    tampered.record.inputTokens = 200
+    lines[1] = JSON.stringify(tampered)
+    await writeFile(path, `${lines.join('\n')}\n`, 'utf8')
+
+    const restored = await createObservabilityJournal({ dataDir }).restore()
+    assert.equal(restored.integrity.verified, false)
+    assert.equal(restored.integrity.usage.verified, false)
+    assert.equal(restored.integrity.usage.brokenAt, 2)
+    assert.equal(restored.integrity.usage.headSeq, 3, 'the head still anchors the real tail')
+    assert.equal(restored.invalidLines, 1)
+    assert.equal(restored.usage.length, 3, 'tampered records stay visible for inspection')
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('a removed tail is detected through the head anchor', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-observability-truncate-'))
+  try {
+    const journal = createObservabilityJournal({ dataDir })
+    await journal.appendAccessDenial({ at: 1, route: '/denial', status: 401 })
+    await journal.appendAccessDenial({ at: 2, route: '/denial', status: 401 })
+    await journal.appendAccessDenial({ at: 3, route: '/denial', status: 401 })
+    await journal.close()
+
+    const path = join(journalDirectory(dataDir), 'access-denials.jsonl')
+    const lines = (await readFile(path, 'utf8')).trim().split('\n')
+    await writeFile(path, `${lines.slice(0, 2).join('\n')}\n`, 'utf8')
+
+    const restored = await createObservabilityJournal({ dataDir }).restore()
+    assert.equal(restored.integrity.verified, false)
+    assert.equal(restored.integrity.accessDenials.truncated, true)
+    assert.equal(restored.integrity.accessDenials.headSeq, 3)
+    assert.equal(restored.integrity.accessDenials.tailSeq, 2)
+    assert.equal(restored.accessDenials.length, 2, 'the surviving prefix still parses')
   } finally {
     await rm(dataDir, { recursive: true, force: true })
   }
@@ -145,6 +206,8 @@ test('a restarted backend reconciles restored denials with the previous metrics 
       assert.equal(reconciliation.body.restored.invalidLines, 0)
       assert.equal(reconciliation.body.journal.healthy, true)
       assert.equal(reconciliation.body.journal.writeFailures, 0)
+      assert.equal(reconciliation.body.journal.integrity.verified, true, JSON.stringify(reconciliation.body.journal.integrity))
+      assert.equal(reconciliation.body.restored.integrity.verified, true)
       assert.equal(typeof reconciliation.body.previousProcess.capturedAt, 'number')
       assert.equal(reconciliation.body.previousProcess.view.metricsVersion, 1)
       assert.ok(reconciliation.body.previousProcess.view.requests.total >= 2)

@@ -69,7 +69,7 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | T9 | 跨 principal 读写 Session/Workspace | 换 cookie 或猜 id | 每个资源按 principal 404；错误不区分存在性 | [principal 隔离](principal-scoped-session-isolation-progress.md) | 侧信道时序未测 |
 | T10 | egress 绕过白名单或把 key 转发出去 | 工具直接 fetch 或滥用代理 | capability 的 origin/path/method 校验、不跟随重定向、响应脱敏、固定窗口限流 | `tests/credential-isolation.e2e.mjs` | Worker 自身仍可访问任意 CORS 站点；需部署方 CSP `connect-src` |
 | T11 | provider key 经错误路径或配置端点回显 | 上游失败、debug 路由、导出包 | key 只在 backend；`/health` 与 `/config` 只暴露 provider/model；错误文案固定 | 本页 `threat-model-invariants` 2/2 | 日志文件若由进程外工具采集需再脱敏 |
-| T12 | 客户端删除或篡改审计 | 页面调用私有路由或改本地副本 | journal 只由 backend 追加；客户端无写接口 | `observability-persistence` 3/3 | 同机同用户进程可改写 JSONL；未做签名/只追加卷 |
+| T12 | 客户端删除或篡改审计 | 页面调用私有路由或改本地副本 | journal 只由 backend 追加；客户端无写接口；每条记录带 `prev`/`hash` 链，`.head.json` 锚定尾行 | `observability-persistence` 5/5（改写一条记录报 `brokenAt=2`，删尾后 `headSeq=3`/`tailSeq=2`） | 同机同用户进程可重算整条链并重写 head；需外部只追加采集或签名锚点 |
 | T13 | durable host 在无页面时执行高权工具 | 关页后写工具继续运行 | 服务端以 principal 合成请求；`write` 需页面审批；未知工具显式失败 | `durable-host` / `durable-tool-attach` 测试 | 审批超时语义与取消窗口需继续补齐 |
 | T14 | 导出包或证据包泄露敏感内容 | 用户下载 Session bundle、失败证据包 | 导出按 principal 校验；证据包不含 prompt、只保留最后 12 条精简事件 | `product-visibility`、`observability.test.mjs` | 导出内容本身是用户数据，无加密与访问审计保留期 |
 
@@ -80,7 +80,7 @@ description: "以“客户端执行、服务端权威”为模型，列出 Brows
 | 预览页内 XSS | 高 | HTML 预览内容已在无同源权限的 sandbox 与严格 CSP 下隔离，注入脚本读不到 cookie、OPFS 与同源 API；`--api-port` 可把 API 移到独立 origin，e2e 已验证分离路径；默认启动预览页仍与 API 同源 | 默认启动也分离到不同 origin，或预览页只读且 API 要求不可伪造的 per-tab token；用注入脚本用例断言 API 拒绝 |
 | 同机进程互认证 | 高 | 回环端口对同机任意进程开放，identity 端点自签 principal | 每次启动生成 0600 启动令牌，所有路由要求该令牌，且令牌不经 HTTP 暴露；用第二个进程无令牌请求断言 401 |
 | 工具策略/预算执行在客户端 | 高 | 常规 turn 的 `deny` 由工具执行层 guard 拒绝；超预算同时在 LLM 前置与工具执行前复核，关闭 LLM 前置后工具 guard 仍拒 `write`；服务端只记账 | 服务端在发出上游请求前复核预算，并在工具执行前复核策略（防被篡改的 Worker）；用篡改客户端跳过本地判定的用例断言服务端拒绝 |
-| 审计完整性 | 中 | JSONL 可被同机同用户进程改写，无签名 | 只追加卷、文件完整性签名或外部采集；用篡改文件后重启对账断言报告不一致 |
+| 审计完整性 | 中 | 每条 journal 记录带 `prev`/`hash`，恢复时重算链；`.head.json` 锚定尾行，单条改写报 `brokenAt`，删尾报 `headSeq`/`tailSeq` 不一致；`reconciliation` 暴露 `integrity.verified` | 外部只追加采集或签名锚点，使同机进程无法重算整条链；用重写整链后重启对账断言仍报告不一致 |
 
 ## 本轮新增验证
 
@@ -154,6 +154,18 @@ node docs/drafts/browser-native-dsh-poc/tests/local-request-guard.test.mjs
 ```
 
 Node backend 全程没有策略或预算拒绝逻辑，因此该拒绝来自 Worker 自己；服务端记账与对账仍按 [token 预算](token-budget-metering.md) 执行。
+
+## 审计 journal 完整性
+
+`access-denials.jsonl` 与 `usage.jsonl` 的每行写成 `{v:2, seq, prev, hash, record}`，`hash` 覆盖 `prev`、`seq` 与规范 JSON；追加后原子重写 `<file>.head.json`。`tests/observability-persistence.test.mjs` 5/5：
+
+```text
+改写第二条 usage 的 record（不重算 hash）→ integrity.usage.verified=false, brokenAt=2, invalidLines=1, 记录仍返回
+删除 access-denials 最后一条 → integrity.accessDenials.truncated=true, headSeq=3, tailSeq=2, 前缀仍解析
+干净重启 → reconciliation.journal.integrity.verified=true, restored.integrity.verified=true
+```
+
+同机同用户进程仍可重算整条链并同步改写 head，因此该控制把“随手改一行/删尾”变成可检测事件，不能替代外部只追加采集或签名锚点。
 
 既有证据复用：[Worker 隔离与安全](worker-isolation-and-security.md)（Chrome 156，三套响应头，`crossOriginAuthorizationHeaders=0`、CSP 使跨源请求数为 0）、[凭据隔离](credential-isolation-proxy.md)（Worker 无 key、白名单外拒绝、不跟随重定向）、[提示注入边界](prompt-injection-boundaries.md)（工具结果不能提升权限）、[principal 隔离](principal-scoped-session-isolation-progress.md)（跨 principal 一律 404）。
 

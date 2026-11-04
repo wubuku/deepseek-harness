@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts` 与 `apps/web/src/browser-native-page-control.ts` 提供 preview 接线及页面生命周期 bridge，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-107：审计 journal 哈希链与尾行锚点
+
+```text
+changeId: BN-P2-107
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/observability-persistence.test.mjs; docs/drafts/browser-native-dsh-poc/observability.md; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/threat-model.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 威胁模型 T12/未闭环表记录审计 JSONL 可被同机进程随手改写或截断且无法检测；关闭条件要求文件完整性签名或外部采集，并用篡改后重启对账断言报告不一致。
+existingExtensionPointsChecked: journal 已有单一 append/restore 入口与 `reconciliation` 暴露的 `restored`/`journal` 字段；只在既有 JSONL 记录、恢复路径与对账响应上扩展，不改 durable journal、Session 格式或客户端协议。
+whyDraftOnlyWasInsufficient: 纯追加 JSONL 没有前向链接，删除末尾行后文件内部仍然自洽，重启无法区分“没有请求”与“记录被删”；必须让每行覆盖前一行并把最新尾行锚定到独立文件。
+behaviorChange: `access-denials.jsonl`/`usage.jsonl` 每行改为 `{v:2, seq, prev, hash, record}`，`hash=sha256(prev+"\n"+seq+"\n"+JSON.stringify(record))`；每次追加原子重写 `<file>.head.json`。恢复时重算整链并与 head 比对，返回 `integrity.{accessDenials,usage}`：`verified`、`brokenAt`、`headSeq`、`tailSeq`、`truncated`、`headMissing`。`reconciliation` 的 `restored.integrity` 与 `journal.integrity` 暴露同一结果；轮转后从头开始新链。
+consumersUpdated: observability-persistence 测试（原 3 例改为链式写入并新增篡改/截断两例）、backend reconciliation 响应、`observability.md` 与 token-budget 文档；无 SDK、CLI 或 profile 变更。
+test: `node --test docs/drafts/browser-native-dsh-poc/tests/observability-persistence.test.mjs` 5/5：改写第二条 usage 记录（不重算 hash）→ `verified=false`、`brokenAt=2`、`invalidLines=1`、记录仍返回；删除 access-denials 尾行 → `truncated=true`、`headSeq=3`、`tailSeq=2`；干净重启 → `journal.integrity.verified=true`、`restored.integrity.verified=true`；`node docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 64/64。
+syncReplaySteps: 上游同步后重跑上述两套测试；若 journal 行格式再变化，同步升级 `LEDGER_VERSION` 并保留旧版读取报告而非静默解析。
+deleteCondition: 接入只追加卷或外部签名锚点后，可将内部链降级为快速校验；仍保留 `integrity` 字段供对账。
+status: implemented
+```
+
 ### BN-P2-106：预算在 Worker 工具执行层就地拦截
 
 ```text

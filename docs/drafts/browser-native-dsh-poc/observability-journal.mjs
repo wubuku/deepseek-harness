@@ -1,16 +1,23 @@
 /**
  * Durable ledgers for Browser-Native observability evidence.
  *
- * Access denials and provider usage are appended as JSONL under
- * `<dataDir>/observability`, and the last aggregate metrics snapshot is
- * rewritten atomically. Persistence must never change the response a client
- * already received, so write failures are counted instead of thrown.
+ * Access denials and provider usage are appended as one hash-chained JSONL
+ * envelope per record under `<dataDir>/observability`; the last aggregate
+ * metrics snapshot is rewritten atomically. Each ledger also keeps an
+ * atomically rewritten `<file>.head.json` with the newest sequence and hash,
+ * so a tail truncation shows up as a head/tail mismatch rather than as a
+ * shorter but internally consistent chain. Persistence must never change the
+ * response a client already received, so write failures are counted instead of
+ * thrown.
  */
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 const JOURNAL_VERSION = 1
+/** Envelope format version for chained ledger lines; raw records are v1 data and rejected. */
+const LEDGER_VERSION = 2
+const GENESIS = 'GENESIS'
 const MAX_JOURNAL_BYTES = 4 * 1024 * 1024
 const MAX_RESTORED_ACCESS_DENIALS = 200
 const MAX_RESTORED_USAGE = 1_000
@@ -19,27 +26,85 @@ const USAGE_FILE = 'usage.jsonl'
 const METRICS_FILE = 'metrics.json'
 
 /**
- * Parse a JSONL journal, keeping only object records and the newest entries.
- * @param raw - Journal text.
- * @param limit - Maximum number of newest records to keep.
- * @returns Parsed records plus truncation and invalid-line counts.
+ * Hash one ledger envelope.
+ * @param prev - Previous envelope hash, or {@link GENESIS}.
+ * @param seq - Monotonic sequence number.
+ * @param record - Persisted record.
+ * @returns Lowercase SHA-256 hex digest.
  */
-function parseJournal(raw, limit) {
+function envelopeHash(prev, seq, record) {
+  return createHash('sha256').update(`${prev}\n${seq}\n${JSON.stringify(record)}`).digest('hex')
+}
+
+/**
+ * Parse one ledger, verifying the chain and its head anchor.
+ *
+ * A line whose envelope fields or hash do not verify is counted as invalid;
+ * its record is still returned so an operator can inspect it. The first
+ * broken sequence is reported separately.
+ * @param raw - Ledger text.
+ * @param head - Parsed head anchor, or `undefined` when the file is absent.
+ * @returns Records, limit truncation, invalid lines, and integrity details.
+ */
+function parseLedger(raw, head) {
   const lines = raw.split('\n').filter(line => line.length > 0)
   const records = []
   let invalidLines = 0
+  let brokenAt
+  let seq = 0
+  let prev = GENESIS
+  let last
   for (const line of lines) {
+    let envelope
     try {
-      const record = JSON.parse(line)
-      if (record === null || typeof record !== 'object' || Array.isArray(record)) invalidLines += 1
-      else records.push(record)
+      envelope = JSON.parse(line)
     } catch {
       // A torn or hand-edited line is reported through invalidLines; it must not stop boot.
       invalidLines += 1
+      continue
     }
+    if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)
+      || envelope.v !== LEDGER_VERSION || !Number.isSafeInteger(envelope.seq) || envelope.seq <= 0
+      || typeof envelope.prev !== 'string' || typeof envelope.hash !== 'string'
+      || envelope.record === null || typeof envelope.record !== 'object' || Array.isArray(envelope.record)) {
+      invalidLines += 1
+      if (Number.isSafeInteger(envelope?.seq) && envelope.seq > 0) {
+        brokenAt ??= envelope.seq
+        seq = envelope.seq
+        last = envelope
+      }
+      continue
+    }
+    const linked = envelope.seq === seq + 1 && envelope.prev === prev
+    const hashed = envelope.hash === envelopeHash(prev, envelope.seq, envelope.record)
+    if (!linked || !hashed) {
+      brokenAt ??= envelope.seq
+      invalidLines += 1
+    }
+    seq = envelope.seq
+    prev = envelope.hash
+    last = envelope
+    records.push(envelope.record)
   }
-  const truncated = records.length > limit
-  return { records: records.slice(-limit), truncated, invalidLines }
+  const headMatches = head === undefined
+    ? lines.length === 0
+    : head.seq === last?.seq && head.hash === last?.hash
+  if (!headMatches) brokenAt ??= last?.seq
+  return {
+    records,
+    invalidLines,
+    tail: last,
+    integrity: {
+      entries: lines.length,
+      invalidLines,
+      verified: invalidLines === 0 && headMatches,
+      brokenAt,
+      headMissing: head === undefined && lines.length > 0,
+      headSeq: head?.seq,
+      tailSeq: last?.seq,
+      truncated: !headMatches,
+    },
+  }
 }
 
 /**
@@ -56,10 +121,33 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   let healthy = true
   let writeFailures = 0
   let prepared
+  /** Newest envelope per ledger, loaded from disk on the first append after a restart. */
+  const tails = new Map()
 
   const prepare = () => {
     prepared ??= mkdir(directory, { recursive: true })
     return prepared
+  }
+
+  const headPath = file => join(directory, `${file}.head.json`)
+
+  const writeHead = async state => {
+    const path = headPath(state.file)
+    const temporary = `${path}.${randomUUID()}.tmp`
+    await writeFile(temporary, `${JSON.stringify({ version: LEDGER_VERSION, seq: state.seq, hash: state.hash })}\n`, 'utf8')
+    await rename(temporary, path)
+  }
+
+  const ensureTail = async file => {
+    const cached = tails.get(file)
+    if (cached !== undefined) return cached
+    const parsed = parseLedger(await readIfExists(join(directory, file)), undefined)
+    const tail = parsed.tail
+    const state = tail === undefined
+      ? { file, seq: 0, hash: GENESIS }
+      : { file, seq: tail.seq, hash: tail.hash }
+    tails.set(file, state)
+    return state
   }
 
   const append = (file, record) => {
@@ -72,8 +160,17 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error
       }
-      if (size > MAX_JOURNAL_BYTES) await rename(path, `${path}.1`)
-      await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8')
+      if (size > MAX_JOURNAL_BYTES) {
+        await rename(path, `${path}.1`)
+        tails.set(file, { file, seq: 0, hash: GENESIS })
+      }
+      const state = await ensureTail(file)
+      const seq = state.seq + 1
+      const hash = envelopeHash(state.hash, seq, record)
+      await appendFile(path, `${JSON.stringify({ v: LEDGER_VERSION, seq, prev: state.hash, hash, record })}\n`, 'utf8')
+      const next = { file, seq, hash }
+      tails.set(file, next)
+      await writeHead(next)
     })
     chain = chain.catch(error => {
       healthy = false
@@ -92,13 +189,38 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
     }
   }
 
+  const readHead = async file => {
+    try {
+      const parsed = JSON.parse(await readFile(headPath(file), 'utf8'))
+      if (parsed?.version !== LEDGER_VERSION || !Number.isSafeInteger(parsed.seq)
+        || parsed.seq <= 0 || typeof parsed.hash !== 'string') {
+        return { invalid: true }
+      }
+      return { seq: parsed.seq, hash: parsed.hash }
+    } catch (error) {
+      if (error?.code === 'ENOENT') return undefined
+      return { invalid: true }
+    }
+  }
+
+  const readLedger = async (file, limit) => {
+    const head = await readHead(file)
+    if (head?.invalid === true) {
+      const parsed = parseLedger(await readIfExists(join(directory, file)), undefined)
+      return { ...parsed, integrity: { ...parsed.integrity, verified: false, headInvalid: true } }
+    }
+    const parsed = parseLedger(await readIfExists(join(directory, file)), head)
+    const truncated = parsed.records.length > limit
+    return { ...parsed, records: parsed.records.slice(-limit), truncated }
+  }
+
   /**
    * Read back the journals and the last metrics snapshot for restart reconciliation.
-   * @returns Restored records, truncation/invalid flags, and the previous snapshot when readable.
+   * @returns Restored records, limit/integrity flags, and the previous snapshot when readable.
    */
   const restore = async () => {
-    const denials = parseJournal(await readIfExists(join(directory, ACCESS_DENIALS_FILE)), MAX_RESTORED_ACCESS_DENIALS)
-    const usage = parseJournal(await readIfExists(join(directory, USAGE_FILE)), MAX_RESTORED_USAGE)
+    const denials = await readLedger(ACCESS_DENIALS_FILE, MAX_RESTORED_ACCESS_DENIALS)
+    const usage = await readLedger(USAGE_FILE, MAX_RESTORED_USAGE)
     let metrics
     let metricsError
     try {
@@ -118,6 +240,11 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
       invalidLines: denials.invalidLines + usage.invalidLines,
       metrics,
       metricsError,
+      integrity: {
+        accessDenials: denials.integrity,
+        usage: usage.integrity,
+        verified: denials.integrity.verified && usage.integrity.verified,
+      },
     }
   }
 
