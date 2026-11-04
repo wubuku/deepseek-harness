@@ -36,6 +36,25 @@ type BrowserNativePageNotice = BrowserNativeControlNotice
 
 const BROWSER_NATIVE_FIRST_USE_STORAGE_KEY = 'dsh-browser-native-first-use-completed-v1'
 
+/**
+ * Design-platform tokens for the injected status surfaces. These resolve on
+ * `document.body`, so a single declaration follows the light and dark themes
+ * instead of pinning one palette.
+ */
+const browserNativeSurface = {
+  fill: 'var(--dsw-alias-bg-layer-2)',
+  raised: 'var(--dsw-alias-bg-layer-3)',
+  label: 'var(--dsw-alias-label-primary)',
+  secondary: 'var(--dsw-alias-label-secondary)',
+  border: 'var(--dsw-alias-border-l3)',
+  actionFill: 'var(--dsw-alias-button-primary-fill)',
+  actionLabel: 'var(--dsw-alias-label-primary-foreground)',
+  success: 'var(--dsw-alias-state-success-primary)',
+  warn: 'var(--dsw-alias-state-warn-primary)',
+  error: 'var(--dsw-alias-state-error-primary)',
+  info: 'var(--dsw-alias-state-business-primary)',
+} as const
+
 declare global {
   interface Window {
     __DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?: BrowserNativeWorkspaceStatus
@@ -320,10 +339,10 @@ export async function connectBrowserNativePageControl(
       marginTop: '8px',
       padding: '6px 10px',
       pointerEvents: 'auto',
-      border: '1px solid #8ab4f8',
+      border: 'none',
       borderRadius: '5px',
-      background: '#1d4ed8',
-      color: '#fff',
+      background: browserNativeSurface.actionFill,
+      color: browserNativeSurface.actionLabel,
       cursor: 'pointer',
       font: `${weight} 13px/1.3 system-ui, sans-serif`,
     })
@@ -353,10 +372,10 @@ export async function connectBrowserNativePageControl(
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
-        border: '1px solid #526174',
+        border: `1px solid ${browserNativeSurface.border}`,
         borderRadius: '10px',
-        background: '#111827',
-        color: '#f9fafb',
+        background: browserNativeSurface.fill,
+        color: browserNativeSurface.label,
         boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
         font: '500 13px/1.4 system-ui, sans-serif',
       })
@@ -376,8 +395,8 @@ export async function connectBrowserNativePageControl(
     }
     applyLiveRegion(workspaceStatus, isBlockingWorkspaceState(notice.state) ? 'alert' : 'status')
     workspaceStatus.style.borderColor = isBlockingWorkspaceState(notice.state)
-      ? '#f87171'
-      : notice.state === 'synced' ? '#34d399' : '#fbbf24'
+      ? browserNativeSurface.error
+      : notice.state === 'synced' ? browserNativeSurface.success : browserNativeSurface.warn
     if ((notice.workspaceId !== undefined && (notice.state === 'conflict' || notice.state === 'error'))
       || notice.state === 'local-corrupt' || notice.state === 'local-newer-version'
       || notice.state === 'identity-missing' || notice.state === 'identity-mismatch') {
@@ -450,10 +469,10 @@ export async function connectBrowserNativePageControl(
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
-        border: '1px solid #526174',
+        border: `1px solid ${browserNativeSurface.border}`,
         borderRadius: '10px',
-        background: '#111827',
-        color: '#f9fafb',
+        background: browserNativeSurface.fill,
+        color: browserNativeSurface.label,
         boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
         font: '500 13px/1.4 system-ui, sans-serif',
       })
@@ -492,10 +511,10 @@ export async function connectBrowserNativePageControl(
         pointerEvents: 'none',
         maxWidth: 'min(440px, calc(100vw - 32px))',
         padding: '9px 13px',
-        border: '1px solid #526174',
+        border: `1px solid ${browserNativeSurface.border}`,
         borderRadius: '10px',
-        background: '#111827',
-        color: '#f9fafb',
+        background: browserNativeSurface.fill,
+        color: browserNativeSurface.label,
         boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
         font: '500 13px/1.4 system-ui, sans-serif',
       })
@@ -511,8 +530,8 @@ export async function connectBrowserNativePageControl(
       notice.queued,
     )
     offlineStatus.style.borderColor = notice.state === 'offline'
-      ? '#fbbf24'
-      : notice.state === 'replaying' ? '#60a5fa' : '#34d399'
+      ? browserNativeSurface.warn
+      : notice.state === 'replaying' ? browserNativeSurface.info : browserNativeSurface.success
   }
   const showRecoveryResult = (success: boolean): void => {
     if (workspaceStatus === undefined) return
@@ -546,10 +565,10 @@ export async function connectBrowserNativePageControl(
     button.textContent = browserNativeSessionExportCopy(document.documentElement.lang)
     Object.assign(button.style, {
       padding: '7px 12px',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '7px',
-      background: '#111827',
-      color: '#f9fafb',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
       cursor: 'pointer',
       font: '500 13px/1.3 system-ui, sans-serif',
     })
@@ -559,21 +578,21 @@ export async function connectBrowserNativePageControl(
     supportButton.textContent = browserNativeSupportBundleCopy(document.documentElement.lang)
     Object.assign(supportButton.style, {
       padding: '7px 12px',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '7px',
-      background: '#111827',
-      color: '#f9fafb',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
       cursor: 'pointer',
       font: '500 13px/1.3 system-ui, sans-serif',
     })
     const result = document.createElement('span')
     result.dataset.browserNativeSessionExportResult = ''
     applyLiveRegion(result, 'status')
-    result.style.color = '#f9fafb'
+    result.style.color = browserNativeSurface.label
     const supportResult = document.createElement('span')
     supportResult.dataset.browserNativeSupportBundleResult = ''
     applyLiveRegion(supportResult, 'status')
-    supportResult.style.color = '#f9fafb'
+    supportResult.style.color = browserNativeSurface.label
     root.append(button, supportButton, result, supportResult)
     document.body.append(root)
     const control = { root, button, supportButton, result }
@@ -711,10 +730,10 @@ export async function connectBrowserNativePageControl(
       maxHeight: 'calc(100vh - 120px)',
       overflow: 'auto',
       padding: '14px 16px',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '12px',
-      background: '#111827',
-      color: '#f9fafb',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
       boxShadow: '0 8px 28px rgb(0 0 0 / 32%)',
       font: '500 13px/1.45 system-ui, sans-serif',
     })
@@ -724,9 +743,9 @@ export async function connectBrowserNativePageControl(
     Object.assign(title.style, { margin: '0 0 6px', fontSize: '15px', fontWeight: '600', lineHeight: '1.3' })
     const body = document.createElement('p')
     body.textContent = copy.body
-    Object.assign(body.style, { margin: '0 0 8px', color: '#d1d5db' })
+    Object.assign(body.style, { margin: '0 0 8px', color: browserNativeSurface.secondary })
     const steps = document.createElement('ol')
-    Object.assign(steps.style, { margin: '0 0 10px', paddingLeft: '20px', color: '#d1d5db' })
+    Object.assign(steps.style, { margin: '0 0 10px', paddingLeft: '20px', color: browserNativeSurface.secondary })
     for (const step of copy.steps) {
       const item = document.createElement('li')
       item.textContent = step
@@ -740,8 +759,8 @@ export async function connectBrowserNativePageControl(
       margin: '0 0 10px',
       padding: '7px 9px',
       borderRadius: '8px',
-      background: '#1f2937',
-      color: '#e5e7eb',
+      background: browserNativeSurface.raised,
+      color: browserNativeSurface.label,
       font: '500 12px/1.4 ui-monospace, monospace',
     })
     const actions = document.createElement('div')
@@ -752,10 +771,10 @@ export async function connectBrowserNativePageControl(
     sample.textContent = copy.sampleAction
     Object.assign(sample.style, {
       pointerEvents: 'auto',
-      border: '1px solid #34d399',
+      border: 'none',
       borderRadius: '8px',
-      background: '#064e3b',
-      color: '#ecfdf5',
+      background: browserNativeSurface.actionFill,
+      color: browserNativeSurface.actionLabel,
       padding: '6px 11px',
       font: '600 13px/1.2 system-ui, sans-serif',
       cursor: 'pointer',
@@ -766,10 +785,10 @@ export async function connectBrowserNativePageControl(
     dismiss.textContent = copy.dismiss
     Object.assign(dismiss.style, {
       pointerEvents: 'auto',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '8px',
       background: 'transparent',
-      color: '#e5e7eb',
+      color: browserNativeSurface.label,
       padding: '6px 11px',
       font: '500 13px/1.2 system-ui, sans-serif',
       cursor: 'pointer',
@@ -777,7 +796,7 @@ export async function connectBrowserNativePageControl(
     const status = document.createElement('output')
     status.setAttribute('data-browser-native-first-use-status', '')
     applyLiveRegion(status, 'status')
-    Object.assign(status.style, { display: 'block', marginTop: '8px', color: '#a7f3d0', minHeight: '1.2em' })
+    Object.assign(status.style, { display: 'block', marginTop: '8px', color: browserNativeSurface.secondary, minHeight: '1.2em' })
     sample.addEventListener('click', () => {
       const input = composerElement()
       if (input === undefined) {
@@ -851,10 +870,10 @@ export async function connectBrowserNativePageControl(
     Object.assign(select.style, {
       minWidth: '220px',
       padding: '7px 10px',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '7px',
-      background: '#111827',
-      color: '#f9fafb',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
       font: '500 13px/1.3 system-ui, sans-serif',
     })
     const create = document.createElement('button')
@@ -863,17 +882,17 @@ export async function connectBrowserNativePageControl(
     create.textContent = copy.create
     Object.assign(create.style, {
       padding: '7px 12px',
-      border: '1px solid #526174',
+      border: `1px solid ${browserNativeSurface.border}`,
       borderRadius: '7px',
-      background: '#111827',
-      color: '#f9fafb',
+      background: browserNativeSurface.fill,
+      color: browserNativeSurface.label,
       cursor: 'pointer',
       font: '500 13px/1.3 system-ui, sans-serif',
     })
     const status = document.createElement('span')
     status.setAttribute('data-browser-native-workspace-switcher-status', '')
     applyLiveRegion(status, 'status')
-    status.style.color = '#f9fafb'
+    status.style.color = browserNativeSurface.label
     status.style.maxWidth = '180px'
     status.style.overflow = 'hidden'
     status.style.textOverflow = 'ellipsis'

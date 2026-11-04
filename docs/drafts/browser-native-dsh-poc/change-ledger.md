@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-145：暗色主题对比度与设计 token 复用
+
+```text
+changeId: BN-P2-145
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: apps/web/src/browser-native-page-control.ts; docs/drafts/browser-native-dsh-poc/mobile-ui-only.html; docs/drafts/browser-native-dsh-poc/tests/dark-theme-contrast.e2e.mjs; docs/drafts/browser-native-dsh-poc/dark-theme-contrast.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 新增状态面原先固定使用深色内联配色，不跟随客户端主题，也无法证明暗色下的文本对比度；移动端暗色按钮为浅蓝底白字、错误文字为暗红，均低于 WCAG 2 AA。
+existingExtensionPointsChecked: 复用 `packages/client/ui-theme` 的 `--dsw-alias-*` token、主题引导写入的 `body[data-ds-dark-theme]`、preview 的真实 turn/导出/排队/离线/跨标签冲突通道；未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有在真实主题引导与真实状态渲染后才能解析 token 与计算实际前景/背景；静态检查无法发现移动端暗色按钮与错误文字的低对比。
+behaviorChange: 页面内注入的引导卡、状态条、导出控件、Workspace 切换器与动作按钮改用 design-platform token；首次使用示例按钮与状态动作按钮改为主题主按钮配色；移动端 UI-only 页面新增暗色 `--accent-fg` 与 `--error`。新增暗色/亮色对比度 E2E。
+consumersUpdated: preview 构建产物、移动端页面、PoC README 产品导航、新增 dark-theme-contrast.md、本 ledger。
+tests: `pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/dark-theme-contrast.e2e.mjs` 与 `DSH_POC_COLOR_SCHEME=light` 同参数均通过：first-use、main-export-workspace、queued-admission、offline-recovery、collaboration-session-conflict、mobile-ui-only 全部 `problems: []`，pageerror 0；重跑 axe 审计仍 0 serious/critical、pageerror 0。
+syncReplaySteps: 上游同步后重建 preview，复跑暗色与亮色对比度脚本；确认注入状态卡背景仍解析为不透明 token、移动端仍按 `prefers-color-scheme` 选择配色。
+deleteCondition: 正式客户端提供主题 token 对比度门禁与可视回归，或被等价的门禁取代。
+status: implemented
+```
+
 ### BN-P2-144：双语字典覆盖与伪本地化窄屏验证
 
 ```text

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DSH mobile · UI only</title>
 <style>
-  :root { color-scheme: light dark; --fg: #111; --muted: #5c6370; --bg: #fff; --line: #d7dbe0; --accent: #2f6fed; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #eceff4; --muted: #9aa3af; --bg: #14171c; --line: #2b313a; --accent: #7aa2ff; } }
+  :root { color-scheme: light dark; --fg: #111; --muted: #5c6370; --bg: #fff; --line: #d7dbe0; --accent: #2f6fed; --accent-fg: #fff; --error: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #eceff4; --muted: #9aa3af; --bg: #14171c; --line: #2b313a; --accent: #7aa2ff; --accent-fg: #0b1020; --error: #ff9a8a; } }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   header { position: sticky; top: 0; padding: 14px calc(16px + env(safe-area-inset-left)) 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
@@ -18,10 +18,10 @@
   .entry .role { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
   form { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 8px; padding: 10px calc(12px + env(safe-area-inset-left)) calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
   textarea { flex: 1; min-height: 44px; max-height: 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: inherit; font: inherit; resize: none; }
-  button { min-width: 72px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; }
+  button { min-width: 72px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; }
   button:disabled { opacity: 0.5; }
   .status { min-height: 1.5em; margin-top: 10px; color: var(--muted); font-size: 13px; }
-  .status.error { color: #c0392b; }
+  .status.error { color: var(--error); }
 </style>
 </head>
 <body>
