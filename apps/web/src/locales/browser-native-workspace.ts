@@ -117,6 +117,33 @@ export function browserNativeQueueStatusCopy(
     : `Waiting for a model slot · position ${String(position)} of ${String(queued)}${capacity}`
 }
 
+/** Format the connectivity notice shown while Session requests wait for the network.
+ * @param language - Page language tag.
+ * @param state - Connectivity state reported by the page or Worker.
+ * @param queued - Number of Session requests waiting for connectivity.
+ * @returns Localized connectivity text.
+ */
+export function browserNativeOfflineStatusCopy(
+  language: string,
+  state: 'offline' | 'replaying' | 'online',
+  queued: number,
+): string {
+  const request = (count: number): string => language.startsWith('zh')
+    ? `${String(count)} 个请求进入可重试队列`
+    : `${String(count)} request${count === 1 ? '' : 's'} queued for retry`
+  if (state === 'offline') {
+    return language.startsWith('zh')
+      ? `网络已断开 · ${request(queued)}；恢复后将自动重放`
+      : `Offline · ${request(queued)}; replay resumes when the connection returns`
+  }
+  if (state === 'replaying') {
+    return language.startsWith('zh')
+      ? `正在恢复连接 · 重放 ${request(queued)}`
+      : `Reconnecting · replaying ${request(queued)}`
+  }
+  return language.startsWith('zh') ? '连接已恢复，队列已清空' : 'Connected; retry queue is empty'
+}
+
 /** Format the notice shown when the page cannot host the Browser-Native preview.
  * @param language - Page language tag.
  * @param issue - First missing platform requirement.

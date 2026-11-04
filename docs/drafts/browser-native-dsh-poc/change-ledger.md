@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-134：断网可见状态、Session 请求等待队列与按 requestId 幂等重放
+
+```text
+changeId: BN-P2-134
+upstreamBaseline: research checkout at batch start; 2026-11-04; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/browser-native-connection.ts; docs/drafts/browser-native-dsh-poc/browser-native-control.ts; docs/drafts/browser-native-dsh-poc/browser-native-providers.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/offline-reconnect.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs; apps/web/src/browser-native-control-channel.ts; apps/web/src/browser-native-page-control.ts; apps/web/src/locales/browser-native-workspace.ts; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 断网时页面没有任何可见状态，Session 请求直接失败；用户无法区分“请求未发出”与“已发送但响应丢失”，恢复后也无法证明同一 turn 只执行一次。
+existingExtensionPointsChecked: 复用 Worker 内唯一的 Session HTTP 出口 `sessionRequest`、既有 durable outbox 与 seq 冲突对账、控制通道 notice 校验和页面控制渲染；未改 Agent Loop、Session 事件类型或格式、模型/工具协议；本次不涉及 `packages/`。
+whyDraftOnlyWasInsufficient: “未联网时请求不发出、恢复后只追加一次”只能由真实 Chrome 的网络离线状态、Worker 请求路径、backend append 记录与 Session 日志共同证明；静态阅读无法区分排队与失败。
+behaviorChange: 新增 `browser-native-connection.ts`（页面转发 online/offline、`navigator.onLine` 兜底、等待队列与 `queued` 计数）；`sessionRequest` 在 fetch 前等待连接并保留原 `requestId`；控制通道新增 `offline` notice 与校验，页面渲染 `[data-browser-native-offline-status]`；backend `session/append` 以 `(principalId, requestId)` 缓存首次结果，相同正文返回 `replayed: true` 且不重复写日志、不向实时流推送，正文不同返回 409 `IDEMPOTENCY_CONFLICT`，缓存上限 1,000 条。
+consumersUpdated: PoC README 新增“离线与重连体验”章节与导航入口；`apps/web` 控制通道类型、页面状态条与中英文文案同步更新；本 ledger 登记；未新增生产入口。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs` 71/71 通过（含新增幂等重放与 `IDEMPOTENCY_CONFLICT` 用例）；`node docs/drafts/browser-native-dsh-poc/tests/offline-reconnect.e2e.mjs` 1/1 通过，输出 `{"result":"passed","offlineBanner":{"present":true,"hidden":false,"state":"offline","queued":0},"queuedBanner":{"present":true,"hidden":false,"state":"offline","queued":1},"settledBanner":{"present":true,"hidden":true,"state":"online","queued":0},"appendCount":1,"userMessages":1,"sessionEvents":26,"turn":2}`；`control-channel-conformance.e2e.mjs`、`control-payload-bounds.e2e.mjs` 与 `collaboration-stream.test.mjs` 回归通过。
+syncReplaySteps: 上游同步后先 `pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview`，再复跑上述三条命令；确认控制通道 notice 白名单仍由 `browser-native-control-channel.ts` 单点校验、`sessionRequest` 仍是 Worker 唯一的 Session HTTP 出口。
+deleteCondition: 正式产品由平台级离线队列/Service Worker 背景同步替代，或该 PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-133：viewer 实时事件订阅与 Session 执行权移交
 
 ```text

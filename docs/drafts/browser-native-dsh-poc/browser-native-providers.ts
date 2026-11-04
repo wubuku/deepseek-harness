@@ -70,6 +70,7 @@ import {
 } from './browser-native-memory.ts'
 import { splitSessionAppendBatches } from './browser-native-session-transport.ts'
 import { BrowserNativeSessionOutbox } from './browser-native-session-outbox.ts'
+import { waitForBrowserNativeConnection } from './browser-native-connection.ts'
 import { matchesWorkspaceReceipt } from './workspace-session-reconciliation.mjs'
 import type { BrowserNativePermissionProbe } from './browser-native-permission-probe.ts'
 import type { BrowserNativeToolPolicyProbe } from './browser-native-tool-policy.ts'
@@ -318,10 +319,14 @@ async function sessionRequest(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<SessionResponse> {
+  // Requests queued while offline keep this request id, so a replay after
+  // reconnection carries the same identity the backend may already have seen.
+  const id = requestId()
+  await waitForBrowserNativeConnection(signal)
   const response = await fetch(`${SESSION_ROUTE}/${operation}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-browser-native-protocol': String(PROTOCOL_VERSION) },
-    body: JSON.stringify({ protocolVersion: PROTOCOL_VERSION, requestId: requestId(), ...body }),
+    body: JSON.stringify({ protocolVersion: PROTOCOL_VERSION, requestId: id, ...body }),
     signal,
   })
   const payload = await readJson(response)

@@ -60,7 +60,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | Workspace 持久化与传输 | [Durable Workspace 增量验证](#durable-workspace-增量验证)、[完整性与生命周期验证](#完整性与生命周期验证)、[大文件与分块传输](#大文件与分块-workspace-传输验证)、[可写 chunk-backed 编辑](#可写-chunk-backed-编辑验证) |
 | 文件、编辑与附件 | [文件搜索与载荷安全](#browser-native-文件搜索与载荷安全)、[Composer 通用文件附件](#composer-通用文件附件)、[OPFS 外置大文件闭环](#opfs-外置大文件的-dsh-工具闭环)、[内容定义分块成本](#内容定义分块成本对照) |
 | 模型、预算与策略 | [租户成本报表](tenant-cost-report.md)、[双 provider 真实兼容](#双-provider-真实兼容)、[Token 预算与计量](#token-预算与计量)、[审批策略与工具决策](#审批策略与工具决策)、[模型流故障与恢复](#模型流故障与-agent-loop-恢复) |
-| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
+| Session 生命周期与恢复 | [执行写权交接](#session-与-workspace-执行写权交接)、[实时协作与执行权移交](#实时协作与执行权移交)、[离线与重连](#离线与重连体验)、[生命周期、身份与计算位置](#生命周期身份与浏览器计算位置验证)、[principal 隔离](#session-与-workspace-principal-隔离)、[导出与导入](#session-导出与导入) |
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
@@ -1419,6 +1419,26 @@ node --test docs/drafts/browser-native-dsh-poc/tests/collaboration-stream.test.m
 ```
 
 边界：订阅 hub 在 backend 进程内；authority 转发模式下，owner 与 viewer 必须命中同一 backend 才能收到实时增量，跨 backend fan-out 未实现。没有页面级 viewer UI，验证停在协议与 HTTP 客户端层。
+
+## 离线与重连体验
+
+`browser-native-connection.ts` 把 Worker 内 Session 请求的“可发送条件”集中到一处：页面通过控制消息把 `window` 的 `online`/`offline` 事件转发给 Worker，Worker 同时以 `navigator.onLine` 兜底。断网时 `sessionRequest` 不发起 `fetch`，请求进入内存等待队列并保留原 `requestId`；控制通道新增 `offline` notice（`state` 为 `offline`/`replaying`/`online`，`queued` 为等待数），页面状态条以 `[data-browser-native-offline-status]` 及其 `data-state`/`data-queued` 呈现。
+
+重放不重复执行由两层保证：等待队列只在连接恢复后发送一次原请求；backend 的 `session/append` 按 `(principalId, requestId)` 缓存首次结果，相同 `requestId` 与相同正文直接返回缓存结果（`replayed: true`，不重复写日志、不再向实时流推送），正文不同返回 409 `IDEMPOTENCY_CONFLICT`；缓存上限 1,000 条。
+
+`tests/offline-reconnect.e2e.mjs` 在真实 Chrome 中完成一个基线 turn 后调用 `context.setOffline(true)`，断言页面状态条为 `state=offline`；提交第二个 prompt 后断言 `data-queued=1`，且 backend 未收到任何携带该用户消息的 `append`；`setOffline(false)` 后同一 append 生效，Session 内该用户消息恰 1 条、`turn/end` 为 `completed`、assistant marker 存在、`append` 只有 1 条、seq 无重复，状态条回到 `online` 后隐藏。
+
+实测输出：`{"result":"passed","offlineBanner":{"present":true,"hidden":false,"state":"offline","queued":0},"queuedBanner":{"present":true,"hidden":false,"state":"offline","queued":1},"settledBanner":{"present":true,"hidden":true,"state":"online","queued":0},"appendCount":1,"userMessages":1,"sessionEvents":26,"turn":2}`。
+
+复跑：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+node docs/drafts/browser-native-dsh-poc/tests/offline-reconnect.e2e.mjs
+node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs
+```
+
+边界：排队只发生在 Worker 进程内，页面刷新后由既有 durable outbox 与 seq 冲突对账接管，不继承排队计数；只有 Session HTTP 请求在发送前等待连接，模型请求本身不排队；`requestId` 幂等缓存随 backend 进程消失，跨进程重试仍依赖 outbox 与 seq 对账；未覆盖 Service Worker 后台重放。
 
 ## 权限预设与审批生命周期
 

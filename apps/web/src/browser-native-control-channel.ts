@@ -65,9 +65,20 @@ export interface BrowserNativeQueueStatus {
   readonly limit?: number
 }
 
+/**
+ * Connectivity state for Session requests held by the Worker while the page is offline.
+ * `queued` counts requests waiting for connectivity; a reconnecting Worker reports
+ * `replaying` until that count returns to zero.
+ */
+export interface BrowserNativeOfflineStatus {
+  readonly type: 'offline'
+  readonly state: 'offline' | 'replaying' | 'online'
+  readonly queued: number
+}
+
 export type BrowserNativeControlNotice = BrowserNativeOwnerNotice | BrowserNativeWorkspaceStatus
   | BrowserNativeWorkspaceLease | BrowserNativeWorkspaceLeaseReleased | BrowserNativePagehideAck
-  | BrowserNativeQueueStatus
+  | BrowserNativeQueueStatus | BrowserNativeOfflineStatus
 
 export interface BrowserNativeControlReadyFrame {
   readonly type: 'control-ready'
@@ -172,6 +183,11 @@ function isNotice(value: unknown): value is BrowserNativeControlNotice {
       && hasBoundedOptionalInteger(value, 'limit', 1)
       && (value.state === 'idle' || (typeof value.position === 'number' && typeof value.queued === 'number'))
   }
+  if (value.type === 'offline') {
+    return hasExactKeys(value, ['type', 'state', 'queued'])
+      && (value.state === 'offline' || value.state === 'replaying' || value.state === 'online')
+      && typeof value.queued === 'number' && Number.isSafeInteger(value.queued) && value.queued >= 0
+  }
   return false
 }
 
@@ -204,7 +220,7 @@ function browserNativeControlFrameError(value: unknown): string | undefined {
     return 'CONTROL_FRAME_INVALID'
   }
   if (!isPlainRecord(value.notice) || typeof value.notice.type !== 'string') return 'CONTROL_FRAME_INVALID'
-  const knownNotice = ['owner', 'released', 'unavailable', 'workspace', 'workspace-lease', 'workspace-lease-released', 'pagehide-ack', 'queue']
+  const knownNotice = ['owner', 'released', 'unavailable', 'workspace', 'workspace-lease', 'workspace-lease-released', 'pagehide-ack', 'queue', 'offline']
   if (!knownNotice.includes(value.notice.type)) return 'CONTROL_NOTICE_UNSUPPORTED'
   if (!isNotice(value.notice)) return hasOversizedNoticeString(value.notice) ? 'CONTROL_FIELD_TOO_LARGE' : 'CONTROL_FRAME_INVALID'
   try {

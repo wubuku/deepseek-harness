@@ -3,6 +3,7 @@ import {
   BROWSER_NATIVE_CONTROL_PROTOCOL_VERSION,
   type BrowserNativeControlFrame,
   type BrowserNativeControlNotice,
+  type BrowserNativeOfflineStatus,
   type BrowserNativeOwnerNotice,
   type BrowserNativePagehideAck,
   type BrowserNativeQueueStatus,
@@ -13,6 +14,7 @@ import {
 export type {
   BrowserNativeControlFrame,
   BrowserNativeControlNotice,
+  BrowserNativeOfflineStatus,
   BrowserNativeOwnerNotice,
   BrowserNativePagehideAck,
   BrowserNativeQueueStatus,
@@ -100,6 +102,11 @@ export function publishBrowserNativeWorkspaceLease(notice: BrowserNativeWorkspac
 
 /** Report this Worker's live admission queue position to the owning page. */
 export function publishBrowserNativeQueueStatus(notice: BrowserNativeQueueStatus): void {
+  publishBrowserNativeControlNotice(notice)
+}
+
+/** Report queued Session requests while the page has no network connection. */
+export function publishBrowserNativeOfflineStatus(notice: BrowserNativeOfflineStatus): void {
   publishBrowserNativeControlNotice(notice)
 }
 

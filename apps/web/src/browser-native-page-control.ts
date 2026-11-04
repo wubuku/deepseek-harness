@@ -1,5 +1,6 @@
 import {
   browserNativeFirstUseCopy,
+  browserNativeOfflineStatusCopy,
   browserNativeQueueStatusCopy,
   browserNativeRecoveryErrorCopy,
   browserNativeSessionExportCopy,
@@ -25,6 +26,7 @@ import {
 import {
   BrowserNativeControlReceiver,
   type BrowserNativeControlNotice,
+  type BrowserNativeOfflineStatus,
   type BrowserNativePagehideAck,
   type BrowserNativeQueueStatus,
   type BrowserNativeWorkspaceStatus,
@@ -294,6 +296,8 @@ export async function connectBrowserNativePageControl(
   let workspaceId: string | undefined
   let workspaceStatus: HTMLElement | undefined
   let queueStatus: HTMLElement | undefined
+  let offlineStatus: HTMLElement | undefined
+  let offlineQueued = 0
   let exportControl: { readonly root: HTMLElement; readonly button: HTMLButtonElement; readonly result: HTMLElement } | undefined
   let retryTimer: number | undefined
   const pagehideWaiters = new Map<string, (notice: BrowserNativePagehideAck) => void>()
@@ -468,6 +472,42 @@ export async function connectBrowserNativePageControl(
       notice.activeTurns ?? 0,
       notice.limit,
     )
+  }
+  const showOfflineStatus = (notice: BrowserNativeOfflineStatus): void => {
+    offlineQueued = notice.queued
+    offlineStatus ??= (() => {
+      const element = document.createElement('output')
+      applyLiveRegion(element, 'status')
+      element.setAttribute('data-browser-native-offline-status', '')
+      Object.assign(element.style, {
+        position: 'fixed',
+        left: '16px',
+        bottom: '16px',
+        zIndex: '2147483000',
+        pointerEvents: 'none',
+        maxWidth: 'min(440px, calc(100vw - 32px))',
+        padding: '9px 13px',
+        border: '1px solid #526174',
+        borderRadius: '10px',
+        background: '#111827',
+        color: '#f9fafb',
+        boxShadow: '0 8px 28px rgb(0 0 0 / 28%)',
+        font: '500 13px/1.4 system-ui, sans-serif',
+      })
+      document.body.append(element)
+      return element
+    })()
+    offlineStatus.hidden = notice.state === 'online'
+    offlineStatus.dataset.state = notice.state
+    offlineStatus.dataset.queued = String(notice.queued)
+    offlineStatus.textContent = browserNativeOfflineStatusCopy(
+      document.documentElement.lang,
+      notice.state,
+      notice.queued,
+    )
+    offlineStatus.style.borderColor = notice.state === 'offline'
+      ? '#fbbf24'
+      : notice.state === 'replaying' ? '#60a5fa' : '#34d399'
   }
   const showRecoveryResult = (success: boolean): void => {
     if (workspaceStatus === undefined) return
@@ -1021,6 +1061,10 @@ export async function connectBrowserNativePageControl(
       showQueueStatus(notice)
       return
     }
+    if (notice.type === 'offline') {
+      showOfflineStatus(notice)
+      return
+    }
     if (notice.type === 'workspace-lease' && typeof notice.workspaceId === 'string'
       && typeof notice.writerToken === 'string' && Number.isSafeInteger(notice.fencingToken)) {
       const resource = { kind: 'workspace', id: notice.workspaceId } as const
@@ -1110,6 +1154,17 @@ export async function connectBrowserNativePageControl(
   })
   channel.port1.start()
   worker.postMessage({ type: 'browser-native-control-init' }, [channel.port2])
+  const reportNetworkState = (): void => {
+    worker.postMessage({ type: 'browser-native-control-network', online: navigator.onLine })
+    if (!navigator.onLine) {
+      showOfflineStatus({ type: 'offline', state: 'offline', queued: offlineQueued })
+      return
+    }
+    if (offlineQueued === 0) showOfflineStatus({ type: 'offline', state: 'online', queued: 0 })
+  }
+  window.addEventListener('offline', reportNetworkState)
+  window.addEventListener('online', reportNetworkState)
+  reportNetworkState()
   for (const workspace of recoveryWorkspaces) {
     worker.postMessage({
       type: 'browser-native-control-resume-workspace-lease',
@@ -1175,6 +1230,8 @@ export async function connectBrowserNativePageControl(
 
   return () => {
     window.removeEventListener('pagehide', handlePageHide)
+    window.removeEventListener('offline', reportNetworkState)
+    window.removeEventListener('online', reportNetworkState)
     document.removeEventListener('click', handleFirstUseClick, true)
     document.removeEventListener('keydown', handleFirstUseKeydown, true)
     clearRetryTimer()
@@ -1182,6 +1239,7 @@ export async function connectBrowserNativePageControl(
     channel.port1.close()
     workspaceStatus?.remove()
     queueStatus?.remove()
+    offlineStatus?.remove()
     exportControl?.root.remove()
     workspaceSwitcher?.root.remove()
     firstUsePanel?.root.remove()

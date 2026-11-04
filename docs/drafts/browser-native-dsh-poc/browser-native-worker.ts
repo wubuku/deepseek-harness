@@ -77,6 +77,7 @@ import {
   setBrowserNativeResumeOwner,
   setBrowserNativeResumeWorkspaceLease,
 } from './browser-native-control.ts'
+import { setBrowserNativeConnectionOnline } from './browser-native-connection.ts'
 import {
   createBrowserNativeWorkspaceRuntime,
   type BrowserNativeFileToolStage,
@@ -2682,6 +2683,11 @@ self.addEventListener('message', (event: MessageEvent) => {
     const port = event.ports[0]
     if (port === undefined) throw new Error('browser-native worker: control init frame needs a MessagePort')
     setBrowserNativeControlPort(port)
+    return
+  }
+  if (data?.type === 'browser-native-control-network') {
+    if (typeof data.online !== 'boolean') throw new Error('browser-native worker: network frame needs an online flag')
+    setBrowserNativeConnectionOnline(data.online)
     return
   }
   if (data?.type === 'browser-native-control-resume-owner') {

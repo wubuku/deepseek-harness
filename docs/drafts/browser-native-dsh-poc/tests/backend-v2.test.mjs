@@ -437,6 +437,46 @@ describe('browser-native DSH v2 backend', () => {
     assert.equal(read.eventState, 'shared-frozen')
   })
 
+  it('replays one append request id without applying it twice', async () => {
+    const dataDir = await temporaryDirectory()
+    const { origin } = await start({ dataDir, llmMode: 'scripted' })
+    const id = 'idempotent-append-session'
+    const created = await post(origin, '/api/browser-native/session/create', envelope('create-idempotent', {
+      sessionId: id,
+      header: header(id),
+    }))
+    const event = { seq: 0, type: 'user/message', payload: { content: 'delivered once' }, at: '2026-10-03T00:00:00.000Z' }
+    const request = envelope('append-idempotent', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      expectedNextSeq: 0,
+      events: [event],
+    })
+    const first = await post(origin, '/api/browser-native/session/append', request)
+    assert.equal(first.acceptedCount, 1)
+    assert.equal(first.nextSeq, 1)
+
+    const replay = await post(origin, '/api/browser-native/session/append', request)
+    assert.equal(replay.replayed, true)
+    assert.equal(replay.nextSeq, 1)
+
+    const conflict = await failure(origin, '/api/browser-native/session/append', envelope('append-idempotent', {
+      sessionId: id,
+      ownerToken: created.owner.ownerToken,
+      expectedNextSeq: 0,
+      events: [{ ...event, payload: { content: 'different payload' } }],
+    }))
+    assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT')
+    assert.equal(conflict.status, 409)
+
+    const read = await post(origin, '/api/browser-native/session/read', envelope('read-idempotent', {
+      sessionId: id,
+      offset: 0,
+      length: 10,
+    }))
+    assert.deepEqual(read.events, [event])
+  })
+
   it('fits an oversized Session read page inside the response byte budget', async () => {
     const dataDir = await temporaryDirectory()
     const { origin } = await start({ dataDir, llmMode: 'scripted' })

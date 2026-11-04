@@ -43,6 +43,7 @@ const MAX_EVENTS = 100_000
 const MAX_SESSION_READ_EVENTS = 2_048
 const MAX_SESSION_READ_BYTES = 2 * 1024 * 1024
 const MAX_CATALOG_PAGE_SIZE = 100
+const MAX_SESSION_APPEND_RECEIPTS = 1_000
 const MAX_HANDOFF_ID_LENGTH = 200
 const MAX_CHECKPOINT_IDS = 1_000
 const MAX_CHECKPOINT_ID_LENGTH = 200
@@ -1943,7 +1944,7 @@ function sessionResponse(session, extra = {}) {
 /** Operations a Session viewer may perform; everything else requires the owner lease. */
 const SHARED_READ_OPERATIONS = new Set(['open', 'read', 'stat'])
 
-async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission) {
+async function sessionOperation(store, operation, body, principalId, shares, testHooks = {}, admission, appendReceipts) {
   assertProtocol(body)
   assertPrincipalId(principalId)
   if (operation === 'list') {
@@ -2099,6 +2100,14 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
       return sessionResponse(session, { owner: store.renew(session, body.ownerToken) })
     }
     if (operation === 'append') {
+      const receiptKey = `${principalId}\u0000${body.requestId}`
+      const receipt = appendReceipts?.get(receiptKey)
+      if (receipt !== undefined) {
+        if (fullDigest(receipt.request) !== fullDigest(body)) {
+          throw new BackendError('IDEMPOTENCY_CONFLICT', 'requestId was reused with different append content', 409)
+        }
+        return { ...clone(receipt.result), replayed: true }
+      }
       if (testHooks.failSessionAppend?.(body) === true) {
         throw new BackendError('E2E_INJECTED_SESSION_APPEND_FAILURE', 'E2E injected Session append failure', 503)
       }
@@ -2114,7 +2123,12 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
         }
       })
       session.events.push(...clone(body.events))
-      return sessionResponse(session, { acceptedCount: body.events.length })
+      const result = sessionResponse(session, { acceptedCount: body.events.length })
+      appendReceipts?.set(receiptKey, { request: clone(body), result })
+      while (appendReceipts !== undefined && appendReceipts.size > MAX_SESSION_APPEND_RECEIPTS) {
+        appendReceipts.delete(appendReceipts.keys().next().value)
+      }
+      return result
     }
     if (operation === 'flush') {
       const durabilityReceipt = await store.flush(session)
@@ -5038,6 +5052,7 @@ export async function createBrowserNativeV2Server(options) {
   const sessionShares = new SessionShareStore(options.dataDir)
   await sessionShares.load()
   const sessionEvents = new SessionEventHub()
+  const sessionAppendReceipts = new Map()
   const sweepAttachments = async () => {
     const workspaces = []
     for (const workspaceId of await listAttachmentWorkspaces(options.dataDir)) {
@@ -6283,8 +6298,8 @@ export async function createBrowserNativeV2Server(options) {
             revision: checkpoint.workspaceRevision,
           })
         }
-        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission)
-        if (operation === 'append') sessionEvents.publish(result.sessionId, body.events)
+        const result = await sessionOperation(store, operation, body, principalId, sessionShares, options.testHooks, admission, sessionAppendReceipts)
+        if (operation === 'append' && result.replayed !== true) sessionEvents.publish(result.sessionId, body.events)
         if (operation === 'handoff' && options.testHooks?.dropSessionHandoffResponse?.(body, result) === true) {
           response.destroy()
           return
