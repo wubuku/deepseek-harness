@@ -5583,10 +5583,38 @@ async function runLlmAttempt(response, request, config, body, { canRetry }) {
 }
 
 /**
+ * Describe one model request without copying prompt text into the ledger.
+ * @param {object} body - Client model request body.
+ * @returns {{messageCount: number, systemChars: number, historyChars: number, toolCount: number, toolSchemaChars: number}} Prompt composition for cost attribution.
+ */
+function requestComposition(body) {
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  let systemChars = typeof body.system === 'string' ? body.system.length : 0
+  let historyChars = 0
+  for (const message of messages) {
+    // Serialized length includes tool calls and tool results, so it tracks the
+    // transcript the provider actually bills rather than visible text only.
+    const chars = JSON.stringify(message).length
+    if (message?.role === 'system') systemChars += chars
+    else historyChars += chars
+  }
+  const tools = Array.isArray(body.tools) ? body.tools : []
+  return {
+    messageCount: messages.length,
+    systemChars,
+    historyChars,
+    toolCount: tools.length,
+    toolSchemaChars: tools.length === 0 ? 0 : JSON.stringify(tools).length,
+  }
+}
+
+/**
  * Proxy a real provider request, falling back once before any client output.
  *
  * Usage is recorded at most once per client request, by the attempt that
- * produced the response, and carries the provider that answered.
+ * produced the response, and carries the provider that answered plus the size
+ * of the system prompt, conversation history, and tool schemas that produced
+ * the prompt token count.
  * @param {import('node:http').ServerResponse} response - Client response.
  * @param {import('node:http').IncomingMessage} request - Client request.
  * @param {object} config - Primary provider config, optionally with `fallback`.
@@ -5613,6 +5641,7 @@ async function realLlm(response, request, config, body, recordUsage = () => {}) 
         attempt: index + 1,
         ...(index > 0 ? { fallbackUsed: true } : {}),
         ...result.usage,
+        request: requestComposition(body),
       })
     }
     return
@@ -6108,6 +6137,10 @@ export async function createBrowserNativeV2Server(options) {
   }
   const MAX_DURABLE_TOOL_WRITE_BYTES = 1 * 1024 * 1024
   const MAX_DURABLE_TOOL_READ_BYTES = 2 * 1024 * 1024
+  const MAX_DURABLE_SEARCH_FILES = 200
+  const MAX_DURABLE_SEARCH_MATCHES = 50
+  const MAX_DURABLE_GLOB_MATCHES = 200
+  const MAX_DURABLE_SUBAGENT_STEPS = 3
   const DURABLE_WORKSPACE_ROOT = '/dsh/home/workspace/'
   const DURABLE_TOOL_DEFINITIONS = [
     {
@@ -6136,7 +6169,68 @@ export async function createBrowserNativeV2Server(options) {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'grep',
+        description: 'Search UTF-8 text files in the caller Workspace with a regular expression. Returns matching lines as path:line:text.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Regular expression matched against each line.' },
+            path: { type: 'string', description: 'Optional workspace-relative directory to limit the search.' },
+          },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'glob',
+        description: 'List caller Workspace file paths matching a glob pattern such as **/*.txt.',
+        parameters: {
+          type: 'object',
+          properties: { pattern: { type: 'string', description: 'Glob pattern matched against workspace-relative file paths.' } },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'edit',
+        description: 'Replace text in an existing Workspace file. old_string must match exactly once unless replace_all is true.',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string' },
+            old_string: { type: 'string' },
+            new_string: { type: 'string' },
+            replace_all: { type: 'boolean' },
+          },
+          required: ['file_path', 'old_string', 'new_string'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'subagent',
+        description: 'Delegate one research step to a child agent that can read, grep, and glob the same Workspace, then return its final text.',
+        parameters: {
+          type: 'object',
+          properties: { prompt: { type: 'string', description: 'Instructions for the child agent.' } },
+          required: ['prompt'],
+          additionalProperties: false,
+        },
+      },
+    },
   ]
+  const DURABLE_CHILD_TOOLS = DURABLE_TOOL_DEFINITIONS.filter(tool => tool.function.name !== 'subagent' && tool.function.name !== 'write' && tool.function.name !== 'edit')
   const workspaceToolPath = value => {
     if (typeof value !== 'string' || value.length === 0 || value.length > 1_000) {
       throw new DurableTurnError('DURABLE_TOOL_INVALID', 'file_path must be a non-empty string of at most 1000 characters', 400)
@@ -6146,6 +6240,56 @@ export async function createBrowserNativeV2Server(options) {
       throw new DurableTurnError('DURABLE_TOOL_PATH_FORBIDDEN', `durable tools can only reach ${DURABLE_WORKSPACE_ROOT}`, 403)
     }
     return value
+  }
+  /**
+   * Resolve an optional workspace-relative search directory.
+   * @param {string|undefined} value - Tool argument naming a file or directory.
+   * @returns {string} Directory prefix without a trailing slash; empty for the workspace root.
+   */
+  const workspaceToolDirectory = value => {
+    if (value === undefined || value === '' || value === DURABLE_WORKSPACE_ROOT.slice(0, -1)) return ''
+    return workspaceToolPath(value).replace(/\/+$/, '')
+  }
+  /**
+   * Convert a glob pattern over workspace-relative paths into a RegExp.
+   * @param {string} pattern - Pattern using `**`, `*`, and `?`.
+   * @returns {RegExp} Anchored matcher.
+   */
+  const globRegExp = pattern => {
+    let source = ''
+    for (let index = 0; index < pattern.length; index += 1) {
+      const character = pattern[index]
+      if (character === '*') {
+        source += pattern[index + 1] === '*' ? '.*' : '[^/]*'
+        if (pattern[index + 1] === '*') index += 1
+      } else if (character === '?') {
+        source += '[^/]'
+      } else {
+        source += character.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      }
+    }
+    return new RegExp(`^${source}$`)
+  }
+  /**
+   * Publish one file revision through the Workspace blob and commit routes.
+   * @param {object} request - Synthesized principal request.
+   * @param {string} workspaceId - Caller Workspace.
+   * @param {string} path - Workspace-relative path.
+   * @param {Buffer} bytes - UTF-8 file contents.
+   * @returns {Promise<void>} Resolves after the commit.
+   */
+  const commitWorkspaceFile = async (request, workspaceId, path, bytes) => {
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    await workspaces.putBlob(request, workspaceId, hash, bytes)
+    const { revision } = workspaces.revision(request, workspaceId)
+    await workspaces.commit(request, {
+      protocolVersion: PROTOCOL_VERSION,
+      requestId: randomUUID(),
+      workspaceId,
+      operationId: randomUUID(),
+      baseRevision: revision,
+      changes: [{ path, kind: 'file', hash, bytes: bytes.byteLength, mode: 0o644 }],
+    })
   }
   /**
    * Execute one advertised Workspace tool against the caller's own Workspace.
@@ -6166,16 +6310,16 @@ export async function createBrowserNativeV2Server(options) {
     if (input === null || typeof input !== 'object' || Array.isArray(input)) {
       return { text: `tool ${name} requires a JSON object argument`, isError: true }
     }
-    if (name !== 'read' && name !== 'write') {
+    if (!['read', 'write', 'grep', 'glob', 'edit'].includes(name)) {
       return { text: `the durable host does not implement tool ${name}`, isError: true }
     }
     const request = { headers: { cookie: `dsh-browser-native-principal=${principalId}` } }
     try {
       const workspaceId = workspaces.workspaceIdForPrincipal(principalId)
-      const path = workspaceToolPath(input.file_path ?? input.path)
       if (name === 'read') {
-        const snapshot = workspaces.manifest(request, workspaceId)
-        const entry = snapshot.entries.find(candidate => candidate.path === path && candidate.kind === 'file')
+        const path = workspaceToolPath(input.file_path)
+        const entry = workspaces.manifest(request, workspaceId).entries
+          .find(candidate => candidate.path === path && candidate.kind === 'file')
         if (entry === undefined) return { text: `no readable file at ${path}`, isError: true }
         if (entry.bytes > MAX_DURABLE_TOOL_READ_BYTES) {
           return { text: `file ${path} is ${String(entry.bytes)} bytes, above the readable limit`, isError: true }
@@ -6183,27 +6327,137 @@ export async function createBrowserNativeV2Server(options) {
         const bytes = await workspaces.getBlob(request, workspaceId, entry.hash)
         return { text: bytes.toString('utf8') }
       }
+      if (name === 'grep') {
+        if (typeof input.pattern !== 'string' || input.pattern.length === 0 || input.pattern.length > 500) {
+          return { text: 'grep requires a pattern of 1 to 500 characters', isError: true }
+        }
+        let expression
+        try {
+          expression = new RegExp(input.pattern)
+        } catch {
+          return { text: `grep pattern is not a valid regular expression: ${input.pattern}`, isError: true }
+        }
+        const prefix = workspaceToolDirectory(input.path)
+        const files = workspaces.manifest(request, workspaceId).entries
+          .filter(entry => entry.kind === 'file' && (prefix === '' || entry.path.startsWith(`${prefix}/`)))
+        const matches = []
+        let scanned = 0
+        for (const entry of files) {
+          if (scanned >= MAX_DURABLE_SEARCH_FILES || matches.length >= MAX_DURABLE_SEARCH_MATCHES) break
+          if (entry.bytes > MAX_DURABLE_TOOL_READ_BYTES) continue
+          scanned += 1
+          const lines = (await workspaces.getBlob(request, workspaceId, entry.hash)).toString('utf8').split('\n')
+          for (const [index, line] of lines.entries()) {
+            if (!expression.test(line)) continue
+            matches.push(`${entry.path}:${String(index + 1)}: ${line.slice(0, 500)}`)
+            if (matches.length >= MAX_DURABLE_SEARCH_MATCHES) break
+          }
+        }
+        if (matches.length === 0) {
+          return { text: `no match for ${input.pattern}${prefix === '' ? '' : ` under ${prefix}`}`, isError: true }
+        }
+        return { text: matches.join('\n') }
+      }
+      if (name === 'glob') {
+        if (typeof input.pattern !== 'string' || input.pattern.length === 0 || input.pattern.length > 500) {
+          return { text: 'glob requires a pattern of 1 to 500 characters', isError: true }
+        }
+        const expression = globRegExp(input.pattern)
+        const files = workspaces.manifest(request, workspaceId).entries
+          .filter(entry => entry.kind === 'file' && expression.test(entry.path))
+          .map(entry => entry.path).sort()
+        if (files.length === 0) return { text: `no files match ${input.pattern}`, isError: true }
+        return { text: files.slice(0, MAX_DURABLE_GLOB_MATCHES).join('\n') }
+      }
+      if (name === 'edit') {
+        const path = workspaceToolPath(input.file_path)
+        if (typeof input.old_string !== 'string' || input.old_string.length === 0) {
+          return { text: 'edit requires a non-empty old_string', isError: true }
+        }
+        if (typeof input.new_string !== 'string') return { text: 'edit requires a string new_string', isError: true }
+        const entry = workspaces.manifest(request, workspaceId).entries
+          .find(candidate => candidate.path === path && candidate.kind === 'file')
+        if (entry === undefined) return { text: `no readable file at ${path}`, isError: true }
+        if (entry.bytes > MAX_DURABLE_TOOL_READ_BYTES) {
+          return { text: `file ${path} is ${String(entry.bytes)} bytes, above the readable limit`, isError: true }
+        }
+        const current = (await workspaces.getBlob(request, workspaceId, entry.hash)).toString('utf8')
+        const occurrences = current.split(input.old_string).length - 1
+        if (occurrences === 0) return { text: `old_string was not found in ${path}`, isError: true }
+        if (occurrences > 1 && input.replace_all !== true) {
+          return { text: `old_string matches ${String(occurrences)} times in ${path}; include more context or set replace_all`, isError: true }
+        }
+        const index = current.indexOf(input.old_string)
+        const updated = input.replace_all === true
+          ? current.split(input.old_string).join(input.new_string)
+          : `${current.slice(0, index)}${input.new_string}${current.slice(index + input.old_string.length)}`
+        const bytes = Buffer.from(updated, 'utf8')
+        if (bytes.byteLength > MAX_DURABLE_TOOL_WRITE_BYTES) {
+          return { text: `edited content is ${String(bytes.byteLength)} bytes, above the writable limit`, isError: true }
+        }
+        await commitWorkspaceFile(request, workspaceId, path, bytes)
+        return { text: `edited ${path} (${String(occurrences)} replacement(s), ${String(bytes.byteLength)} bytes)` }
+      }
       if (typeof input.content !== 'string') return { text: 'write requires a string content argument', isError: true }
+      const path = workspaceToolPath(input.file_path)
       const bytes = Buffer.from(input.content, 'utf8')
       if (bytes.byteLength > MAX_DURABLE_TOOL_WRITE_BYTES) {
         return { text: `content is ${String(bytes.byteLength)} bytes, above the writable limit`, isError: true }
       }
-      const hash = createHash('sha256').update(bytes).digest('hex')
-      await workspaces.putBlob(request, workspaceId, hash, bytes)
-      const { revision } = workspaces.revision(request, workspaceId)
-      await workspaces.commit(request, {
-        protocolVersion: PROTOCOL_VERSION,
-        requestId: randomUUID(),
-        workspaceId,
-        operationId: randomUUID(),
-        baseRevision: revision,
-        changes: [{ path, kind: 'file', hash, bytes: bytes.byteLength, mode: 0o644 }],
-      })
+      await commitWorkspaceFile(request, workspaceId, path, bytes)
       return { text: `wrote ${path} (${String(bytes.byteLength)} bytes)` }
     } catch (error) {
       if (error instanceof DurableTurnError) throw error
       return { text: `tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`, isError: true }
     }
+  }
+  /**
+   * Execute one `subagent` call as a bounded child model loop.
+   *
+   * The child sees only read, grep, and glob so it cannot change the Workspace
+   * or recurse into another subagent. Its model requests reuse the parent
+   * turn's owner lease and abort controller, and its final text becomes the
+   * tool result.
+   * @param {{principalId: string, arguments: string, complete: Function}} call - Parent principal, raw JSON arguments, and the parent-scoped completion helper.
+   * @returns {Promise<{text: string, isError?: boolean}>} Child final text.
+   */
+  const executeDurableSubagent = async ({ principalId, arguments: raw, complete }) => {
+    let input
+    try {
+      input = JSON.parse(raw)
+    } catch {
+      return { text: 'subagent received arguments that are not valid JSON', isError: true }
+    }
+    if (typeof input?.prompt !== 'string' || input.prompt.length === 0 || input.prompt.length > 10_000) {
+      return { text: 'subagent requires a prompt of 1 to 10000 characters', isError: true }
+    }
+    let messages = [{ role: 'user', content: input.prompt }]
+    for (let step = 1; step <= MAX_DURABLE_SUBAGENT_STEPS; step += 1) {
+      const completion = await complete(messages, DURABLE_CHILD_TOOLS)
+      const calls = completion.blocks.filter(block => block.type === 'tool-call')
+      if (completion.finishReason === 'tool-calls') {
+        if (calls.length === 0) return { text: 'the subagent asked for tools without naming a call', isError: true }
+        const textBlocks = completion.blocks.filter(block => block.type === 'text' && block.text.trim() !== '')
+        const results = []
+        for (const call of calls) {
+          const result = await executeDurableTool({ principalId, name: call.name, arguments: call.arguments })
+          results.push({ role: 'tool', tool_call_id: call.id, content: result.text })
+        }
+        messages = [
+          ...messages,
+          {
+            role: 'assistant',
+            content: textBlocks.map(block => block.text).join('') || null,
+            tool_calls: calls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })),
+          },
+          ...results,
+        ]
+        continue
+      }
+      if (completion.text.trim() === '') return { text: 'the subagent returned no text', isError: true }
+      return { text: completion.text }
+    }
+    return { text: `the subagent did not finish within ${String(MAX_DURABLE_SUBAGENT_STEPS)} model steps`, isError: true }
   }
   const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
     ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
@@ -6250,9 +6504,10 @@ export async function createBrowserNativeV2Server(options) {
     authToken,
     timeoutMs: durableTurnTimeoutMs,
     approvalTimeoutMs: durableApprovalTimeoutMs,
-    requiresApproval: call => call.name === 'write',
+    requiresApproval: call => call.name === 'write' || call.name === 'edit',
     tools: DURABLE_TOOL_DEFINITIONS,
     executeTool: executeDurableTool,
+    executeSubagent: executeDurableSubagent,
     journalPath: join(options.dataDir, 'durable-runs.json'),
   })
   const durableRecovery = await durableHost.recover()
@@ -7193,6 +7448,23 @@ export async function createBrowserNativeV2Server(options) {
           throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
         }
         sendJson(response, 200, workspaces.revision(request, url.searchParams.get('workspaceId')))
+        return
+      }
+      const blobRead = url.pathname.match(/^\/api\/browser-native\/workspace\/blob\/([a-f0-9]{64})$/i)
+      if (request.method === 'GET' && blobRead !== null) {
+        if (url.searchParams.get('protocolVersion') !== String(PROTOCOL_VERSION)) {
+          throw new WorkspaceError('PROTOCOL_UNSUPPORTED', 'unsupported browser-native protocol')
+        }
+        const workspaceId = url.searchParams.get('workspaceId')
+        // Manifest access proves the caller owns the Workspace before the
+        // content-addressed blob is returned.
+        const manifest = workspaces.manifest(request, workspaceId)
+        if (!manifest.entries.some(entry => entry.hash === blobRead[1].toLowerCase())) {
+          throw new WorkspaceError('NOT_FOUND', 'workspace blob is not referenced by the manifest', 404)
+        }
+        const bytes = await workspaces.getBlob(request, workspaceId, blobRead[1].toLowerCase())
+        response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes.byteLength })
+        response.end(bytes)
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/workspace/blob-upload/start') {

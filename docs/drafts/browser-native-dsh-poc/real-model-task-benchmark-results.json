@@ -1,5 +1,5 @@
 {
-  "startedAt": "2026-11-05T04:59:32.418Z",
+  "startedAt": "2026-11-05T05:17:49.227Z",
   "provider": "longcat",
   "model": "LongCat-2.5",
   "llmMode": "real",
@@ -92,21 +92,51 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 4,
-          "inputTokens": 8792,
-          "outputTokens": 681,
-          "totalTokens": 9473,
+          "inputTokens": 8582,
+          "outputTokens": 439,
+          "totalTokens": 9021,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 942,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 380,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1874,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 2437,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 34,
+          "approvalLatencyMs": 33,
           "exportBytes": null,
-          "durationMs": 14592,
-          "bootMs": 2312,
-          "finalTextLength": 889,
-          "finalTextPreview": "The line starting with \"fixture=\" is `fixture=VFS_INPUT_READY`. I need to write that to /dsh/home/workspace/bench/echo.txt. But I should read the file first if it exists? The instruction says write the file. The fs-observation-policy requir",
+          "durationMs": 10183,
+          "bootMs": 2249,
+          "finalTextLength": 13,
+          "finalTextPreview": "BENCH_T1_DONE",
           "toolTrace": [
             {
               "name": "read",
@@ -131,22 +161,73 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 4,
-          "inputTokens": 8520,
-          "outputTokens": 564,
-          "totalTokens": 9084,
+          "modelRequests": 7,
+          "inputTokens": 18799,
+          "outputTokens": 1030,
+          "totalTokens": 19829,
           "costUsd": null,
-          "steps": 3,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 978,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 424,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1634,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 2390,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 9,
+              "systemChars": 4456,
+              "historyChars": 3061,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 11,
+              "systemChars": 4456,
+              "historyChars": 5051,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 13,
+              "systemChars": 4456,
+              "historyChars": 5658,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
+          "steps": 6,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 44,
+          "approvalLatencyMs": 33,
           "exportBytes": null,
-          "durationMs": 10303,
-          "bootMs": 2313,
-          "finalTextLength": 277,
-          "finalTextPreview": "I'll create the file and then search for the marker.\nFile created: [search-index.txt](/dsh/home/workspace/bench/search-index.txt)\n\nSearch result:\n- File path: `/dsh/home/workspace/bench/search-index.txt`\n- Matching line (line 2): `scale-fix",
+          "durationMs": 27002,
+          "bootMs": 2164,
+          "finalTextLength": 610,
+          "finalTextPreview": "I'll create the file first, then search the workspace.\nNow let me search the workspace for the marker:\nThe grep path must stay under the worker workspace. Let me try the current working directory directly or use glob to find files.Let me tr",
           "toolTrace": [
             {
               "name": "write",
@@ -155,8 +236,23 @@
             },
             {
               "name": "grep",
+              "isError": true,
+              "resultPreview": "Error: SEARCH_INVALID_PATH: path must stay under the Worker workspace"
+            },
+            {
+              "name": "grep",
               "isError": false,
               "resultPreview": "Found 1 match\n\nbench/search-index.txt\nLine 2: scale-fixture-line-0007 marker"
+            },
+            {
+              "name": "glob",
+              "isError": false,
+              "resultPreview": "bench/search-index.txt"
+            },
+            {
+              "name": "read",
+              "isError": false,
+              "resultPreview": "<path>/dsh/home/workspace/bench/search-index.txt</path>\n<type>file</type>\n<content>\n1: alpha\n2: scale-fixture-line-0007 marker\n3: omega\n\n(End of file - total 3 "
             }
           ],
           "readBackPaths": 0
@@ -172,21 +268,51 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 4,
-          "inputTokens": 9011,
-          "outputTokens": 533,
-          "totalTokens": 9544,
+          "inputTokens": 8361,
+          "outputTokens": 232,
+          "totalTokens": 8593,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 855,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 301,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1404,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 2058,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 39,
+          "approvalLatencyMs": 33,
           "exportBytes": null,
-          "durationMs": 18414,
-          "bootMs": 2294,
-          "finalTextLength": 60,
-          "finalTextPreview": "Now edit the file to change \"beta\" to \"gamma\".\nBENCH_T3_DONE",
+          "durationMs": 7287,
+          "bootMs": 2277,
+          "finalTextLength": 13,
+          "finalTextPreview": "BENCH_T3_DONE",
           "toolTrace": [
             {
               "name": "write",
@@ -212,19 +338,42 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 5888,
-          "outputTokens": 423,
-          "totalTokens": 6311,
+          "inputTokens": 5789,
+          "outputTokens": 360,
+          "totalTokens": 6149,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 899,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 341,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 6,
+              "systemChars": 4456,
+              "historyChars": 2710,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 212,
+          "approvalLatencyMs": 222,
           "exportBytes": null,
-          "durationMs": 9227,
-          "bootMs": 2180,
+          "durationMs": 8037,
+          "bootMs": 2263,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T4_DONE",
           "toolTrace": [
@@ -251,27 +400,64 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 2,
-          "inputTokens": 5446,
-          "outputTokens": 163,
-          "totalTokens": 5609,
+          "modelRequests": 5,
+          "inputTokens": 12236,
+          "outputTokens": 1513,
+          "totalTokens": 13749,
           "costUsd": null,
-          "steps": 2,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 883,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 1252,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 321,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1602,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 6797,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
+          "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 5804,
-          "bootMs": 2303,
-          "finalTextLength": 20,
-          "finalTextPreview": "BENCH_T5_PARENT_DONE",
+          "durationMs": 26299,
+          "bootMs": 2291,
+          "finalTextLength": 41,
+          "finalTextPreview": "BENCH_T5_PARENT_DONE\nBENCH_T5_PARENT_DONE",
           "toolTrace": [
             {
               "name": "subagent",
               "isError": false,
-              "resultPreview": "started subagent 99ffe515-decd-408c-b4c9-bcecbf02aa85"
+              "resultPreview": "started subagent 5c665825-d06f-4573-b5d9-63abef558b46"
             }
           ],
           "readBackPaths": 0
@@ -287,21 +473,65 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 6,
-          "inputTokens": 14625,
-          "outputTokens": 329,
-          "totalTokens": 14954,
+          "inputTokens": 14393,
+          "outputTokens": 304,
+          "totalTokens": 14697,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 814,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 252,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1362,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 1721,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 9,
+              "systemChars": 4456,
+              "historyChars": 2473,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 11,
+              "systemChars": 4456,
+              "historyChars": 3089,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 5,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 42,
+          "approvalLatencyMs": 37,
           "exportBytes": null,
-          "durationMs": 14989,
-          "bootMs": 2181,
-          "finalTextLength": 94,
-          "finalTextPreview": "BENCH_T6_TURN1_DONE\nThe file contains \"value=1\". Now edit it to \"value=2\".\nBENCH_T6_TURN2_DONE",
+          "durationMs": 16886,
+          "bootMs": 2278,
+          "finalTextLength": 39,
+          "finalTextPreview": "BENCH_T6_TURN1_DONE\nBENCH_T6_TURN2_DONE",
           "toolTrace": [
             {
               "name": "write",
@@ -331,28 +561,46 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 4,
-          "inputTokens": 8580,
-          "outputTokens": 336,
-          "totalTokens": 8916,
+          "modelRequests": 3,
+          "inputTokens": 5642,
+          "outputTokens": 365,
+          "totalTokens": 6007,
           "costUsd": null,
-          "steps": 3,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 324,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 870,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 2229,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
+          "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 42,
-          "exportBytes": 27325,
-          "durationMs": 11236,
-          "bootMs": 2163,
+          "approvalLatencyMs": 39,
+          "exportBytes": 25205,
+          "durationMs": 39503,
+          "bootMs": 2254,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T7_DONE",
           "toolTrace": [
-            {
-              "name": "read",
-              "isError": true,
-              "resultPreview": "Error: cannot read \"/dsh/home/workspace/bench/summary.json\": not found"
-            },
             {
               "name": "write",
               "isError": false,
@@ -372,19 +620,42 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 5618,
-          "outputTokens": 273,
-          "totalTokens": 5891,
+          "inputTokens": 5573,
+          "outputTokens": 286,
+          "totalTokens": 5859,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 252,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 814,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1893,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 30,
+          "approvalLatencyMs": 41,
           "exportBytes": null,
-          "durationMs": 7242,
-          "bootMs": 2177,
+          "durationMs": 6659,
+          "bootMs": 2262,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T8_DONE",
           "toolTrace": [
@@ -406,27 +677,81 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 4,
-          "inputTokens": 8485,
-          "outputTokens": 247,
-          "totalTokens": 8732,
+          "modelRequests": 6,
+          "inputTokens": 15555,
+          "outputTokens": 911,
+          "totalTokens": 16466,
           "costUsd": null,
-          "steps": 3,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 288,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 850,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 4456,
+              "historyChars": 1728,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 7,
+              "systemChars": 4456,
+              "historyChars": 2626,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 9,
+              "systemChars": 4456,
+              "historyChars": 4433,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 11,
+              "systemChars": 4456,
+              "historyChars": 5473,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
+          "steps": 5,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 34,
+          "approvalLatencyMs": 42,
           "exportBytes": null,
-          "durationMs": 8271,
-          "bootMs": 2180,
-          "finalTextLength": 13,
-          "finalTextPreview": "BENCH_T9_DONE",
+          "durationMs": 25898,
+          "bootMs": 2249,
+          "finalTextLength": 1884,
+          "finalTextPreview": "The path search failed because the glob tool's path must stay under the Worker workspace. The workspace is /dsh/home. Hmm, the path /dsh/home/workspace/bench/* is under /dsh/home, but the error says it must stay under the Worker workspace. ",
           "toolTrace": [
             {
               "name": "read",
               "isError": true,
               "resultPreview": "Error: cannot read \"/dsh/home/workspace/bench/missing-t9.txt\": not found"
+            },
+            {
+              "name": "glob",
+              "isError": true,
+              "resultPreview": "Error: SEARCH_INVALID_PATH: path must stay under the Worker workspace"
+            },
+            {
+              "name": "glob",
+              "isError": false,
+              "resultPreview": "No files found"
             },
             {
               "name": "write",
@@ -447,10 +772,33 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 6342,
-          "outputTokens": 454,
-          "totalTokens": 6796,
+          "inputTokens": 6270,
+          "outputTokens": 239,
+          "totalTokens": 6509,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 313,
+              "toolCount": 0,
+              "toolSchemaChars": 0
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4456,
+              "historyChars": 879,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            },
+            {
+              "messageCount": 6,
+              "systemChars": 4456,
+              "historyChars": 4135,
+              "toolCount": 8,
+              "toolSchemaChars": 6529
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
@@ -458,10 +806,10 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 6114,
-          "bootMs": 2178,
-          "finalTextLength": 345,
-          "finalTextPreview": "Both files are in the browser-validation directory under the session workspace.\n\n- **input.txt** — a 2-line fixture declaring `runtime=DedicatedWorker` and `fixture=VFS_INPUT_READY`.\n- **scale-input.txt** — a 24-line fixture where each line",
+          "durationMs": 8098,
+          "bootMs": 2253,
+          "finalTextLength": 261,
+          "finalTextPreview": "Both files read:\n\n- **input.txt** — a tiny two-line fixture containing `runtime=DedicatedWorker` and `fixture=VFS_INPUT_READY`.\n- **scale-input.txt** — a 24-line padded fixture with `scale-fixture-line-NNNN` identifiers and repeated filler ",
           "toolTrace": [
             {
               "name": "read",
@@ -484,19 +832,29 @@
         "successRate": 1,
         "avgModelRequestsPerTask": 4,
         "avgSessionStepsPerTask": 3,
-        "avgDurationMs": 10619,
-        "totalInputTokens": 81307,
-        "totalOutputTokens": 4003,
-        "totalTokens": 85310,
+        "avgDurationMs": 17585,
+        "totalInputTokens": 101200,
+        "totalOutputTokens": 5679,
+        "totalTokens": 106879,
         "totalCostUsd": null,
-        "totalModelRequests": 37,
+        "totalModelRequests": 44,
+        "inputTokensPerRequest": 2300,
+        "requestComposition": {
+          "observedRequests": 44,
+          "systemPromptRequests": 34,
+          "avgMessageCount": 5,
+          "avgToolCount": 6,
+          "avgSystemCharsPerRequest": 3443,
+          "avgHistoryCharsPerRequest": 1843,
+          "avgToolSchemaCharsPerRequest": 5045
+        },
         "failuresByClass": {
           "model": 0,
           "tool": 0,
           "harness": 0
         }
       },
-      "e2eMs": 129947,
+      "e2eMs": 199922,
       "bootMs": null
     },
     {
@@ -514,10 +872,33 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 1078,
-          "outputTokens": 150,
-          "totalTokens": 1228,
+          "inputTokens": 2131,
+          "outputTokens": 339,
+          "totalTokens": 2470,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 291,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 634,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 0,
+              "historyChars": 990,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 3,
           "turnReason": {
             "kind": "completed"
@@ -525,7 +906,7 @@
           "approvalCount": 1,
           "approvalLatencyMs": 2,
           "exportBytes": null,
-          "durationMs": 8114,
+          "durationMs": 19809,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T1_DONE",
@@ -549,36 +930,76 @@
           "capability": "workspace search",
           "mode": "durable",
           "userTurns": 1,
-          "result": "failed",
-          "failureClass": "harness",
-          "failureCapability": "workspace-search",
-          "detail": "durable host advertises no search tool; calls=write,read",
-          "modelRequests": 3,
-          "inputTokens": 1167,
-          "outputTokens": 1694,
-          "totalTokens": 2861,
+          "result": "passed",
+          "failureClass": null,
+          "failureCapability": null,
+          "detail": "passed",
+          "modelRequests": 4,
+          "inputTokens": 3131,
+          "outputTokens": 595,
+          "totalTokens": 3726,
           "costUsd": null,
-          "steps": 3,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 317,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 712,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 0,
+              "historyChars": 1039,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 8,
+              "systemChars": 0,
+              "historyChars": 1768,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
+          "steps": 4,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 2,
+          "approvalLatencyMs": 3,
           "exportBytes": null,
-          "durationMs": 40424,
+          "durationMs": 14900,
           "bootMs": null,
-          "finalTextLength": 487,
-          "finalTextPreview": "I'll create the file first, then verify its contents.\nThe file has been created and verified with exactly three lines. The search confirms the marker is located in the file I created — it's the only file in the workspace containing that mar",
+          "finalTextLength": 426,
+          "finalTextPreview": "The search found the fixture marker in two files:\n\n- **bench/search-index.txt:2** — `scale-fixture-line-0007 marker`\n- **browser-validation/scale-input.txt:8** — `scale-fixture-line-0007 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
           "toolTrace": [
             {
               "name": "write",
               "isError": false,
-              "resultPreview": "wrote bench/search-index.txt (42 bytes)"
+              "resultPreview": "wrote bench/search-index.txt (43 bytes)"
+            },
+            {
+              "name": "grep",
+              "isError": true,
+              "resultPreview": "no match for scale-fixture-line-0007 under ."
             },
             {
               "name": "read",
               "isError": false,
-              "resultPreview": "alpha\nscale-fixture-line-0007 marker\nomega"
+              "resultPreview": "alpha\nscale-fixture-line-0007 marker\nomega\n"
+            },
+            {
+              "name": "grep",
+              "isError": false,
+              "resultPreview": "bench/search-index.txt:2: scale-fixture-line-0007 marker\nbrowser-validation/scale-input.txt:8: scale-fixture-line-0007 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
             }
           ],
           "manifestPaths": 6
@@ -589,23 +1010,46 @@
           "capability": "edit",
           "mode": "durable",
           "userTurns": 1,
-          "result": "failed",
-          "failureClass": "harness",
-          "failureCapability": "file-edit",
-          "detail": "durable host advertises no edit tool; calls=write",
+          "result": "passed",
+          "failureClass": null,
+          "failureCapability": null,
+          "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 1032,
-          "outputTokens": 181,
-          "totalTokens": 1213,
+          "inputTokens": 2098,
+          "outputTokens": 131,
+          "totalTokens": 2229,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 194,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 536,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 0,
+              "historyChars": 920,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 4567,
+          "approvalLatencyMs": 4453,
           "exportBytes": null,
-          "durationMs": 11595,
+          "durationMs": 10761,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T3_DONE",
@@ -616,9 +1060,9 @@
               "resultPreview": "wrote bench/notes.txt (10 bytes)"
             },
             {
-              "name": "write",
+              "name": "edit",
               "isError": false,
-              "resultPreview": "wrote bench/notes.txt (11 bytes)"
+              "resultPreview": "edited bench/notes.txt (1 replacement(s), 11 bytes)"
             }
           ],
           "manifestPaths": 7
@@ -634,18 +1078,34 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 2,
-          "inputTokens": 697,
-          "outputTokens": 159,
-          "totalTokens": 856,
+          "inputTokens": 1399,
+          "outputTokens": 229,
+          "totalTokens": 1628,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 238,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 4,
+              "systemChars": 0,
+              "historyChars": 836,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 154,
+          "approvalLatencyMs": 160,
           "exportBytes": null,
-          "durationMs": 5658,
+          "durationMs": 6473,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T4_DONE",
@@ -669,27 +1129,56 @@
           "capability": "subagent",
           "mode": "durable",
           "userTurns": 1,
-          "result": "failed",
-          "failureClass": "harness",
-          "failureCapability": "subagent",
-          "detail": "durable host advertises no subagent tool; calls=none",
-          "modelRequests": 1,
-          "inputTokens": 288,
-          "outputTokens": 1080,
-          "totalTokens": 1368,
+          "result": "passed",
+          "failureClass": null,
+          "failureCapability": null,
+          "detail": "passed",
+          "modelRequests": 3,
+          "inputTokens": 1660,
+          "outputTokens": 168,
+          "totalTokens": 1828,
           "costUsd": null,
-          "steps": 1,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 222,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 72,
+              "toolCount": 3,
+              "toolSchemaChars": 1114
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 520,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
+          "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 23781,
+          "durationMs": 9673,
           "bootMs": null,
-          "finalTextLength": 174,
-          "finalTextPreview": "I don't have a subagent tool available in this environment—only file read/write tools—so I can't invoke a child subagent as requested. I won't fabricate a call or its result.",
-          "toolTrace": [],
+          "finalTextLength": 20,
+          "finalTextPreview": "BENCH_T5_PARENT_DONE",
+          "toolTrace": [
+            {
+              "name": "subagent",
+              "isError": false,
+              "resultPreview": "CHILD_OK"
+            }
+          ],
           "manifestPaths": 9
         },
         {
@@ -703,18 +1192,55 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 5,
-          "inputTokens": 1612,
-          "outputTokens": 295,
-          "totalTokens": 1907,
+          "inputTokens": 3383,
+          "outputTokens": 266,
+          "totalTokens": 3649,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 153,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 493,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 195,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 483,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 0,
+              "historyChars": 873,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 5,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 7482,
+          "approvalLatencyMs": 27581,
           "exportBytes": null,
-          "durationMs": 11614,
+          "durationMs": 32969,
           "bootMs": null,
           "finalTextLength": 39,
           "finalTextPreview": "BENCH_T6_TURN1_DONE\nBENCH_T6_TURN2_DONE",
@@ -730,9 +1256,9 @@
               "resultPreview": "value=1"
             },
             {
-              "name": "write",
+              "name": "edit",
               "isError": false,
-              "resultPreview": "wrote bench/config.txt (7 bytes)"
+              "resultPreview": "edited bench/config.txt (1 replacement(s), 7 bytes)"
             }
           ],
           "manifestPaths": 10
@@ -748,18 +1274,34 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 2,
-          "inputTokens": 640,
-          "outputTokens": 128,
-          "totalTokens": 768,
+          "inputTokens": 1342,
+          "outputTokens": 200,
+          "totalTokens": 1542,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 209,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 632,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 0,
+          "approvalLatencyMs": 1,
           "exportBytes": 2479,
-          "durationMs": 6423,
+          "durationMs": 5988,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T7_DONE",
@@ -783,18 +1325,34 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 2,
-          "inputTokens": 614,
-          "outputTokens": 113,
-          "totalTokens": 727,
+          "inputTokens": 1316,
+          "outputTokens": 219,
+          "totalTokens": 1535,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 153,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 502,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 1,
+          "approvalLatencyMs": 2,
           "exportBytes": null,
-          "durationMs": 5491,
+          "durationMs": 5698,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T8_DONE",
@@ -818,18 +1376,41 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 1024,
-          "outputTokens": 175,
-          "totalTokens": 1199,
+          "inputTokens": 2077,
+          "outputTokens": 120,
+          "totalTokens": 2197,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 189,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 0,
+              "historyChars": 514,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 5,
+              "systemChars": 0,
+              "historyChars": 869,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 1,
+          "approvalLatencyMs": 2,
           "exportBytes": null,
-          "durationMs": 10239,
+          "durationMs": 13193,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T9_DONE",
@@ -858,10 +1439,26 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 2,
-          "inputTokens": 1288,
-          "outputTokens": 208,
-          "totalTokens": 1496,
+          "inputTokens": 1990,
+          "outputTokens": 171,
+          "totalTokens": 2161,
           "costUsd": null,
+          "requestSizes": [
+            {
+              "messageCount": 1,
+              "systemChars": 0,
+              "historyChars": 238,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            },
+            {
+              "messageCount": 4,
+              "systemChars": 0,
+              "historyChars": 2894,
+              "toolCount": 6,
+              "toolSchemaChars": 2243
+            }
+          ],
           "steps": 2,
           "turnReason": {
             "kind": "completed"
@@ -869,10 +1466,10 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 7039,
+          "durationMs": 5360,
           "bootMs": null,
-          "finalTextLength": 305,
-          "finalTextPreview": "/dsh/home/workspace/browser-validation/input.txt — A two-line fixture file declaring a DedicatedWorker runtime and VFS_INPUT_READY status.\n\n/dsh/home/workspace/browser-validation/scale-input.txt — A larger fixture of 24 numbered lines (0000",
+          "finalTextLength": 240,
+          "finalTextPreview": "- **input.txt**: A two-line fixture declaring a DedicatedWorker runtime and a VFS_INPUT_READY fixture marker.\n- **scale-input.txt**: A 24-line scale fixture where each line is an index-labeled row of repeated \"y\" characters.\n\nBENCH_T10_DONE",
           "toolTrace": [
             {
               "name": "read",
@@ -890,29 +1487,39 @@
       ],
       "summary": {
         "tasks": 10,
-        "passed": 7,
-        "failed": 3,
-        "successRate": 0.7,
+        "passed": 10,
+        "failed": 0,
+        "successRate": 1,
         "avgModelRequestsPerTask": 3,
         "avgSessionStepsPerTask": 3,
-        "avgDurationMs": 13038,
-        "totalInputTokens": 9440,
-        "totalOutputTokens": 4183,
-        "totalTokens": 13623,
+        "avgDurationMs": 12482,
+        "totalInputTokens": 20527,
+        "totalOutputTokens": 2438,
+        "totalTokens": 22965,
         "totalCostUsd": null,
-        "totalModelRequests": 26,
+        "totalModelRequests": 29,
+        "inputTokensPerRequest": 707.8,
+        "requestComposition": {
+          "observedRequests": 29,
+          "systemPromptRequests": 0,
+          "avgMessageCount": 3,
+          "avgToolCount": 6,
+          "avgSystemCharsPerRequest": 0,
+          "avgHistoryCharsPerRequest": 610,
+          "avgToolSchemaCharsPerRequest": 2204
+        },
         "failuresByClass": {
           "model": 0,
           "tool": 0,
-          "harness": 3
+          "harness": 0
         }
       },
-      "e2eMs": 130553,
+      "e2eMs": 125006,
       "bootMs": null
     }
   ],
   "partial": false,
-  "finishedAt": "2026-11-05T05:03:54.806Z",
+  "finishedAt": "2026-11-05T05:23:17.311Z",
   "comparison": {
     "browser-worker": {
       "successRate": 1,
@@ -920,31 +1527,85 @@
       "tasks": 10,
       "avgModelRequestsPerTask": 4,
       "avgSessionStepsPerTask": 3,
-      "avgDurationMs": 10619,
-      "totalTokens": 85310,
+      "avgDurationMs": 17585,
+      "totalTokens": 106879,
       "totalCostUsd": null,
       "failuresByClass": {
         "model": 0,
         "tool": 0,
         "harness": 0
       },
-      "e2eMs": 129947
+      "e2eMs": 199922
     },
     "durable-host": {
-      "successRate": 0.7,
-      "passed": 7,
+      "successRate": 1,
+      "passed": 10,
       "tasks": 10,
       "avgModelRequestsPerTask": 3,
       "avgSessionStepsPerTask": 3,
-      "avgDurationMs": 13038,
-      "totalTokens": 13623,
+      "avgDurationMs": 12482,
+      "totalTokens": 22965,
       "totalCostUsd": null,
       "failuresByClass": {
         "model": 0,
         "tool": 0,
-        "harness": 3
+        "harness": 0
       },
-      "e2eMs": 130553
+      "e2eMs": 125006
+    },
+    "tokenAttribution": {
+      "workerInputTokensPerRequest": 2300,
+      "durableInputTokensPerRequest": 707.8,
+      "inputTokenGapPerRequest": 1592.2,
+      "extraModelRequests": 15,
+      "requestChars": {
+        "worker": {
+          "systemPrompt": 151492,
+          "toolSchemas": 221980,
+          "history": 81092
+        },
+        "durable": {
+          "systemPrompt": 0,
+          "toolSchemas": 63916,
+          "history": 17690
+        }
+      },
+      "estimatedInputTokens": {
+        "worker": {
+          "systemPrompt": 33727,
+          "toolSchemas": 49420,
+          "history": 18054
+        },
+        "durable": {
+          "systemPrompt": 0,
+          "toolSchemas": 16077,
+          "history": 4450
+        },
+        "gap": {
+          "systemPrompt": 33727,
+          "toolSchemas": 33343,
+          "history": 13604
+        }
+      },
+      "workerComposition": {
+        "observedRequests": 44,
+        "systemPromptRequests": 34,
+        "avgMessageCount": 5,
+        "avgToolCount": 6,
+        "avgSystemCharsPerRequest": 3443,
+        "avgHistoryCharsPerRequest": 1843,
+        "avgToolSchemaCharsPerRequest": 5045
+      },
+      "durableComposition": {
+        "observedRequests": 29,
+        "systemPromptRequests": 0,
+        "avgMessageCount": 3,
+        "avgToolCount": 6,
+        "avgSystemCharsPerRequest": 0,
+        "avgHistoryCharsPerRequest": 610,
+        "avgToolSchemaCharsPerRequest": 2204
+      },
+      "note": "Char totals come from each observed request; the per-mode chars-to-token scale maps them onto the provider input count, so the three gap terms sum to the observed input difference within rounding."
     }
   }
 }

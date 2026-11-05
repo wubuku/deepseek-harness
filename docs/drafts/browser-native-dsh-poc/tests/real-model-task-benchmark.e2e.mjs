@@ -127,13 +127,9 @@ const tasks = [
       if (resultError(write)) return fail('tool', `write failed: ${resultError(write)}`)
       if (read === undefined || read.isError === true) return fail('tool', 'the fixture read failed before the write')
       if (!observation.finalText.includes('BENCH_T1_DONE')) return fail('model', 'the final reply missed BENCH_T1_DONE')
-      if (observation.mode === 'browser') {
-        const content = observation.files[resultPath('echo.txt')]
-        if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
-        if (content.content.trim() !== 'fixture=VFS_INPUT_READY') return fail('model', `wrote ${JSON.stringify(content.content)}, expected the fixture line`)
-      } else if (!observation.manifestPaths.includes('bench/echo.txt')) {
-        return fail('harness', 'the durable workspace manifest does not list bench/echo.txt')
-      }
+      const content = observation.files[resultPath('echo.txt')]
+      if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
+      if (content.content.trim() !== 'fixture=VFS_INPUT_READY') return fail('model', `wrote ${JSON.stringify(content.content)}, expected the fixture line`)
       return pass('file derived and written')
     },
   },
@@ -146,9 +142,6 @@ const tasks = [
       'Then search the workspace for scale-fixture-line-0007 and reply with the file path that contains it and the exact matching line, ending with BENCH_T2_DONE.',
     ])],
     verify: observation => {
-      if (observation.mode === 'durable') {
-        return fail('harness', `durable host advertises no search tool; calls=${callNames(observation.session)}`, 'workspace-search')
-      }
       const search = lastToolResult(observation.session, 'grep') ?? lastToolResult(observation.session, 'glob')
       if (search === undefined) return fail('model', 'the model never called grep or glob')
       if (search.isError === true) return fail('tool', `search failed: ${search.text}`)
@@ -167,9 +160,6 @@ const tasks = [
       'Reply with exactly BENCH_T3_DONE and nothing else.',
     ])],
     verify: observation => {
-      if (observation.mode === 'durable') {
-        return fail('harness', `durable host advertises no edit tool; calls=${callNames(observation.session)}`, 'file-edit')
-      }
       const write = lastToolCall(observation.session, 'write')
       if (write === undefined || resultError(write)) return fail('tool', `initial write failed: ${write === undefined ? 'missing' : resultError(write)}`)
       const edit = lastToolCall(observation.session, 'edit')
@@ -196,16 +186,10 @@ const tasks = [
       const failedWrite = writes.find(call => resultError(call) !== undefined)
       if (failedWrite !== undefined) return fail('tool', `write failed: ${resultError(failedWrite)}`)
       if (!observation.finalText.includes('BENCH_T4_DONE')) return fail('model', 'the final reply missed BENCH_T4_DONE')
-      if (observation.mode === 'browser') {
-        for (const [name, expected] of [['a.txt', 'A'], ['b.txt', 'B']]) {
-          const content = observation.files[resultPath(name)]
-          if (content?.ok !== true) return fail('harness', `workspace read-back failed for ${name}: ${JSON.stringify(content)}`)
-          if (content.content.trim() !== expected) return fail('model', `${name} is ${JSON.stringify(content.content)}, expected ${expected}`)
-        }
-      } else {
-        for (const name of ['a.txt', 'b.txt']) {
-          if (!observation.manifestPaths.includes(`bench/${name}`)) return fail('harness', `manifest misses bench/${name}`)
-        }
+      for (const [name, expected] of [['a.txt', 'A'], ['b.txt', 'B']]) {
+        const content = observation.files[resultPath(name)]
+        if (content?.ok !== true) return fail('harness', `workspace read-back failed for ${name}: ${JSON.stringify(content)}`)
+        if (content.content.trim() !== expected) return fail('model', `${name} is ${JSON.stringify(content.content)}, expected ${expected}`)
       }
       return pass('two files written')
     },
@@ -220,10 +204,7 @@ const tasks = [
     ])],
     verify: observation => {
       const call = lastToolCall(observation.session, 'subagent')
-      if (observation.mode === 'durable') {
-        return fail('harness', `durable host advertises no subagent tool; calls=${callNames(observation.session)}`, 'subagent')
-      }
-      if (call === undefined) return fail('model', 'the model never called subagent')
+      if (call === undefined) return fail('model', `the model never called subagent; calls=${callNames(observation.session)}`)
       if (resultError(call) !== undefined) return fail('tool', `subagent failed: ${resultError(call)}`)
       if (!observation.finalText.includes('BENCH_T5_PARENT_DONE')) return fail('model', 'the parent reply missed BENCH_T5_PARENT_DONE')
       return pass('subagent delegated')
@@ -251,13 +232,9 @@ const tasks = [
       if (failedWrite !== undefined) return fail('tool', `write failed: ${resultError(failedWrite)}`)
       if (read === undefined || read.isError === true) return fail('tool', 'the second turn did not read config.txt successfully')
       if (!observation.finalText.includes('BENCH_T6_TURN2_DONE')) return fail('model', 'the second turn reply missed BENCH_T6_TURN2_DONE')
-      if (observation.mode === 'browser') {
-        const content = observation.files[resultPath('config.txt')]
-        if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
-        if (content.content.trim() !== 'value=2') return fail('model', `config.txt is ${JSON.stringify(content.content)}`)
-      } else if (!observation.manifestPaths.includes('bench/config.txt')) {
-        return fail('harness', 'the manifest misses bench/config.txt')
-      }
+      const content = observation.files[resultPath('config.txt')]
+      if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
+      if (content.content.trim() !== 'value=2') return fail('model', `config.txt is ${JSON.stringify(content.content)}`)
       return pass('cross-turn edit applied')
     },
   },
@@ -315,13 +292,9 @@ const tasks = [
       if (write === undefined) return fail('model', 'the model never recovered with a write')
       if (resultError(write) !== undefined) return fail('tool', `recovery write failed: ${resultError(write)}`)
       if (!observation.finalText.includes('BENCH_T9_DONE')) return fail('model', 'the final reply missed BENCH_T9_DONE')
-      if (observation.mode === 'browser') {
-        const content = observation.files[resultPath('missing-t9.txt')]
-        if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
-        if (content.content.trim() !== 'BENCH_MISSING') return fail('model', `recovery content is ${JSON.stringify(content.content)}`)
-      } else if (!observation.manifestPaths.includes('bench/missing-t9.txt')) {
-        return fail('harness', 'the manifest misses bench/missing-t9.txt')
-      }
+      const content = observation.files[resultPath('missing-t9.txt')]
+      if (content?.ok !== true) return fail('harness', `workspace read-back failed: ${JSON.stringify(content)}`)
+      if (content.content.trim() !== 'BENCH_MISSING') return fail('model', `recovery content is ${JSON.stringify(content.content)}`)
       return pass('read error surfaced and recovered')
     },
   },
@@ -433,7 +406,27 @@ function usageDelta(before, after) {
     costUsd: report.totals.costUsd,
     requests: report.totals.requests,
     components: entries.map(entry => entry.purpose ?? 'turn'),
+    requestSizes: entries.map(entry => entry.request).filter(request => request !== undefined),
   }
+}
+
+async function readDurableFiles(origin, cookie, workspaceId, paths) {
+  const query = `protocolVersion=1&workspaceId=${encodeURIComponent(workspaceId)}`
+  const response = await fetch(`${origin}/api/browser-native/workspace/manifest?${query}`, { headers: { cookie } })
+  assert.equal(response.status, 200, 'durable manifest read-back must succeed')
+  const entries = (await response.json()).entries ?? []
+  const files = {}
+  for (const absolute of paths) {
+    const relative = absolute.startsWith(`${WORKSPACE}/`) ? absolute.slice(WORKSPACE.length + 1) : absolute
+    const entry = entries.find(candidate => candidate.path === relative && candidate.kind === 'file')
+    if (entry === undefined) {
+      files[absolute] = { ok: false, error: 'not in manifest' }
+      continue
+    }
+    const blob = await fetch(`${origin}/api/browser-native/workspace/blob/${entry.hash}?${query}`, { headers: { cookie } })
+    files[absolute] = blob.ok ? { ok: true, content: await blob.text() } : { ok: false, error: `HTTP ${String(blob.status)}` }
+  }
+  return files
 }
 
 function delay(milliseconds) {
@@ -803,12 +796,13 @@ async function runDurableMode() {
         if (failure === undefined) {
           assert.ok(session !== undefined, 'a completed durable turn must produce a Session')
           const manifestPaths = await durableManifest(origin, cookie, workspaceId)
+          const files = await readDurableFiles(origin, cookie, workspaceId, expectedFilePaths(task.id))
           if (task.id === 't7-export') exportResult = await exportSession(origin, cookie, workspaceId, sessionId)
           const turnError = harnessTurnError(session)
           const verdict = turnError === undefined
             ? task.verify({
                 mode: 'durable', session, sessionId, finalText: assistantText(session),
-                approvals, files: {}, manifestPaths, exportResult, pageErrors: [],
+                approvals, files, manifestPaths, exportResult, pageErrors: [],
                 approvalLatencyMs: approvals.length === 0 ? 0 : (approvals.at(-1).decidedAt ?? Date.now()) - approvals[0].requestedAt,
               })
             : fail('harness', turnError)
@@ -872,6 +866,7 @@ function taskRecord({ task, mode, failure, session, approvals, exportResult, del
     outputTokens: delta.outputTokens,
     totalTokens: delta.totalTokens,
     costUsd: delta.costUsd,
+    requestSizes: delta.requestSizes,
     steps: session === undefined ? 0 : countSteps(session),
     turnReason: session === undefined ? null : lastTurnReason(session),
     approvalCount: approvals.length,
@@ -895,6 +890,9 @@ function taskRecord({ task, mode, failure, session, approvals, exportResult, del
 function summarize(records) {
   const passed = records.filter(record => record.result === 'passed')
   const mean = values => values.length === 0 ? 0 : Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
+  const compositions = records.flatMap(record => record.requestSizes)
+  const totalInputTokens = records.reduce((sum, record) => sum + record.inputTokens, 0)
+  const totalModelRequests = records.reduce((sum, record) => sum + record.modelRequests, 0)
   return {
     tasks: records.length,
     passed: passed.length,
@@ -903,13 +901,23 @@ function summarize(records) {
     avgModelRequestsPerTask: mean(records.map(record => record.modelRequests)),
     avgSessionStepsPerTask: mean(records.map(record => record.steps)),
     avgDurationMs: mean(records.map(record => record.durationMs)),
-    totalInputTokens: records.reduce((sum, record) => sum + record.inputTokens, 0),
+    totalInputTokens,
     totalOutputTokens: records.reduce((sum, record) => sum + record.outputTokens, 0),
     totalTokens: records.reduce((sum, record) => sum + record.totalTokens, 0),
     totalCostUsd: pricing === undefined
       ? null
       : Number(records.reduce((sum, record) => sum + (record.costUsd ?? 0), 0).toFixed(6)),
-    totalModelRequests: records.reduce((sum, record) => sum + record.modelRequests, 0),
+    totalModelRequests,
+    inputTokensPerRequest: totalModelRequests === 0 ? null : Number((totalInputTokens / totalModelRequests).toFixed(1)),
+    requestComposition: {
+      observedRequests: compositions.length,
+      systemPromptRequests: compositions.filter(request => request.systemChars > 0).length,
+      avgMessageCount: mean(compositions.map(request => request.messageCount)),
+      avgToolCount: mean(compositions.map(request => request.toolCount)),
+      avgSystemCharsPerRequest: mean(compositions.map(request => request.systemChars)),
+      avgHistoryCharsPerRequest: mean(compositions.map(request => request.historyChars)),
+      avgToolSchemaCharsPerRequest: mean(compositions.map(request => request.toolSchemaChars)),
+    },
     failuresByClass: {
       model: records.filter(record => record.failureClass === 'model').length,
       tool: records.filter(record => record.failureClass === 'tool').length,
@@ -1005,6 +1013,46 @@ function buildComparison() {
       totalCostUsd: mode.summary.totalCostUsd,
       failuresByClass: mode.summary.failuresByClass,
       e2eMs: mode.e2eMs,
+    }
+  }
+  const worker = document.modes.find(mode => mode.mode === 'browser-worker')
+  const durable = document.modes.find(mode => mode.mode === 'durable-host')
+  if (worker !== undefined && durable !== undefined) {
+    const requestChars = composition => ({
+      systemPrompt: Math.round(composition.avgSystemCharsPerRequest * composition.observedRequests),
+      toolSchemas: Math.round(composition.avgToolSchemaCharsPerRequest * composition.observedRequests),
+      history: Math.round(composition.avgHistoryCharsPerRequest * composition.observedRequests),
+    })
+    const workerChars = requestChars(worker.summary.requestComposition)
+    const durableChars = requestChars(durable.summary.requestComposition)
+    const scale = (chars, inputTokens) => inputTokens / (chars.systemPrompt + chars.toolSchemas + chars.history)
+    const workerScale = scale(workerChars, worker.summary.totalInputTokens)
+    const durableScale = scale(durableChars, durable.summary.totalInputTokens)
+    const attribute = (chars, inputScale) => ({
+      systemPrompt: Math.round(chars.systemPrompt * inputScale),
+      toolSchemas: Math.round(chars.toolSchemas * inputScale),
+      history: Math.round(chars.history * inputScale),
+    })
+    const workerTokens = attribute(workerChars, workerScale)
+    const durableTokens = attribute(durableChars, durableScale)
+    comparison.tokenAttribution = {
+      workerInputTokensPerRequest: worker.summary.inputTokensPerRequest,
+      durableInputTokensPerRequest: durable.summary.inputTokensPerRequest,
+      inputTokenGapPerRequest: Number((worker.summary.inputTokensPerRequest - durable.summary.inputTokensPerRequest).toFixed(1)),
+      extraModelRequests: worker.summary.totalModelRequests - durable.summary.totalModelRequests,
+      requestChars: { worker: workerChars, durable: durableChars },
+      estimatedInputTokens: {
+        worker: workerTokens,
+        durable: durableTokens,
+        gap: {
+          systemPrompt: workerTokens.systemPrompt - durableTokens.systemPrompt,
+          toolSchemas: workerTokens.toolSchemas - durableTokens.toolSchemas,
+          history: workerTokens.history - durableTokens.history,
+        },
+      },
+      workerComposition: worker.summary.requestComposition,
+      durableComposition: durable.summary.requestComposition,
+      note: 'Char totals come from each observed request; the per-mode chars-to-token scale maps them onto the provider input count, so the three gap terms sum to the observed input difference within rounding.',
     }
   }
   return comparison

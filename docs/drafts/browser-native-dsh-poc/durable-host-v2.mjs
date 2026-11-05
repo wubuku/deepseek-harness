@@ -193,7 +193,7 @@ function journalText(value, name) {
 
 /**
  * Create the server-owned durable turn host.
- * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, authToken?: string, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, journalPath?: string}} options - Session store, admission controller, served origin, local process token for the internal model route, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, and the running-turn journal path.
+ * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, authToken?: string, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, executeSubagent?: Function, journalPath?: string}} options - Session store, admission controller, served origin, local process token for the internal model route, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, the `subagent` executor, and the running-turn journal path.
  * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, recover: Function, version: number}} Host operations.
  */
 export function createDurableTurnHost({
@@ -207,6 +207,7 @@ export function createDurableTurnHost({
   requiresApproval = () => false,
   tools = [],
   executeTool,
+  executeSubagent,
   journalPath,
 }) {
   if (typeof store?.exclusive !== 'function') throw new TypeError('durable host requires the formal Session store')
@@ -217,6 +218,7 @@ export function createDurableTurnHost({
   if (journalPath !== undefined && typeof journalPath !== 'string') throw new TypeError('durable host journalPath must be a string')
   if (!Array.isArray(tools)) throw new TypeError('durable host tools must be an array')
   if (tools.length > 0 && typeof executeTool !== 'function') throw new TypeError('durable host tools require an executeTool function')
+  if (executeSubagent !== undefined && typeof executeSubagent !== 'function') throw new TypeError('durable host executeSubagent must be a function')
   const runs = new Map()
   const settledRuns = []
   const recoveredRuns = new Map()
@@ -341,7 +343,7 @@ export function createDurableTurnHost({
     ...(run.error === undefined ? {} : { error: { ...run.error } }),
   })
 
-  const requestCompletion = async (run, messages, owner) => {
+  const requestCompletion = async (run, messages, owner, requestTools = tools) => {
     const origin = originOf()
     if (typeof origin !== 'string') throw new DurableTurnError('DURABLE_HOST_NOT_READY', 'the durable host has no served origin', 503)
     const controller = run.abortController
@@ -365,7 +367,7 @@ export function createDurableTurnHost({
             ownerToken: owner.ownerToken,
             ownerEpoch: owner.ownerEpoch,
             messages,
-            tools,
+            tools: requestTools,
           }),
           signal: controller.signal,
         })
@@ -445,31 +447,36 @@ export function createDurableTurnHost({
           ])
           let result
           try {
+            // A subagent step runs its own model loop inside this turn, so it
+            // needs the same owner-scoped model request the host already uses.
+            const executeCall = () => call.name === 'subagent' && typeof executeSubagent === 'function'
+              ? executeSubagent({
+                  principalId: run.principalId,
+                  sessionId: run.sessionId,
+                  turnId: run.turnId,
+                  turn: run.turn,
+                  step,
+                  callId: call.id,
+                  arguments: call.arguments,
+                  complete: (messages, childTools) => requestCompletion(run, messages, owner, childTools),
+                })
+              : executeTool({
+                  principalId: run.principalId,
+                  sessionId: run.sessionId,
+                  turnId: run.turnId,
+                  turn: run.turn,
+                  step,
+                  callId: call.id,
+                  name: call.name,
+                  arguments: call.arguments,
+                })
             if (requiresApproval(call)) {
               const decision = await requestApproval(run, call)
               result = decision.approved
-                ? await executeTool({
-                    principalId: run.principalId,
-                    sessionId: run.sessionId,
-                    turnId: run.turnId,
-                    turn: run.turn,
-                    step,
-                    callId: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                  })
+                ? await executeCall()
                 : { text: `tool ${call.name} was rejected by the user; no change was made`, isError: true }
             } else {
-              result = await executeTool({
-                principalId: run.principalId,
-                sessionId: run.sessionId,
-                turnId: run.turnId,
-                turn: run.turn,
-                step,
-                callId: call.id,
-                name: call.name,
-                arguments: call.arguments,
-              })
+              result = await executeCall()
             }
           } catch (error) {
             const settled = error?.code === 'DURABLE_TURN_CANCELLED' || error?.code === 'DURABLE_APPROVAL_TIMEOUT'
