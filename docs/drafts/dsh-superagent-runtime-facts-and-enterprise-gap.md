@@ -136,6 +136,30 @@ BYOM 不是“笔记本只是浏览器”，而是机器执行、责任仍属人
 
 代价也要写清：启动延迟、内存占用、节点生命周期管理（起、等、停、回收、失联判定）。这些成本换来的不是更多功能，而是可判定的故障域。
 
+### 实例归属与锁的粒度
+
+上文记录了原型 stateDir 的锁，但没有区分“实例、会话、目录”三种归属。把三类加进来后，本轮核查得到下面这张表（本节额外使用“dsh-TUI 实现”一类：它是第三方周边项目，不计入 DSH 本体能力）：
+
+| 归属对象 | 保护机制 | 争用时的行为 | 证据类别 |
+|---|---|---|---|
+| 原型 stateDir | `proper-lockfile` 锁住状态目录，一个 stateDir 一个 orchestrator | 第二个进程拿不到该目录 | 原型实现 |
+| 单个 Session | DSH 在会话目录的 `session.lock` 上做非阻塞 `flock(2)`，竞争映射为 `SessionAlreadyOwnedError`，API 层返回 `session/writer-held` | 同一个 Session 的第二个 writer 被拒绝；持有者死亡后内核释放 | DSH 已有能力 |
+| 工作目录 | 没有跨进程锁 | 两个 agent 可以并发写同一份源码 | DSH 现状（缺失） |
+| 同机多开入口 | `dsh-TUI` 每个终端各自装配一套 Host，共享会话根，用 `~/.dsh-tui/session-mounts.json` 协调挂载 | 新会话不排斥；同一 Session 被账本拒绝，`flock` 兜底 | dsh-TUI 实现（第三方） |
+
+DSH 的会话锁只保护**同一个 Session 日志**：POSIX 上是非阻塞 `flock(2)`，争用抛 `SessionAlreadyOwnedError`，持有者进程死亡时内核释放，活着但卡死的持有者继续持有且没有超时，见 [lease.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/session/session-persistence-jsonl/src/lease.ts#L4-L8)、[lease.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/session/session-persistence-jsonl/src/lease.ts#L40-L40)、[lease.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/session/session-persistence-jsonl/src/lease.ts#L68-L68) 和 [README.md](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/api/session-controller/README.md#L65-L65)。这部分已在 [dsh-agent-collaboration-research.md](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/docs/drafts/dsh-agent-collaboration-research.md#L194-L198) 与 [dsh-deployment-and-tenancy-deep-dive.md](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/docs/drafts/dsh-deployment-and-tenancy-deep-dive.md#L62-L66) 记录，本节不重复推导，只补“锁的粒度”这一层。
+
+dsh-TUI 的本轮事实（第三方周边，不是 DSH 本体）：同一 cwd 开多个终端跑 `dsh-tui`，每个终端是独立进程；每个进程用 `new host.Context()` 加 `ctx.plugin(Loader)` 在自己进程内装配 Cordis root、agents、Session 持久化和 workspace registry，没有 daemon 或 socket 连接既有实例，见 [host-dsh.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/dsh-adapter/host-dsh.ts#L300-L308) 与 [host-dsh.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/dsh-adapter/host-dsh.ts#L198-L213)。它们共享 `$DSH_HOME/sessions` 会话根（base bundle 把 `session-persistence-jsonl` 的 root 配成 `dshHomePath('sessions')`，见 [cordis.patch.yml](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/bundle/base/cordis.patch.yml#L138-L141)），以及 `~/.dsh-tui/session-mounts.json` 占用账本；账本写入取短跨进程锁、锁内重读、原子替换，记录持有者 pid 和 sessionIds，判活靠 pid，账本本身没有时间戳，另有发布器每 15 秒刷新，见 [sessionMounts.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/sessionMounts.ts#L3-L3)、[sessionMounts.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/sessionMounts.ts#L29-L46)、[sessionMounts.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/sessionMounts.ts#L638-L643) 和 [session-mount-heartbeat.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/dsh-adapter/session-mount-heartbeat.ts#L40-L40)。TUI 的进程模型也写在它自己的文档里：TUI 自己就是终端进程，一台机器可以同时开多个，见 [session-mount-runtime.md](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/docs/session-mount-runtime.md#L20-L29)。
+
+由此产生两个后果：
+
+- **新会话互不排斥。** 同一 cwd 下两个 agent 可以并发改同一份源码，DSH 不设防；没有文件锁、目录租约或 workspace 级所有权。这不是 dsh-TUI 的缺陷，因为 DSH 本身也只锁会话日志，不锁工作目录。
+- **只有同一个 Session 会被拒绝。** dsh-TUI 的账本报告 `mounted by another TUI terminal (pid N)` 并拒绝继续，内核 `flock` 兜底；开新会话不受影响，见 [plugin.ts](file:///Users/yangjiefeng/Documents/ccch1mneyyy/dsh-TUI/src/dsh-adapter/plugin.ts#L3093-L3100)。
+
+workspace 记录还有一处未验证的并发风险：`attachSession` 走应用层写链，写链只在**进程内**串行；storage-json 对每个单元做整文件原子替换，并明确以“每个进程一个 writer、last-write-wins 正确”为前提，见 [entity.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/workspace/workspace/src/entity.ts#L191-L221)、[atomic.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/storage/storage-json/src/atomic.ts#L8-L10) 和 [single-unit.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/packages/storage/storage-json/src/single-unit.ts#L4-L7)。两个进程并发 attach 同一条 workspace 时，理论上后写者会用自己陈旧的 `sessionIds` 覆盖先写者，丢失一条关联；本轮未实测。
+
+对企业级可用而言，结论要落到边界上：**会话隔离 ≠ 目录隔离 ≠ 进程隔离 ≠ 租户隔离。** 会话锁解决的是“一个日志不能有两个 writer”；它不解决“两个人改同一份代码”“一个进程崩了拖垮另一个”“一个租户读到另一个租户的凭据”。多机、多员工场景真正缺的是**执行节点所有权与 lease**：谁拥有哪个执行节点、租约多长、失联如何判定、任务如何改派。再加一把会话锁不会补上这个缺口。
+
 ## 企业化差距
 
 按优先级排列，每一项都是边界问题，不是功能清单：
