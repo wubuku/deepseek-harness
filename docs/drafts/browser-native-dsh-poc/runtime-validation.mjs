@@ -135,10 +135,11 @@ export async function createRuntimeValidationDist({
       if (roster === 'browser-budget') {
         const insertion = entries.find(entry => Array.isArray(entry?.insert))
         if (insertion === undefined) throw new Error('validation profile has no root plugin insertion')
+        // The plugin carries no limits: it adopts the backend-published budget,
+        // so the profile cannot drift from the page's budget source.
         insertion.insert.push({
           id: 'browser-native-token-budget',
           name: './browser-native-token-budget.js',
-          config: { tenantId: 'poc-tenant', sessionLimit: 10_000, tenantLimit: 20_000 },
         })
       }
       if (roster === 'browser-session-query') {
@@ -225,6 +226,11 @@ export async function createRuntimeValidationDist({
       replaced += 1
     }
     if (replaced !== 1) throw new Error('expected one preview bootstrap; run build:preview first')
+    if (roster === 'browser-budget') {
+      // The preview reads this marker before the runtime probe and refuses to
+      // boot when the backend does not publish the limits the plugin adopts.
+      await writeFile(join(outputRoot, 'browser-native-budget-profile.json'), '{"budget":"required"}\n')
+    }
     return { distRoot: outputRoot, roster, cleanup: () => rm(temporary, { recursive: true, force: true }) }
   } catch (error) {
     await rm(temporary, { recursive: true, force: true })

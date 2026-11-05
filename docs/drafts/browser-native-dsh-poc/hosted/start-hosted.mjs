@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readBudgetLimitsFromEnv } from '../budget-config.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const HELP = `Usage: node docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs
@@ -34,6 +35,10 @@ Environment:
   DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS  Verify downloaded chunks (default: 0)
   DSH_POC_INPUT_USD_PER_1M     Input token price for the usage report; pair with the output price
   DSH_POC_OUTPUT_USD_PER_1M    Output token price; both prices or neither
+  DSH_POC_SESSION_TOKEN_BUDGET Session token limit; pair with the tenant limit
+  DSH_POC_TENANT_TOKEN_BUDGET  Tenant token limit; both limits or neither
+  DSH_POC_TENANT_ID            Tenant named in budget refusals and the Worker plugin
+  DSH_POC_BUDGET_WARN_RATIO     Warning ratio from 0 to 1 (default: 0.8)
   DSH_POC_HOSTED_ISSUER        Hosted token issuer; requires the audience and secret
   DSH_POC_HOSTED_AUDIENCE      Hosted token audience
   DSH_POC_HOSTED_SECRET        HS256 shared secret, at least 32 bytes
@@ -92,31 +97,6 @@ function usagePricingFromEnv() {
     }
   }
   return rates
-}
-
-/** Read the optional pre-send budget limits; both token totals present or none. */
-function budgetLimitsFromEnv() {
-  const session = env.DSH_POC_SESSION_TOKEN_BUDGET
-  const tenant = env.DSH_POC_TENANT_TOKEN_BUDGET
-  if (session === undefined && tenant === undefined) return undefined
-  if (session === undefined || tenant === undefined) {
-    throw new Error('DSH_POC_SESSION_TOKEN_BUDGET and DSH_POC_TENANT_TOKEN_BUDGET must be set together')
-  }
-  const limits = {
-    sessionTokens: integerEnv('DSH_POC_SESSION_TOKEN_BUDGET', 1, 1, 2_147_483_647),
-    tenantTokens: integerEnv('DSH_POC_TENANT_TOKEN_BUDGET', 1, 1, 2_147_483_647),
-  }
-  const tenantId = env.DSH_POC_TENANT_ID
-  if (tenantId !== undefined && tenantId !== '') limits.tenantId = tenantId
-  const warnRatio = env.DSH_POC_BUDGET_WARN_RATIO
-  if (warnRatio !== undefined && warnRatio !== '') {
-    const value = Number(warnRatio)
-    if (!Number.isFinite(value) || value <= 0 || value > 1) {
-      throw new Error('DSH_POC_BUDGET_WARN_RATIO must be a number above 0 and at most 1')
-    }
-    limits.warnRatio = value
-  }
-  return limits
 }
 
 /** Read the hosted token verifier settings; all three present or none. */
@@ -208,7 +188,7 @@ function readConfiguration() {
     workspaceChunkObjects: booleanEnv('DSH_POC_WORKSPACE_CHUNK_OBJECTS', false),
     workspaceVerifiedDownloads: booleanEnv('DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS', false),
     usagePricing: usagePricingFromEnv(),
-    budgetLimits: budgetLimitsFromEnv(),
+    budgetLimits: readBudgetLimitsFromEnv(),
     alerts: alertsFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,

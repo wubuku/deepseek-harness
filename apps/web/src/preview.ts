@@ -159,7 +159,42 @@ function browserNativeTestUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-async function probeBrowserNativeWorker(currentWorker: Worker, apiOrigin?: string): Promise<void> {
+let browserNativeBudgetRequirement: Promise<boolean> | undefined
+
+/**
+ * Read the image profile's budget requirement marker.
+ * @returns Whether the mounted profile needs backend-published budget limits.
+ */
+async function readBrowserNativeBudgetRequirement(): Promise<boolean> {
+  let response: Response
+  try {
+    response = await fetch('/browser-native-budget-profile.json', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      redirect: 'error',
+    })
+  } catch (error) {
+    throw new Error(
+      `browser-native startup blocked: BUDGET_PROFILE_UNAVAILABLE (${error instanceof Error ? error.message : String(error)})`)
+  }
+  if (response.status === 404) return false
+  if (!response.ok) {
+    throw new Error(`browser-native startup blocked: BUDGET_PROFILE_INVALID (HTTP ${String(response.status)})`)
+  }
+  const payload: unknown = await response.json()
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)
+    || (payload as Record<string, unknown>).budget !== 'required') {
+    throw new Error('browser-native startup blocked: BUDGET_PROFILE_INVALID')
+  }
+  return true
+}
+
+function browserNativeBudgetRequirementOnce(): Promise<boolean> {
+  browserNativeBudgetRequirement ??= readBrowserNativeBudgetRequirement()
+  return browserNativeBudgetRequirement
+}
+
+async function probeBrowserNativeWorker(currentWorker: Worker, apiOrigin?: string, expectBudget = false): Promise<void> {
   const channel = new MessageChannel()
   const requestId = browserNativeTestUuid()
   await new Promise<void>((resolve, reject) => {
@@ -204,6 +239,7 @@ async function probeBrowserNativeWorker(currentWorker: Worker, apiOrigin?: strin
           ? { testFault: browserNativeProbeFault }
           : {}),
         ...(apiOrigin === undefined ? {} : { apiOrigin }),
+        expectBudget,
       }, [channel.port2])
     } catch (error) {
       finish(error instanceof Error ? error : new Error('browser-native startup blocked: PROBE_POST_FAILED'))
@@ -284,7 +320,11 @@ function spawnBrowserNativeWorker(): Worker {
  */
 async function prepareBrowserNativeWorker(): Promise<Worker> {
   const currentWorker = spawnBrowserNativeWorker()
-  await probeBrowserNativeWorker(currentWorker, browserNative ? await browserNativeApiOrigin() : undefined)
+  await probeBrowserNativeWorker(
+    currentWorker,
+    browserNative ? await browserNativeApiOrigin() : undefined,
+    browserNative ? await browserNativeBudgetRequirementOnce() : false,
+  )
   markBoot('workerProbed')
   return currentWorker
 }
@@ -363,7 +403,9 @@ async function bootBrowserNativePreview(): Promise<void> {
           ? { durable: browserNativeDurable }
           : { durable: browserNativeDurable, apiOrigin })
       }
-      if (browserNative && prepared === undefined) await probeBrowserNativeWorker(currentWorker, apiOrigin)
+      if (browserNative && prepared === undefined) {
+        await probeBrowserNativeWorker(currentWorker, apiOrigin, await browserNativeBudgetRequirementOnce())
+      }
       if (browserNative && prepared === undefined) markBoot('workerProbed')
       markBoot('hostConnectStart')
       await connectWorkerHost(currentWorker, {

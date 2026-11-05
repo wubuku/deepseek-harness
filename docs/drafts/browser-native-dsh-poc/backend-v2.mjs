@@ -6260,6 +6260,13 @@ export async function createBrowserNativeV2Server(options) {
             fallbackModel: llm.fallback.model,
             fallbackProviderKind: llm.fallback.kind,
           }),
+          ...(budgetLimits === undefined ? {} : {
+            budget: {
+              sessionTokens: budgetLimits.sessionTokens,
+              tenantTokens: budgetLimits.tenantTokens,
+              ...(budgetLimits.tenantId === undefined ? {} : { tenantId: budgetLimits.tenantId }),
+            },
+          }),
         })
         return
       }

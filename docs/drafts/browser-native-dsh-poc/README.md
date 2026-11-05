@@ -525,11 +525,12 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 ## Token 预算与计量
 
-[token 预算验证](token-budget-metering.md)用真实模型对照 PoC backend 独立记录的上游 usage：Session 计量 2346 输入 / 16 输出与 provider 完全一致。Session 限额压到已用量以下后，下一 turn 在 `fetch` 之前被拒绝，`turn/end` 为 `TOKEN_BUDGET_EXCEEDED`、上游请求数不增、`budget/exceeded` 一条且客户端显示错误；租户限额压到已用量以下后同样在请求前阻断，租户 scope 审计一条。同一文档记录客户端预算条：`GET /api/browser-native/session/budget` 按 provider 账本显示 Session/租户已用 token 与费用、80% 预警，达到限额时禁用 composer 发送并拦截 Enter/点击，提供管理员说明复制与诊断包下载；`tests/budget-guidance.e2e.mjs` 用真实模型逐值对齐展示值并用 1/2 token 限额证明发送前无新 turn、无 provider 请求。预算判定来自验证 roster 的 profile `config`，正式 profile 未启用；客户端限额由 hosted 环境变量单独配置。
+[token 预算验证](token-budget-metering.md)用真实模型对照 PoC backend 独立记录的上游 usage：Session 计量 2346 输入 / 16 输出与 provider 完全一致。Session 限额压到已用量以下后，下一 turn 在 `fetch` 之前被拒绝，`turn/end` 为 `TOKEN_BUDGET_EXCEEDED`、上游请求数不增、`budget/exceeded` 一条且客户端显示错误；租户限额压到已用量以下后同样在请求前阻断，租户 scope 审计一条。同一文档记录客户端预算条：`GET /api/browser-native/session/budget` 按 provider 账本显示 Session/租户已用 token 与费用、80% 预警，达到限额时禁用 composer 发送并拦截 Enter/点击，提供管理员说明复制与诊断包下载；`tests/budget-guidance.e2e.mjs` 用真实模型逐值对齐展示值并用 1/2 token 限额证明发送前无新 turn、无 provider 请求。限额只有一处：hosted 环境变量或显式 `budgetLimits` 由 backend 归一化后经 `GET /api/browser-native/config` 下发，验证 roster 的预算插件不再携带 profile 限额而是直接采用该值；挂载插件的镜像用 `browser-native-budget-profile.json` 声明需求，backend 未下发限额时 runtime probe 以 `BUDGET_LIMITS_UNCONFIGURED` 拒绝启动。`tests/budget-config-single-source.e2e.mjs` 用同一镜像先后启动 12 000/24 000 与 15 000/30 000 两组限额，断言 Worker `budget-state` 与 `/config` 同步变化，并覆盖缺失配置的启动拒绝。正式 profile 未启用该插件。
 
 ```sh
 DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/budget-config-single-source.e2e.mjs
 ```
 
 ## 审批策略与工具决策

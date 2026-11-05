@@ -68,7 +68,7 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 
 页面在 owner notice 后每 2 秒轮询该端点，显示 `Session 已用/限额 · 费用`、`Tenant 已用/限额 · 剩余 · 费用` 与 `Warning at 80%`。达到 80% 显示预警文案；达到任一限额时显示 `Sending is disabled`，将 composer 的发送按钮置为 disabled，并在 document capture 阶段拦截发送按钮点击与输入框 Enter（含按钮属性被重新渲染或移除的情况），同时给出“复制管理员说明”和“导出诊断包”两个入口。管理员说明包含 Session、已用量、限额与 tenant 汇总；诊断包复用既有 support bundle。
 
-配置入口是 hosted 启动脚本的环境变量 `DSH_POC_SESSION_TOKEN_BUDGET`、`DSH_POC_TENANT_TOKEN_BUDGET`、`DSH_POC_TENANT_ID` 与 `DSH_POC_BUDGET_WARN_RATIO`（默认 0.8）；两个 token 限额必须同时设置，都未设置时页面不显示预算条。`usagePricing` 与租户报表共用同一组价格。
+配置入口是 hosted 启动脚本的环境变量 `DSH_POC_SESSION_TOKEN_BUDGET`、`DSH_POC_TENANT_TOKEN_BUDGET`、`DSH_POC_TENANT_ID` 与 `DSH_POC_BUDGET_WARN_RATIO`（默认 0.8）；两个 token 限额必须同时设置，都未设置时页面不显示预算条。`usagePricing` 与租户报表共用同一组价格。这是唯一来源：backend 归一化后把限额放进 `GET /api/browser-native/config` 的 `budget` 字段，Worker 预算插件不再读取 profile 限额，而是在 runtime probe 阶段取得同一份值。`budget-config.mjs` 之外不再有第二份限额配置。
 
 真实模型证据（`tests/budget-guidance.e2e.mjs`，roster `browser`，无 Worker 预算插件）：
 
@@ -104,6 +104,31 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
   node docs/drafts/browser-native-dsh-poc/tests/budget-guidance.e2e.mjs
 ```
 
+## 预算限额单一来源
+
+`budget-config.mjs` 是环境变量的唯一读取入口：两个 token 限额缺失一半、非正整数或 `warnRatio` 越界都直接抛错，不做部分放行。backend 把它归一化成 `budgetLimits` 并只在 `/config` 发布一次；`browser-budget` roster 只挂载插件、不写任何限额。runtime probe 读取 `/config` 后缓存 `budget`，插件 `apply` 同步采用该值；挂载插件的镜像由 `createRuntimeValidationDist` 写出 `browser-native-budget-profile.json`（内容只有 `{"budget":"required"}`），probe 在镜像声明需求但 backend 未发布限额时返回 `BUDGET_LIMITS_UNCONFIGURED`，页面显示 `browser-native startup blocked: BUDGET_LIMITS_UNCONFIGURED` 并终止 Worker，不进入任何模型请求。
+
+证据（`tests/budget-config-single-source.e2e.mjs`，scripted backend，同一镜像启动两次）：
+
+```json
+{
+  "browser": "156.0.8078.80",
+  "adoptions": [
+    { "sessionTokens": 12000, "tenantTokens": 24000 },
+    { "sessionTokens": 15000, "tenantTokens": 30000 }
+  ],
+  "refusals": ["BUDGET_LIMITS_UNCONFIGURED"]
+}
+```
+
+第一组只改环境记录一处，`/config` 与 Worker `budget-state` 同时为 12 000/24 000；第二组在同一镜像上只改这一处为 15 000/30 000，两侧同步变化，证明镜像里没有烘焙限额。第三组不传 `budgetLimits`，启动在 probe 阶段被拒且无 `/llm` 请求。
+
+运行命令：
+
+```sh
+DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/budget-config-single-source.e2e.mjs
+```
+
 ## 残余缺口
 
 - 阻断粒度是“上游请求之前”与“工具执行之前”，没有按预估输入 token 的预检；单次请求本身仍可能跨过限额，证据中的 2369/2368 就是请求完成后才越界。工具 guard 在超限后拒绝所有工具调用，直到限额上调或打开新 turn。
@@ -112,6 +137,6 @@ DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 - 预算判定没有费用换算，只有 token；客户端展示的费用来自 backend 的 `usagePricing`。provider 的 cache 命中字段若将来出现在原始 usage 中，backend 审计只记录 `prompt_tokens` 总量，插件 meter 按 projection 分桶，二者可能不再逐值相等。
 - `usage.jsonl` 只保留最近 1 000 条 provider 调用记录，用于重启对账与证据回看，不参与预算判定；预算仍以 Session 日志的 meter 为准，因此超出 journal 窗口的历史用量无法从该文件累计。
 - 标题生成、压缩等后台请求的 usage 若不写入被计量的 Session 日志，租户总量会低估这些调用；本次运行没有触发这些请求，未验证。
-- 客户端预算条的限额来自 backend 的 `budgetLimits`，Worker 预算插件的限额来自 profile config；两者是独立配置，部署时必须手动对齐。页面只按 backend 账本展示，不读取 Worker meter；插件未挂载时（本次 E2E 的 roster `browser`）页面阻断是唯一防线，服务端仍没有独立于 UI 的租户预算拒绝逻辑。
+- 限额已收敛到 backend 一处，但“该镜像是否挂载预算插件”仍由镜像内的 `browser-native-budget-profile.json` 声明；手工拼装镜像漏写该文件时，probe 不会要求限额，插件 `apply` 因缺少下发值抛错又会被 Cordis 包含，结果是 Worker 少一层 guard（页面是否显示预算条仍取决于 backend 配置）。页面只按 backend 账本展示，不读取 Worker meter；插件未挂载时（本次 E2E 的 roster `browser`）页面阻断是唯一防线，服务端仍没有独立于 UI 的租户预算拒绝逻辑。
 - 页面按 principal cookie 聚合租户用量，不是认证租户；cookie 重置或换设备后历史用量不再计入。backend 只保留最近 1 000 条 provider 记录，超过窗口的历史用量同样不计入展示与阻断。
 - 预算条只在 owner Session 上出现；共享只读用户没有预算入口。轮询间隔 2 秒，极端情况下两次快速发送可能落在刷新间隙，仍由 Worker/服务端预算判定兜底。

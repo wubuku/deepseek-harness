@@ -2,13 +2,17 @@
  * Validation-only Session and tenant token budget for Browser-Native DSH.
  *
  * The plugin meters durable provider usage through Token-meter's `tokenUsage`
- * projection, sums the sessions of one profile-configured tenant, and appends
+ * projection, sums the sessions of the backend-published tenant, and appends
  * one `budget/exceeded` audit event per session/scope crossing. Enforcement
  * happens in two places inside the Worker: the Browser-Native LLM adapter asks
  * {@link BrowserNativeTokenBudgetProbe.canRequest} before each upstream request,
  * and a monotonic `ctx.tools.guard` refuses tool execution once a limit is
  * crossed. The guard is the tool-execution-layer stop: it still refuses when the
  * request preflight is skipped or a caller bypasses the adapter.
+ *
+ * The profile carries no limits: the runtime probe refuses startup when the
+ * image requires a budget the backend does not publish, and plugin load adopts
+ * the probed limits so the page and the Worker cannot meter different budgets.
  *
  * The probe is test-only. It reads the live counters, replaces the limits, and
  * toggles the request preflight without reloading the profile.
@@ -19,14 +23,12 @@ import type { ToolExecution } from '../../../packages/core/tools/src/index.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import { readBrowserNativeProbedBudget } from './browser-native-runtime-probes.ts'
 
-/** Profile YAML `config` for the budget plugin. */
-export interface TokenBudgetConfig {
-  /** Tenant shared by every Session this Worker meters. */
+/** Limits the mounted plugin enforces; both consumers read these values. */
+interface MountedBudget {
   readonly tenantId: string
-  /** Maximum non-cached input plus output tokens across one Session. */
   readonly sessionLimit: number
-  /** Maximum non-cached input plus output tokens across all tenant Sessions. */
   readonly tenantLimit: number
 }
 
@@ -100,18 +102,26 @@ function positiveInteger(value: unknown, name: string): number {
   return value
 }
 
-function parseConfig(value: unknown): TokenBudgetConfig {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('token budget: config must be an object')
+/** Refuse plugin load with the code the startup probe reports. */
+class BudgetConfigError extends Error {
+  constructor(readonly code: 'BUDGET_LIMITS_UNCONFIGURED', message: string) {
+    super(`${message} (${code})`)
   }
-  const record = value as Record<string, unknown>
-  if (typeof record.tenantId !== 'string' || record.tenantId.length === 0) {
-    throw new Error('token budget: "tenantId" must be a non-empty string')
+}
+
+/**
+ * Read the budget the runtime probe received from the backend.
+ * @returns the limits every budget consumer shares.
+ */
+function probedBudgetOrFail(): MountedBudget {
+  const budget = readBrowserNativeProbedBudget()
+  if (budget === undefined) {
+    throw new BudgetConfigError('BUDGET_LIMITS_UNCONFIGURED', 'token budget: backend did not publish budget limits')
   }
   return {
-    tenantId: record.tenantId,
-    sessionLimit: positiveInteger(record.sessionLimit, 'sessionLimit'),
-    tenantLimit: positiveInteger(record.tenantLimit, 'tenantLimit'),
+    tenantId: budget.tenantId,
+    sessionLimit: budget.sessionTokens,
+    tenantLimit: budget.tenantTokens,
   }
 }
 
@@ -121,7 +131,7 @@ function parseConfig(value: unknown): TokenBudgetConfig {
  */
 export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe {
   let ctx: Context | undefined
-  let config: TokenBudgetConfig | undefined
+  let config: MountedBudget | undefined
   const sessions = new Map<string, Session>()
   const exceeded = new Set<string>()
   /** Meter states already audited, so several refusals at one usage append once. */
@@ -193,9 +203,11 @@ export function createBrowserNativeTokenBudget(): BrowserNativeTokenBudgetProbe 
     default: {
       name: 'browser-native-token-budget',
       inject: ['sessionProjections', 'tools'],
-      apply(applyCtx: Context, raw?: unknown): void {
+      apply(applyCtx: Context): void {
         ctx = applyCtx
-        config = parseConfig(raw)
+        // The runtime probe already fetched the backend configuration; adoption
+        // is synchronous and adds no second limit source.
+        config = probedBudgetOrFail()
         ctx.on('session/event', (session) => {
           sessions.set(String(session.id), session)
         })

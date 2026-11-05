@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-164：预算限额单一来源
+
+```text
+changeId: BN-P2-164
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: apps/web/src/preview.ts; docs/drafts/browser-native-dsh-poc/budget-config.mjs; docs/drafts/browser-native-dsh-poc/browser-native-runtime-probes.ts; docs/drafts/browser-native-dsh-poc/browser-native-token-budget.ts; docs/drafts/browser-native-dsh-poc/browser-native-worker.ts; docs/drafts/browser-native-dsh-poc/runtime-validation.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/budget-config.test.mjs; docs/drafts/browser-native-dsh-poc/tests/budget-config-single-source.e2e.mjs; docs/drafts/browser-native-dsh-poc/tests/token-budget.e2e.mjs; docs/drafts/browser-native-dsh-poc/token-budget-metering.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 客户端预算条与 Worker 预算插件各自持有限额（backend `budgetLimits` 与验证 roster 的 profile config 10000/20000），部署时靠人工对齐；任一侧漏改就会页面显示一套、请求 guard 执行另一套，或插件在无配置时静默不装 guard。
+existingExtensionPointsChecked: 复用既有 `/api/browser-native/config` 与 runtime probe、backend `normalizeBudgetLimits`、hosted 环境变量、`createRuntimeValidationDist` 与 Worker 测试通道；只在 `/config` 增加可选 `budget` 字段与 probe failure code，未改 Agent Loop、Session format、正式 profile、`packages/` 或根依赖。
+whyDraftOnlyWasInsufficient: 只有同一验证镜像用两组限额真实启动，才能证明镜像没有烘焙限额且 Worker 与 backend 同步采用；只有挂载插件但缺配置的启动被拒，才能证明缺失不会静默放行。
+behaviorChange: 新增 `budget-config.mjs` 作为环境变量唯一读取入口：部分缺失、非正整数、非法 `warnRatio` 直接抛错。`browser-budget` roster 不再写 `tenantId`/`sessionLimit`/`tenantLimit`；backend 只把归一化限额发布在 `/config.budget`。runtime probe 解析并缓存该字段；`browser-native-budget-profile.json` 声明镜像需要限额，probe 在镜像需要而 backend 未发布时返回 `BUDGET_LIMITS_UNCONFIGURED`，页面显示 `browser-native startup blocked: BUDGET_LIMITS_UNCONFIGURED` 且无 `/llm` 请求。Worker 插件 `apply` 同步采用 probe 值，不再有第二份限额。hosted 与 E2E 通过同一 reader 读取同一环境记录。
+consumersUpdated: backend `/config` 路由、hosted 启动参数、runtime probe 协议与 Worker probe handler、preview 启动与镜像 marker、预算插件、runtime-validation 镜像构建、token-budget E2E、新增单元测试与单一来源 E2E、token-budget-metering.md、PoC README、本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/budget-config.test.mjs docs/drafts/browser-native-dsh-poc/tests/usage-report.test.mjs` 13/13 通过；`pnpm exec tsc -b apps/web/tsconfig.json` 通过；`pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` 通过；`DSH_POC_BROWSER=chrome node docs/drafts/browser-native-dsh-poc/tests/budget-config-single-source.e2e.mjs` 通过：同一镜像 12 000/24 000 与 15 000/30 000 两组限额下 `/config.budget` 与 Worker `budget-state` 两侧同步，缺 `budgetLimits` 时 `BUDGET_LIMITS_UNCONFIGURED` 拒绝启动且无 `/llm`；`DSH_POC_ENV_FILE=docs/drafts/.env ... token-budget.e2e.mjs` 真实模型通过（2346 输入 / 24 输出逐值相等，session/tenant 阻断各 1，tool guard 拒绝）；`... budget-guidance.e2e.mjs` 真实模型通过（state ok/exceeded、发送前无新 turn 或 provider 请求）。
+syncReplaySteps: 上游同步后重建 preview，复跑单元测试与两个 E2E；确认 `/config` 无 `budget` 时页面预算条消失，`browser-budget` 镜像在无 `budgetLimits` 时启动被拒，删除 marker 后 probe 不再要求限额。
+deleteCondition: 正式产品由权威服务端下发限额并在缺少配置时拒绝启动，且 Worker/页面无第二份限额来源。
+status: implemented
+```
+
 ### BN-P2-163：客户端预算展示与发送前阻断
 
 ```text

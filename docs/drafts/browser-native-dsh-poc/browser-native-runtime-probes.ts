@@ -5,6 +5,7 @@ export type BrowserNativeRuntimeProbeFailureCode =
   | 'BACKEND_UNAVAILABLE'
   | 'BACKEND_PROTOCOL_MISMATCH'
   | 'BACKEND_RESPONSE_INVALID'
+  | 'BUDGET_LIMITS_UNCONFIGURED'
   | 'OPFS_SYNC_ACCESS_UNAVAILABLE'
 
 export interface BrowserNativeRuntimeProbeFailure {
@@ -18,10 +19,43 @@ export interface BrowserNativeRuntimeProbeReport {
   readonly failures: readonly BrowserNativeRuntimeProbeFailure[]
 }
 
+/** Budget the backend published for a mounted Worker budget plugin. */
+export interface BrowserNativeProbedBudget {
+  readonly sessionTokens: number
+  readonly tenantTokens: number
+  readonly tenantId: string
+}
+
+let probedBudget: BrowserNativeProbedBudget | undefined
+
+/**
+ * Budget limits parsed by the latest backend probe.
+ * @returns Limits for a mounted budget plugin, or undefined when the backend published none.
+ */
+export function readBrowserNativeProbedBudget(): BrowserNativeProbedBudget | undefined {
+  return probedBudget
+}
+
+function parseProbedBudget(value: unknown): BrowserNativeProbedBudget | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new ProbeFailure('BACKEND_RESPONSE_INVALID')
+  const sessionTokens = value.sessionTokens
+  const tenantTokens = value.tenantTokens
+  const tenantId = value.tenantId
+  if (typeof sessionTokens !== 'number' || !Number.isSafeInteger(sessionTokens) || sessionTokens <= 0
+    || typeof tenantTokens !== 'number' || !Number.isSafeInteger(tenantTokens) || tenantTokens <= 0
+    || typeof tenantId !== 'string' || tenantId.length === 0) {
+    throw new ProbeFailure('BACKEND_RESPONSE_INVALID')
+  }
+  return { sessionTokens, tenantTokens, tenantId }
+}
+
 /** Inputs supplied by the Worker that owns the outbox and optional OPFS access. */
 export interface BrowserNativeRuntimeProbeOptions {
   readonly backendOrigin: string
   readonly durableWorkspace: boolean
+  /** The image profile mounts a budget plugin that needs backend-published limits. */
+  readonly expectBudget?: boolean
   readonly probeSessionOutbox: () => Promise<void>
   readonly fetcher?: typeof fetch
   readonly probeWorkspaceOpfs?: () => Promise<void>
@@ -84,6 +118,7 @@ async function probeBackend(origin: string, fetcher: typeof fetch): Promise<void
     || typeof config.provider !== 'string' || config.provider.length === 0) {
     throw new ProbeFailure('BACKEND_RESPONSE_INVALID')
   }
+  probedBudget = parseProbedBudget(config.budget)
 }
 
 async function probeOpfsSyncAccessHandle(): Promise<void> {
@@ -154,9 +189,15 @@ export async function probeBrowserNativeRuntime(
   options: BrowserNativeRuntimeProbeOptions,
 ): Promise<BrowserNativeRuntimeProbeReport> {
   const fetcher = options.fetcher ?? fetch
+  probedBudget = undefined
   const tasks = [
     check('session-outbox', options.probeSessionOutbox),
-    check('backend', async () => await probeBackend(options.backendOrigin, fetcher)),
+    check('backend', async () => {
+      await probeBackend(options.backendOrigin, fetcher)
+      if (options.expectBudget === true && probedBudget === undefined) {
+        throw new ProbeFailure('BUDGET_LIMITS_UNCONFIGURED')
+      }
+    }),
   ] as const
   const results = await Promise.all(tasks)
   const opfs = options.durableWorkspace

@@ -263,6 +263,8 @@ interface BrowserNativeRuntimeProbeRequest {
   readonly testFault?: 'outbox-abort' | 'opfs-unavailable'
   /** API origin when the preview server serves API routes separately. */
   readonly apiOrigin?: string
+  /** The mounted profile requires a backend-published token budget. */
+  readonly expectBudget?: boolean
 }
 
 function isRuntimeProbeRequest(value: unknown): value is BrowserNativeRuntimeProbeRequest {
@@ -273,6 +275,7 @@ function isRuntimeProbeRequest(value: unknown): value is BrowserNativeRuntimePro
     && typeof data.durableWorkspace === 'boolean'
     && (data.testFault === undefined || data.testFault === 'outbox-abort' || data.testFault === 'opfs-unavailable')
     && (data.apiOrigin === undefined || typeof data.apiOrigin === 'string')
+    && (data.expectBudget === undefined || typeof data.expectBudget === 'boolean')
 }
 
 function failedProbeReport(
@@ -315,6 +318,7 @@ async function handleRuntimeProbe(request: BrowserNativeRuntimeProbeRequest, por
   runtimeProbePromise = probeBrowserNativeRuntime({
     backendOrigin: backendApiOrigin ?? self.location.origin,
     durableWorkspace,
+    expectBudget: request.expectBudget === true,
     probeSessionOutbox: async () => await sessionOutbox.probe(),
     ...(request.testFault === 'opfs-unavailable' ? {
       probeWorkspaceOpfs: async () => { throw new Error('injected OPFS probe failure') },

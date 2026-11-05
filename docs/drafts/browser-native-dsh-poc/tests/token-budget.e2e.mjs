@@ -1,10 +1,11 @@
 /**
  * Token-budget product regression against a real model.
  *
- * The `browser-budget` roster mounts the profile-configured budget plugin
- * (`tenantId: poc-tenant`, session 10000, tenant 20000). The run compares the
- * plugin's Session meter with the upstream provider usage captured by the PoC
- * backend, then lowers the Session limit and finally the tenant limit to prove
+ * The `browser-budget` roster mounts the budget plugin, which adopts the
+ * backend-published limits (tenant `poc-tenant`, session 10000, tenant 20000)
+ * from one environment record. The run compares the plugin's Session meter with
+ * the upstream provider usage captured by the PoC backend, then lowers the
+ * Session limit and finally the tenant limit to prove
  * that the next upstream request is refused before it is sent, the turn ends
  * with a visible budget error, and a durable `budget/exceeded` audit event is
  * written for each scope.
@@ -19,6 +20,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBrowserNativeV2Server } from '../backend-v2.mjs'
+import { readBudgetLimitsFromEnv } from '../budget-config.mjs'
 import { createRuntimeValidationDist } from '../runtime-validation.mjs'
 import {
   openPreview, sendTurn, sessionRequest, submitPrompt, waitFor,
@@ -36,7 +38,14 @@ for (const name of ['OPENAI_BASE_URL', 'OPENAI_MODEL', 'OPENAI_API_KEY']) {
   if (envValue(name) === undefined) throw new Error(`${name} is required for the token budget run`)
 }
 
-const PROFILE_BUDGET = { tenantId: 'poc-tenant', sessionLimit: 10_000, tenantLimit: 20_000 }
+// The one configuration read by the backend; the mounted plugin adopts it, so
+// changing these values changes both sides without a second profile copy.
+const BUDGET_ENV_VALUES = {
+  DSH_POC_SESSION_TOKEN_BUDGET: '10000',
+  DSH_POC_TENANT_TOKEN_BUDGET: '20000',
+  DSH_POC_TENANT_ID: 'poc-tenant',
+}
+const budgetLimits = readBudgetLimitsFromEnv(BUDGET_ENV_VALUES)
 const GUARD_FILE = '/dsh/home/workspace/budget-guard.txt'
 const GUARD_MARKER = 'BUDGET_GUARD'
 const llmTimeoutMs = Number(process.env.DSH_POC_BUDGET_LLM_TIMEOUT_MS ?? 240_000)
@@ -95,6 +104,7 @@ try {
     llmApiKey: envValue('OPENAI_API_KEY'),
     llmTimeoutMs,
     llmIncludeUsage: true,
+    budgetLimits,
   })
   origin = await app.listen(0)
   browser = await chromium.launch({ headless: true, channel: process.env.DSH_POC_BROWSER ?? 'chrome' })
@@ -119,13 +129,19 @@ try {
   })
   const sessionA = boot.sessionId
 
+  const backendConfig = await (await fetch(`${origin}/api/browser-native/config`)).json()
+  assert.deepEqual(backendConfig.budget, {
+    sessionTokens: budgetLimits.sessionTokens,
+    tenantTokens: budgetLimits.tenantTokens,
+    tenantId: budgetLimits.tenantId,
+  }, 'the backend must publish the one configured budget')
   const profileState = await testAction({ action: 'budget-state' })
   assert.equal(profileState?.ok, true, JSON.stringify(profileState))
   assert.deepEqual(profileState.budget.limits, {
-    sessionLimit: PROFILE_BUDGET.sessionLimit,
-    tenantLimit: PROFILE_BUDGET.tenantLimit,
-  }, 'limits must come from the profile config')
-  assert.equal(profileState.budget.tenantId, PROFILE_BUDGET.tenantId)
+    sessionLimit: budgetLimits.sessionTokens,
+    tenantLimit: budgetLimits.tenantTokens,
+  }, 'the mounted plugin must adopt the backend-published limits')
+  assert.equal(profileState.budget.tenantId, budgetLimits.tenantId)
 
   const providerA = await usageAudit(sessionA)
   assert.ok(providerA.length >= 1, 'the real provider must report usage for the boot request')
@@ -157,7 +173,7 @@ try {
   assert.match(sessionError.message, /token budget exceeded \(session\)/, sessionError.message)
   const sessionLog = await readSession(sessionA)
   assert.equal(budgetAudit(sessionLog, 'session').length, 1, JSON.stringify(budgetAudit(sessionLog, 'session')))
-  assert.equal(budgetAudit(sessionLog, 'session')[0].data.tenantId, PROFILE_BUDGET.tenantId)
+  assert.equal(budgetAudit(sessionLog, 'session')[0].data.tenantId, budgetLimits.tenantId)
   assert.equal((await usageAudit(sessionA)).length, sentBefore, 'a blocked request must not reach the provider')
   const errorCard = await waitFor(async () => {
     const text = await page.locator('body').innerText()
@@ -187,7 +203,7 @@ try {
   assert.match(tenantError.message, /token budget exceeded \(tenant poc-tenant\)/, tenantError.message)
   const tenantLog = await readSession(sessionA)
   assert.equal(budgetAudit(tenantLog, 'tenant').length, 1, JSON.stringify(budgetAudit(tenantLog, 'tenant')))
-  assert.equal(budgetAudit(tenantLog, 'tenant')[0].data.tenantId, PROFILE_BUDGET.tenantId)
+  assert.equal(budgetAudit(tenantLog, 'tenant')[0].data.tenantId, budgetLimits.tenantId)
   assert.equal((await usageAudit(sessionA)).length, tenantBefore, 'a tenant-blocked request must not reach the provider')
 
   // Tool-execution guard: skip the adapter preflight, lower the Session limit
@@ -229,7 +245,7 @@ try {
   assert.equal(pageErrors.length, 0, pageErrors.join('\n'))
   console.log(JSON.stringify({
     scope: 'real-model-token-budget-session-tenant',
-    tenantId: PROFILE_BUDGET.tenantId,
+    tenantId: budgetLimits.tenantId,
     profileLimits: profileState.budget.limits,
     meterVsProvider: {
       sessionA: sessionState,
