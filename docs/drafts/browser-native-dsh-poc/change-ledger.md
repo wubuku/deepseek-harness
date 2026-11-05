@@ -12,6 +12,19 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-165：静态数据加密（at rest）
+
+```text
+changeId: BN-P2-165
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/at-rest-crypto.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/chunk-object-store.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs; docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/change-ledger.md; docs/drafts/browser-native-dsh-poc/README.md
+reason: Session 事件、Workspace blob、附件与审计 journal 原本以明文落盘，主机或备份介质持有者可读到 prompt 与文件内容。新增统一 AES-256-GCM 信封层，密钥只从部署配置读取，缺少或错误时在启动阶段失败，密文损坏在 GCM 校验或启动加载时失败。
+existingExtensionPointsChecked: 复用 CSV/JSON 既有文件边界与 `FormalSessionStore`、`WorkspaceStore`/`FileWorkspaceBlobStore`/`ChunkObjectWorkspaceBlobStore`、附件 staging/commit、`createObservabilityJournal` 与 `redactObservabilityJournal`；未改 packages/、Session format 或 Worker 协议。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs`；`node docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs`；相关既有 `workspace-durability`、`chunk-object-store`、`chunk-object-workspace`、`observability`、`observability-persistence`、`attachment-chunked-upload`、`attachment-backend`、`backend-v2` 单测。
+upstreamSync: PoC 目录整体删除时一并删除；若上游提供等价 at-rest 加密，替换本模块并在 `start-hosted.mjs` 保留缺失/错误密钥拒绝启动的行为。
+deleteWhen: PoC 目录退役或上游以密钥托管 + 信封加密覆盖 Session、Workspace、附件与 journal。
+```
+
 ### BN-P2-164：预算限额单一来源
 
 ```text

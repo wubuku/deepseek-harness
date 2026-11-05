@@ -37,8 +37,13 @@ export class WorkspaceError extends Error {
 }
 
 class FileWorkspaceBlobStore {
-  constructor(root) {
+  /**
+   * @param root - Content-addressed blob directory.
+   * @param atRest - Optional cipher; blobs are then stored as authenticated envelopes.
+   */
+  constructor(root, atRest) {
     this.root = root
+    this.atRest = atRest
   }
 
   async initialize() {
@@ -49,7 +54,15 @@ class FileWorkspaceBlobStore {
     return join(this.root, hash.slice(0, 2), hash)
   }
 
+  context(hash) {
+    return `workspace-blob:${hash}`
+  }
+
   async stat(hash) {
+    if (this.atRest !== undefined) {
+      const stored = await this.atRest.statPlaintextSize(this.path(hash))
+      return stored === undefined ? undefined : { size: stored.size }
+    }
     try {
       const info = await stat(this.path(hash))
       return { size: info.size }
@@ -60,15 +73,20 @@ class FileWorkspaceBlobStore {
   }
 
   async get(hash) {
-    return await readFile(this.path(hash))
+    return this.atRest === undefined
+      ? await readFile(this.path(hash))
+      : await this.atRest.readFile(this.path(hash), this.context(hash))
   }
 
   async verify(hash, expectedBytes) {
     const info = await this.stat(hash)
-    return info !== undefined && info.size === expectedBytes && await hashFile(this.path(hash)) === hash
+    return info !== undefined && info.size === expectedBytes && hashBytes(await this.get(hash)) === hash
   }
 
   async getRange(hash, offset, length) {
+    if (this.atRest !== undefined) {
+      return (await this.get(hash)).subarray(offset, offset + length)
+    }
     const buffer = Buffer.alloc(length)
     const handle = await open(this.path(hash), 'r')
     try {
@@ -88,7 +106,8 @@ class FileWorkspaceBlobStore {
       }
       return { reused: true }
     }
-    await atomicWrite(this.path(hash), bytes)
+    const payload = this.atRest === undefined ? bytes : this.atRest.encryptBuffer(bytes, this.context(hash))
+    await atomicWrite(this.path(hash), payload)
     return { reused: false }
   }
 
@@ -102,7 +121,13 @@ class FileWorkspaceBlobStore {
     }
     const target = this.path(hash)
     await mkdir(dirname(target), { recursive: true })
-    await rename(sourcePath, target)
+    if (this.atRest === undefined) {
+      await rename(sourcePath, target)
+    } else {
+      const bytes = await readFile(sourcePath)
+      await atomicWrite(target, this.atRest.encryptBuffer(bytes, this.context(hash)))
+      await rm(sourcePath, { force: true })
+    }
     const directory = await open(dirname(target), 'r')
     try { await directory.sync() } finally { await directory.close() }
     return { reused: false }
@@ -483,10 +508,12 @@ export class WorkspaceStore {
     if (options.chunkObjects === true && options.blobStore !== undefined) {
       throw new WorkspaceError('CHUNK_STORE_CONFIGURATION', 'chunk objects cannot wrap an external blob store')
     }
+    this.atRest = options.atRest
     this.chunkObjects = options.chunkObjects === true
-      ? new ChunkObjectWorkspaceBlobStore(join(this.root, 'chunk-objects'), new FileWorkspaceBlobStore(this.blobsDir))
+      ? new ChunkObjectWorkspaceBlobStore(join(this.root, 'chunk-objects'),
+        new FileWorkspaceBlobStore(this.blobsDir, this.atRest), this.atRest)
       : undefined
-    this.blobStore = this.chunkObjects ?? options.blobStore ?? new FileWorkspaceBlobStore(this.blobsDir)
+    this.blobStore = this.chunkObjects ?? options.blobStore ?? new FileWorkspaceBlobStore(this.blobsDir, this.atRest)
     this.identitiesPath = join(this.root, 'identities.json')
     this.identities = new Map()
     this.workspaces = new Map()

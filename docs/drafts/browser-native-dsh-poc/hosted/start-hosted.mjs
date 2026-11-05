@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readBudgetLimitsFromEnv } from '../budget-config.mjs'
+import { loadAtRestKeyringFromEnv } from '../at-rest-crypto.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const HELP = `Usage: node docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs
@@ -39,6 +40,10 @@ Environment:
   DSH_POC_TENANT_TOKEN_BUDGET  Tenant token limit; both limits or neither
   DSH_POC_TENANT_ID            Tenant named in budget refusals and the Worker plugin
   DSH_POC_BUDGET_WARN_RATIO     Warning ratio from 0 to 1 (default: 0.8)
+  DSH_POC_AT_REST_ENCRYPTION   auto (default) or required; required refuses to start without a key
+  DSH_POC_AT_REST_KEY          Inline base64 AES-256 key
+  DSH_POC_AT_REST_KEY_ID       Optional 16-hex key id recorded in file headers
+  DSH_POC_AT_REST_KEY_FILE     Key file (first entry active); must be chmod 600
   DSH_POC_HOSTED_ISSUER        Hosted token issuer; requires the audience and secret
   DSH_POC_HOSTED_AUDIENCE      Hosted token audience
   DSH_POC_HOSTED_SECRET        HS256 shared secret, at least 32 bytes
@@ -161,7 +166,7 @@ function alertsFromEnv() {
 }
 
 /** Build deployment options from the environment. */
-function readConfiguration() {
+async function readConfiguration() {
   const llmMode = env.DSH_POC_LLM ?? 'scripted'
   if (llmMode !== 'scripted' && llmMode !== 'real') throw new Error('DSH_POC_LLM must be scripted or real')
   const buildRaw = env.DSH_POC_BUILD
@@ -189,6 +194,7 @@ function readConfiguration() {
     workspaceVerifiedDownloads: booleanEnv('DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS', false),
     usagePricing: usagePricingFromEnv(),
     budgetLimits: readBudgetLimitsFromEnv(),
+    atRestKeyring: await loadAtRestKeyringFromEnv(env),
     alerts: alertsFromEnv(),
     stateAuthorityOrigin: env.DSH_POC_STATE_AUTHORITY_ORIGIN,
     stateAuthorityToken: env.DSH_POC_STATE_AUTHORITY_TOKEN,
@@ -211,6 +217,7 @@ function report(app, origin, options, authMode) {
   process.stdout.write(`hosted: admission ≤${String(options.admission.maxConcurrentTurns)} concurrent turns, ≤${String(options.admission.maxMountedSessions)} mounted Sessions\n`)
   process.stdout.write(`hosted: usage pricing ${options.usagePricing === undefined ? 'disabled' : `$${String(options.usagePricing.inputUsdPer1M)}/M input, $${String(options.usagePricing.outputUsdPer1M)}/M output`}\n`)
   process.stdout.write(`hosted: pre-send budget ${options.budgetLimits === undefined ? 'disabled' : `${String(options.budgetLimits.sessionTokens)} Session tokens, ${String(options.budgetLimits.tenantTokens)} tenant tokens, warn at ${String(Math.round(options.budgetLimits.warnRatio * 100))}%`}\n`)
+  process.stdout.write(`hosted: at-rest encryption ${app.atRest.state}${app.atRest.keyId === undefined ? '' : ` key ${app.atRest.keyId}`}\n`)
   process.stdout.write(`hosted: alerts ${options.alerts === undefined ? 'disabled' : [
     ...(options.alerts.failureRate === undefined ? [] : [`failure-rate ≥${String(options.alerts.failureRate.ratio)}`]),
     ...(options.alerts.queueBacklog === undefined ? [] : [`queue ≥${String(options.alerts.queueBacklog.queuedTurns)}`]),
@@ -221,7 +228,7 @@ function report(app, origin, options, authMode) {
 
 /** Start the server and keep it alive until SIGINT or SIGTERM. */
 async function main() {
-  const options = readConfiguration()
+  const options = await readConfiguration()
 
   // Real mode reaches the upstream through Node's environment proxy support; re-exec
   // once so the flag is present before any network request is constructed.
@@ -256,6 +263,7 @@ async function main() {
     workspaceChunkObjects: options.workspaceChunkObjects,
     workspaceVerifiedDownloads: options.workspaceVerifiedDownloads,
     ...(options.usagePricing === undefined ? {} : { usagePricing: options.usagePricing }),
+    ...(options.atRestKeyring.keys.length === 0 ? {} : { atRestKeyring: options.atRestKeyring }),
     ...(options.budgetLimits === undefined ? {} : { budgetLimits: options.budgetLimits }),
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),

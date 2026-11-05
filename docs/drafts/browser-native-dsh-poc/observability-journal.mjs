@@ -48,7 +48,7 @@ function envelopeHash(prev, seq, record) {
  * @param head - Parsed head anchor, or `undefined` when the file is absent.
  * @returns Records, limit truncation, invalid lines, and integrity details.
  */
-function parseLedger(raw, head) {
+function parseLedger(raw, head, decode = line => line) {
   const lines = raw.split('\n').filter(line => line.length > 0)
   const records = []
   let invalidLines = 0
@@ -59,7 +59,7 @@ function parseLedger(raw, head) {
   for (const line of lines) {
     let envelope
     try {
-      envelope = JSON.parse(line)
+      envelope = JSON.parse(decode(line))
     } catch {
       // A torn or hand-edited line is reported through invalidLines; it must not stop boot.
       invalidLines += 1
@@ -114,13 +114,23 @@ function parseLedger(raw, head) {
  * @param path - Ledger or head path.
  * @returns File contents or the empty string when the file does not exist.
  */
-async function readIfExists(path) {
+async function readIfExists(path, cipher, context) {
   try {
-    return await readFile(path, 'utf8')
+    return cipher === undefined ? await readFile(path, 'utf8') : await cipher.readText(path, context)
   } catch (error) {
     if (error?.code === 'ENOENT') return ''
     throw error
   }
+}
+
+/** Encode one ledger line for storage, encrypted when a cipher is configured. */
+function encodeLine(cipher, context, text) {
+  return `${cipher === undefined ? text : cipher.encryptText(text, context)}\n`
+}
+
+/** Decode one stored ledger line, accepting legacy plaintext. */
+function decodeLine(cipher, context) {
+  return cipher === undefined ? line => line : line => cipher.decryptText(line, context)
 }
 
 /**
@@ -135,15 +145,15 @@ async function readIfExists(path) {
  * @param options.shouldRemove - Predicate receiving the record and ledger name.
  * @returns Removed record counts per ledger.
  */
-export async function redactObservabilityJournal({ dataDir, shouldRemove }) {
+export async function redactObservabilityJournal({ dataDir, shouldRemove, cipher }) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('observability redaction requires dataDir')
   if (typeof shouldRemove !== 'function') throw new TypeError('observability redaction requires shouldRemove')
   const directory = join(dataDir, 'observability')
   const removed = { accessDenials: 0, usage: 0, collaboration: 0 }
   for (const [file, name] of [[ACCESS_DENIALS_FILE, 'accessDenials'], [USAGE_FILE, 'usage'], [COLLABORATION_FILE, 'collaboration']]) {
     const path = join(directory, file)
-    const raw = await readIfExists(path)
-    const parsed = parseLedger(raw, undefined)
+    const raw = await readIfExists(path, cipher, `observability/${file}`)
+    const parsed = parseLedger(raw, undefined, decodeLine(cipher, `observability/${file}`))
     const kept = []
     for (const record of parsed.records) {
       if (shouldRemove(record, name)) removed[name] += 1
@@ -159,14 +169,18 @@ export async function redactObservabilityJournal({ dataDir, shouldRemove }) {
       prev = hash
     }
     const temporary = `${path}.${randomUUID()}.tmp`
-    await writeFile(temporary, rebuilt.length === 0 ? '' : `${rebuilt.join('\n')}\n`, 'utf8')
+    const rebuiltText = rebuilt.length === 0 ? '' : rebuilt.map(line => encodeLine(cipher, `observability/${file}`, line)).join('')
+    if (cipher === undefined) await writeFile(temporary, rebuiltText, 'utf8')
+    else await cipher.writeFile(temporary, rebuiltText, `observability/${file}`)
     await rename(temporary, path)
     const head = join(directory, `${file}.head.json`)
     if (kept.length === 0) {
       await rm(head, { force: true })
     } else {
       const headTemporary = `${head}.${randomUUID()}.tmp`
-      await writeFile(headTemporary, `${JSON.stringify({ version: LEDGER_VERSION, seq: kept.length, hash: prev })}\n`, 'utf8')
+      const headText = `${JSON.stringify({ version: LEDGER_VERSION, seq: kept.length, hash: prev })}\n`
+      if (cipher === undefined) await writeFile(headTemporary, headText, 'utf8')
+      else await cipher.writeFile(headTemporary, headText, `observability/${file}.head`)
       await rename(headTemporary, head)
     }
   }
@@ -180,9 +194,10 @@ export async function redactObservabilityJournal({ dataDir, shouldRemove }) {
  * @param options.now - Clock returning epoch milliseconds.
  * @returns Append, restore, and close operations plus current write health.
  */
-export function createObservabilityJournal({ dataDir, now = () => Date.now() }) {
+export function createObservabilityJournal({ dataDir, now = () => Date.now(), cipher }) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('observability journal requires dataDir')
   const directory = join(dataDir, 'observability')
+  const contextFor = file => `observability/${file}`
   let chain = Promise.resolve()
   let healthy = true
   let writeFailures = 0
@@ -200,14 +215,17 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   const writeHead = async state => {
     const path = headPath(state.file)
     const temporary = `${path}.${randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify({ version: LEDGER_VERSION, seq: state.seq, hash: state.hash })}\n`, 'utf8')
+    const text = `${JSON.stringify({ version: LEDGER_VERSION, seq: state.seq, hash: state.hash })}\n`
+    if (cipher === undefined) await writeFile(temporary, text, 'utf8')
+    else await cipher.writeFile(temporary, text, contextFor(`${state.file}.head`))
     await rename(temporary, path)
   }
 
   const ensureTail = async file => {
     const cached = tails.get(file)
     if (cached !== undefined) return cached
-    const parsed = parseLedger(await readIfExists(join(directory, file)), undefined)
+    const parsed = parseLedger(await readIfExists(join(directory, file), cipher, contextFor(file)), undefined,
+      decodeLine(cipher, contextFor(file)))
     const tail = parsed.tail
     const state = tail === undefined
       ? { file, seq: 0, hash: GENESIS }
@@ -233,7 +251,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
       const state = await ensureTail(file)
       const seq = state.seq + 1
       const hash = envelopeHash(state.hash, seq, record)
-      await appendFile(path, `${JSON.stringify({ v: LEDGER_VERSION, seq, prev: state.hash, hash, record })}\n`, 'utf8')
+      await appendFile(path, encodeLine(cipher, contextFor(file), JSON.stringify({ v: LEDGER_VERSION, seq, prev: state.hash, hash, record })), 'utf8')
       const next = { file, seq, hash }
       tails.set(file, next)
       await writeHead(next)
@@ -248,7 +266,9 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
 
   const readHead = async file => {
     try {
-      const parsed = JSON.parse(await readFile(headPath(file), 'utf8'))
+      const text = cipher === undefined
+        ? await readFile(headPath(file), 'utf8') : await cipher.readText(headPath(file), contextFor(`${file}.head`))
+      const parsed = JSON.parse(text)
       if (parsed?.version !== LEDGER_VERSION || !Number.isSafeInteger(parsed.seq)
         || parsed.seq <= 0 || typeof parsed.hash !== 'string') {
         return { invalid: true }
@@ -263,10 +283,12 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   const readLedger = async (file, limit) => {
     const head = await readHead(file)
     if (head?.invalid === true) {
-      const parsed = parseLedger(await readIfExists(join(directory, file)), undefined)
+      const parsed = parseLedger(await readIfExists(join(directory, file), cipher, contextFor(file)), undefined,
+        decodeLine(cipher, contextFor(file)))
       return { ...parsed, integrity: { ...parsed.integrity, verified: false, headInvalid: true } }
     }
-    const parsed = parseLedger(await readIfExists(join(directory, file)), head)
+    const parsed = parseLedger(await readIfExists(join(directory, file), cipher, contextFor(file)), head,
+      decodeLine(cipher, contextFor(file)))
     const truncated = parsed.records.length > limit
     return { ...parsed, records: parsed.records.slice(-limit), truncated }
   }
@@ -282,7 +304,10 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
     let metrics
     let metricsError
     try {
-      const parsed = JSON.parse(await readFile(join(directory, METRICS_FILE), 'utf8'))
+      const text = cipher === undefined
+        ? await readFile(join(directory, METRICS_FILE), 'utf8')
+        : await cipher.readText(join(directory, METRICS_FILE), contextFor(METRICS_FILE))
+      const parsed = JSON.parse(text)
       if (parsed?.version !== JOURNAL_VERSION || !Number.isSafeInteger(parsed.capturedAt)
         || parsed.view === null || typeof parsed.view !== 'object' || Array.isArray(parsed.view)) {
         throw new Error('metrics snapshot is not a v1 record')
@@ -319,7 +344,8 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
       await prepare()
       const path = join(directory, METRICS_FILE)
       const temporary = `${path}.${randomUUID()}.tmp`
-      await writeFile(temporary, payload, 'utf8')
+      if (cipher === undefined) await writeFile(temporary, payload, 'utf8')
+      else await cipher.writeFile(temporary, payload, contextFor(METRICS_FILE))
       await rename(temporary, path)
     })
     chain = chain.catch(error => {
@@ -338,7 +364,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now() }) 
   const redact = shouldRemove => {
     const run = chain.then(async () => {
       tails.clear()
-      const removed = await redactObservabilityJournal({ dataDir, shouldRemove })
+      const removed = await redactObservabilityJournal({ dataDir, shouldRemove, cipher })
       await Promise.all([ACCESS_DENIALS_FILE, USAGE_FILE, COLLABORATION_FILE].map(file => ensureTail(file)))
       return removed
     })

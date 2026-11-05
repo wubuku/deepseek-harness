@@ -36,6 +36,7 @@ import { buildTraceReport, traceIdFor } from './subagent-trace.mjs'
 import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
 import { assertDataFormatReadable } from './hosted/data-format.mjs'
+import { assertAtRestReady, createAtRestCipher } from './at-rest-crypto.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -786,12 +787,43 @@ async function listAttachmentObjects(dataDir, workspaceId) {
   return objects
 }
 
-async function verifyAttachmentObject(path, hash) {
+/** Context bound into an attachment object's at-rest envelope. */
+function attachmentContext(workspaceId, hash) {
+  return `attachment/${workspaceId}/${hash}`
+}
+
+/** Context bound into a staging upload part's at-rest envelope. */
+function attachmentUploadContext(workspaceId, uploadId) {
+  return `attachment-upload/${workspaceId}/${uploadId}`
+}
+
+/** Write one buffer at an explicit file offset, rejecting zero-progress writes. */
+async function writeAllAt(handle, bytes, offset) {
+  let written = 0
+  while (written < bytes.byteLength) {
+    const result = await handle.write(bytes, written, bytes.byteLength - written, offset + written)
+    if (result.bytesWritten < 1) throw new Error('attachment object store wrote zero bytes')
+    written += result.bytesWritten
+  }
+}
+
+async function verifyAttachmentObject(path, hash, workspaceId, atRest) {
   const info = await stat(path).catch(() => undefined)
-  if (info === undefined || !info.isFile() || info.size > MAX_ATTACHMENT_BYTES) return undefined
-  const digest = createHash('sha256')
-  for await (const chunk of createReadStream(path)) digest.update(chunk)
-  return digest.digest('hex') === hash ? info.size : undefined
+  if (info === undefined || !info.isFile()) return undefined
+  if (atRest === undefined) {
+    if (info.size > MAX_ATTACHMENT_BYTES) return undefined
+    const digest = createHash('sha256')
+    for await (const chunk of createReadStream(path)) digest.update(chunk)
+    return digest.digest('hex') === hash ? info.size : undefined
+  }
+  const bytes = await atRest.readFile(path, attachmentContext(workspaceId, hash))
+  if (bytes.byteLength > MAX_ATTACHMENT_BYTES) return undefined
+  return hashBytesOf(bytes) === hash ? bytes.byteLength : undefined
+}
+
+/** SHA-256 hex digest of an in-memory buffer. */
+function hashBytesOf(bytes) {
+  return createHash('sha256').update(bytes).digest('hex')
 }
 
 async function storeAttachmentObject(
@@ -803,6 +835,7 @@ async function storeAttachmentObject(
   onStage = () => {},
   onChunk = () => {},
   publish = async operation => await operation(),
+  atRest,
 ) {
   const assertRequestActive = () => {
     if (!request.aborted) return
@@ -811,7 +844,7 @@ async function storeAttachmentObject(
   const directoryPath = join(dataDir, 'attachments-v1', workspaceId, hash.slice(0, 2))
   await mkdir(directoryPath, { recursive: true, mode: 0o700 })
   const target = attachmentPath(dataDir, workspaceId, hash)
-  const existing = await verifyAttachmentObject(target, hash)
+  const existing = await verifyAttachmentObject(target, hash, workspaceId, atRest)
   if (existing !== undefined) {
     let received = 0
     const digest = createHash('sha256')
@@ -829,7 +862,7 @@ async function storeAttachmentObject(
       throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
     }
     await publish(async () => {
-      if (await verifyAttachmentObject(target, hash) !== existing) {
+      if (await verifyAttachmentObject(target, hash, workspaceId, atRest) !== existing) {
         throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'attachment object was collected during the upload; retry the upload', 409)
       }
     })
@@ -839,6 +872,13 @@ async function storeAttachmentObject(
 
   const temporaryPath = join(directoryPath, `${randomUUID()}.part`)
   const handle = await open(temporaryPath, 'wx', 0o600)
+  const encryptor = atRest === undefined ? undefined : atRest.createEncryptor(attachmentContext(workspaceId, hash))
+  let storedOffset = 0
+  if (encryptor !== undefined) {
+    const header = encryptor.header()
+    await writeAllAt(handle, header, 0)
+    storedOffset = header.byteLength
+  }
   const digest = createHash('sha256')
   let bytes = 0
   let closed = false
@@ -852,13 +892,14 @@ async function storeAttachmentObject(
       digest.update(chunk)
       await onChunk(chunk.byteLength, { workspaceId, hash })
       assertRequestActive()
-      let offset = 0
-      while (offset < chunk.byteLength) {
-        const result = await handle.write(chunk, offset, chunk.byteLength - offset, bytes + offset)
-        if (result.bytesWritten < 1) throw new Error('attachment object store wrote zero bytes')
-        offset += result.bytesWritten
-      }
+      const payload = encryptor === undefined ? chunk : encryptor.update(chunk)
+      await writeAllAt(handle, payload, storedOffset)
+      storedOffset += payload.byteLength
       bytes += chunk.byteLength
+    }
+    if (encryptor !== undefined) {
+      const tail = encryptor.finish()
+      await writeAllAt(handle, tail, storedOffset)
     }
     if (digest.digest('hex') !== hash) {
       throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'uploaded bytes do not match the requested SHA-256 digest', 400)
@@ -875,7 +916,7 @@ async function storeAttachmentObject(
         await link(temporaryPath, target)
       } catch (error) {
         if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
-        const committedBytes = await verifyAttachmentObject(target, hash)
+        const committedBytes = await verifyAttachmentObject(target, hash, workspaceId, atRest)
         if (committedBytes !== bytes) throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
         reused = true
       }
@@ -913,7 +954,7 @@ async function storeAttachmentObject(
  * @param {number} maximumBytes - Configured attachment byte ceiling.
  * @returns {Promise<{uploadId: string, chunkBytes: number}>} Upload identifier and the largest accepted chunk.
  */
-async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, maximumBytes) {
+async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, maximumBytes, atRest) {
   if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > maximumBytes) {
     throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment must declare a byte length from 0 through ${String(maximumBytes)}`, 413)
   }
@@ -924,6 +965,9 @@ async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, ma
   const metaPath = attachmentUploadMetaPath(dataDir, workspaceId, uploadId)
   const handle = await open(partPath, 'wx', 0o600)
   await handle.close()
+  if (atRest !== undefined) {
+    await atRest.writeFile(partPath, Buffer.alloc(0), attachmentUploadContext(workspaceId, uploadId), 0o600)
+  }
   try {
     await writeFile(metaPath, JSON.stringify({
       version: 1,
@@ -986,7 +1030,7 @@ async function readAttachmentUploadMeta(dataDir, workspaceId, uploadId) {
  * @param {number} maximumBytes - Configured attachment byte ceiling.
  * @returns {Promise<{uploadId: string, offset: number, received: number, bytes: number}>} Progress after the append.
  */
-async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash, offset, body, maximumBytes) {
+async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash, offset, body, maximumBytes, atRest) {
   if (!(body instanceof Buffer) || body.byteLength > MAX_ATTACHMENT_CHUNK_BYTES) {
     throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment chunks must not exceed ${String(MAX_ATTACHMENT_CHUNK_BYTES)} bytes`, 413)
   }
@@ -997,25 +1041,27 @@ async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash,
   if (info === undefined || !info.isFile()) {
     throw new BackendError('ATTACHMENT_UPLOAD_NOT_FOUND', 'chunked attachment upload has no staging file', 404)
   }
-  if (offset !== info.size) {
+  const receivedBytes = atRest === undefined ? info.size : (await atRest.statPlaintextSize(partPath))?.size
+  if (receivedBytes === undefined) throw new BackendError('ATTACHMENT_UPLOAD_CORRUPT', 'staged upload part is unreadable', 500)
+  if (offset !== receivedBytes) {
     throw new BackendError('ATTACHMENT_UPLOAD_OFFSET_MISMATCH',
-      `chunk offset ${String(offset)} does not continue the staged upload at ${String(info.size)}`, 409)
+      `chunk offset ${String(offset)} does not continue the staged upload at ${String(receivedBytes)}`, 409)
   }
   if (Math.min(meta.bytes, maximumBytes) < offset + body.byteLength) {
     throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment chunk exceeds the declared attachment length', 413)
   }
   if (body.byteLength > 0) {
-    const handle = await open(partPath, 'r+')
-    try {
-      let written = 0
-      while (written < body.byteLength) {
-        const result = await handle.write(body, written, body.byteLength - written, offset + written)
-        if (result.bytesWritten < 1) throw new Error('attachment upload chunk wrote zero bytes')
-        written += result.bytesWritten
+    if (atRest === undefined) {
+      const handle = await open(partPath, 'r+')
+      try {
+        await writeAllAt(handle, body, offset)
+        await handle.sync()
+      } finally {
+        await handle.close()
       }
-      await handle.sync()
-    } finally {
-      await handle.close()
+    } else {
+      const staged = await atRest.readFile(partPath, attachmentUploadContext(workspaceId, uploadId))
+      await atRest.writeFile(partPath, Buffer.concat([staged, body]), attachmentUploadContext(workspaceId, uploadId), 0o600)
     }
   }
   const received = offset + body.byteLength
@@ -1034,7 +1080,7 @@ async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash,
  * @param {(operation: () => Promise<void>) => Promise<void>} publish - Publishes atomically under the attachment lock.
  * @returns {Promise<{bytes: number, reused: boolean}>} Committed size and whether an existing object served the receipt.
  */
-async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publish) {
+async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publish, atRest) {
   const meta = await readAttachmentUploadMeta(dataDir, workspaceId, uploadId)
   if (meta.hash !== hash) throw new BackendError('ATTACHMENT_UPLOAD_HASH_MISMATCH', 'upload staging does not belong to this attachment hash', 409)
   const partPath = attachmentUploadPartPath(dataDir, workspaceId, uploadId)
@@ -1044,13 +1090,21 @@ async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publ
     await rm(metaPath, { force: true }).catch(() => {})
     throw new BackendError('ATTACHMENT_UPLOAD_NOT_FOUND', 'chunked attachment upload has no staging file', 404)
   }
-  if (info.size !== meta.bytes) {
+  const stagedBytes = atRest === undefined ? info.size : (await atRest.statPlaintextSize(partPath))?.size
+  if (stagedBytes === undefined) throw new BackendError('ATTACHMENT_UPLOAD_CORRUPT', 'staged upload part is unreadable', 500)
+  if (stagedBytes !== meta.bytes) {
     throw new BackendError('ATTACHMENT_UPLOAD_INCOMPLETE',
-      `staged upload holds ${String(info.size)} of ${String(meta.bytes)} declared bytes`, 409)
+      `staged upload holds ${String(stagedBytes)} of ${String(meta.bytes)} declared bytes`, 409)
   }
-  const digest = createHash('sha256')
-  for await (const chunk of createReadStream(partPath)) digest.update(chunk)
-  if (digest.digest('hex') !== meta.hash) {
+  let digestHex
+  if (atRest === undefined) {
+    const digest = createHash('sha256')
+    for await (const chunk of createReadStream(partPath)) digest.update(chunk)
+    digestHex = digest.digest('hex')
+  } else {
+    digestHex = hashBytesOf(await atRest.readFile(partPath, attachmentUploadContext(workspaceId, uploadId)))
+  }
+  if (digestHex !== meta.hash) {
     await rm(partPath, { force: true }).catch(() => {})
     await rm(metaPath, { force: true }).catch(() => {})
     throw new BackendError('ATTACHMENT_HASH_MISMATCH', 'staged bytes do not match the requested SHA-256 digest', 400)
@@ -1060,14 +1114,23 @@ async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publ
   const target = attachmentPath(dataDir, workspaceId, meta.hash)
   let reused = false
   await publish(async () => {
+    let stagedPath = partPath
+    if (atRest !== undefined) {
+      stagedPath = join(directoryPath, `${randomUUID()}.enc`)
+      await atRest.writeFile(stagedPath,
+        await atRest.readFile(partPath, attachmentUploadContext(workspaceId, uploadId)),
+        attachmentContext(workspaceId, meta.hash), 0o600)
+    }
     try {
-      await link(partPath, target)
+      await link(stagedPath, target)
     } catch (error) {
       if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error
-      if (await verifyAttachmentObject(target, meta.hash) !== meta.bytes) {
+      if (await verifyAttachmentObject(target, meta.hash, workspaceId, atRest) !== meta.bytes) {
         throw new BackendError('ATTACHMENT_OBJECT_CONFLICT', 'existing attachment object failed verification', 409)
       }
       reused = true
+    } finally {
+      if (stagedPath !== partPath) await rm(stagedPath, { force: true }).catch(() => {})
     }
   })
   const directory = await open(directoryPath, 'r')
@@ -1141,9 +1204,9 @@ async function sweepAttachmentUploads(dataDir, ttlMs, now = Date.now()) {
   return result
 }
 
-async function streamAttachmentObject(request, response, dataDir, workspaceId, hash) {
+async function streamAttachmentObject(request, response, dataDir, workspaceId, hash, atRest) {
   const path = attachmentPath(dataDir, workspaceId, hash)
-  const bytes = await verifyAttachmentObject(path, hash)
+  const bytes = await verifyAttachmentObject(path, hash, workspaceId, atRest)
   if (bytes === undefined) throw new BackendError('ATTACHMENT_NOT_FOUND', 'attachment is unavailable', 404)
   response.writeHead(200, {
     'content-type': 'application/octet-stream',
@@ -1153,7 +1216,11 @@ async function streamAttachmentObject(request, response, dataDir, workspaceId, h
     'x-content-type-options': 'nosniff',
     'x-browser-native-protocol': String(PROTOCOL_VERSION),
   })
-  await pipeline(createReadStream(path), response)
+  if (atRest === undefined) {
+    await pipeline(createReadStream(path), response)
+  } else {
+    response.end(await atRest.readFile(path, attachmentContext(workspaceId, hash)))
+  }
 }
 
 function isSharedStatePath(pathname) {
@@ -1663,11 +1730,12 @@ function recordOf(session) {
 }
 
 class FormalSessionStore {
-  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename } = {}) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename, atRest } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) throw new Error('retentionMs must be a non-negative safe integer')
     this.root = resolve(dataDir)
     this.sessionsDir = join(this.root, 'sessions')
+    this.atRest = atRest
     this.sessions = new Map()
     this.unsupported = new Map()
     this.locks = new Map()
@@ -1678,12 +1746,22 @@ class FormalSessionStore {
     this.failFlushAfterRename = failFlushAfterRename
   }
 
+  /** Session file context bound into the at-rest envelope AAD. */
+  sessionContext(name) {
+    return `session/${name}`
+  }
+
+  async readSessionText(name) {
+    const path = join(this.sessionsDir, name)
+    return this.atRest === undefined ? await readFile(path, 'utf8') : await this.atRest.readText(path, this.sessionContext(name))
+  }
+
   async load() {
     await mkdir(this.sessionsDir, { recursive: true })
     for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       const entryPath = join(this.sessionsDir, entry.name)
-      const raw = JSON.parse(await readFile(entryPath, 'utf8'))
+      const raw = JSON.parse(await this.readSessionText(entry.name))
       const modifiedAt = await stat(entryPath).then(info => Math.floor(info.mtimeMs)).catch(() => 0)
       const id = assertSessionId(raw.id)
       if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
@@ -2098,7 +2176,12 @@ class FormalSessionStore {
     let published = false
     try {
       if (this.failFlush?.(session) === true) throw new BackendError('E2E_INJECTED_SESSION_FLUSH_FAILURE', 'E2E injected Session flush failure', 503)
-      await writeFile(temporary, `${JSON.stringify(record)}\n`, 'utf8')
+      if (this.atRest !== undefined) {
+        await this.atRest.writeFile(temporary, `${JSON.stringify(record)}\n`,
+          this.sessionContext(`${session.id}.json`))
+      } else {
+        await writeFile(temporary, `${JSON.stringify(record)}\n`, 'utf8')
+      }
       const file = await open(temporary, 'r+')
       try { await file.sync() } finally { await file.close() }
       await rename(temporary, target)
@@ -5607,6 +5690,9 @@ export async function createBrowserNativeV2Server(options) {
     throw new TypeError('workspaceDownloadTimeoutMs exceeds the Node timer limit')
   }
   await assertDataFormatReadable(options.dataDir)
+  await mkdir(options.dataDir, { recursive: true })
+  const atRest = options.atRestKeyring === undefined ? undefined : createAtRestCipher(options.atRestKeyring)
+  const atRestStatus = await assertAtRestReady({ dataDir: options.dataDir, cipher: atRest })
   const dataDirLock = await acquireDataDirLock(options.dataDir)
   let released = false
   const releaseDataDirLock = async () => {
@@ -5644,12 +5730,14 @@ export async function createBrowserNativeV2Server(options) {
     retentionMs,
     failFlush: options.testHooks?.failSessionFlush,
     failFlushAfterRename: options.testHooks?.failSessionFlushAfterRename,
+    atRest,
   })
   await store.load()
   if (retentionMs > 0) {
     await store.purgeExpired()
     await redactObservabilityJournal({
       dataDir: options.dataDir,
+      cipher: atRest,
       shouldRemove: record => recordExpired(record, retentionClock() - retentionMs),
     })
   }
@@ -5660,6 +5748,7 @@ export async function createBrowserNativeV2Server(options) {
     pendingUploadTtlMs: options.pendingUploadTtlMs,
     blobStore: options.workspaceBlobStore,
     chunkObjects: options.workspaceChunkObjects === true,
+    atRest,
     hostedAuth,
   })
   await workspaces.load()
@@ -5899,7 +5988,7 @@ export async function createBrowserNativeV2Server(options) {
   const startedAt = Date.now()
   const metrics = createMetricsRegistry()
   const usageAudit = []
-  const observabilityJournal = createObservabilityJournal({ dataDir: options.dataDir })
+  const observabilityJournal = createObservabilityJournal({ dataDir: options.dataDir, cipher: atRest })
   const observabilityRestore = await observabilityJournal.restore()
   accessAuditEntries.push(...observabilityRestore.accessDenials)
   if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) {
@@ -6008,15 +6097,18 @@ export async function createBrowserNativeV2Server(options) {
     const attachments = []
     for (const [hash, reference] of references) {
       const path = attachmentPath(options.dataDir, workspaceId, hash)
-      const bytes = await verifyAttachmentObject(path, hash)
+      const bytes = await verifyAttachmentObject(path, hash, workspaceId, atRest)
       if (bytes === undefined) {
         throw new BackendError('ATTACHMENT_MISSING', `Session references attachment ${reference.attachmentId} but the Workspace does not store it`, 409)
       }
+      const plaintext = atRest === undefined
+        ? await readFile(path)
+        : await atRest.readFile(path, attachmentContext(workspaceId, hash))
       attachments.push({
         attachmentId: reference.attachmentId,
         ...(reference.name === undefined ? {} : { name: reference.name }),
         bytes,
-        data: (await readFile(path)).toString('base64'),
+        data: plaintext.toString('base64'),
       })
     }
     return {
@@ -6040,9 +6132,10 @@ export async function createBrowserNativeV2Server(options) {
     const directoryPath = join(options.dataDir, 'attachments-v1', workspaceId, attachment.hash.slice(0, 2))
     await mkdir(directoryPath, { recursive: true, mode: 0o700 })
     const target = attachmentPath(options.dataDir, workspaceId, attachment.hash)
-    if (await verifyAttachmentObject(target, attachment.hash) !== undefined) return
+    if (await verifyAttachmentObject(target, attachment.hash, workspaceId, atRest) !== undefined) return
     const temporary = `${target}.${randomUUID()}.tmp`
-    await writeFile(temporary, attachment.data, { mode: 0o600 })
+    if (atRest === undefined) await writeFile(temporary, attachment.data, { mode: 0o600 })
+    else await atRest.writeFile(temporary, attachment.data, attachmentContext(workspaceId, attachment.hash), 0o600)
     await rename(temporary, target)
   })
 
@@ -6547,6 +6640,7 @@ export async function createBrowserNativeV2Server(options) {
             options.testHooks?.onAttachmentStage,
             options.testHooks?.onAttachmentChunk,
             operation => publishAttachment(workspaceId, operation),
+            atRest,
           )
           await options.testHooks?.beforeAttachmentReceipt?.({ workspaceId, hash, name, stored })
           if (response.destroyed) {
@@ -6569,7 +6663,7 @@ export async function createBrowserNativeV2Server(options) {
           options.testHooks?.onAttachmentStage?.('receipt-sent')
           return
         }
-        await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash)
+        await streamAttachmentObject(request, response, options.dataDir, workspaceId, hash, atRest)
         return
       }
       const attachmentUploadBegin = url.pathname.match(/^\/api\/browser-native\/workspace\/attachments\/([a-f0-9]{64})\/uploads$/)
@@ -6584,7 +6678,7 @@ export async function createBrowserNativeV2Server(options) {
           throw new BackendError('INVALID_REQUEST', 'chunked attachment uploads require an integer bytes field')
         }
         sendJson(response, 200, { name, ...await beginAttachmentUpload(
-          options.dataDir, workspaceId, hash, name, body.bytes, attachmentMaxBytes,
+          options.dataDir, workspaceId, hash, name, body.bytes, attachmentMaxBytes, atRest,
         ) })
         return
       }
@@ -6611,7 +6705,7 @@ export async function createBrowserNativeV2Server(options) {
           const offset = Number(offsetText)
           if (!Number.isSafeInteger(offset) || offset < 0) throw new BackendError('INVALID_REQUEST', 'chunk offset is invalid')
           const appended = await withKeyedLock(attachmentUploadLocks, uploadId, async () =>
-            await appendAttachmentUploadChunk(options.dataDir, workspaceId, uploadId, hash, offset, body, attachmentMaxBytes))
+            await appendAttachmentUploadChunk(options.dataDir, workspaceId, uploadId, hash, offset, body, attachmentMaxBytes, atRest))
           await options.testHooks?.onAttachmentUploadChunk?.({
             workspaceId, hash, uploadId, offset, received: appended.received,
           })
@@ -6626,7 +6720,7 @@ export async function createBrowserNativeV2Server(options) {
             return {
               meta,
               stored: await commitAttachmentUpload(options.dataDir, workspaceId, uploadId, hash,
-                operation => publishAttachment(workspaceId, operation)),
+                operation => publishAttachment(workspaceId, operation), atRest),
             }
           })
           sendJson(response, 200, {
@@ -7553,6 +7647,7 @@ export async function createBrowserNativeV2Server(options) {
     get apiOrigin() { return servedApiOrigin },
     authToken,
     authTokenPath,
+    atRest: atRestStatus,
     store,
     workspaces,
     crossStoreLedger,

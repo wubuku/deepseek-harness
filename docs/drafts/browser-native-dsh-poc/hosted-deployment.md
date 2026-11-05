@@ -60,6 +60,10 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 | `DSH_POC_MAX_MOUNTED_SESSIONS` | `16` | 已挂载 Session 上限 |
 | `DSH_POC_WORKSPACE_CHUNK_OBJECTS` | `0` | 数据目录由 chunk-object 布局创建时必须设为 `1` |
 | `DSH_POC_WORKSPACE_VERIFIED_DOWNLOADS` | `0` | 下载分块时重新校验；要求 chunk objects 为 `1` |
+| `DSH_POC_AT_REST_ENCRYPTION` | `auto` | `required` 时缺少密钥即拒绝启动；`auto` 有密钥就加密，无密钥在空目录上写明文 |
+| `DSH_POC_AT_REST_KEY` | 无 | 内联 base64 AES-256 密钥（32 字节）；与 `..._KEY_FILE` 互斥 |
+| `DSH_POC_AT_REST_KEY_ID` | 由密钥派生 | 可选 16 位小写十六进制 id，写入每个文件头 |
+| `DSH_POC_AT_REST_KEY_FILE` | 无 | 密钥文件；首个非注释行 `keyId=base64` 或裸 base64，文件权限必须为 `0600` |
 | `DSH_POC_INPUT_USD_PER_1M` / `DSH_POC_OUTPUT_USD_PER_1M` | 无 | 成本报表的每百万 token 单价；两项同时设置，见[租户成本报表](tenant-cost-report.md) |
 | `DSH_POC_ALERT_FAILURE_RATIO` | 无 | 最近请求的失败占比阈值（0–1）；设置后启用失败率告警，见[可观测性](observability.md#阈值告警) |
 | `DSH_POC_ALERT_FAILURE_MIN_SAMPLES` | `20` | 失败率判定的最少样本数 |
@@ -76,6 +80,18 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 `real` 模式的 provider 凭据沿用 backend 既有环境变量（OpenAI 兼容为 `OPENAI_NEXT_*`，Anthropic 兼容为 `ANTHROPIC_*`），不写入数据目录，也不进入响应。`scripted` 模式的健康检查与冒烟不需要任何外部凭据。
 
 告警阈值在启动时校验：`DSH_POC_ALERT_BUDGET_USD` 缺少两个单价变量、webhook 不是 http(s)、失败率窗口或样本数非法，都会拒绝启动。事件默认写 stderr，配置 `DSH_POC_ALERT_WEBHOOK_URL` 时同时 POST；`GET /api/browser-native/observability/alerts` 返回阈值、失败窗口、活动告警与最近 32 次状态变化。
+
+### 静态数据加密
+
+设置 `DSH_POC_AT_REST_KEY_FILE`（生产推荐）或 `DSH_POC_AT_REST_KEY` 后，Session 日志、Workspace blob（含 chunk objects）、附件（含分块暂存）与 observability journal 以 AES-256-GCM 落盘。每个文件是自描述信封：magic、版本、16 位 key id、随机 96 位 IV、密文与 16 字节认证标签；文件头前缀与逐面 context 作为 AAD，把密文移到别的文件或改动任一字节都会在解密时失败。
+
+首次带密钥启动会在数据目录写入 `.browser-native-at-rest-key-check`（`0600`），记录 key id 与一段认证样本。此后：
+
+- 不带密钥启动会以 `AT_REST_KEY_REQUIRED` 失败；
+- 换成另一把密钥会以 `AT_REST_KEY_INVALID` 失败；
+- 密文被截断或篡改，读取时以 `AT_REST_CIPHERTEXT_CORRUPT` 失败，启动加载 Session 时直接拒绝启动。
+
+升级留在原地的明文目录可以直接加密钥：旧文件按明文读取，新写入即加密；密钥文件权限不是 `0600` 或同时配置内联密钥与密钥文件都拒绝启动。回滚到未加密构建前必须先恢复未加密备份，否则旧构建无法读取密文。备份 bundle 保存的是密文（manifest 摘要也针对密文），恢复时必须使用同一密钥。Workspace 上传暂存、manifest/identity 元数据与备份包本身不在此范围内。
 
 ## 部署形态
 
@@ -146,6 +162,7 @@ nginx 的 upstream 写成 `backend:4185`；容器部署时给 backend 容器加�
 5. 目录存在 `workspace-v2/chunk-objects` 时，本次构建启动必须带 `DSH_POC_WORKSPACE_CHUNK_OBJECTS=1`，否则 `WorkspaceStore.load()` 会以 `CHUNK_STORE_REQUIRED` 失败。`check-data` 会打印 `required flags`。
 6. 需要数据集版本升级时（当前只有 share 文件 v1→v2），停服后运行 `hosted/upgrade-data.mjs --data-dir <data> --backup-root <backups>`：它先写带 `dataset.version` 的版本化备份，再迁移并写 `data-format.json`，失败自动用备份恢复。回滚运行 `hosted/rollback-data.mjs --data-dir <data> --bundle <备份目录>`；完整步骤与失败边界见[数据格式升级与回滚](upgrade-rollback.md)。手工回退仍可恢复备份并用旧构建启动；不要在同一目录同时运行两个 backend。
 7. 升级前后都不得删除 `sessions/`、`workspace-v2/`、`cross-store-operation-ledger.json` 等历史数据。
+8. 启用静态加密的数据目录在升级、回滚和备份恢复时都必须能读到同一把密钥，且 `.browser-native-at-rest-key-check` 要随目录一起保留；缺少密钥时 `check-data` 不判定兼容错误，但 backend 会在启动时以 `AT_REST_KEY_REQUIRED` 失败。
 
 ## 冒烟
 
@@ -192,6 +209,7 @@ node docs/drafts/browser-native-dsh-poc/hosted/import-data.mjs --bundle /srv/bac
 - 导出拒绝持有 lock 的目录：运行中的 backend 会继续写入，边写边拷贝会混合不同修订。
 - 导入只接受本构建可读的 Session format v4、Workspace metadata v1 与 identity metadata v1；版本不兼容在写入前失败。
 - 恢复后 `workspace-v2/chunk-objects` 存在时，启动必须带 `DSH_POC_WORKSPACE_CHUNK_OBJECTS=1`，与升级路径一致。
+- 加密目录导出的 bundle 保留密文与 `.browser-native-at-rest-key-check`；导入后必须用同一密钥启动，恢复到另一把密钥会以 `AT_REST_KEY_INVALID` 拒绝启动。
 
 `tests/backup-restore.e2e.mjs` 通过 HTTP 面填充源目录：一次 Workspace 文件写入、一次内容定义分块上传（chunk objects、file descriptor 与 content layout）、一个附件、一个两事件 Session，以及一条拒绝审计与一条 provider usage。停止 backend 后导出、导入空目录并重启，断言：
 
@@ -246,6 +264,6 @@ editor 用 `open(access: "write")` 取得 `editorToken`/`editorEpoch`（`shared:
 
 ## 已验证与未验证
 
-已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；真实 Chromium 跨站攻击的 0 副作用拒绝（跨站表单、`no-cors` 简单请求、CORS 读取、EventSource）；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session viewer/editor 共享的授权持久化、viewer 读取、写入与租约拒绝、editor 单租约仲裁、并发 seq 冲突、协作审计与重启后保持。
+已验证：单命令启动、缺产物时的构建入口、本地 token 门禁、handshake cookie、durable Workspace 首次同步、干净数据目录下的升级核对、锁清理、告警阈值配置与状态回读；Session 日志、Workspace blob/chunk objects、附件（含分块暂存）与 observability journal 的 AES-256-GCM 落盘、磁盘无明文、同钥重启/备份恢复/导出导入一致、缺钥/错钥/损坏密文拒绝启动；真实 Chromium 跨站攻击的 0 副作用拒绝（跨站表单、`no-cors` 简单请求、CORS 读取、EventSource）；容器镜像的构建与运行（含同卷重启后继续服务）、nginx TLS 反代的 Host/Origin 准入与 Secure cookie、systemd 单元语法；停止状态下的全量导出/导入与恢复后的 Session 续跑、Workspace chunk objects、附件、journal 哈希链与 usage 报告一致性；停止状态下的 Session 与 principal 删除、残留扫描、journal 重建后验证、删除后导出不可恢复与保留 principal 不受影响；Session viewer/editor 共享的授权持久化、viewer 读取、写入与租约拒绝、editor 单租约仲裁、并发 seq 冲突、协作审计与重启后保持。
 
-未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理；共享的撤销/有效期与 UI 呈现。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。
+未验证：systemd 单元运行时（本机无 systemd）、进程崩溃后的自动重启策略、证书轮换与真实 DNS/HSTS、跨主机或多实例部署；备份不含崩溃瞬间的一致性（没有跨存储事务）、增量/差异备份、传输加密与异地保存；密钥轮换自动化、KMS/HSM 托管与密钥销毁流程；Workspace 上传暂存、manifest/identity 元数据与备份包本身的加密；删除后旧备份的销毁、跨主机缓存或 CDN 副本清理；共享的撤销/有效期与 UI 呈现。多实例边界与前置条件见[服务端交付边界](server-delivery-boundaries.md)；纯浏览器零服务端依赖不成立，见[产品就绪度](product-readiness-go-no-go.md)。

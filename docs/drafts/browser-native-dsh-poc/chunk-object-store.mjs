@@ -2,8 +2,9 @@
 import { constants } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { WorkspaceError } from './workspace-v2.mjs'
+import { isAtRestEnvelope } from './at-rest-crypto.mjs'
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 const MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -82,10 +83,12 @@ export class ChunkObjectWorkspaceBlobStore {
   /**
    * @param {string} root - Private directory containing chunks/ and files/.
    * @param {object} fallback - Existing FileWorkspaceBlobStore-compatible store.
+   * @param {object} [atRest] - Optional cipher; chunks and descriptors are then authenticated envelopes.
    */
-  constructor(root, fallback) {
+  constructor(root, fallback, atRest) {
     this.root = root
     this.fallback = fallback
+    this.atRest = atRest
     this.chunksDir = join(root, 'chunks')
     this.filesDir = join(root, 'files')
     this.mutationQueue = Promise.resolve()
@@ -469,15 +472,21 @@ export class ChunkObjectWorkspaceBlobStore {
           result.scannedChunks += 1
           const path = this.#chunkPath(entry.name)
           const info = await lstat(path)
-          if (!info.isFile() || info.size > MAX_CHUNK_BYTES) {
+          if (!info.isFile() || info.size > MAX_CHUNK_BYTES + (this.atRest?.overheadBytes ?? 0)) {
+            result.preservedUnknownObjects += 1
+            continue
+          }
+          const plaintextSize = this.atRest === undefined
+            ? info.size : (await this.atRest.statPlaintextSize(path))?.size
+          if (plaintextSize === undefined) {
             result.preservedUnknownObjects += 1
             continue
           }
           if (roots.has(entry.name)) {
             result.retainedChunks += 1
-            result.retainedBytes += info.size
+            result.retainedBytes += plaintextSize
           } else {
-            try { await this.#readChunk(entry.name, info.size) } catch (error) {
+            try { await this.#readChunk(entry.name, plaintextSize) } catch (error) {
               if (!(error instanceof WorkspaceError)) throw error
               result.preservedUnknownObjects += 1
               continue
@@ -533,17 +542,22 @@ export class ChunkObjectWorkspaceBlobStore {
     try { await directory.sync() } finally { await directory.close() }
   }
 
+  #context(path) {
+    return `workspace-chunk-object:${relative(this.root, path)}`
+  }
+
   async #publish(path, bytes, metric) {
     const parent = dirname(path)
     await mkdir(parent, { recursive: true, mode: 0o700 })
     await this.#syncDirectory(dirname(parent))
     const temporary = join(parent, `${randomUUID()}.tmp`)
+    const payload = this.atRest === undefined ? bytes : this.atRest.encryptBuffer(bytes, this.#context(path))
     const handle = await open(temporary, 'wx', 0o600)
     try {
       try {
         let offset = 0
-        while (offset < bytes.byteLength) {
-          const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset, offset)
+        while (offset < payload.byteLength) {
+          const { bytesWritten } = await handle.write(payload, offset, payload.byteLength - offset, offset)
           if (bytesWritten === 0) throw new Error('object write made no progress')
           this.metrics[metric] += bytesWritten
           offset += bytesWritten
@@ -565,19 +579,20 @@ export class ChunkObjectWorkspaceBlobStore {
       if (error?.code === 'ENOENT') return undefined
       throw error
     }
-    if (!info.isFile() || info.size > maximum) throw corrupt('stored object is not a bounded regular file')
+    const atRest = this.atRest
+    if (!info.isFile() || info.size > maximum + (atRest?.overheadBytes ?? 0)) throw corrupt('stored object is not a bounded regular file')
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
     let ownedBytes = 0
     try {
-      const bytes = Buffer.alloc(info.size)
+      const stored = Buffer.alloc(info.size)
       if (metric === 'chunkReadBytes') {
-        ownedBytes = bytes.byteLength
+        ownedBytes = stored.byteLength
         this.#readBufferBytes += ownedBytes
         this.metrics.peakReadBufferBytes = Math.max(this.metrics.peakReadBufferBytes, this.#readBufferBytes)
       }
       let offset = 0
-      while (offset < bytes.byteLength) {
-        const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset)
+      while (offset < stored.byteLength) {
+        const { bytesRead } = await handle.read(stored, offset, stored.byteLength - offset, offset)
         this.metrics[metric] += bytesRead
         if (bytesRead === 0) break
         offset += bytesRead
@@ -585,6 +600,10 @@ export class ChunkObjectWorkspaceBlobStore {
       if (offset !== info.size || (await handle.stat()).size !== info.size) {
         throw corrupt('stored object size changed while reading')
       }
+      const bytes = atRest !== undefined && isAtRestEnvelope(stored)
+        ? atRest.decryptBuffer(stored, this.#context(path))
+        : stored
+      if (bytes.byteLength > maximum) throw corrupt('stored object exceeds its plaintext size bound')
       return consume(bytes)
     } finally {
       try { await handle.close() } finally { this.#readBufferBytes -= ownedBytes }
