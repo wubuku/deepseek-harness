@@ -368,3 +368,48 @@ export function browserNativeFirstUseCopy(language: string): {
     composerMissing: 'No composer was found; type a task at the bottom of the page.',
   }
 }
+
+/** Format the durable turn's pending-approval surface for the page language.
+ *
+ * The page renders this surface from the durable host's status, not from the
+ * Worker host's remote approval request, so a server-owned turn that waits on a
+ * write stays visible after the page has no local execution to pause.
+ * @param language - Page language tag.
+ * @returns Localized approval labels and interpolated status text.
+ */
+export function browserNativeDurableApprovalCopy(language: string): {
+  readonly title: (name: string) => string
+  readonly waiting: string
+  readonly target: (target: string) => string
+  readonly approve: string
+  readonly reject: string
+  readonly deciding: string
+  readonly running: string
+  readonly completed: string
+  readonly failed: (status: number | undefined) => string
+} {
+  if (language.startsWith('zh')) {
+    return {
+      title: name => `需要审批：${name}`,
+      waiting: '服务端 turn 正在等待你的决定。',
+      target: target => `目标：${target}`,
+      approve: '批准',
+      reject: '拒绝',
+      deciding: '正在提交决定…',
+      running: '服务端 turn 正在运行',
+      completed: '服务端 turn 已完成',
+      failed: status => status === undefined ? '审批决定提交失败' : `审批决定提交失败（HTTP ${String(status)}）`,
+    }
+  }
+  return {
+    title: name => `Approval needed: ${name}`,
+    waiting: 'A server-side turn is waiting for your decision.',
+    target: target => `Target: ${target}`,
+    approve: 'Approve',
+    reject: 'Reject',
+    deciding: 'Submitting decision…',
+    running: 'Server turn running',
+    completed: 'Server turn completed',
+    failed: status => status === undefined ? 'The approval decision could not be submitted' : `The approval decision could not be submitted (HTTP ${String(status)})`,
+  }
+}

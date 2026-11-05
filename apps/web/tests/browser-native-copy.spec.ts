@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  browserNativeDurableApprovalCopy,
   browserNativeFirstUseCopy,
   browserNativeOfflineStatusCopy,
   browserNativeQueueStatusCopy,
@@ -153,6 +154,19 @@ describe('browser-native copy', () => {
     expect(en.steps).toHaveLength(3)
     expect(zh.steps).toHaveLength(3)
     en.steps.forEach((step, index) => { expectLocalized(step, zh.steps[index] ?? '') })
+  })
+
+  it('localizes the durable approval surface with the tool and target', () => {
+    const en = browserNativeDurableApprovalCopy('en-US')
+    const zh = browserNativeDurableApprovalCopy('zh-CN')
+    for (const key of ['waiting', 'approve', 'reject', 'deciding', 'running', 'completed'] as const) {
+      expectLocalized(en[key], zh[key])
+    }
+    expectLocalized(en.title('write'), zh.title('write'), ['write'])
+    expectLocalized(en.target('/dsh/home/workspace/a.txt'), zh.target('/dsh/home/workspace/a.txt'),
+      ['/dsh/home/workspace/a.txt'])
+    expectLocalized(en.failed(409), zh.failed(409), ['409'])
+    expectLocalized(en.failed(undefined), zh.failed(undefined))
   })
 
   it('falls back to English for languages without a dictionary', () => {

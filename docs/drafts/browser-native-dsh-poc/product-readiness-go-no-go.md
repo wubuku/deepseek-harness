@@ -60,11 +60,11 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 | --- | --- | --- |
 | 真实 Host/Agent Loop 在 Worker 运行 | GO（降级路径） | 现有 UI + Cordis 插件 + 真实 loop；真实 provider 双协议文本、工具、usage、取消均通过；同一 10 任务基准 10/10 |
 | durable 服务端 host 作主执行路径 | GO（单节点） | 同一 10 任务基准 10/10；29 请求、23,318 tokens、12.8 秒；`read`/`write`/`edit`/`grep`/`glob`/`subagent` 与 10 次审批在服务端完成；文本 turn 关页续跑已验证 |
-| durable 功能对齐（图片/共享/审批/16 路/检索/嵌套/归档） | GO（单节点） | `durable-feature-alignment` 6/6：图片附件写入 `ImageBlock` 与模型 data URL；viewer 403、editor 续跑、owner 再续；16 并发 turn `activeTurns=16` 且列表 16 条；122 Session 检索含 durable Session；父→子→孙嵌套且孙代无 `subagent`；归档后新 turn 保留历史；移动端原型审批面板批准后落盘 |
+| durable 功能对齐（图片/共享/审批/16 路/检索/嵌套/归档） | GO（单节点） | `durable-feature-alignment` 6/6：图片附件写入 `ImageBlock` 与模型 data URL；viewer 403、editor 续跑、owner 再续；16 并发 turn `activeTurns=16` 且列表 16 条；122 Session 检索含 durable Session；父→子→孙嵌套且孙代无 `subagent`；归档后新 turn 保留历史；正式 Web preview UI 的 durable 审批按键批准落盘、按键拒绝无写入；移动端原型审批面板批准后落盘 |
 | Session 持久化与恢复 | GO（强证据，依赖服务端） | AES-256-GCM 信封加密；缺钥/损坏密文显式拒绝；在线轮换期间读操作可用、写操作排队；60 次随机 SIGKILL 后日志可读、seq 单调无重复、结算一次、无孤儿临时文件、审计链可验证；ENOSPC/EROFS/IO 超时按面归一为 `STORAGE_*` 并保留可重试状态 |
 | Durable Workspace（OPFS） | GO（有边界） | 配额失败无半份数据、未确认保存撤下工具、刷新 hydrate 后可重试；无三方合并、无块级 delta |
 | 文件工具 | GO（同一 6 工具 roster） | 两侧均跑通 `read`/`write`/`edit`/`glob`/`grep`/`subagent`；基准 roster 已移除 `todo_write`、禁用 `working_directory`；无 `bash`/`pwsh`/`web_*`/`browser_*` |
-| 审批与策略 | GO（仅验证 roster） | deny 经 `ctx.tools.guard` 不可绕过、prepended allow 无效、真实模型被拒后继续；策略仅按工具名；durable 审批已接入移动端原型，产品主 UI 仍无 durable 入口 |
+| 审批与策略 | GO（仅验证 roster） | deny 经 `ctx.tools.guard` 不可绕过、prepended allow 无效、真实模型被拒后继续；策略仅按工具名；durable 待决审批已在正式 Web preview UI 显示工具名与目标并支持键盘批准/拒绝，决策后 turn 继续；主 composer 仍无 durable 启动入口 |
 | Token 计量与预算 | GO（单一来源，Session 执行） | 限额只由部署配置一处注入，`/config` 与 Worker `budget-state` 同步为 12,000/24,000，改一处两侧同变为 15,000/30,000；未传限额在 probe 阶段拒绝启动。租户汇总只读，硬阻断仍限 Session |
 | 错误码与可操作建议 | GO | 失败码映射到 `retry`/`reload`/`request-access`/`contact-admin`/`diagnostics` 五类动作；预算超限不提供盲重试；未知码保留一次重试并附诊断包；`browser-native-failure-guidance.spec.ts` 7/7 |
 | 多 Session 与准入 | GO（有上限） | 8 turn / 16 mount；16 路 turn 中位数 875–1,272 ms、p95 906–1,278 ms；第 17 个挂载 429 |

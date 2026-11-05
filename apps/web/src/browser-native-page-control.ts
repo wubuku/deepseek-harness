@@ -1,4 +1,5 @@
 import {
+  browserNativeDurableApprovalCopy,
   browserNativeFirstUseCopy,
   browserNativeOfflineStatusCopy,
   browserNativeQueueStatusCopy,
@@ -70,6 +71,11 @@ const browserNativeSurface = {
 declare global {
   interface Window {
     __DSH_BROWSER_NATIVE_WORKSPACE_STATUS__?: BrowserNativeWorkspaceStatus
+    __DSH_BROWSER_NATIVE_DURABLE_TURN__?: (request: {
+      readonly prompt: string
+      readonly sessionId?: string
+    }) => Promise<{ readonly sessionId: string; readonly turnId: string }>
+    __DSH_LAST_DURABLE_TURN__?: { readonly sessionId: string; readonly turnId: string }
   }
 }
 
@@ -1819,6 +1825,251 @@ export async function connectBrowserNativePageControl(
     })
   }
 
+  type DurableApprovalState = 'running' | 'pending' | 'completed' | 'failed'
+  let durablePanel: {
+    readonly root: HTMLElement
+    readonly title: HTMLElement
+    readonly detail: HTMLElement
+    readonly status: HTMLElement
+    readonly approve: HTMLButtonElement
+    readonly reject: HTMLButtonElement
+    state: DurableApprovalState
+    approvalId: string | undefined
+    deciding: boolean
+  } | undefined
+  let durableWatch: { readonly sessionId: string; readonly turnId: string } | undefined
+  let durableTimer: number | undefined
+  const styleDurableButton = (button: HTMLButtonElement): void => {
+    Object.assign(button.style, {
+      padding: '6px 12px',
+      border: `1px solid ${browserNativeSurface.border}`,
+      borderRadius: '6px',
+      background: browserNativeSurface.actionFill,
+      color: browserNativeSurface.actionLabel,
+      cursor: 'pointer',
+      font: '600 13px/1.3 system-ui, sans-serif',
+      pointerEvents: 'auto',
+    })
+    const ring = (): void => { button.style.boxShadow = `0 0 0 2px ${browserNativeSurface.info}` }
+    const clear = (): void => { button.style.boxShadow = 'none' }
+    button.addEventListener('focus', ring)
+    button.addEventListener('blur', clear)
+  }
+  const ensureDurableApprovalPanel = (): NonNullable<typeof durablePanel> => {
+    if (durablePanel !== undefined) return durablePanel
+    const copy = browserNativeDurableApprovalCopy(document.documentElement.lang)
+    const root = document.createElement('div')
+    root.setAttribute('data-browser-native-durable-approval', '')
+    root.setAttribute('role', 'group')
+    root.setAttribute('aria-labelledby', 'dsh-durable-approval-title')
+    Object.assign(root.style, {
+      position: 'fixed',
+      left: '50%',
+      bottom: '112px',
+      transform: 'translateX(-50%)',
+      zIndex: '1200',
+      display: 'block',
+      maxWidth: 'min(460px, calc(100vw - 32px))',
+      padding: '14px 16px',
+      border: `1px solid ${browserNativeSurface.border}`,
+      borderRadius: '10px',
+      background: browserNativeSurface.raised,
+      color: browserNativeSurface.label,
+      boxShadow: '0 12px 32px rgb(0 0 0 / 24%)',
+      font: '500 13px/1.45 system-ui, sans-serif',
+    })
+    // The inline display outranks the UA `[hidden]` rule, so both the semantic
+    // flag and the layout display toggle the panel's visibility.
+    root.hidden = true
+    root.style.display = 'none'
+    const title = document.createElement('div')
+    title.id = 'dsh-durable-approval-title'
+    title.style.fontWeight = '600'
+    title.style.marginBottom = '4px'
+    const detail = document.createElement('div')
+    detail.setAttribute('data-browser-native-durable-approval-detail', '')
+    detail.style.color = browserNativeSurface.secondary
+    detail.style.wordBreak = 'break-all'
+    detail.style.marginBottom = '6px'
+    const status = document.createElement('div')
+    status.setAttribute('data-browser-native-durable-approval-status', '')
+    status.setAttribute('role', 'status')
+    status.setAttribute('aria-live', 'assertive')
+    status.style.marginBottom = '10px'
+    const actions = document.createElement('div')
+    Object.assign(actions.style, { display: 'flex', gap: '8px' })
+    const approve = document.createElement('button')
+    approve.type = 'button'
+    approve.setAttribute('data-browser-native-durable-approve', '')
+    approve.textContent = copy.approve
+    styleDurableButton(approve)
+    const reject = document.createElement('button')
+    reject.type = 'button'
+    reject.setAttribute('data-browser-native-durable-reject', '')
+    reject.textContent = copy.reject
+    styleDurableButton(reject)
+    actions.append(approve, reject)
+    root.append(title, detail, status, actions)
+    root.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.isComposing || durablePanel === undefined || durableWatch === undefined) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        void decideDurableApproval('reject')
+        return
+      }
+      // A focused button handles Enter itself; only a non-button target routes
+      // the shortcut so one key press cannot submit the decision twice.
+      if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+        event.preventDefault()
+        void decideDurableApproval('approve')
+      }
+    })
+    approve.addEventListener('click', () => { void decideDurableApproval('approve') })
+    reject.addEventListener('click', () => { void decideDurableApproval('reject') })
+    document.body.append(root)
+    durablePanel = { root, title, detail, status, approve, reject, state: 'running', approvalId: undefined, deciding: false }
+    return durablePanel
+  }
+  const renderDurableApproval = (
+    state: DurableApprovalState,
+    text: { readonly title: string; readonly detail?: string; readonly status?: string },
+    approvalId?: string,
+  ): void => {
+    const panel = ensureDurableApprovalPanel()
+    panel.state = state
+    panel.approvalId = approvalId
+    panel.root.hidden = false
+    panel.root.style.display = 'block'
+    panel.root.dataset.browserNativeDurableApprovalState = state
+    panel.root.setAttribute('aria-busy', state === 'pending' && panel.deciding ? 'true' : 'false')
+    panel.title.textContent = text.title
+    panel.detail.textContent = text.detail ?? ''
+    panel.detail.hidden = text.detail === undefined
+    if (panel.deciding && state === 'pending') return
+    panel.status.textContent = text.status ?? ''
+    const actionable = state === 'pending'
+    panel.approve.hidden = !actionable
+    panel.reject.hidden = !actionable
+    panel.approve.disabled = !actionable || panel.deciding
+    panel.reject.disabled = !actionable || panel.deciding
+  }
+  const stopDurableWatch = (): void => {
+    if (durableTimer === undefined) return
+    window.clearInterval(durableTimer)
+    durableTimer = undefined
+  }
+  const decideDurableApproval = async (decision: 'approve' | 'reject'): Promise<void> => {
+    const panel = durablePanel
+    const watch = durableWatch
+    if (panel === undefined || watch === undefined || panel.deciding) return
+    if (panel.state !== 'pending' || panel.approvalId === undefined) return
+    panel.deciding = true
+    panel.approve.disabled = true
+    panel.reject.disabled = true
+    const copy = browserNativeDurableApprovalCopy(document.documentElement.lang)
+    panel.status.textContent = copy.deciding
+    const response = await fetch(workspaceApiUrl('/api/browser-native/session/durable/approve'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', 'x-browser-native-protocol': '1' },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        requestId: globalThis.crypto.randomUUID(),
+        turnId: watch.turnId,
+        approvalId: panel.approvalId,
+        decision,
+      }),
+    }).catch(() => undefined)
+    if (response === undefined || !response.ok) {
+      panel.deciding = false
+      panel.approve.disabled = false
+      panel.reject.disabled = false
+      panel.status.textContent = copy.failed(response?.status)
+      return
+    }
+    void pollDurableApproval()
+  }
+  const pollDurableApproval = async (): Promise<void> => {
+    const panel = durablePanel
+    const watch = durableWatch
+    if (panel === undefined || watch === undefined) return
+    const response = await fetch(
+      workspaceApiUrl(`/api/browser-native/session/durable?turnId=${encodeURIComponent(watch.turnId)}`),
+      { credentials: 'include', cache: 'no-store' },
+    ).catch(() => undefined)
+    if (response === undefined || !response.ok) return
+    const payload: unknown = await response.json().catch(() => undefined)
+    if (!isRecord(payload)) return
+    const copy = browserNativeDurableApprovalCopy(document.documentElement.lang)
+    const pending = isRecord(payload.pendingApproval) ? payload.pendingApproval : undefined
+    if (pending !== undefined && typeof pending.approvalId === 'string' && typeof pending.name === 'string') {
+      if (panel.deciding) return
+      renderDurableApproval('pending', {
+        title: copy.title(pending.name),
+        ...(typeof pending.target === 'string' ? { detail: copy.target(pending.target) } : {}),
+        status: copy.waiting,
+      }, pending.approvalId)
+      panel.root.dataset.browserNativeDurableApprovalTool = pending.name
+      return
+    }
+    if (payload.status === 'running') {
+      if (!panel.deciding) renderDurableApproval('running', { title: copy.running, status: copy.running })
+      return
+    }
+    stopDurableWatch()
+    const failed = payload.status === 'failed'
+    const error = isRecord(payload.error) && typeof payload.error.code === 'string'
+      ? payload.error.code : undefined
+    renderDurableApproval(failed ? 'failed' : 'completed', {
+      title: failed ? copy.failed(undefined) : copy.completed,
+      ...(failed && error !== undefined ? { detail: error } : {}),
+      status: failed ? copy.failed(undefined) : copy.completed,
+    })
+  }
+  const startDurableTurn = async (request: {
+    readonly prompt: string
+    readonly sessionId?: string
+  }): Promise<{ readonly sessionId: string; readonly turnId: string }> => {
+    if (!isRecord(request) || typeof request.prompt !== 'string' || request.prompt.length === 0) {
+      throw new TypeError('durable turn requires a non-empty prompt')
+    }
+    const sessionId = typeof request.sessionId === 'string' && request.sessionId.length > 0
+      ? request.sessionId : `durable-ui-${globalThis.crypto.randomUUID()}`
+    const turnId = `durable-ui-turn-${globalThis.crypto.randomUUID()}`
+    stopDurableWatch()
+    durableWatch = { sessionId, turnId }
+    window.__DSH_LAST_DURABLE_TURN__ = { sessionId, turnId }
+    const panel = ensureDurableApprovalPanel()
+    panel.deciding = false
+    panel.approvalId = undefined
+    renderDurableApproval('running', {
+      title: browserNativeDurableApprovalCopy(document.documentElement.lang).running,
+    })
+    const response = await fetch(workspaceApiUrl('/api/browser-native/session/durable'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', 'x-browser-native-protocol': '1' },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        requestId: globalThis.crypto.randomUUID(),
+        sessionId,
+        turnId,
+        prompt: request.prompt,
+      }),
+    })
+    if (!response.ok) {
+      renderDurableApproval('failed', {
+        title: browserNativeDurableApprovalCopy(document.documentElement.lang).failed(response.status),
+      })
+      throw new Error(`durable turn start failed with HTTP ${String(response.status)}`)
+    }
+    durableTimer = window.setInterval(() => { void pollDurableApproval() }, 300)
+    void pollDurableApproval()
+    return { sessionId, turnId }
+  }
+  if (options.durable === true) window.__DSH_BROWSER_NATIVE_DURABLE_TURN__ = startDurableTurn
+
   const handlePageHide = (event: PageTransitionEvent): void => {
     if (event.persisted) return
     pageLeaving = true
@@ -1876,6 +2127,9 @@ export async function connectBrowserNativePageControl(
     clearRetryTimer()
     stopTurnRetryWatch()
     stopBudgetWatch()
+    stopDurableWatch()
+    if (options.durable === true) delete window.__DSH_BROWSER_NATIVE_DURABLE_TURN__
+    durablePanel?.root.remove()
     pagehideWaiters.clear()
     channel.port1.close()
     workspaceStatus?.remove()

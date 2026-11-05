@@ -6,7 +6,7 @@ description: "记录 Browser-Native DSH 最小服务端 durable turn host 的关
 
 ## 当前状态
 
-状态：durable host 已对齐 Worker 路径的 6 工具、审批、图片附件、共享 Session 写权、嵌套子代理、归档重开与合法 Session 事件封套；产品主聊天 UI 仍由 Worker 执行 turn，durable 审批 UI 只在移动端原型落地。
+状态：durable host 已对齐 Worker 路径的 6 工具、审批、图片附件、共享 Session 写权、嵌套子代理、归档重开与合法 Session 事件封套；正式 Web preview UI 已渲染 durable 待决审批并支持键盘批准/拒绝，移动端原型与主 composer 之外的 durable 启动入口仍为页面级 port。
 
 结论：跨页面关闭的 turn 可以由服务端持有并完成。服务端用 `turnId` 作为幂等键，重复提交不会再次请求模型；关页后 turn 继续，重开标签读取同一 Session 事件；turn 结算后释放 Session 所有权，重开标签可以接管写权。durable 写入的 Session 事件现在满足 Session 封套（`time`、`surfaceOp`、message 字段、`isSeeded`），可被检索索引与归档读取器直接消费。
 
@@ -14,13 +14,14 @@ description: "记录 Browser-Native DSH 最小服务端 durable turn host 的关
 
 | 已闭环 | 未闭环 |
 |---|---|
-| 服务端创建或接管空闲 Session，写入 `turn/start`、`user/message`、`step/start` 并 flush | 产品主聊天 UI 仍把 turn 交给 Worker；durable 只在移动端原型接入 |
+| 服务端创建或接管空闲 Session，写入 `turn/start`、`user/message`、`step/start` 并 flush | 主 composer 仍把 turn 交给 Worker；durable 启动入口仍是页面级 port |
 | 服务端经同源 `/llm` 完成文本 turn，追加 `assistant/message`、`step/end`、`turn/end` 并 flush | 待决审批跨 backend 重启恢复；工具结果的跨 store 事务 |
 | `read`/`write`/`edit`/`grep`/`glob`/`subagent` 六工具与审批策略在服务端执行 | 多 backend、HA、持久运行队列与租户配额 |
 | `turnId` 幂等：运行中、完成后重复提交都返回既有状态，不产生第二次模型请求 | 运行记录只在内存；进程重启后的在途 turn 仍以 `SESSION_TURN_ACTIVE` 拒绝 |
 | 关页后服务端继续，重开标签读取相同事件并观察完成 | 重开标签通过 test HTTP 读取，产品 UI 不渲染服务端 turn |
 | turn 完成后释放所有权，重开标签可 `session/open {access:'write'}` 接管 | 跨节点关页接管 |
 | 共享 Session：viewer 写 turn 返回 403 `SESSION_READ_ONLY`，editor 以 editor lease 续跑 | 共享 Session 的跨节点租约与冲突提示 UI |
+| 正式 Web preview UI 渲染 durable `pendingApproval`，显示工具名与目标，键盘 Enter 批准、Escape 拒绝，决策后 turn 继续 | 产品主 composer 没有 durable 启动入口；面板由页面级 durable port 驱动 |
 | 图片附件：durable start 接收 `attachments`，校验哈希/尺寸后写入 Workspace 附件目录，事件保存 ImageBlock，模型请求收到 data URL | 产品 composer 的 durable 图片上传路径（移动端原型未提供上传入口） |
 | 子代理可再委派一层（`MAX_DURABLE_SUBAGENT_DEPTH=2`），孙代不再获得 `subagent` | 超过两层的递归预算与取消传播 |
 | 归档 Session 可在下一 durable turn 打开，历史事件保留且归档索引保留 | 归档自动调度与保留期 |
@@ -50,6 +51,7 @@ backend 新增：
 | 真实模型 smoke | `LongCat-2.5` 完成 `turn/start → assistant/message → turn/end`，耗时 4.1 s，assistant 文本 `DURABLE_REAL_SMOKE_OK`，`durableThroughSeq=5`。同批 `gpt-5.6-sol` 请求返回上游 `insufficient_quota`（HTTP 403），服务端正确结算为 `turn/end` 错误，未重试、未伪造 assistant 输出；该失败是 provider 配额，不是 durable host 逻辑。 |
 | `node --test tests/durable-feature-alignment.test.mjs` | 6 项全过：图片 `ImageBlock` + 附件字节落盘；viewer 403 / editor 续跑 / owner 再续；16 并发 durable turn 时 `activeTurns=16` 且列表 16 条；两个 durable Session 可列出并读回；嵌套子代理 3 次模型请求、孙代无 `subagent`；归档后第二 turn 完成且历史保留。 |
 | `node tests/mobile-ui-only.e2e.mjs` | en-US 移动端原型：write 审批面板出现、点击批准后 `turn/end` 完成、文本 `MOBILE APPROVAL APPLIED`，两次移动 turn 均落库。 |
+| `node tests/durable-ui-approval.e2e.mjs` | 正式 Web preview（`preview.html?browser-native-durable=1`）：durable turn 的 `pendingApproval` 渲染为 “Approval needed: write” + 精确目标；键盘 Enter 批准后 11 个事件 seq 0–10、`tool/result` 无 `isError`、Workspace 出现 `durable-ui-approved.txt`；Escape 拒绝后 11 个事件 seq 0–10、`tool/result.isError=true`、`durable-ui-rejected.txt` 不存在；`pageErrors=0`。 |
 | `node tests/session-query-scale.e2e.mjs` | 122 Session（含 1 个 durable Session）检索探针通过：列表/过滤/全文/会话内命中均可索引 durable 事件；alpha 命中 61、beta 60。 |
 
 ## 复跑
@@ -71,18 +73,18 @@ node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs \
 |---|---|---|---|
 | 多模态图片附件 | 已修复 | `durable-feature-alignment` 图片用例；`user/message` 保存 `ImageBlock`，模型收到 `data:` URL，附件字节可按 SHA-256 读回 | 产品 composer 仍走 Worker 上传；下一步把附件上传与 durable start 接到同一 composer 动作 |
 | Session 共享（viewer/editor） | 已修复 | 同文件共享用例：viewer 403 `SESSION_READ_ONLY`，editor 续跑并落库，owner 随后再续，3 个 `turn/end` | 共享租约跨节点未验证；下一步补跨节点 editor fencing |
-| 审批 UI 与决策 | 已修复（原型） | `mobile-ui-only.e2e`：审批面板出现、批准后完成并写入文件 | 产品主聊天 UI 无 durable 审批入口；下一步复用现有审批卡片组件接入主 composer |
+| 审批 UI 与决策 | 已修复（正式 Web preview + 原型） | `durable-ui-approval.e2e`：正式 preview UI 键盘批准落盘、键盘拒绝无写入；`mobile-ui-only.e2e`：移动端原型批准后完成 | 主 composer 无 durable 启动入口；下一步把 durable start 接入 composer 动作 |
 | 仪表盘 16 路 | 已验证 | 16 个 durable Session 并发，`activeTurns=16`，全部完成后列表 16 条 | 仪表盘 UI 仍读取服务端 Session 列表，未做专门视觉回归；下一步加一次 16 项 durable 会话的浏览器截图校验 |
 | 跨 Session 检索 | 已修复 | 122 Session 检索探针含 durable Session；补齐 `time`、`surfaceOp`、message 字段与 `isSeeded` 后才可索引 | 仅线性全文回退；下一步把服务端 SQLite 索引接上 durable 事件 |
 | 子代理嵌套 | 已修复 | 嵌套用例：父→子→孙 3 次模型请求，孙代 tools 不含 `subagent`，父记录子结果 | 仅两层；下一步把深度预算与取消传播暴露为配置 |
 | 归档后打开 | 已验证 | 归档后下一 durable turn 202 完成，前后 prompt 均保留，`turn/end` 2 条 | 无自动保留期调度；下一步接归档调度器 |
 
-结论：7 项在 durable 路径均已复验；“仍缺失”只剩产品主 UI 的 durable 执行/审批入口与配套上传路径，不是服务端能力缺口。
+结论：7 项在 durable 路径均已复验，审批另有正式 Web preview UI 的键盘批准/拒绝 E2E；“仍缺失”只剩主 composer 的 durable 执行入口与配套上传路径，不是服务端能力缺口。
 
 ## 风险与下一步
 
 - 服务端 turn 已挂载 `read`/`write`/`edit`/`grep`/`glob`/`subagent`，写操作经审批；同一 10 任务真实模型基准达到 10/10、29 请求 / 23,318 tokens。尚未覆盖的是待决审批跨重启恢复与工具结果的跨 store 事务。
 - 运行记录只在内存。backend 重启后，已 flush 的开场事件会保留成一个没有 `turn/end` 的 turn；下一次 durable turn 会以 `SESSION_TURN_ACTIVE` 拒绝，需要启动恢复流程把未知 turn 结算为 `interrupted`。
-- 产品 UI 没有只读挂载服务端 Session 的入口。本批“重开标签接管视图”由真实 Chrome 标签的 HTTP 读取与写权接管证明，不证明聊天 UI 渲染；durable 审批只在移动端原型可见。
+- 产品 UI 没有只读挂载服务端 Session 的入口。本批“重开标签接管视图”由真实 Chrome 标签的 HTTP 读取与写权接管证明，不证明聊天 UI 渲染；durable 审批已在正式 Web preview UI 可见并可决策，但启动仍由页面级 port 触发。
 - Session 所有权在 turn 结束后立即释放；长 turn 期间重开标签只能只读，不能抢写。若产品需要“接管即抢占”，需要显式的接管协议与旧执行者 fencing。
 - 未验证：多 backend/HA、关页中途正在执行的工具 turn、待决审批跨重启恢复、Safari/WebKit、自然浏览器崩溃与 OS 崩溃。
