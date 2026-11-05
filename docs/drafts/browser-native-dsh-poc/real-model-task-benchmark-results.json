@@ -1,5 +1,5 @@
 {
-  "startedAt": "2026-11-05T05:17:49.227Z",
+  "startedAt": "2026-11-05T06:03:13.992Z",
   "provider": "longcat",
   "model": "LongCat-2.5",
   "llmMode": "real",
@@ -92,38 +92,63 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 4,
-          "inputTokens": 8582,
-          "outputTokens": 439,
-          "totalTokens": 9021,
+          "inputTokens": 7583,
+          "outputTokens": 371,
+          "totalTokens": 7954,
           "costUsd": null,
           "requestSizes": [
-            {
-              "messageCount": 3,
-              "systemChars": 4456,
-              "historyChars": 942,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 380,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4270,
+              "historyChars": 942,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1874,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1833,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 2437,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2396,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 3,
@@ -131,10 +156,10 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 33,
+          "approvalLatencyMs": 37,
           "exportBytes": null,
-          "durationMs": 10183,
-          "bootMs": 2249,
+          "durationMs": 13667,
+          "bootMs": 2283,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T1_DONE",
           "toolTrace": [
@@ -161,73 +186,84 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 7,
-          "inputTokens": 18799,
-          "outputTokens": 1030,
-          "totalTokens": 19829,
+          "modelRequests": 4,
+          "inputTokens": 11233,
+          "outputTokens": 713,
+          "totalTokens": 11946,
           "costUsd": null,
           "requestSizes": [
             {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 978,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
-            {
-              "messageCount": 1,
-              "systemChars": 0,
-              "historyChars": 424,
-              "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1634,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2947,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 2390,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 3590,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 9,
-              "systemChars": 4456,
-              "historyChars": 3061,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
-            {
-              "messageCount": 11,
-              "systemChars": 4456,
-              "historyChars": 5051,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
-            {
-              "messageCount": 13,
-              "systemChars": 4456,
-              "historyChars": 5658,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 4603,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
-          "steps": 6,
+          "steps": 4,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 33,
+          "approvalLatencyMs": 43,
           "exportBytes": null,
-          "durationMs": 27002,
-          "bootMs": 2164,
-          "finalTextLength": 610,
-          "finalTextPreview": "I'll create the file first, then search the workspace.\nNow let me search the workspace for the marker:\nThe grep path must stay under the worker workspace. Let me try the current working directory directly or use glob to find files.Let me tr",
+          "durationMs": 17010,
+          "bootMs": 2158,
+          "finalTextLength": 883,
+          "finalTextPreview": "The grep tool says path must stay under the Worker workspace. Hmm, /dsh/home is the workspace per runtime context (\"Current DSH file policy: workspace-write... session workspace: /dsh/home\"). But grep rejected it. Maybe the grep tool's work",
           "toolTrace": [
             {
               "name": "write",
@@ -243,16 +279,6 @@
               "name": "grep",
               "isError": false,
               "resultPreview": "Found 1 match\n\nbench/search-index.txt\nLine 2: scale-fixture-line-0007 marker"
-            },
-            {
-              "name": "glob",
-              "isError": false,
-              "resultPreview": "bench/search-index.txt"
-            },
-            {
-              "name": "read",
-              "isError": false,
-              "resultPreview": "<path>/dsh/home/workspace/bench/search-index.txt</path>\n<type>file</type>\n<content>\n1: alpha\n2: scale-fixture-line-0007 marker\n3: omega\n\n(End of file - total 3 "
             }
           ],
           "readBackPaths": 0
@@ -267,53 +293,98 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 4,
-          "inputTokens": 8361,
-          "outputTokens": 232,
-          "totalTokens": 8593,
+          "modelRequests": 5,
+          "inputTokens": 11764,
+          "outputTokens": 1087,
+          "totalTokens": 12851,
           "costUsd": null,
           "requestSizes": [
-            {
-              "messageCount": 3,
-              "systemChars": 4456,
-              "historyChars": 855,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 301,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4270,
+              "historyChars": 855,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1404,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2589,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 2058,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 5287,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
+            },
+            {
+              "messageCount": 9,
+              "systemChars": 4270,
+              "historyChars": 5883,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
-          "steps": 3,
+          "steps": 4,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 33,
+          "approvalLatencyMs": 35,
           "exportBytes": null,
-          "durationMs": 7287,
-          "bootMs": 2277,
+          "durationMs": 22653,
+          "bootMs": 2310,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T3_DONE",
           "toolTrace": [
+            {
+              "name": "read",
+              "isError": true,
+              "resultPreview": "Error: cannot read \"/dsh/home/workspace/bench/notes.txt\": not found"
+            },
             {
               "name": "write",
               "isError": false,
@@ -338,31 +409,48 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 5789,
-          "outputTokens": 360,
-          "totalTokens": 6149,
+          "inputTokens": 5155,
+          "outputTokens": 451,
+          "totalTokens": 5606,
           "costUsd": null,
           "requestSizes": [
-            {
-              "messageCount": 3,
-              "systemChars": 4456,
-              "historyChars": 899,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 341,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4270,
+              "historyChars": 899,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 6,
-              "systemChars": 4456,
-              "historyChars": 2710,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2766,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 2,
@@ -370,10 +458,10 @@
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 222,
+          "approvalLatencyMs": 214,
           "exportBytes": null,
-          "durationMs": 8037,
-          "bootMs": 2263,
+          "durationMs": 10904,
+          "bootMs": 2311,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T4_DONE",
           "toolTrace": [
@@ -401,45 +489,78 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 5,
-          "inputTokens": 12236,
-          "outputTokens": 1513,
-          "totalTokens": 13749,
+          "inputTokens": 12947,
+          "outputTokens": 3593,
+          "totalTokens": 16540,
           "costUsd": null,
           "requestSizes": [
             {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 883,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 1252,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 321,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1602,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1556,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
-              "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 6797,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "messageCount": 8,
+              "systemChars": 4270,
+              "historyChars": 16422,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 3,
@@ -449,15 +570,20 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 26299,
-          "bootMs": 2291,
-          "finalTextLength": 41,
-          "finalTextPreview": "BENCH_T5_PARENT_DONE\nBENCH_T5_PARENT_DONE",
+          "durationMs": 88544,
+          "bootMs": 2309,
+          "finalTextLength": 20,
+          "finalTextPreview": "BENCH_T5_PARENT_DONE",
           "toolTrace": [
             {
               "name": "subagent",
               "isError": false,
-              "resultPreview": "started subagent 5c665825-d06f-4573-b5d9-63abef558b46"
+              "resultPreview": "started subagent c9e9dec5-83a7-4abe-bc43-8c3e256bc2f7"
+            },
+            {
+              "name": "glob",
+              "isError": true,
+              "resultPreview": "Error: SEARCH_INVALID_PATH: path must stay under the Worker workspace"
             }
           ],
           "readBackPaths": 0
@@ -473,52 +599,93 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 6,
-          "inputTokens": 14393,
-          "outputTokens": 304,
-          "totalTokens": 14697,
+          "inputTokens": 12827,
+          "outputTokens": 275,
+          "totalTokens": 13102,
           "costUsd": null,
           "requestSizes": [
-            {
-              "messageCount": 3,
-              "systemChars": 4456,
-              "historyChars": 814,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 252,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
+            },
+            {
+              "messageCount": 3,
+              "systemChars": 4270,
+              "historyChars": 814,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1362,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1557,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 1721,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1905,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 9,
-              "systemChars": 4456,
-              "historyChars": 2473,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2457,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 11,
-              "systemChars": 4456,
-              "historyChars": 3089,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 3007,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 5,
@@ -526,10 +693,10 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 37,
+          "approvalLatencyMs": 47,
           "exportBytes": null,
-          "durationMs": 16886,
-          "bootMs": 2278,
+          "durationMs": 31846,
+          "bootMs": 2182,
           "finalTextLength": 39,
           "finalTextPreview": "BENCH_T6_TURN1_DONE\nBENCH_T6_TURN2_DONE",
           "toolTrace": [
@@ -562,9 +729,9 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 5642,
-          "outputTokens": 365,
-          "totalTokens": 6007,
+          "inputTokens": 4890,
+          "outputTokens": 200,
+          "totalTokens": 5090,
           "costUsd": null,
           "requestSizes": [
             {
@@ -572,21 +739,38 @@
               "systemChars": 0,
               "historyChars": 324,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
             },
             {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 870,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 2229,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1727,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 2,
@@ -594,10 +778,10 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 39,
-          "exportBytes": 25205,
-          "durationMs": 39503,
-          "bootMs": 2254,
+          "approvalLatencyMs": 43,
+          "exportBytes": 22179,
+          "durationMs": 5247,
+          "bootMs": 2162,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T7_DONE",
           "toolTrace": [
@@ -620,9 +804,9 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 3,
-          "inputTokens": 5573,
-          "outputTokens": 286,
-          "totalTokens": 5859,
+          "inputTokens": 4862,
+          "outputTokens": 192,
+          "totalTokens": 5054,
           "costUsd": null,
           "requestSizes": [
             {
@@ -630,21 +814,38 @@
               "systemChars": 0,
               "historyChars": 252,
               "toolCount": 0,
-              "toolSchemaChars": 0
+              "toolSchemaChars": 0,
+              "toolNames": []
             },
             {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 814,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1893,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1651,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 2,
@@ -652,10 +853,10 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 41,
+          "approvalLatencyMs": 40,
           "exportBytes": null,
-          "durationMs": 6659,
-          "bootMs": 2262,
+          "durationMs": 11506,
+          "bootMs": 2301,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T8_DONE",
           "toolTrace": [
@@ -677,81 +878,82 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 6,
-          "inputTokens": 15555,
-          "outputTokens": 911,
-          "totalTokens": 16466,
+          "modelRequests": 4,
+          "inputTokens": 7570,
+          "outputTokens": 338,
+          "totalTokens": 7908,
           "costUsd": null,
           "requestSizes": [
+            {
+              "messageCount": 3,
+              "systemChars": 4270,
+              "historyChars": 850,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
+            },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 288,
               "toolCount": 0,
-              "toolSchemaChars": 0
-            },
-            {
-              "messageCount": 3,
-              "systemChars": 4456,
-              "historyChars": 850,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolSchemaChars": 0,
+              "toolNames": []
             },
             {
               "messageCount": 5,
-              "systemChars": 4456,
-              "historyChars": 1728,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 1627,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 7,
-              "systemChars": 4456,
-              "historyChars": 2626,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
-            {
-              "messageCount": 9,
-              "systemChars": 4456,
-              "historyChars": 4433,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
-            },
-            {
-              "messageCount": 11,
-              "systemChars": 4456,
-              "historyChars": 5473,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 2576,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
-          "steps": 5,
+          "steps": 3,
           "turnReason": {
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 42,
+          "approvalLatencyMs": 37,
           "exportBytes": null,
-          "durationMs": 25898,
-          "bootMs": 2249,
-          "finalTextLength": 1884,
-          "finalTextPreview": "The path search failed because the glob tool's path must stay under the Worker workspace. The workspace is /dsh/home. Hmm, the path /dsh/home/workspace/bench/* is under /dsh/home, but the error says it must stay under the Worker workspace. ",
+          "durationMs": 14851,
+          "bootMs": 2297,
+          "finalTextLength": 82,
+          "finalTextPreview": "The file doesn't exist, so I'll create it with the required content.\nBENCH_T9_DONE",
           "toolTrace": [
             {
               "name": "read",
               "isError": true,
               "resultPreview": "Error: cannot read \"/dsh/home/workspace/bench/missing-t9.txt\": not found"
-            },
-            {
-              "name": "glob",
-              "isError": true,
-              "resultPreview": "Error: SEARCH_INVALID_PATH: path must stay under the Worker workspace"
-            },
-            {
-              "name": "glob",
-              "isError": false,
-              "resultPreview": "No files found"
             },
             {
               "name": "write",
@@ -771,32 +973,41 @@
           "failureClass": null,
           "failureCapability": null,
           "detail": "passed",
-          "modelRequests": 3,
-          "inputTokens": 6270,
-          "outputTokens": 239,
-          "totalTokens": 6509,
+          "modelRequests": 2,
+          "inputTokens": 5551,
+          "outputTokens": 132,
+          "totalTokens": 5683,
           "costUsd": null,
           "requestSizes": [
             {
-              "messageCount": 1,
-              "systemChars": 0,
-              "historyChars": 313,
-              "toolCount": 0,
-              "toolSchemaChars": 0
-            },
-            {
               "messageCount": 3,
-              "systemChars": 4456,
+              "systemChars": 4270,
               "historyChars": 879,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             },
             {
               "messageCount": 6,
-              "systemChars": 4456,
-              "historyChars": 4135,
-              "toolCount": 8,
-              "toolSchemaChars": 6529
+              "systemChars": 4270,
+              "historyChars": 4156,
+              "toolCount": 6,
+              "toolSchemaChars": 5249,
+              "toolNames": [
+                "edit",
+                "glob",
+                "grep",
+                "read",
+                "subagent",
+                "write"
+              ]
             }
           ],
           "steps": 2,
@@ -806,10 +1017,10 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 8098,
-          "bootMs": 2253,
-          "finalTextLength": 261,
-          "finalTextPreview": "Both files read:\n\n- **input.txt** — a tiny two-line fixture containing `runtime=DedicatedWorker` and `fixture=VFS_INPUT_READY`.\n- **scale-input.txt** — a 24-line padded fixture with `scale-fixture-line-NNNN` identifiers and repeated filler ",
+          "durationMs": 8248,
+          "bootMs": 2295,
+          "finalTextLength": 281,
+          "finalTextPreview": "I'll read both files.\n**`input.txt`** — A two-line fixture containing `runtime=DedicatedWorker` and `fixture=VFS_INPUT_READY`.\n\n**`scale-input.txt`** — A 24-line padded fixture of repeated `scale-fixture-line-NNNN` entries with long trailin",
           "toolTrace": [
             {
               "name": "read",
@@ -832,21 +1043,21 @@
         "successRate": 1,
         "avgModelRequestsPerTask": 4,
         "avgSessionStepsPerTask": 3,
-        "avgDurationMs": 17585,
-        "totalInputTokens": 101200,
-        "totalOutputTokens": 5679,
-        "totalTokens": 106879,
+        "avgDurationMs": 22448,
+        "totalInputTokens": 84382,
+        "totalOutputTokens": 7352,
+        "totalTokens": 91734,
         "totalCostUsd": null,
-        "totalModelRequests": 44,
-        "inputTokensPerRequest": 2300,
+        "totalModelRequests": 39,
+        "inputTokensPerRequest": 2163.6,
         "requestComposition": {
-          "observedRequests": 44,
-          "systemPromptRequests": 34,
-          "avgMessageCount": 5,
-          "avgToolCount": 6,
-          "avgSystemCharsPerRequest": 3443,
-          "avgHistoryCharsPerRequest": 1843,
-          "avgToolSchemaCharsPerRequest": 5045
+          "observedRequests": 39,
+          "systemPromptRequests": 31,
+          "avgMessageCount": 4,
+          "avgToolCount": 5,
+          "avgSystemCharsPerRequest": 3394,
+          "avgHistoryCharsPerRequest": 2129,
+          "avgToolSchemaCharsPerRequest": 4172
         },
         "failuresByClass": {
           "model": 0,
@@ -854,7 +1065,7 @@
           "harness": 0
         }
       },
-      "e2eMs": 199922,
+      "e2eMs": 248538,
       "bootMs": null
     },
     {
@@ -873,8 +1084,8 @@
           "detail": "passed",
           "modelRequests": 3,
           "inputTokens": 2131,
-          "outputTokens": 339,
-          "totalTokens": 2470,
+          "outputTokens": 170,
+          "totalTokens": 2301,
           "costUsd": null,
           "requestSizes": [
             {
@@ -882,21 +1093,45 @@
               "systemChars": 0,
               "historyChars": 291,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 634,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 5,
               "systemChars": 0,
               "historyChars": 990,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 3,
@@ -904,9 +1139,9 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 2,
+          "approvalLatencyMs": 1,
           "exportBytes": null,
-          "durationMs": 19809,
+          "durationMs": 10256,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T1_DONE",
@@ -935,9 +1170,9 @@
           "failureCapability": null,
           "detail": "passed",
           "modelRequests": 4,
-          "inputTokens": 3131,
-          "outputTokens": 595,
-          "totalTokens": 3726,
+          "inputTokens": 3177,
+          "outputTokens": 805,
+          "totalTokens": 3982,
           "costUsd": null,
           "requestSizes": [
             {
@@ -945,28 +1180,60 @@
               "systemChars": 0,
               "historyChars": 317,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
-              "historyChars": 712,
+              "historyChars": 765,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 5,
               "systemChars": 0,
-              "historyChars": 1039,
+              "historyChars": 1246,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
-              "messageCount": 8,
+              "messageCount": 7,
               "systemChars": 0,
-              "historyChars": 1768,
+              "historyChars": 1579,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 4,
@@ -974,12 +1241,12 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 3,
+          "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 14900,
+          "durationMs": 21370,
           "bootMs": null,
-          "finalTextLength": 426,
-          "finalTextPreview": "The search found the fixture marker in two files:\n\n- **bench/search-index.txt:2** — `scale-fixture-line-0007 marker`\n- **browser-validation/scale-input.txt:8** — `scale-fixture-line-0007 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "finalTextLength": 480,
+          "finalTextPreview": "I'll create the file first, then search for the marker.\nThe file was created and verified. Searching the workspace found two occurrences of `scale-fixture-line-0007`:\n\n**Target file (created):**\n- Path: `bench/search-index.txt`\n- Line: `sca",
           "toolTrace": [
             {
               "name": "write",
@@ -988,18 +1255,13 @@
             },
             {
               "name": "grep",
-              "isError": true,
-              "resultPreview": "no match for scale-fixture-line-0007 under ."
+              "isError": false,
+              "resultPreview": "bench/search-index.txt:2: scale-fixture-line-0007 marker\nbrowser-validation/scale-input.txt:8: scale-fixture-line-0007 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
             },
             {
               "name": "read",
               "isError": false,
               "resultPreview": "alpha\nscale-fixture-line-0007 marker\nomega\n"
-            },
-            {
-              "name": "grep",
-              "isError": false,
-              "resultPreview": "bench/search-index.txt:2: scale-fixture-line-0007 marker\nbrowser-validation/scale-input.txt:8: scale-fixture-line-0007 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
             }
           ],
           "manifestPaths": 6
@@ -1016,8 +1278,8 @@
           "detail": "passed",
           "modelRequests": 3,
           "inputTokens": 2098,
-          "outputTokens": 131,
-          "totalTokens": 2229,
+          "outputTokens": 315,
+          "totalTokens": 2413,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1025,21 +1287,45 @@
               "systemChars": 0,
               "historyChars": 194,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 536,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 5,
               "systemChars": 0,
               "historyChars": 920,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 3,
@@ -1047,9 +1333,9 @@
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 4453,
+          "approvalLatencyMs": 1834,
           "exportBytes": null,
-          "durationMs": 10761,
+          "durationMs": 12829,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T3_DONE",
@@ -1079,8 +1365,8 @@
           "detail": "passed",
           "modelRequests": 2,
           "inputTokens": 1399,
-          "outputTokens": 229,
-          "totalTokens": 1628,
+          "outputTokens": 346,
+          "totalTokens": 1745,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1088,14 +1374,30 @@
               "systemChars": 0,
               "historyChars": 238,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 4,
               "systemChars": 0,
               "historyChars": 836,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 2,
@@ -1103,9 +1405,9 @@
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 160,
+          "approvalLatencyMs": 154,
           "exportBytes": null,
-          "durationMs": 6473,
+          "durationMs": 9170,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T4_DONE",
@@ -1135,8 +1437,8 @@
           "detail": "passed",
           "modelRequests": 3,
           "inputTokens": 1660,
-          "outputTokens": 168,
-          "totalTokens": 1828,
+          "outputTokens": 120,
+          "totalTokens": 1780,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1144,21 +1446,42 @@
               "systemChars": 0,
               "historyChars": 222,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 72,
               "toolCount": 3,
-              "toolSchemaChars": 1114
+              "toolSchemaChars": 1114,
+              "toolNames": [
+                "read",
+                "grep",
+                "glob"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 520,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 2,
@@ -1168,7 +1491,7 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 9673,
+          "durationMs": 19096,
           "bootMs": null,
           "finalTextLength": 20,
           "finalTextPreview": "BENCH_T5_PARENT_DONE",
@@ -1193,8 +1516,8 @@
           "detail": "passed",
           "modelRequests": 5,
           "inputTokens": 3383,
-          "outputTokens": 266,
-          "totalTokens": 3649,
+          "outputTokens": 441,
+          "totalTokens": 3824,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1202,35 +1525,75 @@
               "systemChars": 0,
               "historyChars": 153,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 493,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 1,
               "systemChars": 0,
               "historyChars": 195,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 483,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 5,
               "systemChars": 0,
               "historyChars": 873,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 5,
@@ -1238,9 +1601,9 @@
             "kind": "completed"
           },
           "approvalCount": 2,
-          "approvalLatencyMs": 27581,
+          "approvalLatencyMs": 8718,
           "exportBytes": null,
-          "durationMs": 32969,
+          "durationMs": 15452,
           "bootMs": null,
           "finalTextLength": 39,
           "finalTextPreview": "BENCH_T6_TURN1_DONE\nBENCH_T6_TURN2_DONE",
@@ -1275,8 +1638,8 @@
           "detail": "passed",
           "modelRequests": 2,
           "inputTokens": 1342,
-          "outputTokens": 200,
-          "totalTokens": 1542,
+          "outputTokens": 120,
+          "totalTokens": 1462,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1284,14 +1647,30 @@
               "systemChars": 0,
               "historyChars": 209,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 632,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 2,
@@ -1301,7 +1680,7 @@
           "approvalCount": 1,
           "approvalLatencyMs": 1,
           "exportBytes": 2479,
-          "durationMs": 5988,
+          "durationMs": 19093,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T7_DONE",
@@ -1326,8 +1705,8 @@
           "detail": "passed",
           "modelRequests": 2,
           "inputTokens": 1316,
-          "outputTokens": 219,
-          "totalTokens": 1535,
+          "outputTokens": 119,
+          "totalTokens": 1435,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1335,14 +1714,30 @@
               "systemChars": 0,
               "historyChars": 153,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 502,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 2,
@@ -1352,7 +1747,7 @@
           "approvalCount": 1,
           "approvalLatencyMs": 2,
           "exportBytes": null,
-          "durationMs": 5698,
+          "durationMs": 7330,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T8_DONE",
@@ -1377,8 +1772,8 @@
           "detail": "passed",
           "modelRequests": 3,
           "inputTokens": 2077,
-          "outputTokens": 120,
-          "totalTokens": 2197,
+          "outputTokens": 137,
+          "totalTokens": 2214,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1386,21 +1781,45 @@
               "systemChars": 0,
               "historyChars": 189,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 3,
               "systemChars": 0,
               "historyChars": 514,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 5,
               "systemChars": 0,
               "historyChars": 869,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 3,
@@ -1408,9 +1827,9 @@
             "kind": "completed"
           },
           "approvalCount": 1,
-          "approvalLatencyMs": 2,
+          "approvalLatencyMs": 1,
           "exportBytes": null,
-          "durationMs": 13193,
+          "durationMs": 5811,
           "bootMs": null,
           "finalTextLength": 13,
           "finalTextPreview": "BENCH_T9_DONE",
@@ -1440,8 +1859,8 @@
           "detail": "passed",
           "modelRequests": 2,
           "inputTokens": 1990,
-          "outputTokens": 171,
-          "totalTokens": 2161,
+          "outputTokens": 172,
+          "totalTokens": 2162,
           "costUsd": null,
           "requestSizes": [
             {
@@ -1449,14 +1868,30 @@
               "systemChars": 0,
               "historyChars": 238,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             },
             {
               "messageCount": 4,
               "systemChars": 0,
               "historyChars": 2894,
               "toolCount": 6,
-              "toolSchemaChars": 2243
+              "toolSchemaChars": 2243,
+              "toolNames": [
+                "write",
+                "read",
+                "grep",
+                "glob",
+                "edit",
+                "subagent"
+              ]
             }
           ],
           "steps": 2,
@@ -1466,10 +1901,10 @@
           "approvalCount": 0,
           "approvalLatencyMs": 0,
           "exportBytes": null,
-          "durationMs": 5360,
+          "durationMs": 7940,
           "bootMs": null,
-          "finalTextLength": 240,
-          "finalTextPreview": "- **input.txt**: A two-line fixture declaring a DedicatedWorker runtime and a VFS_INPUT_READY fixture marker.\n- **scale-input.txt**: A 24-line scale fixture where each line is an index-labeled row of repeated \"y\" characters.\n\nBENCH_T10_DONE",
+          "finalTextLength": 200,
+          "finalTextPreview": "input.txt — A two-line fixture stating runtime=DedicatedWorker and fixture=VFS_INPUT_READY.\n\nscale-input.txt — A 24-line repetitive scale fixture of numbered lines with long y-strings.\n\nBENCH_T10_DONE",
           "toolTrace": [
             {
               "name": "read",
@@ -1492,20 +1927,20 @@
         "successRate": 1,
         "avgModelRequestsPerTask": 3,
         "avgSessionStepsPerTask": 3,
-        "avgDurationMs": 12482,
-        "totalInputTokens": 20527,
-        "totalOutputTokens": 2438,
-        "totalTokens": 22965,
+        "avgDurationMs": 12835,
+        "totalInputTokens": 20573,
+        "totalOutputTokens": 2745,
+        "totalTokens": 23318,
         "totalCostUsd": null,
         "totalModelRequests": 29,
-        "inputTokensPerRequest": 707.8,
+        "inputTokensPerRequest": 709.4,
         "requestComposition": {
           "observedRequests": 29,
           "systemPromptRequests": 0,
           "avgMessageCount": 3,
           "avgToolCount": 6,
           "avgSystemCharsPerRequest": 0,
-          "avgHistoryCharsPerRequest": 610,
+          "avgHistoryCharsPerRequest": 612,
           "avgToolSchemaCharsPerRequest": 2204
         },
         "failuresByClass": {
@@ -1514,12 +1949,23 @@
           "harness": 0
         }
       },
-      "e2eMs": 125006,
+      "e2eMs": 128530,
       "bootMs": null
     }
   ],
   "partial": false,
-  "finishedAt": "2026-11-05T05:23:17.311Z",
+  "finishedAt": "2026-11-05T06:09:34.520Z",
+  "settings": {
+    "prunerChars": 2048,
+    "workerTools": [
+      "edit",
+      "glob",
+      "grep",
+      "read",
+      "subagent",
+      "write"
+    ]
+  },
   "comparison": {
     "browser-worker": {
       "successRate": 1,
@@ -1527,15 +1973,15 @@
       "tasks": 10,
       "avgModelRequestsPerTask": 4,
       "avgSessionStepsPerTask": 3,
-      "avgDurationMs": 17585,
-      "totalTokens": 106879,
+      "avgDurationMs": 22448,
+      "totalTokens": 91734,
       "totalCostUsd": null,
       "failuresByClass": {
         "model": 0,
         "tool": 0,
         "harness": 0
       },
-      "e2eMs": 199922
+      "e2eMs": 248538
     },
     "durable-host": {
       "successRate": 1,
@@ -1543,58 +1989,58 @@
       "tasks": 10,
       "avgModelRequestsPerTask": 3,
       "avgSessionStepsPerTask": 3,
-      "avgDurationMs": 12482,
-      "totalTokens": 22965,
+      "avgDurationMs": 12835,
+      "totalTokens": 23318,
       "totalCostUsd": null,
       "failuresByClass": {
         "model": 0,
         "tool": 0,
         "harness": 0
       },
-      "e2eMs": 125006
+      "e2eMs": 128530
     },
     "tokenAttribution": {
-      "workerInputTokensPerRequest": 2300,
-      "durableInputTokensPerRequest": 707.8,
-      "inputTokenGapPerRequest": 1592.2,
-      "extraModelRequests": 15,
+      "workerInputTokensPerRequest": 2163.6,
+      "durableInputTokensPerRequest": 709.4,
+      "inputTokenGapPerRequest": 1454.2,
+      "extraModelRequests": 10,
       "requestChars": {
         "worker": {
-          "systemPrompt": 151492,
-          "toolSchemas": 221980,
-          "history": 81092
+          "systemPrompt": 132366,
+          "toolSchemas": 162708,
+          "history": 83031
         },
         "durable": {
           "systemPrompt": 0,
           "toolSchemas": 63916,
-          "history": 17690
+          "history": 17748
         }
       },
       "estimatedInputTokens": {
         "worker": {
-          "systemPrompt": 33727,
-          "toolSchemas": 49420,
-          "history": 18054
+          "systemPrompt": 29540,
+          "toolSchemas": 36312,
+          "history": 18530
         },
         "durable": {
           "systemPrompt": 0,
-          "toolSchemas": 16077,
-          "history": 4450
+          "toolSchemas": 16102,
+          "history": 4471
         },
         "gap": {
-          "systemPrompt": 33727,
-          "toolSchemas": 33343,
-          "history": 13604
+          "systemPrompt": 29540,
+          "toolSchemas": 20210,
+          "history": 14059
         }
       },
       "workerComposition": {
-        "observedRequests": 44,
-        "systemPromptRequests": 34,
-        "avgMessageCount": 5,
-        "avgToolCount": 6,
-        "avgSystemCharsPerRequest": 3443,
-        "avgHistoryCharsPerRequest": 1843,
-        "avgToolSchemaCharsPerRequest": 5045
+        "observedRequests": 39,
+        "systemPromptRequests": 31,
+        "avgMessageCount": 4,
+        "avgToolCount": 5,
+        "avgSystemCharsPerRequest": 3394,
+        "avgHistoryCharsPerRequest": 2129,
+        "avgToolSchemaCharsPerRequest": 4172
       },
       "durableComposition": {
         "observedRequests": 29,
@@ -1602,7 +2048,7 @@
         "avgMessageCount": 3,
         "avgToolCount": 6,
         "avgSystemCharsPerRequest": 0,
-        "avgHistoryCharsPerRequest": 610,
+        "avgHistoryCharsPerRequest": 612,
         "avgToolSchemaCharsPerRequest": 2204
       },
       "note": "Char totals come from each observed request; the per-mode chars-to-token scale maps them onto the provider input count, so the three gap terms sum to the observed input difference within rounding."

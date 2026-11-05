@@ -73,6 +73,8 @@ for (const [label, value] of [['model', provider.model], ['base URL', provider.b
 const model = provider.model
 
 const turnTimeoutMs = Number(process.env.DSH_POC_BENCH_TURN_TIMEOUT_MS ?? 240_000)
+const prunerChars = Number(process.env.DSH_POC_BENCH_PRUNER_CHARS ?? 2048)
+if (!Number.isSafeInteger(prunerChars) || prunerChars <= 0) throw new Error('DSH_POC_BENCH_PRUNER_CHARS must be a positive integer')
 const selectedModes = (process.env.DSH_POC_BENCH_MODES ?? 'browser,durable')
   .split(',').map(value => value.trim()).filter(Boolean)
 for (const mode of selectedModes) {
@@ -511,7 +513,7 @@ async function answerApprovals({ page, origin, sessionId, timeout, approvals }) 
 async function runBrowserMode() {
   const startedAt = Date.now()
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-bench-browser-'))
-  const image = await createRuntimeValidationDist({ roster: 'browser-benchmark' })
+  const image = await createRuntimeValidationDist({ roster: 'browser-benchmark', toolResultPrunerThresholdChars: prunerChars })
   const app = await createBrowserNativeV2Server({
     dataDir,
     distRoot: image.distRoot,
@@ -987,6 +989,10 @@ async function main() {
     if (!failed) {
       document.partial = false
       document.finishedAt = new Date().toISOString()
+      const workerToolNames = document.modes
+        .filter(mode => mode.mode === 'browser-worker')
+        .flatMap(mode => mode.tasks.flatMap(task => task.requestSizes.flatMap(size => size.toolNames ?? [])))
+      document.settings = { prunerChars, workerTools: [...new Set(workerToolNames)].sort() }
       document.comparison = buildComparison()
       await writeFile(outputPath, `${JSON.stringify(document, null, 2)}\n`)
       process.stdout.write(`${JSON.stringify({

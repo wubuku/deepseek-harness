@@ -1840,7 +1840,7 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 
 ## 真实模型任务基准（Worker 与 durable 对照）
 
-[真实模型任务基准](real-model-task-benchmark.md)用 10 个真实小任务（读写、检索、编辑、多文件、子代理、跨 turn、导出、审批、缺失文件恢复、摘要）在 LongCat-2.5 上分别跑浏览器 Worker 与 durable host。durable 已补齐 `grep`/`glob`/`edit`/`subagent`，两侧均为 10/10，模型、工具与 harness 失败均为 0；Worker 平均 4.0 次模型请求、17.6 秒、106,879 tokens，durable 平均 3.0 次请求、12.5 秒、22,965 tokens。token 差按请求字符组成拆为 system prompt 33,727、工具 schema 33,343、历史 13,604，合计等于观测到的 80,673 输入差：差异来自 Worker 每次完整请求都携带 DSH 静态提示与 8 工具 schema，而不是重复上下文；可削减顺序为先裁 schema，再压缩 system prompt，最后处理历史。未配置单价，费用记为 null；MiniMax-M3 探测返回 `UPSTREAM_LLM_RATE_LIMITED`（503），未跑全量对照。结果 JSON、逐任务与归因见 [基准文档](real-model-task-benchmark.md)。
+[真实模型任务基准](real-model-task-benchmark.md)用 10 个真实小任务（读写、检索、编辑、多文件、子代理、跨 turn、导出、审批、缺失文件恢复、摘要）在 LongCat-2.5 上分别跑浏览器 Worker 与 durable host。durable 已补齐 `grep`/`glob`/`edit`/`subagent`，两侧均为 10/10，模型、工具与 harness 失败均为 0；Worker 平均 3.9 次模型请求、22.4 秒、91,734 tokens，durable 平均 2.9 次请求、12.8 秒、23,318 tokens。token 差按请求字符组成拆为 system prompt 29,540、工具 schema 20,210、历史 14,059，合计等于观测到的 63,809 输入差：差异来自 Worker 每次完整请求都携带 DSH 静态提示与工具 schema，而不是重复上下文。按证据削减后，Worker 广告工具从 8 个减到与 durable 相同的 6 个（`todo_write` 与 `working_directory` 在任务集中从未使用），per-roster system prompt 压缩，每个完整请求的静态字符从 10,985 降到 9,519（−13.3%），输入 tokens/请求从 2,300 降到 2,163.6；tool-result pruner 阈值 1024 在本任务集不触发（0 条裁剪标记）且 512 违反加载期校验，保留 2048。未配置单价，费用记为 null；MiniMax-M3 探测返回 `UPSTREAM_LLM_RATE_LIMITED`（503），未跑全量对照。结果 JSON、逐任务、分步削减证据与归因见 [基准文档](real-model-task-benchmark.md)。
 
 ## 多 Session 争用上限
 

@@ -5605,6 +5605,7 @@ function requestComposition(body) {
     historyChars,
     toolCount: tools.length,
     toolSchemaChars: tools.length === 0 ? 0 : JSON.stringify(tools).length,
+    toolNames: tools.map(tool => tool?.function?.name ?? '').filter(name => name !== ''),
   }
 }
 

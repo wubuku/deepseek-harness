@@ -184,6 +184,19 @@ export async function createRuntimeValidationDist({
           id: 'browser-native-permission-probe',
           name: './browser-native-permission-probe.js',
         })
+        if (roster === 'browser-benchmark') {
+          // Keep the benchmark roster at the six tools the durable host offers.
+          // `todo_write` and `working_directory` never appear in the task set,
+          // so their schemas were billed on every request for nothing.
+          preset.config.plugins = preset.config.plugins.filter(plugin => plugin?.id !== 'tool-todo')
+          const persona = preset.config.plugins.find(plugin => plugin?.id === 'persona')
+          if (persona === undefined) throw new Error('validation profile has no persona entry')
+          persona.config = {
+            ...persona.config,
+            prefix: 'You run in a browser Dedicated Worker with only the listed tools. Files are in a Worker virtual filesystem, not the user\'s computer, and may not survive a reload. There is no host bash, web search, or web fetch tool. Report tool errors honestly; never claim live information without a tool result, invent missing capabilities, or loop on alternatives.',
+          }
+          entries.push({ id: 'tool-working-directory', disabled: true })
+        }
       }
       profilePatch = dump(entries, { lineWidth: -1, noRefs: true })
     }
