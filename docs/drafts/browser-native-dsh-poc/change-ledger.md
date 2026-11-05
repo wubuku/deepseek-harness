@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-169：大数据量启动可行性
+
+```text
+changeId: BN-P2-169
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/startup-scale.e2e.mjs; docs/drafts/browser-native-dsh-poc/startup-scale.md; docs/drafts/browser-native-dsh-poc/multi-instance-feasibility.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 横向扩展触发条件之一是 `store.load()` 启动耗时随 Session 数线性增长并超出预算，但此前只有“重启到就绪”的间接信号，没有 1,000 Session、多 Workspace、含附件与审计的实测，也无法判断是否必须做索引或懒加载。
+existingExtensionPointsChecked: 复用 `FormalSessionStore.load()`、`createBrowserNativeV2Server` 的 `testHooks.scriptedLlmFault`、`POST /session/durable` 的往返、`createObservabilityJournal` 的审计 ledger 与 Workspace 附件上传路由；未改 packages/、Session format、Worker 协议或正式 profile。
+behaviorChange: `FormalSessionStore` 改为导出，测量脚本可直接调用 `load()`；新增 `tests/startup-scale.e2e.mjs`：先建含 4 个 Workspace、12 个附件对象与 1,000 条 access-denial 的基线 `dataDir`，再复制并写入 0/250/1,000 个 Session（每个 50 事件），用 `--expose-gc` 计时 load 与堆增量，并启动真实 backend 计时冷启动与首个 durable scripted turn；在最大规模断言默认预算（load 5,000 ms、堆 256 MiB、冷启动 10,000 ms、首个 turn 2,000 ms）并打印线性斜率与外推上限。新增 `startup-scale.md` 记录判定、预算、实测、上限与优化顺序。
+consumersUpdated: `multi-instance-feasibility.md` 的“启动恢复退化”判定改用该脚本与预算；README 新增“启动规模与单节点 Session 上限”与复跑命令；本 ledger。
+tests: `node --expose-gc docs/drafts/browser-native-dsh-poc/tests/startup-scale.e2e.mjs` 通过（1,000 Session：`store.load()` 133.8 ms、堆增量 17.9 MiB、冷启动 231.4 ms、首个 turn 35.4 ms；250→1,000 为 3.97 倍，线性）。外推：0.134 ms/会话、18.3 KiB/会话；单节点上限按堆约 14,300（时间约束约 37,459），200/500 事件时约 4,000/1,400。未触发预算，因此未实现索引或懒加载。`backend-v2`、`observability-journal`、`observability-persistence`、`multi-instance-feasibility`、`durable-host-restart` 共 81/81 通过。
+syncReplaySteps: 上游同步后复跑该测量；若 `FormalSessionStore.load()`、Session 文件布局、Workspace 加载或审计 `restore()` 变化，更新测量脚本与预算/上限；上限被实测突破时按 `startup-scale.md` 的优化顺序落地索引或懒加载。
+deleteCondition: 正式产品提供分页/索引式 Session 读取与容量 SLA，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-168：随机崩溃一致性
 
 ```text

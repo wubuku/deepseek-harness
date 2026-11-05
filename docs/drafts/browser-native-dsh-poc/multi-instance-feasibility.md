@@ -35,7 +35,7 @@ description: "Browser-Native DSH 横向扩展可行性判定：同机多 backend
 | 同一 Session 需要跨主机写入 | 部署拓扑要求两个以上主机同时服务同一 Session 或 Workspace | 现有 authority 只能同机转发 |
 | 单节点恢复时间超预算 | authority 重启到首个 Session 读成功的耗时，或 durable turn 恢复耗时超过约定 RTO | `/api/browser-native/observability/reconciliation` 的 `processStartedAt`、`recoveredTurns` |
 | 容量饱和 | `activeRequests` 持续接近准入上限，或 admission 拒绝率非零 | `/api/browser-native/admission`、`dsh_browser_native_admission_*` 指标 |
-| 启动恢复退化 | `store.load()` 全量读取 `sessions/` 的启动耗时随 Session 数线性增长并超出预算 | `processStartedAt` 与就绪时间差 |
+| 启动恢复退化 | `store.load()` 全量读取 `sessions/` 的启动耗时随 Session 数线性增长并超出预算 | `node --expose-gc tests/startup-scale.e2e.mjs` 直接计时：默认预算 `store.load()` 5 s、堆增量 256 MiB、冷启动 10 s；1,000 Session 实测 133.8 ms / 17.9 MiB / 231.4 ms，未触发。上限与优化顺序见[启动规模](startup-scale.md) |
 | 节点故障不得丢 Session | 需求明确 RPO = 0 且单机不可接受 | 当前只有本地 JSON 与同机重启恢复 |
 | 多租户需要独立存储边界 | 需要按租户独立备份、配额或删除 | 当前一个 `dataDir` 对应一个身份空间 |
 

@@ -1746,7 +1746,8 @@ function recordOf(session) {
   }
 }
 
-class FormalSessionStore {
+/** In-memory Session authority backed by one JSON record per Session under `sessions/`. */
+export class FormalSessionStore {
   constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename, atRest, storageFault } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) throw new Error('retentionMs must be a non-negative safe integer')
