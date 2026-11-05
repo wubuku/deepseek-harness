@@ -37,6 +37,7 @@ import { TurnRetryLedger } from './turn-retry-ledger.mjs'
 import { SessionEventHub } from './session-event-hub.mjs'
 import { assertDataFormatReadable } from './hosted/data-format.mjs'
 import { assertAtRestReady, createAtRestCipher } from './at-rest-crypto.mjs'
+import { rotateAtRestData } from './at-rest-rotation.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -70,6 +71,11 @@ const CREDENTIAL_QUERY_NAME = /(token|secret|password|credential|authorization|a
 const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/
 const SAME_ORIGIN_SITE_VALUES = new Set(['same-origin', 'none'])
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+/**
+ * Session operations that only read the in-memory log or its stored files, so
+ * an at-rest key rotation can keep them running while it rewrites those files.
+ */
+const READ_ONLY_SESSION_OPERATIONS = new Set(['list', 'stat', 'read', 'export'])
 // `sec-fetch-mode` is excluded: Node's fetch sends `cors`, and a non-browser
 // client must stay distinguishable from a page. Browsers always send at least
 // `sec-fetch-site` on subresource and fetch traffic.
@@ -5691,6 +5697,9 @@ export async function createBrowserNativeV2Server(options) {
   }
   await assertDataFormatReadable(options.dataDir)
   await mkdir(options.dataDir, { recursive: true })
+  if (options.reloadAtRestKeyring !== undefined && typeof options.reloadAtRestKeyring !== 'function') {
+    throw new TypeError('reloadAtRestKeyring must be a function')
+  }
   const atRest = options.atRestKeyring === undefined ? undefined : createAtRestCipher(options.atRestKeyring)
   const atRestStatus = await assertAtRestReady({ dataDir: options.dataDir, cipher: atRest })
   const dataDirLock = await acquireDataDirLock(options.dataDir)
@@ -6190,8 +6199,79 @@ export async function createBrowserNativeV2Server(options) {
   }
   const branchReceipts = new Map()
   const createReceipts = new Map()
+  // At-rest key rotation admits no state-changing request while it rewrites
+  // files, but reads keep being served. Mutating requests wait on the rotation
+  // promise; rotation waits for mutations already inside the handler to finish.
+  let rotationActive
+  let activeMutations = 0
+  const mutationDrain = []
+  const enterMutation = async () => {
+    while (true) {
+      if (rotationActive !== undefined) {
+        await rotationActive
+        continue
+      }
+      activeMutations += 1
+      if (rotationActive === undefined) return
+      activeMutations -= 1
+      await rotationActive
+    }
+  }
+  const leaveMutation = () => {
+    activeMutations -= 1
+    if (activeMutations === 0) {
+      for (const resolve of mutationDrain.splice(0)) resolve()
+    }
+  }
+  const waitForMutationDrain = () => {
+    if (activeMutations === 0) return Promise.resolve()
+    return new Promise(resolve => mutationDrain.push(resolve))
+  }
+  const rotateAtRest = async () => {
+    if (atRest === undefined) {
+      throw new BackendError('AT_REST_KEY_REQUIRED', 'at-rest key rotation needs a configured key', 409)
+    }
+    if (rotationActive !== undefined) {
+      throw new BackendError('AT_REST_ROTATION_ACTIVE', 'an at-rest key rotation is already running', 409)
+    }
+    let release
+    rotationActive = new Promise(resolve => { release = resolve })
+    try {
+      await waitForMutationDrain()
+      const previousKeyId = atRest.keyId
+      const reloaded = options.reloadAtRestKeyring === undefined ? undefined : await options.reloadAtRestKeyring()
+      if (reloaded === undefined) {
+        if (atRest.keyIds().length < 2) {
+          throw new BackendError('AT_REST_ROTATION_NO_NEW_KEY',
+            'rotation needs a successor key in the keyring or a reloadable key file', 409)
+        }
+      } else {
+        if (reloaded.keys.length === 0) {
+          throw new BackendError('AT_REST_ROTATION_NO_NEW_KEY', 'the reloaded deployment keyring is empty', 409)
+        }
+        atRest.addKeys(reloaded.keys, reloaded.activeKeyId)
+      }
+      await options.testHooks?.atRestRotationStarted?.()
+      const summary = await rotateAtRestData({
+        dataDir: options.dataDir,
+        cipher: atRest,
+        journal: observabilityJournal,
+      })
+      const retired = []
+      for (const keyId of atRest.keyIds()) {
+        if (keyId === atRest.keyId) continue
+        atRest.retireKey(keyId)
+        retired.push(keyId)
+      }
+      return { protocolVersion: PROTOCOL_VERSION, fromKeyId: previousKeyId, toKeyId: atRest.keyId, retired, ...summary }
+    } finally {
+      rotationActive = undefined
+      release()
+    }
+  }
   const handleRequest = async (role, request, response) => {
     let url
+    let countedMutation = false
     activeRequests += 1
     let released = false
     const release = () => {
@@ -6246,6 +6326,21 @@ export async function createBrowserNativeV2Server(options) {
         ? new Set([previewOrigin]) : undefined
       assertLocalRequest(request, url, internalStateRequest, allowedOrigins, publicOrigin)
       assertProcessAuth(request, url, internalStateRequest)
+      const mutatingRequest = STATE_CHANGING_METHODS.has(request.method ?? '')
+      const sessionOperationName = url.pathname.startsWith('/api/browser-native/session/')
+        ? url.pathname.slice('/api/browser-native/session/'.length).replace(/\/$/, '')
+        : undefined
+      const readOnlyRequest = !mutatingRequest || READ_ONLY_SESSION_OPERATIONS.has(sessionOperationName)
+      const rotationRequest = request.method === 'POST' && url.pathname === '/api/browser-native/admin/at-rest-key/rotate'
+      if (!readOnlyRequest && !rotationRequest) {
+        await enterMutation()
+        countedMutation = true
+        response.on('close', () => {
+          if (!countedMutation) return
+          countedMutation = false
+          leaveMutation()
+        })
+      }
       if (role === 'api') {
         const requestedOrigin = request.headers.origin
         if (typeof requestedOrigin === 'string' && previewOrigin !== undefined && requestedOrigin === previewOrigin) {
@@ -6281,6 +6376,10 @@ export async function createBrowserNativeV2Server(options) {
           ...(llm.kind === undefined ? {} : { providerKind: llm.kind }),
           ...(llm.timeoutMs === undefined ? {} : { llmTimeoutMs: llm.timeoutMs }),
         })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/admin/at-rest-key/rotate') {
+        sendJson(response, 200, await rotateAtRest())
         return
       }
       const mcpMatch = url.pathname.match(/^\/api\/browser-native\/mcp\/([A-Za-z0-9._-]{1,64})$/)
@@ -7626,6 +7725,10 @@ export async function createBrowserNativeV2Server(options) {
       }
       throw new BackendError('NOT_FOUND', 'route not found', 404)
     } catch (error) {
+      if (countedMutation) {
+        countedMutation = false
+        leaveMutation()
+      }
       metrics.recordFailure({ code: typeof error?.code === 'string' ? error.code : 'INTERNAL' })
       if (url !== undefined) recordAccessDenial(url, request, error)
       if (!response.headersSent && !response.destroyed) sendError(response, error)

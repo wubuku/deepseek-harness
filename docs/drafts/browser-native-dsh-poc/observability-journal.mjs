@@ -376,6 +376,65 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     return run
   }
 
+  /**
+   * Rewrite every ledger line and aggregate snapshot under the active key.
+   *
+   * Runs on the append chain so no record is appended mid-rewrite. Ledger lines
+   * stay base64 envelopes per line; their hash chain and sequence numbers are
+   * unchanged because only the envelope key changes.
+   * @returns Promise resolving to the number of rewritten lines and snapshots.
+   */
+  const reencrypt = () => {
+    const run = chain.then(async () => {
+      if (cipher === undefined) return 0
+      let rewritten = 0
+      for (const file of [ACCESS_DENIALS_FILE, USAGE_FILE, COLLABORATION_FILE]) {
+        const path = join(directory, file)
+        let raw
+        try {
+          raw = await readFile(path, 'utf8')
+        } catch (error) {
+          if (error?.code === 'ENOENT') continue
+          throw error
+        }
+        const lines = raw.split('\n').filter(line => line.length > 0)
+        const decoded = decodeLine(cipher, contextFor(file))
+        const rebuilt = lines.map(line => encodeLine(cipher, contextFor(file), decoded(line))).join('')
+        const temporary = `${path}.${randomUUID()}.tmp`
+        await writeFile(temporary, rebuilt, 'utf8')
+        await rename(temporary, path)
+        const head = await readHead(file)
+        if (head !== undefined && head.invalid !== true) {
+          const headPathFile = `${file}.head.json`
+          const headPath = join(directory, headPathFile)
+          const headTemporary = `${headPath}.${randomUUID()}.tmp`
+          const text = `${JSON.stringify({ version: LEDGER_VERSION, seq: head.seq, hash: head.hash })}\n`
+          await cipher.writeFile(headTemporary, text, contextFor(`${file}.head`))
+          await rename(headTemporary, headPath)
+        }
+        rewritten += lines.length
+      }
+      const metricsPath = join(directory, METRICS_FILE)
+      try {
+        const text = await cipher.readText(metricsPath, contextFor(METRICS_FILE))
+        const temporary = `${metricsPath}.${randomUUID()}.tmp`
+        await cipher.writeFile(temporary, text, contextFor(METRICS_FILE))
+        await rename(temporary, metricsPath)
+        rewritten += 1
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      tails.clear()
+      return rewritten
+    })
+    chain = run.then(() => undefined, error => {
+      healthy = false
+      writeFailures += 1
+      process.stderr.write(`browser-native observability: key rotation failed: ${String(error)}\n`)
+    })
+    return run
+  }
+
   return {
     appendAccessDenial: entry => append(ACCESS_DENIALS_FILE, entry),
     appendUsage: entry => append(USAGE_FILE, entry),
@@ -383,6 +442,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     persistMetrics,
     restore,
     redact,
+    reencrypt,
     close: () => chain,
     status: () => ({ healthy, writeFailures, path: directory }),
   }

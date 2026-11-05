@@ -2,13 +2,13 @@
  * At-rest AES-256-GCM envelope behavior.
  *
  * Covers round trips, AAD context binding, damaged ciphertext, keyring parsing
- * and key-file permissions, and the startup key-check that refuses a missing or
- * different key before any store opens.
+ * and key-file permissions, the startup key-check that refuses a missing or
+ * different key before any store opens, and key rotation across every surface.
  */
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import {
   AT_REST_ENV,
@@ -16,10 +16,13 @@ import {
   AtRestError,
   assertAtRestReady,
   createAtRestCipher,
+  envelopeKeyId,
   isAtRestEnvelope,
   keyIdFor,
   loadAtRestKeyringFromEnv,
 } from '../at-rest-crypto.mjs'
+import { listAtRestTargets, rotateAtRestData } from '../at-rest-rotation.mjs'
+import { createObservabilityJournal } from '../observability-journal.mjs'
 
 const directories = []
 
@@ -190,6 +193,137 @@ describe('startup key check', () => {
     )
     assert.deepEqual(await assertAtRestReady({ dataDir: directory, cipher }), {
       state: 'encrypted', keyId: cipher.keyId, initialized: true,
+    })
+  })
+})
+
+describe('key rotation', () => {
+  it('activates a successor key and retires the predecessor', () => {
+    const predecessor = keyRing(40)
+    const cipher = createAtRestCipher(predecessor)
+    const oldFile = cipher.encryptBuffer(Buffer.from('before rotation'), 'session/a.json')
+    const successorKey = Buffer.alloc(32, 41)
+    const successorId = keyIdFor(successorKey)
+    cipher.addKeys([{ keyId: successorId, key: successorKey }], successorId)
+    assert.deepEqual(cipher.keyIds().sort(), [predecessor.activeKeyId, successorId].sort())
+    const newFile = cipher.encryptBuffer(Buffer.from('after rotation'), 'session/a.json')
+    assert.equal(envelopeKeyId(newFile), successorId)
+    assert.deepEqual(cipher.decryptBuffer(oldFile, 'session/a.json'), Buffer.from('before rotation'))
+    assert.equal(cipher.retireKey(predecessor.activeKeyId), true)
+    assert.throws(
+      () => cipher.decryptBuffer(oldFile, 'session/a.json'),
+      error => error instanceof AtRestError && error.code === 'AT_REST_KEY_UNKNOWN',
+    )
+    assert.throws(
+      () => createAtRestCipher(predecessor).decryptBuffer(newFile, 'session/a.json'),
+      error => error instanceof AtRestError && error.code === 'AT_REST_KEY_UNKNOWN',
+    )
+    assert.throws(
+      () => cipher.retireKey(successorId),
+      error => error instanceof AtRestError && error.code === 'AT_REST_KEY_INVALID',
+    )
+  })
+
+  it('accepts a key-check written with a predecessor that is still configured', async () => {
+    const directory = await temporaryDirectory()
+    const predecessor = keyRing(42)
+    await assertAtRestReady({ dataDir: directory, cipher: createAtRestCipher(predecessor) })
+    const successorKey = Buffer.alloc(32, 43)
+    const successorId = keyIdFor(successorKey)
+    const both = createAtRestCipher({
+      keys: [predecessor.keys[0], { keyId: successorId, key: successorKey }],
+      activeKeyId: successorId,
+    })
+    assert.deepEqual(await assertAtRestReady({ dataDir: directory, cipher: both }), {
+      state: 'encrypted', keyId: successorId,
+    })
+  })
+
+  it('re-encrypts Sessions, blobs, chunks, attachments, staging, and the journal', async () => {
+    const directory = await temporaryDirectory()
+    const predecessor = keyRing(44)
+    const oldCipher = createAtRestCipher(predecessor)
+    const hash = 'a'.repeat(64)
+    const sessionPath = join(directory, 'sessions', 'rotation.json')
+    const files = [
+      [sessionPath, 'session/rotation.json', '{"id":"rotation","prompt":"rotate me"}'],
+      [join(directory, 'workspace-v2', 'blobs', 'aa', hash), `workspace-blob:${hash}`, 'blob body'],
+      [join(directory, 'workspace-v2', 'chunk-objects', 'chunks', 'aa', hash), `workspace-chunk-object:chunks/aa/${hash}`, 'chunk body'],
+      [join(directory, 'workspace-v2', 'chunk-objects', 'files', `${hash}.json`), `workspace-chunk-object:files/${hash}.json`, '{"chunks":[]}'],
+      [join(directory, 'attachments-v1', 'workspace', 'bb', hash), `attachment/workspace/${hash}`, 'attachment body'],
+      [join(directory, 'attachment-uploads-v1', 'workspace', 'upload.part'), 'attachment-upload/workspace/upload', 'staged body'],
+    ]
+    for (const [path, context, body] of files) {
+      await mkdir(dirname(path), { recursive: true })
+      await oldCipher.writeFile(path, body, context)
+    }
+    await writeFile(join(directory, 'sessions', 'legacy.json'), '{"legacy":true}')
+    const journal = createObservabilityJournal({ dataDir: directory, cipher: oldCipher })
+    await journal.appendAccessDenial({ at: 1, method: 'POST', route: '/probe', status: 404 })
+    await journal.persistMetrics({ metricsVersion: 1, requests: { total: 1 } })
+    await journal.close()
+
+    const successorKey = Buffer.alloc(32, 45)
+    const successorId = keyIdFor(successorKey)
+    oldCipher.addKeys([{ keyId: successorId, key: successorKey }], successorId)
+    const report = await rotateAtRestData({ dataDir: directory, cipher: oldCipher, journal })
+    assert.equal(report.targetKeyId, successorId)
+    assert.deepEqual(report.files, {
+      sessions: 2, blobs: 1, chunks: 2, attachments: 1, uploads: 1, journal: 2,
+    })
+
+    for (const target of await listAtRestTargets(directory)) {
+      assert.equal(envelopeKeyId(await readFile(target.path)), successorId, target.context)
+    }
+    assert.match(await oldCipher.readText(sessionPath, 'session/rotation.json'), /rotate me/)
+    assert.equal(await oldCipher.readText(join(directory, 'sessions', 'legacy.json'), 'session/legacy.json'), '{"legacy":true}')
+    const restored = await createObservabilityJournal({ dataDir: directory, cipher: oldCipher }).restore()
+    assert.equal(restored.accessDenials.length, 1)
+    assert.equal(restored.integrity.verified, true)
+
+    const successorOnly = createAtRestCipher({ keys: [{ keyId: successorId, key: successorKey }], activeKeyId: successorId })
+    assert.equal(await successorOnly.readText(sessionPath, 'session/rotation.json'), '{"id":"rotation","prompt":"rotate me"}')
+    assert.deepEqual(await assertAtRestReady({ dataDir: directory, cipher: successorOnly }), {
+      state: 'encrypted', keyId: successorId,
+    })
+    const predecessorOnly = createAtRestCipher(predecessor)
+    await assert.rejects(
+      predecessorOnly.readFile(sessionPath, 'session/rotation.json'),
+      error => error instanceof AtRestError && error.code === 'AT_REST_KEY_UNKNOWN',
+    )
+    await assert.rejects(
+      assertAtRestReady({ dataDir: directory, cipher: predecessorOnly }),
+      error => error instanceof AtRestError && error.code === 'AT_REST_KEY_INVALID',
+    )
+  })
+
+  it('aborts on damaged ciphertext and leaves predecessor files readable', async () => {
+    const directory = await temporaryDirectory()
+    const predecessor = keyRing(46)
+    const oldCipher = createAtRestCipher(predecessor)
+    await assertAtRestReady({ dataDir: directory, cipher: oldCipher })
+    const hash = 'b'.repeat(64)
+    const sessionPath = join(directory, 'sessions', 'damaged.json')
+    await mkdir(dirname(sessionPath), { recursive: true })
+    await oldCipher.writeFile(sessionPath, '{"id":"damaged"}', 'session/damaged.json')
+    const damaged = await readFile(sessionPath)
+    damaged[damaged.length - 17] ^= 0x01
+    await writeFile(sessionPath, damaged)
+    const blobPath = join(directory, 'workspace-v2', 'blobs', 'aa', hash)
+    await mkdir(dirname(blobPath), { recursive: true })
+    await oldCipher.writeFile(blobPath, 'intact blob', `workspace-blob:${hash}`)
+
+    const successorKey = Buffer.alloc(32, 47)
+    const successorId = keyIdFor(successorKey)
+    oldCipher.addKeys([{ keyId: successorId, key: successorKey }], successorId)
+    await assert.rejects(
+      rotateAtRestData({ dataDir: directory, cipher: oldCipher }),
+      error => error instanceof AtRestError && error.code === 'AT_REST_CIPHERTEXT_CORRUPT',
+    )
+    const predecessorOnly = createAtRestCipher(predecessor)
+    assert.equal(await predecessorOnly.readText(blobPath, `workspace-blob:${hash}`), 'intact blob')
+    assert.deepEqual(await assertAtRestReady({ dataDir: directory, cipher: predecessorOnly }), {
+      state: 'encrypted', keyId: predecessor.activeKeyId,
     })
   })
 })

@@ -12,6 +12,23 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-166：at-rest 密钥轮换
+
+```text
+changeId: BN-P2-166
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/at-rest-crypto.mjs; docs/drafts/browser-native-dsh-poc/at-rest-rotation.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/hosted/start-hosted.mjs; docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs; docs/drafts/browser-native-dsh-poc/tests/at-rest-key-rotation.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 静态加密只有单钥启动路径，更换密钥只能重写全部目录或丢数据；部署无法在保持服务可用的前提下加入 successor、重加密并退休 predecessor。新增多钥 keyring、在线重加密端点与失败边界，避免轮换期间丢写、半迁移目录无法重启或旧钥继续解新数据。
+existingExtensionPointsChecked: 复用 `createAtRestCipher` 信封与 AAD context、`assertAtRestReady` 的 key-check、`start-hosted.mjs` 的 `loadAtRestKeyringFromEnv`、`FormalSessionStore`/blob/chunk/attachment 落盘路径、journal 的 append 链与 `redact`；未改 packages/、Session format、Worker 协议或正式 profile。
+whyDraftOnlyWasInsufficient: 只有真实 backend、真实文件布局、暂停中的轮换请求和重启/备份副本，才能证明读取在轮换中继续、状态变更确实排队、每个面都被重写、key-check 与旧钥退休顺序正确，以及损坏密文失败后回滚仍可启动。
+behaviorChange: `createAtRestCipher` 的 keyring 可变，新增 `keyIds`/`addKeys`/`retireKey`；key-check 改为要求配置 keyring 包含记录的 key id，使中断轮换可重启。新增 `at-rest-rotation.mjs`：枚举并原子重写 Session、Workspace blob、chunk objects、附件对象与分块暂存，逐文件验证 active key 后才写 key-check。`observability-journal` 新增 `reencrypt`，在 append 链上重写各 ledger 行、head 与 metrics。backend 新增 `POST /api/browser-native/admin/at-rest-key/rotate`、`reloadAtRestKeyring` 选项与轮换闸门：GET/HEAD 与 Session `list`/`stat`/`read`/`export` 继续服务，其它写请求排队，重复轮换返回 `AT_REST_ROTATION_ACTIVE`；成功后退休非 active 钥。
+consumersUpdated: `start-hosted.mjs` 传入重读密钥文件的回调；单元测试覆盖多钥激活/退休、predecessor key-check、全表面重加密与损坏回滚；新增轮换 E2E；`hosted-deployment.md` 新增“密钥轮换”运维步骤与失败边界；README 与配置表更新；本 ledger。
+tests: `node --test docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs docs/drafts/browser-native-dsh-poc/tests/chunk-object-workspace.test.mjs docs/drafts/browser-native-dsh-poc/tests/observability-journal.test.mjs` 全部通过；`node docs/drafts/browser-native-dsh-poc/tests/at-rest-key-rotation.e2e.mjs` 通过：轮换暂停时 health 与 Session 读取成功、写请求未结算、释放后写入新钥；报告 `fromKeyId`/`toKeyId`/`retired` 与逐面计数正确；磁盘扫描无明文 marker；每个文件信封 key id 为新钥；旧钥单独启动 `AT_REST_KEY_INVALID`、旧钥读新文件 `AT_REST_KEY_UNKNOWN`；轮换后导出事件与附件与轮换前一致，备份副本与导入在新钥下可读；损坏密文的轮换失败后 health 可用、未重写附件仍可读，轮换前备份用旧钥恢复。`node docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs` 回归通过。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 上游同步后复跑两类 at-rest 单测、两个 E2E 与 `backend-v2`/chunk/journal 单测；若 keyring 文件格式、key-check 结构或数据面布局变化，同步更新 `at-rest-rotation.mjs` 的枚举与 context，并更新运维步骤。多实例并发轮换仍未支持。
+deleteCondition: 正式产品提供 KMS/HSM 托管的多钥轮换与在线重加密，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-165：静态数据加密（at rest）
 
 ```text

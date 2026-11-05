@@ -264,6 +264,7 @@ async function main() {
     workspaceVerifiedDownloads: options.workspaceVerifiedDownloads,
     ...(options.usagePricing === undefined ? {} : { usagePricing: options.usagePricing }),
     ...(options.atRestKeyring.keys.length === 0 ? {} : { atRestKeyring: options.atRestKeyring }),
+    ...(options.atRestKeyring.keys.length === 0 ? {} : { reloadAtRestKeyring: () => loadAtRestKeyringFromEnv(env) }),
     ...(options.budgetLimits === undefined ? {} : { budgetLimits: options.budgetLimits }),
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.stateAuthorityOrigin === undefined ? {} : { stateAuthorityOrigin: options.stateAuthorityOrigin }),

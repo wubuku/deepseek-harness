@@ -63,7 +63,7 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 | `DSH_POC_AT_REST_ENCRYPTION` | `auto` | `required` 时缺少密钥即拒绝启动；`auto` 有密钥就加密，无密钥在空目录上写明文 |
 | `DSH_POC_AT_REST_KEY` | 无 | 内联 base64 AES-256 密钥（32 字节）；与 `..._KEY_FILE` 互斥 |
 | `DSH_POC_AT_REST_KEY_ID` | 由密钥派生 | 可选 16 位小写十六进制 id，写入每个文件头 |
-| `DSH_POC_AT_REST_KEY_FILE` | 无 | 密钥文件；首个非注释行 `keyId=base64` 或裸 base64，文件权限必须为 `0600` |
+| `DSH_POC_AT_REST_KEY_FILE` | 无 | 密钥文件；首个非注释行为 active，其后行是轮换保留的 predecessor，每行 `keyId=base64` 或裸 base64，文件权限必须为 `0600` |
 | `DSH_POC_INPUT_USD_PER_1M` / `DSH_POC_OUTPUT_USD_PER_1M` | 无 | 成本报表的每百万 token 单价；两项同时设置，见[租户成本报表](tenant-cost-report.md) |
 | `DSH_POC_ALERT_FAILURE_RATIO` | 无 | 最近请求的失败占比阈值（0–1）；设置后启用失败率告警，见[可观测性](observability.md#阈值告警) |
 | `DSH_POC_ALERT_FAILURE_MIN_SAMPLES` | `20` | 失败率判定的最少样本数 |
@@ -92,6 +92,37 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 - 密文被截断或篡改，读取时以 `AT_REST_CIPHERTEXT_CORRUPT` 失败，启动加载 Session 时直接拒绝启动。
 
 升级留在原地的明文目录可以直接加密钥：旧文件按明文读取，新写入即加密；密钥文件权限不是 `0600` 或同时配置内联密钥与密钥文件都拒绝启动。回滚到未加密构建前必须先恢复未加密备份，否则旧构建无法读取密文。备份 bundle 保存的是密文（manifest 摘要也针对密文），恢复时必须使用同一密钥。Workspace 上传暂存、manifest/identity 元数据与备份包本身不在此范围内。
+
+### 密钥轮换
+
+`DSH_POC_AT_REST_KEY_FILE` 可以同时列出多把密钥：首个非注释条目是 active（新写入用它），其余是仍可解密历史文件的 predecessor。key-check 要求配置的 keyring 包含记录中的 key id，而不要求它就是 active，因此含 successor 的 keyring 能启动到一半重加密的目录。内联 `DSH_POC_AT_REST_KEY` 只能有一把密钥，轮换必须使用密钥文件。
+
+运维步骤：
+
+1. 把新密钥写到密钥文件第一行，保留旧密钥为第二行，权限保持 `0600`：
+
+   ```text
+   <new keyId>=<base64 new key>
+   <old keyId>=<base64 old key>
+   ```
+
+2. 重启 backend（或确保启动时已加载新文件）。此时 active 为新钥，旧文件仍由配置中的旧钥解密，服务正常。
+3. 触发在线轮换：
+
+   ```sh
+   curl -fsS -X POST http://127.0.0.1:4185/api/browser-native/admin/at-rest-key/rotate
+   ```
+
+   端点重新读取部署 keyring（`start-hosted.mjs` 每次都从密钥文件重读），激活新钥，逐文件原子重写 Session、Workspace blob、chunk objects、附件与分块暂存，journal 在 append 链上重写，最后验证每个文件都携带新 key id，写入新的 key-check，并退休内存中的旧钥。响应包含 `fromKeyId`、`toKeyId`、`retired`、逐面文件计数与 `reencrypted`。
+4. 轮换成功后从密钥文件删除旧钥并重启，完成磁盘配置层面的退休。删除前旧钥仍能启动，只是不再有新数据使用它。
+
+服务可用性与失败边界：
+
+- 轮换运行时 GET/HEAD 与 Session 的 `list`/`stat`/`read`/`export` 继续服务；其它状态变更请求在 `rotationActive` 闸门前排队，轮换结束（成功或失败）后依次执行，不会与重加密交错。同一时间只允许一个轮换，第二个请求得到 `AT_REST_ROTATION_ACTIVE`。
+- 文件逐个 `write temp + rename` 原子替换。任一步失败（密文损坏、权限、磁盘错误）时，已重写的文件用新钥、未重写的文件用旧钥，进程内同时保留两把钥，key-check 保持旧值，所以重启需要两把钥都在密钥文件里；旧钥仍可读取尚未重写的文件。
+- 回滚：停止 backend，用轮换前的备份恢复数据目录，按旧密钥文件启动。轮换成功后退回旧钥意味着新数据不可读，必须同样恢复备份。
+- 轮换后的导出、导入与备份一致性：bundle 保存密文，恢复/导入时必须使用新密钥；明文内容与轮换前相同，密文字节因 IV 重新生成而不同。
+- 未覆盖：多实例同时对同一数据目录轮换（数据目录锁只允许单进程）、密钥文件热更新之外的 KMS/HSM 托管、备份包本身与 manifest/identity 元数据的加密。计划中的 retention 清理与附件 GC 只删除文件，轮换跳过已消失的目标。
 
 ## 部署形态
 

@@ -13,6 +13,11 @@
  * A data directory that was written with a key records a key-check file; a
  * later start without that key, or with a different one, refuses to boot rather
  * than silently writing plaintext next to unreadable ciphertext.
+ *
+ * One cipher can hold several keys so a rotation can add a successor, activate
+ * it for new writes, and keep decrypting files that still use the predecessor.
+ * A key-check passes when the configured keyring contains the recorded key, not
+ * only when that key is active, so an interrupted rotation stays restartable.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -66,6 +71,16 @@ export function keyIdFor(key) {
 /** Whether one buffer starts with the at-rest envelope magic. */
 export function isAtRestEnvelope(bytes) {
   return bytes.length >= HEADER_BYTES && bytes.subarray(0, MAGIC.length).equals(MAGIC)
+}
+
+/**
+ * Read the key id recorded in one at-rest envelope.
+ * @param bytes - Stored file bytes.
+ * @returns 16 ASCII hex characters, or undefined for plaintext bytes.
+ */
+export function envelopeKeyId(bytes) {
+  if (!isAtRestEnvelope(bytes)) return undefined
+  return bytes.subarray(MAGIC.length + 1, MAGIC.length + 1 + KEY_ID_BYTES).toString('ascii')
 }
 
 function assertKey(key, label) {
@@ -194,9 +209,9 @@ export function createAtRestCipher(keyring) {
   }
   const keys = new Map()
   for (const entry of keyring.keys) keys.set(entry.keyId, assertKey(entry.key, `key ${entry.keyId}`))
-  const keyId = keyring.activeKeyId ?? keyring.keys[0].keyId
-  const key = keys.get(keyId)
-  if (key === undefined) throw new AtRestError('AT_REST_KEY_INVALID', `active key id ${keyId} is not in the keyring`)
+  let activeKeyId = keyring.activeKeyId ?? keyring.keys[0].keyId
+  if (!keys.has(activeKeyId)) throw new AtRestError('AT_REST_KEY_INVALID', `active key id ${activeKeyId} is not in the keyring`)
+  const activeKey = () => keys.get(activeKeyId)
 
   const requireKey = forKeyId => {
     const found = keys.get(forKeyId)
@@ -211,8 +226,9 @@ export function createAtRestCipher(keyring) {
 
   const encryptBuffer = (plaintext, context) => {
     if (!(plaintext instanceof Uint8Array)) throw new TypeError('at-rest encryption requires bytes')
+    const key = activeKey()
     const iv = randomBytes(IV_BYTES)
-    const prefix = Buffer.concat([MAGIC, Buffer.from([VERSION]), Buffer.from(keyId, 'ascii'), iv])
+    const prefix = Buffer.concat([MAGIC, Buffer.from([VERSION]), Buffer.from(activeKeyId, 'ascii'), iv])
     const cipher = createCipheriv('aes-256-gcm', key, iv)
     cipher.setAAD(aadFor(prefix, context))
     const body = Buffer.concat([cipher.update(plaintext), cipher.final()])
@@ -248,7 +264,36 @@ export function createAtRestCipher(keyring) {
   }
 
   return Object.freeze({
-    keyId,
+    /** Active key id; new envelopes are written with it. */
+    get keyId() { return activeKeyId },
+    /** Configured key ids, in no particular order. */
+    keyIds: () => [...keys.keys()],
+    /**
+     * Add or replace key material and optionally change the active key.
+     * @param incoming - Keys to install.
+     * @param nextActiveKeyId - New active key id, or the current one.
+     * @returns Nothing.
+     */
+    addKeys: (incoming, nextActiveKeyId) => {
+      for (const entry of incoming) keys.set(entry.keyId, assertKey(entry.key, `key ${entry.keyId}`))
+      if (nextActiveKeyId !== undefined) {
+        if (!keys.has(nextActiveKeyId)) {
+          throw new AtRestError('AT_REST_KEY_INVALID', `active key id ${nextActiveKeyId} is not in the keyring`)
+        }
+        activeKeyId = nextActiveKeyId
+      }
+    },
+    /**
+     * Remove one non-active key from the keyring.
+     * @param retiredKeyId - Key id to remove.
+     * @returns Whether the key was present.
+     */
+    retireKey: retiredKeyId => {
+      if (retiredKeyId === activeKeyId) {
+        throw new AtRestError('AT_REST_KEY_INVALID', `cannot retire the active at-rest key ${retiredKeyId}`)
+      }
+      return keys.delete(retiredKeyId)
+    },
     /** Bytes a file grows by when it is stored encrypted. */
     overheadBytes: AT_REST_OVERHEAD_BYTES,
     encryptBuffer,
@@ -280,8 +325,9 @@ export function createAtRestCipher(keyring) {
      * @returns Header, update, and finish byte producers.
      */
     createEncryptor: context => {
+      const key = activeKey()
       const iv = randomBytes(IV_BYTES)
-      const prefix = Buffer.concat([MAGIC, Buffer.from([VERSION]), Buffer.from(keyId, 'ascii'), iv])
+      const prefix = Buffer.concat([MAGIC, Buffer.from([VERSION]), Buffer.from(activeKeyId, 'ascii'), iv])
       const cipher = createCipheriv('aes-256-gcm', key, iv)
       cipher.setAAD(aadFor(prefix, context))
       return {
@@ -392,25 +438,43 @@ export async function assertAtRestReady({ dataDir, cipher }) {
     if (record?.version !== 1 || typeof record.keyId !== 'string' || typeof record.ciphertext !== 'string') {
       throw new AtRestError('AT_REST_KEY_INVALID', `key-check file ${checkPath} is invalid`)
     }
-    if (record.keyId !== cipher.keyId) {
-      throw new AtRestError('AT_REST_KEY_INVALID',
-        `data directory ${directory} was encrypted with at-rest key ${record.keyId}, but the configured key is ${cipher.keyId}`)
+    const sample = Buffer.from(record.ciphertext, 'base64')
+    if (envelopeKeyId(sample) !== record.keyId) {
+      throw new AtRestError('AT_REST_KEY_INVALID', `key-check file ${checkPath} records a different key id than its sample`)
     }
     let plaintext
     try {
-      plaintext = cipher.decryptBuffer(Buffer.from(record.ciphertext, 'base64'), KEY_CHECK_CONTEXT).toString('utf8')
+      plaintext = cipher.decryptBuffer(sample, KEY_CHECK_CONTEXT).toString('utf8')
     } catch (error) {
+      // The recorded key may be a predecessor during rotation; only its absence
+      // or a failed authentication makes the directory unreadable.
       throw new AtRestError('AT_REST_KEY_INVALID',
-        `configured at-rest key ${cipher.keyId} cannot decrypt the key-check file (${error instanceof Error ? error.message : String(error)})`)
+        `configured keyring cannot decrypt the key-check file written with ${record.keyId} (${error instanceof Error ? error.message : String(error)})`)
     }
     if (plaintext !== KEY_CHECK_PLAINTEXT) {
-      throw new AtRestError('AT_REST_KEY_INVALID', `key-check file ${checkPath} does not verify with the configured key`)
+      throw new AtRestError('AT_REST_KEY_INVALID', `key-check file ${checkPath} does not verify with the configured keyring`)
     }
     return { state: 'encrypted', keyId: cipher.keyId }
   }
+  await writeAtRestKeyCheck(directory, cipher)
+  return { state: 'encrypted', keyId: cipher.keyId, initialized: true }
+}
+
+/**
+ * Write the key-check sample for the cipher's active key.
+ *
+ * Rotation calls this after every file has been re-encrypted so a restart with
+ * only the successor key accepts the directory; an interrupted rotation leaves
+ * the previous sample in place and needs both keys.
+ * @param dataDir - Data directory that owns the check file.
+ * @param cipher - Cipher whose active key signs the sample.
+ * @returns Promise resolving after the file is durable.
+ */
+export async function writeAtRestKeyCheck(dataDir, cipher) {
+  const directory = resolve(dataDir)
+  const checkPath = join(directory, KEY_CHECK_FILE)
   const ciphertext = cipher.encryptBuffer(Buffer.from(KEY_CHECK_PLAINTEXT, 'utf8'), KEY_CHECK_CONTEXT)
   await writeFileBytes(checkPath, `${JSON.stringify({ version: 1, keyId: cipher.keyId, ciphertext: ciphertext.toString('base64') })}\n`, 0o600)
-  return { state: 'encrypted', keyId: cipher.keyId, initialized: true }
 }
 
 /** Whether any stored Session log at the root of `sessions/` is encrypted. */

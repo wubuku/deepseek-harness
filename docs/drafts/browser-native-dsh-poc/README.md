@@ -1142,12 +1142,15 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 
 `at-rest-crypto.mjs` 把 Session 日志、Workspace blob（含 chunk objects）、附件（含分块暂存）与 observability journal 写成 AES-256-GCM 信封：magic、版本、16 位 key id、随机 96 位 IV、密文与认证标签，文件头与逐面 context 作为 AAD。密钥来自部署配置：`DSH_POC_AT_REST_KEY`（内联 base64）或 `DSH_POC_AT_REST_KEY_FILE`（首个条目为 active，权限必须 `0600`），`DSH_POC_AT_REST_ENCRYPTION=required` 时缺钥拒绝启动。带密钥启动写入 `.browser-native-at-rest-key-check`；之后缺钥为 `AT_REST_KEY_REQUIRED`，错钥为 `AT_REST_KEY_INVALID`，密文损坏在读取/启动时为 `AT_REST_CIPHERTEXT_CORRUPT`。明文旧目录可直接加密钥升级，旧文件仍可读；导出/备份保存密文，恢复到同一密钥后字节一致。
 
+密钥文件可同时列出 successor 与 predecessor，首个条目为 active；key-check 只要求配置的 keyring 包含记录中的 key，因此中断的轮换仍可重启。后端提供 `POST /api/browser-native/admin/at-rest-key/rotate`：先重新读取部署 keyring、激活新钥，再在 `at-rest-rotation.mjs` 中逐文件原子重加密 Session、blob、chunk、附件与暂存，journal 在 append 链上重写；轮换期间读取与 Session 只读操作继续服务，状态变更请求排队，全部文件验证通过后才更新 key-check 并退休旧钥。失败时两组密钥都保留、key-check 不变，旧钥仍可读尚未重写的文件；回滚用轮换前备份 + 旧钥启动。运维步骤与失败边界见[托管模式部署](hosted-deployment.md#密钥轮换)。
+
 ```sh
 node --test docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs
 node docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/at-rest-key-rotation.e2e.mjs
 ```
 
-E2E 覆盖磁盘无明文 marker、附件/Workspace 回读、同钥重启、备份副本恢复、Session bundle 导出/导入、缺钥/错钥/损坏密文拒绝启动。范围外：Workspace 上传暂存、manifest/identity 元数据、备份包本身、密钥轮换与 KMS/HSM 托管。
+E2E 覆盖磁盘无明文 marker、附件/Workspace 回读、同钥重启、备份副本恢复、Session bundle 导出/导入、缺钥/错钥/损坏密文拒绝启动；轮换 E2E 覆盖进行中健康检查与读取可用、状态变更排队、旧钥无法解密新数据、轮换后导出/导入/备份/重启一致，以及损坏密文失败后旧钥回滚。范围外：Workspace 上传暂存、manifest/identity 元数据、备份包本身、KMS/HSM 托管与多实例并发轮换。
 
 ## 本地后端请求准入
 
