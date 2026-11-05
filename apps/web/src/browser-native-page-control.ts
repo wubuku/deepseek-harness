@@ -1070,11 +1070,22 @@ export async function connectBrowserNativePageControl(
     readonly code?: string
   }
   let turnRetryTarget: TurnRetryTarget | undefined
+  /** Keep the retry panel above the composer so it never covers the Send control. */
+  const anchorTurnRetryPanel = (root: HTMLElement): void => {
+    const composer = [...document.querySelectorAll<HTMLElement>('[data-composer-input][contenteditable="true"]')].at(-1)
+    root.style.bottom = `${composer === undefined
+      ? 16
+      : Math.max(16, window.innerHeight - composer.getBoundingClientRect().top + 8)}px`
+  }
+  const repositionTurnRetryPanel = (): void => {
+    if (turnRetryPanel !== undefined) anchorTurnRetryPanel(turnRetryPanel.root)
+  }
   const stopTurnRetryWatch = (): void => {
     if (turnRetryTimer !== undefined) {
       window.clearInterval(turnRetryTimer)
       turnRetryTimer = undefined
     }
+    window.removeEventListener('resize', repositionTurnRetryPanel)
     turnRetrySessionId = undefined
     turnRetryTarget = undefined
     turnRetryPanel?.root.remove()
@@ -1090,6 +1101,8 @@ export async function connectBrowserNativePageControl(
       right: '16px',
       bottom: '16px',
       zIndex: '950',
+      // Anchored above the composer by anchorTurnRetryPanel; the initial value
+      // only covers the frame between mounting and the first reposition.
       pointerEvents: 'auto',
       maxWidth: 'min(420px, calc(100vw - 32px))',
       padding: '9px 13px',
@@ -1115,6 +1128,8 @@ export async function connectBrowserNativePageControl(
     root.append(message, button)
     document.body.append(root)
     turnRetryPanel = { root, message, button }
+    anchorTurnRetryPanel(root)
+    window.addEventListener('resize', repositionTurnRetryPanel)
     return turnRetryPanel
   }
   const showTurnRetryPanel = (

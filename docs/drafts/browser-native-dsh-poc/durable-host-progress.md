@@ -54,6 +54,7 @@ backend 新增：
 | `node tests/durable-ui-approval.e2e.mjs` | 正式 Web preview（`preview.html?browser-native-durable=1`）：durable turn 的 `pendingApproval` 渲染为 “Approval needed: write” + 精确目标；键盘 Enter 批准后 11 个事件 seq 0–10、`tool/result` 无 `isError`、Workspace 出现 `durable-ui-approved.txt`；Escape 拒绝后 11 个事件 seq 0–10、`tool/result.isError=true`、`durable-ui-rejected.txt` 不存在；`pageErrors=0`。 |
 | `node tests/session-query-scale.e2e.mjs` | 122 Session（含 1 个 durable Session）检索探针通过：列表/过滤/全文/会话内命中均可索引 durable 事件；alpha 命中 61、beta 60。 |
 | `node tests/durable-composer.e2e.mjs` | 正式 Web preview（`preview.html?browser-native=1&browser-native-durable=1&browser-native-durable-turn=1`）：首用新 Session 下主 composer 状态条为 `durable`；Enter 提交得到服务端 durable turn 并 `completed`；刷新后同一 `sessionId` 仍路由 durable，第二 turn 独立完成、`turn/start` 计 2、两条 prompt 均落库、末事件为 `turn/end`；`pageErrors=0`。 |
+| `node tests/retry-panel-send.e2e.mjs` | 失败重试面板出现后，1440/390/320px 下均不与 composer 或 Send 控件相交，Send 中心点命中自身；面板可见时用 Enter 提交仍得到 `completed` turn；`pageErrors=0`。`product-visibility.e2e.mjs` 随之通过。 |
 
 ## 复跑
 
