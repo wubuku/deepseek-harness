@@ -10,8 +10,8 @@ description: "把 Browser-Native DSH 的 Session 权威、检索索引、租户�
 
 - **试点期只支持单实例同源服务**：一个 backend 进程持有一个 `dataDir`，同时服务多个浏览器标签页。这是当前所有证据成立的前提。
 - **多实例不在交付范围**：共享 `dataDir`、多进程写同一 Session、跨主机接管、跨实例 handoff 都未实现也未验证；不得以“部署两个进程”冒充 HA。
-- **浏览器侧只保留执行面与本地副本**：Workspace/OPFS 是本地缓存与工具执行目录，不是 Session、检索、预算或凭据的权威；关页即回收 Worker。
-- **服务端交付物由五部分组成**：Session 权威、检索索引、租户预算与费用、egress 代理、durable turn host。它们共享同一套 owner fencing 与审计口径。
+- **浏览器侧是纯浏览器降级/离线路径**：Workspace/OPFS 是本地缓存与降级执行目录，不是 Session、检索、预算或凭据的权威；关页即回收 Worker，后台续跑由 durable host 承担。
+- **服务端交付物由五部分组成**：Session 权威、检索索引、租户预算与费用、egress 代理、durable turn host。其中 durable host 是默认主执行路径，浏览器 Worker 只在无法连接服务端或断网时降级；它们共享同一套 owner fencing 与审计口径。
 
 ## 交付物与边界
 
@@ -21,7 +21,7 @@ description: "把 Browser-Native DSH 的 Session 权威、检索索引、租户�
 | 检索索引 | 列表/过滤/全文索引与排名、事件检索游标 | 可选 SQLite 索引；部署默认 `openAt: never`，浏览器内退化为线性扫描 | 121 Session 列表 3.2 ms、cwd 过滤 2.6 ms、全文 255.8 ms 且 60/60 命中；单 Session 内检索 1.9 ms | 服务端 SQLite/OpenSearch 等索引进程、增量写入与重建、租户过滤、跨实例一致的索引版本 | [会话检索规模](session-query-browser-scale.md)；Worker 无 `node:sqlite.DatabaseSync` |
 | 租户预算与费用 | Session/租户输入输出 token、限额、超限审计；费用换算与账单对账 | 验证 roster 的 token meter + fetch 前阻断；`budget/exceeded` 事件 | 真实 provider 用量逐值相等（2,346 输入 / 16 输出）；Session 与租户限额都在发出上游请求前拒绝 | 追加式用量账本（按 tenant/session/request 幂等）、跨实例原子扣减、价格表版本化、账单导出与对账 | [token 预算](token-budget-metering.md)；费用换算与跨 Session 生产聚合未实现 |
 | egress 代理 | 外部 origin/路径/方法/凭据授权、限流、允许与拒绝审计 | 同源 `POST /egress/fetch` + 静态 capability 白名单；CSP `connect-src 'self'` | Worker 无密钥；白名单外的 host/path/method 被拒；不跟随重定向；响应脱敏；capability 级固定窗口限流 | capability 持久化与动态授权、per-tenant 配额（共享计数器）、集中审计、凭据轮换 | [egress 与凭据隔离](credential-isolation-proxy.md)；审计默认内存 200 条，限流是单进程窗口 |
-| durable turn host | 关页后仍在执行的 turn、运行状态、幂等结算 | `POST/GET /session/durable`，`turnId` 幂等，模型经同源 `/llm` | 关页后 turn 完成、重开可读；重复提交不产生第二次模型请求；完成后释放 owner 供重开接管 | 持久运行队列（跨重启）、租约续期与失效、工具/审批/取消结算、跨实例 claim 与幂等键存储 | [durable host 进度](durable-host-progress.md)、[重启恢复](durable-host-restart.md)；工具调用仍以 `DURABLE_TOOL_UNSUPPORTED` 结算 |
+| durable turn host（主执行路径） | 关页后仍在执行的 turn、运行状态、幂等结算、服务端工具与审批 | `POST/GET /session/durable`，`turnId` 幂等，模型经同源 `/llm`；服务端挂载 `read`/`write`/`edit`/`grep`/`glob`/`subagent`，写操作需审批 | 关页后 turn 完成、重开可读；重复提交不产生第二次模型请求；同一 10 任务基准 10/10、29 请求 / 23,318 tokens / 12.8 秒，工具与 10 次审批均在服务端完成 | 持久运行队列（跨重启）、租约续期与失效、跨实例 claim 与幂等键存储 | [durable host 进度](durable-host-progress.md)、[真实模型任务基准](real-model-task-benchmark.md)；运行记录仍在进程内存，工具 turn 的关页中途重跑未验证 |
 
 ## 共同不变量
 

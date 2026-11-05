@@ -59,8 +59,8 @@ node --test docs/drafts/browser-native-dsh-poc/tests/backend-v2.test.mjs \
 
 ## 风险与下一步
 
-- 服务端 turn 只执行文本；真实 agent 的文件工具、审批和 Workspace 提交仍需在服务端实现或交由持久的 Worker host。
+- 服务端 turn 已挂载 `read`/`write`/`edit`/`grep`/`glob`/`subagent`，写操作经审批；同一 10 任务真实模型基准达到 10/10、29 请求 / 23,318 tokens。尚未覆盖的是待决审批跨重启恢复与工具结果的跨 store 事务。
 - 运行记录只在内存。backend 重启后，已 flush 的开场事件会保留成一个没有 `turn/end` 的 turn；下一次 durable turn 会以 `SESSION_TURN_ACTIVE` 拒绝，需要启动恢复流程把未知 turn 结算为 `interrupted`。
 - 产品 UI 没有只读挂载服务端 Session 的入口。本批“重开标签接管视图”由真实 Chrome 标签的 HTTP 读取与写权接管证明，不证明聊天 UI 渲染。
 - Session 所有权在 turn 结束后立即释放；长 turn 期间重开标签只能只读，不能抢写。若产品需要“接管即抢占”，需要显式的接管协议与旧执行者 fencing。
-- 未验证：多 backend/HA、模型流式取消、审批暂停、真实 agent 工具、Safari/WebKit、自然浏览器崩溃与 OS 崩溃。
+- 未验证：多 backend/HA、关页中途正在执行的工具 turn、待决审批跨重启恢复、Safari/WebKit、自然浏览器崩溃与 OS 崩溃。

@@ -2,6 +2,8 @@
 
 本矩阵回答产品问题：`fs`、`shell`、`web`、`subagent`、`browser-use` 在 Browser-Native Worker 里哪些可用、受什么限制、不可用时模型看到什么。原则来自[工具清单与配置裁剪调研](browser-native-tool-roster-and-configuration-research.md)：不属于该执行位置的能力必须在模型请求前裁掉，而不是注册后再返回“命令找不到”。
 
+本矩阵描述浏览器 Worker 降级/离线路径。产品默认执行面是 durable 服务端 host（见[生产执行路径](product-readiness-go-no-go.md#生产执行路径durable-主路径与-worker-降级)）：它提供 `read`/`write`/`edit`/`glob`/`grep`/`subagent` 与审批，基准 roster 已裁掉未使用的 `todo_write` 与 `working_directory`；Worker 侧仍保留这些工具供产品 profile 使用。
+
 ## 矩阵
 
 | 能力 | Worker 可用性 | 模型可见 | 限制 | 不可用或失败时的降级 | 证据 |

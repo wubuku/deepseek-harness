@@ -1,6 +1,6 @@
 # 浏览器支持矩阵
 
-试点结论：Worker + OPFS 的完整 Harness 只支持 **Chromium 桌面**（Chrome、Edge、Chromium）；Safari、iOS/iPadOS 与移动浏览器继续被启动门禁拒绝。移动端另有一条 **server-host + UI-only** 路径：页面不启动 Worker、不使用 OPFS，由服务端 durable host 执行 turn，WebKit 的 iPhone 13 描述符已跑通（见[移动端 UI-only 策略](mobile-ui-only.md)）。两条路径的判定互不替代：UI-only 可用不代表 Worker 路径可用。
+试点结论：产品默认执行路径是 durable 服务端 host；本矩阵只判定浏览器 Worker 降级/离线路径的支持边界。Worker + OPFS 的完整 Harness 只支持 **Chromium 桌面**（Chrome、Edge、Chromium）；Safari、iOS/iPadOS 与移动浏览器继续被 Worker 启动门禁拒绝。移动端另有一条 **server-host + UI-only** 路径：页面不启动 Worker、不使用 OPFS，由服务端 durable host 执行 turn，WebKit 的 iPhone 13 描述符已跑通（见[移动端 UI-only 策略](mobile-ui-only.md)）。两条路径的判定互不替代：UI-only 可用不代表 Worker 路径可用。
 
 ## 矩阵
 

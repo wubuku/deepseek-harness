@@ -74,20 +74,20 @@ PoC 的 principal 是同源匿名 cookie，授权与拒绝审计由 backend 自�
 
 ### 推荐范围
 
-建议把这次 PoC 立项为“服务端 Host 执行 + 浏览器纯 UI 的会话协作产品”，而不是“浏览器内运行完整 harness”。PoC 的价值是已验证的语义与回归证据：Session 追加 fencing、owner/editor 租约、`expectedNextSeq` 并发裁定、离线重放、保留期与按 principal 导出、拒绝与协作审计。产品化应把这些语义实现到既有 seam，浏览器只保留 UI、上传校验与审批投影。
+建议把这次 PoC 立项为“durable 服务端 host 主执行 + 浏览器 Worker 纯浏览器降级/离线”的会话协作产品，而不是“浏览器内运行完整 harness”。PoC 的价值是已验证的语义与回归证据：Session 追加 fencing、owner/editor 租约、`expectedNextSeq` 并发裁定、离线重放、保留期与按 principal 导出、拒绝与协作审计；同一 10 任务真实模型基准两侧均 10/10，durable 23,318 tokens / 12.8 秒，Worker 91,734 tokens / 22.4 秒，且 durable 工具面已与 Worker 对齐。产品化应把这些语义实现到既有 seam，浏览器保留 UI、上传校验与审批投影，并保留 Worker 作为断网或无法连接服务端时的降级执行路径。
 
 ### 分期
 
 - **P0 规格固化**：把本表 R2/R3/R4 的行为写成产品 Session 控制器、存储、附件、遥测的验收用例；PoC 的 HTTP 测试保留为对照证据，不进入产品测试套件。
 - **P1 直接复用**：先迁移 7 个纯工具模块（SHA-256、分块、下载校验、下载日志、能力标识、`Symbol.dispose`、审批投影），它们的依赖最少，可独立验证。
 - **P2 服务端重构**：按 seam 逐个实现 Session 权威与共享、工作区与附件、出口与凭据、观测与导出；每落地一个 seam，用 PoC 的对应合同测试做行为对照。
-- **P3 清理实验路线**：产品路径确定后删除 R7/R8/R9；若仍保留 preview，只保留上游 `packages/experimental/webworker-runtime`，不携带 PoC 的 OPFS 工作区与探针。
+- **P3 收敛执行面**：durable host 成为默认执行路径后，删除 R8 的探针与一次性编排代码；R7 的 Worker 执行入口保留为降级/离线路径，复用产品 `packages/experimental/webworker-runtime`，但不携带 PoC 的探针、旧 v1 后端与自建编排。
 
 ### 风险
 
 - 把 `backend-v2.mjs` 直接改造成产品包会复制第二套 Session 权威，后续无法与产品 JSONL/SQLite 迁移链对齐。
 - 把 `session-shares.json`/`session-collaboration.jsonl` 当成产品持久层会绕过产品存储事务与保留期。
-- 保留 Worker 执行路线就必须同时保留 OPFS、出口代理和浏览器 LLM 代理，等于在产品内维持两套安全模型；移动端还无法覆盖 iOS。
+- 保留 Worker 降级路径就必须同时保留 OPFS、出口代理和浏览器 LLM 代理，等于在产品内维持两套安全模型；因此它只应是 Chromium 桌面上的降级/离线选项，不能升格为默认执行面，也不覆盖 iOS。
 - 只迁移 UI 投影而不迁移上传校验，会丢失 PoC 已验证的“下载后哈希校验再入持久存储”保证。
 
 ## 证据与复跑

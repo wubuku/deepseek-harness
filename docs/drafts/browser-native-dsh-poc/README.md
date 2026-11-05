@@ -6,7 +6,7 @@ description: "Browser-native DSH PoC 的 v2 规划和历史协议实验：保留
 
 ## 产品就绪度
 
-[产品就绪度 go/no-go](product-readiness-go-no-go.md)已按 2026-11-05 新证据刷新：结论仍是有条件 GO——浏览器 Worker 作执行面，Session 权威、检索索引、租户预算/费用、egress 代理与关页后执行必须由服务端承担，纯浏览器零服务端依赖不成立。数据可信度（AES-256-GCM 落盘加密与在线轮换、60 次 SIGKILL、ENOSPC/EROFS/IO 超时注入、归档与按需加载、1,000 Session 启动与单节点容量上限）和产品可见性（预算限额单一来源、可操作失败建议、axe 与 zh/en 复查）已闭环；文档给出可直接勾选的立项条件清单，并逐条标注被新证据替代的旧结论。[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)把这五项定为试点交付物，逐项写明单实例已验证边界、多实例前置条件与不得声称的范围：试点只支持单进程同源服务，多实例/跨主机 HA 未实现也未验证。浏览器范围见[浏览器支持矩阵](browser-support-matrix.md)：只支持 Chromium 桌面，Safari、Firefox、iOS/iPadOS 与移动浏览器在启动前被门禁拒绝。逐模块的“可直接复用 / 需重构 / 应丢弃”判定、PoC 与产品架构落差及立项分期见[PoC 到产品迁移映射](poc-to-product-migration-map.md)。
+[产品就绪度 go/no-go](product-readiness-go-no-go.md)已按 2026-11-05 durable-first 证据刷新：生产路径定为 durable 服务端 host 主执行、浏览器 Worker 作纯浏览器降级/离线路径；同一 10 任务真实模型基准两侧 10/10，durable 29 请求 / 23,318 tokens / 12.8 秒，Worker 39 请求 / 91,734 tokens / 22.4 秒，durable 输入约为 Worker 的 24.4%，工具面已对齐为 6 个。Session 权威、检索索引、租户预算/费用、egress 代理与跨节点关页接管仍必须由服务端承担，纯浏览器零服务端依赖不成立；单节点关页续跑已由 durable host 承担。数据可信度（AES-256-GCM 落盘加密与在线轮换、60 次 SIGKILL、ENOSPC/EROFS/IO 超时注入、归档与按需加载、1,000 Session 启动与单节点容量上限）和产品可见性（预算限额单一来源、可操作失败建议、axe 与 zh/en 复查）已闭环；文档给出可直接勾选的立项条件清单，并逐条标注被新证据替代的旧结论。[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)把这五项定为试点交付物，逐项写明单实例已验证边界、多实例前置条件与不得声称的范围：试点只支持单进程同源服务，多实例/跨主机 HA 未实现也未验证。浏览器范围见[浏览器支持矩阵](browser-support-matrix.md)：只支持 Chromium 桌面，Safari、Firefox、iOS/iPadOS 与移动浏览器在启动前被门禁拒绝。逐模块的“可直接复用 / 需重构 / 应丢弃”判定、PoC 与产品架构落差及立项分期见[PoC 到产品迁移映射](poc-to-product-migration-map.md)。
 
 ## Summary
 
