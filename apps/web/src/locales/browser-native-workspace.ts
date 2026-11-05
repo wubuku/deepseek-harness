@@ -369,6 +369,45 @@ export function browserNativeFirstUseCopy(language: string): {
   }
 }
 
+/** Format the main composer's execution route for the page language.
+ *
+ * The chip states which host runs a submitted prompt: the durable server host by
+ * default, or the browser Worker after an explicit downgrade. `reason` carries
+ * the degraded condition so users can tell why their turn left durable mode.
+ * @param language - Page language tag.
+ * @returns Localized route labels with an interpolated fallback reason.
+ */
+export function browserNativeDurableRouteCopy(language: string): {
+  readonly label: string
+  readonly durable: string
+  readonly workerFallback: (reason: string) => string
+  readonly sessionNotReady: string
+  readonly waitingWorker: string
+  readonly startUnavailable: (detail: string) => string
+  readonly queued: string
+} {
+  if (language.startsWith('zh')) {
+    return {
+      label: '执行路由',
+      durable: '主 composer 由 durable 服务端执行',
+      workerFallback: reason => `已降级到浏览器 Worker：${reason}`,
+      sessionNotReady: 'Session 尚未就绪',
+      waitingWorker: 'Session 未就绪，本轮使用浏览器 Worker',
+      startUnavailable: detail => `durable 服务端不可用（${detail}）`,
+      queued: '已排队，等待当前 durable turn 结束',
+    }
+  }
+  return {
+    label: 'Execution route',
+    durable: 'Main composer runs on the durable server host',
+    workerFallback: reason => `Fell back to the browser Worker: ${reason}`,
+    sessionNotReady: 'the Session is not ready',
+    waitingWorker: 'the Session is not ready; this prompt uses the browser Worker',
+    startUnavailable: detail => `the durable server host is unavailable (${detail})`,
+    queued: 'Queued behind the running durable turn',
+  }
+}
+
 /** Format the durable turn's pending-approval surface for the page language.
  *
  * The page renders this surface from the durable host's status, not from the
@@ -386,6 +425,7 @@ export function browserNativeDurableApprovalCopy(language: string): {
   readonly deciding: string
   readonly running: string
   readonly completed: string
+  readonly retry: string
   readonly failed: (status: number | undefined) => string
 } {
   if (language.startsWith('zh')) {
@@ -398,6 +438,7 @@ export function browserNativeDurableApprovalCopy(language: string): {
       deciding: '正在提交决定…',
       running: '服务端 turn 正在运行',
       completed: '服务端 turn 已完成',
+      retry: '重试该轮',
       failed: status => status === undefined ? '审批决定提交失败' : `审批决定提交失败（HTTP ${String(status)}）`,
     }
   }
@@ -410,6 +451,7 @@ export function browserNativeDurableApprovalCopy(language: string): {
     deciding: 'Submitting decision…',
     running: 'Server turn running',
     completed: 'Server turn completed',
+    retry: 'Retry this turn',
     failed: status => status === undefined ? 'The approval decision could not be submitted' : `The approval decision could not be submitted (HTTP ${String(status)})`,
   }
 }

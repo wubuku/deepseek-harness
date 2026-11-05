@@ -190,7 +190,7 @@ function proxiedRequest(url, headers) {
 
 /** Build the preview handshake URL for a token and origin. */
 function handshakeUrl(origin, token) {
-  const next = '/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none'
+  const next = '/preview.html?browser-native=1&browser-native-durable=1&browser-native-durable-turn=1&preview-fixture=none'
   return `${origin}/auth/handshake?token=${encodeURIComponent(token)}&next=${encodeURIComponent(next)}`
 }
 

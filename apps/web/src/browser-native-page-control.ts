@@ -1,5 +1,6 @@
 import {
   browserNativeDurableApprovalCopy,
+  browserNativeDurableRouteCopy,
   browserNativeFirstUseCopy,
   browserNativeOfflineStatusCopy,
   browserNativeQueueStatusCopy,
@@ -76,8 +77,17 @@ declare global {
       readonly sessionId?: string
     }) => Promise<{ readonly sessionId: string; readonly turnId: string }>
     __DSH_LAST_DURABLE_TURN__?: { readonly sessionId: string; readonly turnId: string }
+    __DSH_BROWSER_NATIVE_COMPOSER_ROUTE__?: {
+      readonly state: 'durable' | 'worker'
+      readonly reason?: string
+      readonly sessionId?: string
+    }
+    __DSH_BROWSER_NATIVE_SESSION_HINT__?: { readonly sessionId: string; readonly endpoint: string }
   }
 }
+
+/** Page event carrying the Session address observed on a client journal stream. */
+const BROWSER_NATIVE_SESSION_HINT_EVENT = 'dsh-browser-native-session-hint'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -377,7 +387,11 @@ async function downloadSupportBundle(sessionId: string): Promise<void> {
  */
 export async function connectBrowserNativePageControl(
   worker: Worker,
-  options: { readonly durable?: boolean; readonly apiOrigin?: string } = {},
+  options: {
+    readonly durable?: boolean
+    readonly apiOrigin?: string
+    readonly durableTurns?: boolean
+  } = {},
 ): Promise<() => void> {
   const channel = new MessageChannel()
   const receiver = new BrowserNativeControlReceiver()
@@ -1751,6 +1765,10 @@ export async function connectBrowserNativePageControl(
       syncExportControl()
       startTurnRetryWatch(notice.sessionId)
       startBudgetWatch(notice.sessionId)
+      if (options.durableTurns === true) {
+        composerRouteSessionId = notice.sessionId
+        renderComposerRoute()
+      }
       if (!recoveryLocks.supported) {
         publishLocalStatus('recovery-unavailable', browserNativeRecoveryErrorCopy(document.documentElement.lang))
         stopWorker()
@@ -1762,8 +1780,16 @@ export async function connectBrowserNativePageControl(
     if (notice.type === 'released' || notice.type === 'unavailable') {
       owners.delete(notice.sessionId)
       syncExportControl()
-      if (turnRetrySessionId === notice.sessionId) stopTurnRetryWatch()
-      stopBudgetWatch(notice.sessionId)
+      const durableSession = durableWatch?.sessionId === notice.sessionId
+        || durableHandoffSessionId === notice.sessionId
+      if (durableSession) {
+        // The durable host owns execution now; its budget endpoint still scopes
+        // usage to this Session, so the bar must outlive the Worker write lease.
+        startBudgetWatch(notice.sessionId)
+      } else {
+        if (turnRetrySessionId === notice.sessionId) stopTurnRetryWatch()
+        stopBudgetWatch(notice.sessionId)
+      }
       removeRecoveryRecord(browserNativeOwnerStorageKey(notice.sessionId))
       recoveryLocks.releaseResource({ kind: 'session', id: notice.sessionId })
     }
@@ -1833,12 +1859,19 @@ export async function connectBrowserNativePageControl(
     readonly status: HTMLElement
     readonly approve: HTMLButtonElement
     readonly reject: HTMLButtonElement
+    readonly retry: HTMLButtonElement
     state: DurableApprovalState
     approvalId: string | undefined
     deciding: boolean
   } | undefined
-  let durableWatch: { readonly sessionId: string; readonly turnId: string } | undefined
+  let durableWatch: { readonly sessionId: string; readonly turnId: string; readonly prompt: string } | undefined
   let durableTimer: number | undefined
+  let pendingDurablePrompt: { readonly prompt: string; readonly sessionId: string } | undefined
+  let composerRoute: 'durable' | 'worker' = options.durableTurns === true ? 'durable' : 'worker'
+  let composerRouteReason: string | undefined
+  let composerRouteSessionId: string | undefined
+  let composerRouteChip: { readonly root: HTMLElement; readonly label: HTMLElement } | undefined
+  let durableHandoffSessionId: string | undefined
   const styleDurableButton = (button: HTMLButtonElement): void => {
     Object.assign(button.style, {
       padding: '6px 12px',
@@ -1908,7 +1941,12 @@ export async function connectBrowserNativePageControl(
     reject.setAttribute('data-browser-native-durable-reject', '')
     reject.textContent = copy.reject
     styleDurableButton(reject)
-    actions.append(approve, reject)
+    const retry = document.createElement('button')
+    retry.type = 'button'
+    retry.setAttribute('data-browser-native-durable-retry', '')
+    retry.textContent = copy.retry
+    styleDurableButton(retry)
+    actions.append(approve, reject, retry)
     root.append(title, detail, status, actions)
     root.addEventListener('keydown', (event: KeyboardEvent) => {
       if (event.isComposing || durablePanel === undefined || durableWatch === undefined) return
@@ -1927,8 +1965,13 @@ export async function connectBrowserNativePageControl(
     })
     approve.addEventListener('click', () => { void decideDurableApproval('approve') })
     reject.addEventListener('click', () => { void decideDurableApproval('reject') })
+    retry.addEventListener('click', () => {
+      const watch = durableWatch
+      if (watch === undefined) return
+      void startDurableTurn({ prompt: watch.prompt, sessionId: watch.sessionId })
+    })
     document.body.append(root)
-    durablePanel = { root, title, detail, status, approve, reject, state: 'running', approvalId: undefined, deciding: false }
+    durablePanel = { root, title, detail, status, approve, reject, retry, state: 'running', approvalId: undefined, deciding: false }
     return durablePanel
   }
   const renderDurableApproval = (
@@ -1951,6 +1994,7 @@ export async function connectBrowserNativePageControl(
     const actionable = state === 'pending'
     panel.approve.hidden = !actionable
     panel.reject.hidden = !actionable
+    panel.retry.hidden = state !== 'failed'
     panel.approve.disabled = !actionable || panel.deciding
     panel.reject.disabled = !actionable || panel.deciding
   }
@@ -2026,6 +2070,13 @@ export async function connectBrowserNativePageControl(
       ...(failed && error !== undefined ? { detail: error } : {}),
       status: failed ? copy.failed(undefined) : copy.completed,
     })
+    if (failed) {
+      showFailureGuidance(panel.root, error ?? 'DURABLE_TURN_FAILED', { sessionId: watch.sessionId }, panel.retry)
+      return
+    }
+    const queued = pendingDurablePrompt
+    pendingDurablePrompt = undefined
+    if (queued !== undefined) void startDurableTurn(queued)
   }
   const startDurableTurn = async (request: {
     readonly prompt: string
@@ -2038,7 +2089,7 @@ export async function connectBrowserNativePageControl(
       ? request.sessionId : `durable-ui-${globalThis.crypto.randomUUID()}`
     const turnId = `durable-ui-turn-${globalThis.crypto.randomUUID()}`
     stopDurableWatch()
-    durableWatch = { sessionId, turnId }
+    durableWatch = { sessionId, turnId, prompt: request.prompt }
     window.__DSH_LAST_DURABLE_TURN__ = { sessionId, turnId }
     const panel = ensureDurableApprovalPanel()
     panel.deciding = false
@@ -2069,6 +2120,175 @@ export async function connectBrowserNativePageControl(
     return { sessionId, turnId }
   }
   if (options.durable === true) window.__DSH_BROWSER_NATIVE_DURABLE_TURN__ = startDurableTurn
+
+  const renderComposerRoute = (): void => {
+    if (options.durableTurns !== true) return
+    const copy = browserNativeDurableRouteCopy(document.documentElement.lang)
+    if (composerRouteChip === undefined) {
+      const root = document.createElement('div')
+      root.setAttribute('data-browser-native-composer-route', '')
+      root.setAttribute('role', 'status')
+      root.setAttribute('aria-live', 'polite')
+      Object.assign(root.style, {
+        position: 'fixed',
+        left: '16px',
+        bottom: '16px',
+        zIndex: '1100',
+        maxWidth: 'min(360px, calc(100vw - 32px))',
+        padding: '5px 10px',
+        border: `1px solid ${browserNativeSurface.border}`,
+        borderRadius: '999px',
+        background: browserNativeSurface.fill,
+        color: browserNativeSurface.secondary,
+        font: '500 12px/1.4 system-ui, sans-serif',
+        pointerEvents: 'none',
+      })
+      const label = document.createElement('span')
+      root.append(label)
+      document.body.append(root)
+      composerRouteChip = { root, label }
+    }
+    const chip = composerRouteChip
+    chip.root.dataset.state = composerRoute
+    chip.root.setAttribute('aria-label', copy.label)
+    chip.label.textContent = composerRoute === 'durable'
+      ? copy.durable
+      : copy.workerFallback(composerRouteReason ?? copy.sessionNotReady)
+    window.__DSH_BROWSER_NATIVE_COMPOSER_ROUTE__ = {
+      state: composerRoute,
+      ...(composerRouteReason === undefined ? {} : { reason: composerRouteReason }),
+      ...(composerRouteSessionId === undefined ? {} : { sessionId: composerRouteSessionId }),
+    }
+  }
+  const showComposerRouteHint = (text: string): void => {
+    if (options.durableTurns !== true || composerRouteChip === undefined) return
+    composerRouteChip.label.textContent = text
+  }
+  const showComposerFallback = (reason: string): void => {
+    composerRoute = 'worker'
+    composerRouteReason = reason
+    renderComposerRoute()
+  }
+  const clearComposer = (input: HTMLElement): void => {
+    input.focus()
+    const selection = document.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(input)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    // oxlint-disable-next-line typescript/no-deprecated -- Chromium-only; no replacement API deletes a contenteditable selection.
+    const deleted = document.execCommand('delete', false)
+    if (deleted && input.innerText.trim().length === 0) return
+    input.textContent = ''
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }))
+  }
+  const restoreComposer = (prompt: string): void => {
+    const input = composerElement()
+    if (input === undefined || input.innerText.trim().length > 0) return
+    insertComposerText(input, prompt)
+  }
+  const composerFailureDetail = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error)
+    return message.length > 80 ? `${message.slice(0, 80)}…` : message
+  }
+  const durableComposerSessionId = (): string | undefined => {
+    if (composerRoute !== 'durable') return undefined
+    if (durableWatch !== undefined) return durableWatch.sessionId
+    if (composerRouteSessionId !== undefined && owners.has(composerRouteSessionId)) return composerRouteSessionId
+    const latest = [...owners.keys()].at(-1)
+    if (latest !== undefined) return latest
+    return window.__DSH_BROWSER_NATIVE_SESSION_HINT__?.sessionId
+  }
+  const routeDurableComposerPrompt = async (prompt: string, sessionId: string): Promise<void> => {
+    const copy = browserNativeDurableRouteCopy(document.documentElement.lang)
+    const input = composerElement()
+    if (input !== undefined) clearComposer(input)
+    composerRouteSessionId = sessionId
+    renderComposerRoute()
+    if (durablePanel?.state === 'running' || durablePanel?.state === 'pending') {
+      pendingDurablePrompt = { prompt, sessionId }
+      if (durablePanel !== undefined) durablePanel.status.textContent = copy.queued
+      return
+    }
+    const ownerToken = owners.get(sessionId)
+    if (ownerToken !== undefined) {
+      durableHandoffSessionId = sessionId
+      try {
+        const response = await fetch(workspaceApiUrl('/api/browser-native/session/close'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json', 'x-browser-native-protocol': '1' },
+          body: JSON.stringify({
+            protocolVersion: 1,
+            requestId: globalThis.crypto.randomUUID(),
+            sessionId,
+            ownerToken,
+          }),
+        })
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
+        owners.delete(sessionId)
+      } catch (error) {
+        showComposerFallback(copy.startUnavailable(composerFailureDetail(error)))
+        restoreComposer(prompt)
+        return
+      }
+    }
+    try {
+      await startDurableTurn({ prompt, sessionId })
+      composerRoute = 'durable'
+      composerRouteReason = undefined
+      renderComposerRoute()
+      startBudgetWatch(sessionId)
+    } catch (error) {
+      showComposerFallback(copy.startUnavailable(composerFailureDetail(error)))
+      restoreComposer(prompt)
+    }
+  }
+  const handleSessionHint = (event: Event): void => {
+    if (options.durableTurns !== true || durableWatch !== undefined) return
+    const detail = (event as CustomEvent<{ readonly sessionId?: unknown }>).detail
+    const sessionId = detail !== null && typeof detail === 'object' && typeof detail.sessionId === 'string'
+      ? detail.sessionId : undefined
+    if (sessionId === undefined) return
+    composerRouteSessionId = sessionId
+    renderComposerRoute()
+  }
+  const handleDurableComposerClick = (event: MouseEvent): void => {
+    if (options.durableTurns !== true || composerRoute !== 'durable') return
+    const target = event.target instanceof Element ? event.target.closest('button[aria-label]') : null
+    if (!isSendButton(target)) return
+    const prompt = composerElement()?.innerText.trim() ?? ''
+    if (prompt.length === 0) return
+    const sessionId = durableComposerSessionId()
+    if (sessionId === undefined) {
+      showComposerRouteHint(browserNativeDurableRouteCopy(document.documentElement.lang).waitingWorker)
+      return
+    }
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    void routeDurableComposerPrompt(prompt, sessionId)
+  }
+  const handleDurableComposerKeydown = (event: KeyboardEvent): void => {
+    if (options.durableTurns !== true || composerRoute !== 'durable') return
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+    if (!(event.target instanceof Element) || !event.target.closest('[data-composer-input]')) return
+    const prompt = composerElement()?.innerText.trim() ?? ''
+    if (prompt.length === 0) return
+    const sessionId = durableComposerSessionId()
+    if (sessionId === undefined) {
+      showComposerRouteHint(browserNativeDurableRouteCopy(document.documentElement.lang).waitingWorker)
+      return
+    }
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    void routeDurableComposerPrompt(prompt, sessionId)
+  }
+  if (options.durableTurns === true) {
+    document.addEventListener('click', handleDurableComposerClick, true)
+    document.addEventListener('keydown', handleDurableComposerKeydown, true)
+    window.addEventListener(BROWSER_NATIVE_SESSION_HINT_EVENT, handleSessionHint as EventListener)
+    renderComposerRoute()
+  }
 
   const handlePageHide = (event: PageTransitionEvent): void => {
     if (event.persisted) return
@@ -2124,6 +2344,13 @@ export async function connectBrowserNativePageControl(
     document.removeEventListener('keydown', handleFirstUseKeydown, true)
     document.removeEventListener('click', handleBudgetClick, true)
     document.removeEventListener('keydown', handleBudgetKeydown, true)
+    if (options.durableTurns === true) {
+      document.removeEventListener('click', handleDurableComposerClick, true)
+      document.removeEventListener('keydown', handleDurableComposerKeydown, true)
+      window.removeEventListener(BROWSER_NATIVE_SESSION_HINT_EVENT, handleSessionHint as EventListener)
+      delete window.__DSH_BROWSER_NATIVE_COMPOSER_ROUTE__
+      composerRouteChip?.root.remove()
+    }
     clearRetryTimer()
     stopTurnRetryWatch()
     stopBudgetWatch()

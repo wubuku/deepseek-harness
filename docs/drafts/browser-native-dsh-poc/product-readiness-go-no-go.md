@@ -64,7 +64,7 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 | Session 持久化与恢复 | GO（强证据，依赖服务端） | AES-256-GCM 信封加密；缺钥/损坏密文显式拒绝；在线轮换期间读操作可用、写操作排队；60 次随机 SIGKILL 后日志可读、seq 单调无重复、结算一次、无孤儿临时文件、审计链可验证；ENOSPC/EROFS/IO 超时按面归一为 `STORAGE_*` 并保留可重试状态 |
 | Durable Workspace（OPFS） | GO（有边界） | 配额失败无半份数据、未确认保存撤下工具、刷新 hydrate 后可重试；无三方合并、无块级 delta |
 | 文件工具 | GO（同一 6 工具 roster） | 两侧均跑通 `read`/`write`/`edit`/`glob`/`grep`/`subagent`；基准 roster 已移除 `todo_write`、禁用 `working_directory`；无 `bash`/`pwsh`/`web_*`/`browser_*` |
-| 审批与策略 | GO（仅验证 roster） | deny 经 `ctx.tools.guard` 不可绕过、prepended allow 无效、真实模型被拒后继续；策略仅按工具名；durable 待决审批已在正式 Web preview UI 显示工具名与目标并支持键盘批准/拒绝，决策后 turn 继续；主 composer 仍无 durable 启动入口 |
+| 审批与策略 | GO（仅验证 roster） | deny 经 `ctx.tools.guard` 不可绕过、prepended allow 无效、真实模型被拒后继续；策略仅按工具名；durable 待决审批已在正式 Web preview UI 显示工具名与目标并支持键盘批准/拒绝，决策后 turn 继续；正式主 composer 默认走 durable 服务端 host，失败时降级 Worker 并标明原因 |
 | Token 计量与预算 | GO（单一来源，Session 执行） | 限额只由部署配置一处注入，`/config` 与 Worker `budget-state` 同步为 12,000/24,000，改一处两侧同变为 15,000/30,000；未传限额在 probe 阶段拒绝启动。租户汇总只读，硬阻断仍限 Session |
 | 错误码与可操作建议 | GO | 失败码映射到 `retry`/`reload`/`request-access`/`contact-admin`/`diagnostics` 五类动作；预算超限不提供盲重试；未知码保留一次重试并附诊断包；`browser-native-failure-guidance.spec.ts` 7/7 |
 | 多 Session 与准入 | GO（有上限） | 8 turn / 16 mount；16 路 turn 中位数 875–1,272 ms、p95 906–1,278 ms；第 17 个挂载 429 |
@@ -122,7 +122,7 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 ## 立项前必做项（更新）
 
 1. 把 Session 权威、检索索引、租户预算与费用结算、egress 代理、durable host 定为服务端交付物，并给出单实例/多实例边界。已完成：见[服务端交付物与单实例/多实例边界](server-delivery-boundaries.md)。
-2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI。已完成部分：见[产品可见性](product-visibility.md)与[16 Session 仪表盘](session-dashboard-16.md)；仍待并入正式 composer/会话状态区。
+2. 为审批策略、排队位置、Session 冲突恢复、导出入口补齐正式 UI。已完成部分：见[产品可见性](product-visibility.md)与[16 Session 仪表盘](session-dashboard-16.md)；主 composer 已默认走 durable 服务端 host，降级状态在 UI 明示，仍待并入 composer 附件上传与并发 steer。
 3. 明确浏览器支持矩阵。已完成：见[浏览器支持矩阵](browser-support-matrix.md)与[移动端 UI-only 策略](mobile-ui-only.md)。
 4. 把 observability、审计与预算记录迁到持久存储并定义重启对账。已完成：见[可观测性](observability.md#持久记录与重启对账)。
 5. 完成“客户端执行、服务端权威”的威胁建模。已完成：见[威胁模型](threat-model.md)；新增 `threat-model-invariants` 2/2。

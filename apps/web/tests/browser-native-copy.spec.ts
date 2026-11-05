@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   browserNativeDurableApprovalCopy,
+  browserNativeDurableRouteCopy,
   browserNativeFirstUseCopy,
   browserNativeOfflineStatusCopy,
   browserNativeQueueStatusCopy,
@@ -159,7 +160,7 @@ describe('browser-native copy', () => {
   it('localizes the durable approval surface with the tool and target', () => {
     const en = browserNativeDurableApprovalCopy('en-US')
     const zh = browserNativeDurableApprovalCopy('zh-CN')
-    for (const key of ['waiting', 'approve', 'reject', 'deciding', 'running', 'completed'] as const) {
+    for (const key of ['waiting', 'approve', 'reject', 'deciding', 'running', 'completed', 'retry'] as const) {
       expectLocalized(en[key], zh[key])
     }
     expectLocalized(en.title('write'), zh.title('write'), ['write'])
@@ -167,6 +168,16 @@ describe('browser-native copy', () => {
       ['/dsh/home/workspace/a.txt'])
     expectLocalized(en.failed(409), zh.failed(409), ['409'])
     expectLocalized(en.failed(undefined), zh.failed(undefined))
+  })
+
+  it('localizes the main composer durable route and its Worker fallback', () => {
+    const en = browserNativeDurableRouteCopy('en-US')
+    const zh = browserNativeDurableRouteCopy('zh-CN')
+    for (const key of ['label', 'durable', 'sessionNotReady', 'waitingWorker', 'queued'] as const) {
+      expectLocalized(en[key], zh[key])
+    }
+    expectLocalized(en.workerFallback('HTTP 503'), zh.workerFallback('HTTP 503'), ['HTTP 503'])
+    expectLocalized(en.startUnavailable('timeout'), zh.startUnavailable('timeout'), ['timeout'])
   })
 
   it('falls back to English for languages without a dictionary', () => {

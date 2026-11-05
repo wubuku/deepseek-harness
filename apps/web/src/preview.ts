@@ -20,6 +20,7 @@ import {
 const searchParams = new URLSearchParams(window.location.search)
 const browserNative = searchParams.get('browser-native') === '1'
 const browserNativeDurable = browserNative && searchParams.get('browser-native-durable') === '1'
+const browserNativeDurableTurns = browserNative && searchParams.get('browser-native-durable-turn') === '1'
 const browserNativeWorkspaceLease = browserNative && searchParams.get('browser-native-workspace-lease') === '1'
 const browserNativeWorkspaceTest = browserNative
   && (searchParams.get('browser-native-test') === 'workspace-recovery'
@@ -389,6 +390,26 @@ async function browserNativeApiOrigin(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Read the ordinary-Session address from a Remote stream payload.
+ * @param payload - Decoded stream payload supplied by the client transport.
+ * @returns The ordinary Session id, or undefined for Host-wide and subagent streams.
+ */
+function sessionIdFromStreamPayload(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const address = (payload as { readonly address?: unknown }).address
+  if (address === null || typeof address !== 'object' || Array.isArray(address)) return undefined
+  const record = address as { readonly kind?: unknown; readonly sessionId?: unknown }
+  return record.kind === 'session' && typeof record.sessionId === 'string' ? record.sessionId : undefined
+}
+
+function observeSessionHint(endpoint: string, payload: unknown): void {
+  const sessionId = sessionIdFromStreamPayload(payload)
+  if (sessionId === undefined) return
+  window.__DSH_BROWSER_NATIVE_SESSION_HINT__ = { sessionId, endpoint }
+  window.dispatchEvent(new CustomEvent('dsh-browser-native-session-hint', { detail: { sessionId } }))
+}
+
 async function bootBrowserNativePreview(): Promise<void> {
   try {
     const prepared = browserNativePrewarm ? prepareBrowserNativeWorker() : undefined
@@ -399,9 +420,11 @@ async function bootBrowserNativePreview(): Promise<void> {
       const currentWorker = prepared === undefined ? spawnBrowserNativeWorker() : await prepared
       const apiOrigin = browserNative ? await browserNativeApiOrigin() : undefined
       if (browserNative) {
-        await connectBrowserNativePageControl(currentWorker, apiOrigin === undefined
-          ? { durable: browserNativeDurable }
-          : { durable: browserNativeDurable, apiOrigin })
+        await connectBrowserNativePageControl(currentWorker, {
+          ...(apiOrigin === undefined ? {} : { apiOrigin }),
+          durable: browserNativeDurable,
+          durableTurns: browserNativeDurableTurns,
+        })
       }
       if (browserNative && prepared === undefined) {
         await probeBrowserNativeWorker(currentWorker, apiOrigin, await browserNativeBudgetRequirementOnce())
@@ -414,6 +437,7 @@ async function bootBrowserNativePreview(): Promise<void> {
           ? [...source.overlays, new URL(browserNativeProfileOverlay, document.baseURI)]
           : source.overlays,
         ...(apiOrigin === undefined ? {} : { apiOrigin }),
+        ...(browserNativeDurableTurns ? { onStreamOpen: observeSessionHint } : {}),
       })
       markBoot('hostConnected')
     }

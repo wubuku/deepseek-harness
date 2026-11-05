@@ -59,6 +59,13 @@ export interface WorkerHostConnectOptions {
    * Omitted, every tunnel and worker request keeps resolving against the page.
    */
   readonly apiOrigin?: string | URL
+  /**
+   * Observe every Remote stream before it opens. The page uses this to learn
+   * which Session the client shell is displaying without reading client state.
+   * @param endpoint - Canonical Remote endpoint the client is opening.
+   * @param payload - Decoded endpoint payload carrying the requested address.
+   */
+  readonly onStreamOpen?: (endpoint: string, payload: unknown) => void
 }
 
 /** Inputs for the optional pre-boot filesystem-source chooser. */
@@ -165,7 +172,10 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
     const payload = await tunnel.bootPayload()
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {
       fetch: (input, init) => tunnel.fetch(input, init),
-      openStream: (endpoint, payload, signal, uplink) => tunnel.open(endpoint, payload, signal, uplink),
+      openStream: (endpoint, payload, signal, uplink) => {
+        options?.onStreamOpen?.(endpoint, payload)
+        return tunnel.open(endpoint, payload, signal, uplink)
+      },
       loadBundle: (url: string) => tunnel.loadBundle(url),
       // The host lives in a worker this page spawned: the page owns it, so
       // the privileged surface stays reachable off loopback authorities.

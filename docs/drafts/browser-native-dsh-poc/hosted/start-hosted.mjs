@@ -205,7 +205,7 @@ async function readConfiguration() {
 /** Print the URLs, locations, and limits the running server actually uses. */
 function report(app, origin, options, authMode) {
   const externalOrigin = options.publicOrigin ?? origin
-  const previewPath = '/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none'
+  const previewPath = '/preview.html?browser-native=1&browser-native-durable=1&browser-native-durable-turn=1&preview-fixture=none'
   const previewUrl = `${externalOrigin}/auth/handshake?token=${encodeURIComponent(app.authToken)}&next=${encodeURIComponent(previewPath)}`
   process.stdout.write(`hosted: ready at ${externalOrigin}\n`)
   process.stdout.write(`hosted: preview ${previewUrl}\n`)
