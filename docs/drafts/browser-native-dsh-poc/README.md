@@ -65,7 +65,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[MCP 浏览器接入判定](mcp-browser-feasibility.md)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
-| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[跨 Session 检索规模](session-query-large-scale.md)、[横向扩展可行性](multi-instance-feasibility.md)、[启动规模与单节点上限](startup-scale.md)、[Session 归档与按需加载](session-archive.md) |
+| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[跨 Session 检索规模](session-query-large-scale.md)、[横向扩展可行性](multi-instance-feasibility.md)、[启动规模与单节点上限](startup-scale.md)、[Session 归档与按需加载](session-archive.md)、[真实模型任务基准](real-model-task-benchmark.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[用户旅程叙事 E2E](user-journey.md)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
@@ -1837,6 +1837,10 @@ compaction 方面：未声明 `contextWindow` 的 301 turns 零次 compaction，
 ## 真实模型 8k compaction 质量
 
 [真实模型 8k compaction 质量](real-model-compaction.md)把 profile 窗口降到 `8192`、headroom 设为 `512`，用真实 LongCat-2.5 跑自动压力 compaction。第 5 turn 触发 1 组 start/summary/end；首轮只出现一次的码字 `ORANGE-FALCON-42` 在第 6 turn 被原样召回，证明摘要而非保留尾部承载了该事实。provider 上报 7 次请求、输入 30,064 / 输出 887 / 合计 30,951 tokens，其中摘要请求 5,598 tokens；durable JSON 86 KB、63 个事件，刷新后 compaction 事件完整重建，第 7 turn 继续完成。profile 的 512 token 摘要 cap 对 LongCat 不足（截断为 `summarization truncated at the token cap`），测试以 `compactMaxTokens: 1024` 覆盖并通过。
+
+## 真实模型任务基准（Worker 与 durable 对照）
+
+[真实模型任务基准](real-model-task-benchmark.md)用 10 个真实小任务（读写、检索、编辑、多文件、子代理、跨 turn、导出、审批、缺失文件恢复、摘要）在 LongCat-2.5 上分别跑浏览器 Worker 与 durable host。Worker 10/10，平均 4.0 次模型请求、10.6 秒、85,310 tokens；durable 7/10，平均 2.6 次请求、13.0 秒、13,623 tokens。durable 的 3 个失败全部是 harness 能力缺口（无检索、无 `edit`、无子代理），两侧模型与工具失败均为 0；两者都支持的 7 个任务全部通过。未配置单价，费用记为 null；MiniMax-M3 探测返回 `UPSTREAM_LLM_RATE_LIMITED`（503），未跑全量对照。结果 JSON 与逐任务归因见 [基准文档](real-model-task-benchmark.md)。
 
 ## 多 Session 争用上限
 

@@ -1,0 +1,164 @@
+{
+  "startedAt": "2026-11-05T05:04:38.593Z",
+  "provider": "minimax",
+  "model": "MiniMax-M3",
+  "llmMode": "real",
+  "pricing": {
+    "configured": true,
+    "inputUsdPer1M": 0,
+    "outputUsdPer1M": 0
+  },
+  "selection": {
+    "modes": [
+      "browser"
+    ],
+    "tasks": [
+      "t10-summarize"
+    ]
+  },
+  "taskSet": [
+    {
+      "id": "t1-read-write",
+      "label": "Read a fixture file and write one derived line",
+      "capability": "read + write",
+      "userTurns": 1
+    },
+    {
+      "id": "t2-search",
+      "label": "Locate a line across the workspace",
+      "capability": "workspace search",
+      "userTurns": 1
+    },
+    {
+      "id": "t3-write-edit",
+      "label": "Create a file and replace one word",
+      "capability": "edit",
+      "userTurns": 1
+    },
+    {
+      "id": "t4-multifile",
+      "label": "Create two small files in one turn",
+      "capability": "write",
+      "userTurns": 1
+    },
+    {
+      "id": "t5-subagent",
+      "label": "Delegate one step to a subagent",
+      "capability": "subagent",
+      "userTurns": 1
+    },
+    {
+      "id": "t6-cross-turn",
+      "label": "Modify a file across two user turns",
+      "capability": "cross-turn edit",
+      "userTurns": 2
+    },
+    {
+      "id": "t7-export",
+      "label": "Produce a result and export the Session",
+      "capability": "session export",
+      "userTurns": 1
+    },
+    {
+      "id": "t8-approval",
+      "label": "Approve one workspace write",
+      "capability": "approval",
+      "userTurns": 1
+    },
+    {
+      "id": "t9-missing-recovery",
+      "label": "Recover from a missing file",
+      "capability": "tool error recovery",
+      "userTurns": 1
+    },
+    {
+      "id": "t10-summarize",
+      "label": "Read two files and summarize them",
+      "capability": "read",
+      "userTurns": 1
+    }
+  ],
+  "modes": [
+    {
+      "mode": "browser-worker",
+      "roster": "browser-benchmark",
+      "tasks": [
+        {
+          "id": "t10-summarize",
+          "label": "Read two files and summarize them",
+          "capability": "read",
+          "mode": "browser",
+          "userTurns": 1,
+          "result": "failed",
+          "failureClass": "harness",
+          "failureCapability": null,
+          "detail": "the turn ended with a harness error: upstream LLM rate limit or quota was exceeded (UPSTREAM_LLM_RATE_LIMITED)",
+          "modelRequests": 0,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "totalTokens": 0,
+          "costUsd": 0,
+          "steps": 1,
+          "turnReason": {
+            "kind": "error",
+            "error": {
+              "message": "upstream LLM rate limit or quota was exceeded",
+              "code": "UPSTREAM_LLM_RATE_LIMITED",
+              "status": 503
+            }
+          },
+          "approvalCount": 0,
+          "approvalLatencyMs": 0,
+          "exportBytes": null,
+          "durationMs": 627,
+          "bootMs": 2323,
+          "finalTextLength": 0,
+          "finalTextPreview": "",
+          "toolTrace": [],
+          "readBackPaths": 0
+        }
+      ],
+      "summary": {
+        "tasks": 1,
+        "passed": 0,
+        "failed": 1,
+        "successRate": 0,
+        "avgModelRequestsPerTask": 0,
+        "avgSessionStepsPerTask": 1,
+        "avgDurationMs": 627,
+        "totalInputTokens": 0,
+        "totalOutputTokens": 0,
+        "totalTokens": 0,
+        "totalCostUsd": 0,
+        "totalModelRequests": 0,
+        "failuresByClass": {
+          "model": 0,
+          "tool": 0,
+          "harness": 1
+        }
+      },
+      "e2eMs": 3497,
+      "bootMs": null
+    }
+  ],
+  "partial": false,
+  "finishedAt": "2026-11-05T05:04:45.666Z",
+  "comparison": {
+    "browser-worker": {
+      "successRate": 0,
+      "passed": 0,
+      "tasks": 1,
+      "avgModelRequestsPerTask": 0,
+      "avgSessionStepsPerTask": 1,
+      "avgDurationMs": 627,
+      "totalTokens": 0,
+      "totalCostUsd": 0,
+      "failuresByClass": {
+        "model": 0,
+        "tool": 0,
+        "harness": 1
+      },
+      "e2eMs": 3497
+    }
+  }
+}
