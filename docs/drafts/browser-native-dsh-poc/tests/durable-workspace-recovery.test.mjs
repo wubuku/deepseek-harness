@@ -165,7 +165,7 @@ test('a committed durable Workspace write survives restart while durable turns c
   assert.equal(before.filter(event => event.type === 'turn/end').length, 1)
   assert.equal(before.at(-1).data.reason.kind, 'completed')
   const userMessage = before.find(event => event.type === 'user/message')
-  assert.equal(typeof userMessage.data.content, 'string', 'durable turns carry a text prompt, so no attachment block can appear')
+  assert.deepEqual(userMessage.data.content, [{ type: 'text', text: 'write a committed workspace file' }], 'durable turns carry a text prompt, so no attachment block can appear')
   await waitEmptyJournal(journalPath)
   await first.stop()
 

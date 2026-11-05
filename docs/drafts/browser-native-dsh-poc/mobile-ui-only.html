@@ -22,6 +22,9 @@
   button:disabled { opacity: 0.5; }
   .status { min-height: 1.5em; margin-top: 10px; color: var(--muted); font-size: 13px; }
   .status.error { color: var(--error); }
+  .approval { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; padding: 12px; border: 1px solid var(--accent); border-radius: 12px; }
+  .approval .label { flex: 1 1 100%; font-size: 14px; }
+  .approval button.reject { background: transparent; border: 1px solid var(--line); color: inherit; }
 </style>
 </head>
 <body>
@@ -69,6 +72,10 @@ const copy = zh ? {
   incomplete: '回合结束但未完成',
   refused: status => `服务端拒绝了该回合（${status}）`,
   streamFailed: status => `服务端流读取失败（${status}）`,
+  approvalNeeded: name => `需要审批：${name}`,
+  approve: '批准',
+  reject: '拒绝',
+  decisionFailed: status => `审批提交失败（${status}）`,
   roles: { user: '用户', 'server user': '服务端用户', assistant: '助手', tool: '工具', 'tool result': '工具结果' },
 } : {
   title: 'DSH mobile · UI only',
@@ -86,6 +93,10 @@ const copy = zh ? {
   incomplete: 'turn settled without completion',
   refused: status => `server host refused the turn (${status})`,
   streamFailed: status => `server host stream failed (${status})`,
+  approvalNeeded: name => `Approval needed: ${name}`,
+  approve: 'Approve',
+  reject: 'Reject',
+  decisionFailed: status => `approval decision failed (${status})`,
   roles: { user: 'user', 'server user': 'server user', assistant: 'assistant', tool: 'tool', 'tool result': 'tool result' },
 }
 document.documentElement.lang = zh ? 'zh-CN' : 'en'
@@ -146,6 +157,52 @@ async function readStream(response, onItem) {
   if (tail.length > 0) onItem(JSON.parse(tail))
 }
 
+function clearApproval() {
+  document.querySelector('[data-mobile-approval]')?.remove()
+}
+
+async function decideApproval(turnId, approvalId, decision) {
+  const response = await fetch('/api/browser-native/session/durable/approve', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      protocolVersion: 1,
+      requestId: crypto.randomUUID(),
+      turnId,
+      approvalId,
+      decision,
+    }),
+  })
+  if (!response.ok) {
+    setStatus(copy.decisionFailed(response.status), true)
+    return
+  }
+  clearApproval()
+}
+
+function renderApproval(turnId, approval) {
+  clearApproval()
+  const panel = document.createElement('div')
+  panel.className = 'approval'
+  panel.dataset.mobileApproval = approval.approvalId
+  const label = document.createElement('span')
+  label.className = 'label'
+  label.textContent = copy.approvalNeeded(approval.name)
+  const approve = document.createElement('button')
+  approve.type = 'button'
+  approve.dataset.mobileApprove = 'true'
+  approve.textContent = copy.approve
+  const reject = document.createElement('button')
+  reject.type = 'button'
+  reject.className = 'reject'
+  reject.dataset.mobileReject = 'true'
+  reject.textContent = copy.reject
+  approve.addEventListener('click', () => void decideApproval(turnId, approval.approvalId, 'approve'))
+  reject.addEventListener('click', () => void decideApproval(turnId, approval.approvalId, 'reject'))
+  panel.append(label, approve, reject)
+  transcript.append(panel)
+}
+
 form.addEventListener('submit', async event => {
   event.preventDefault()
   const prompt = input.value.trim()
@@ -156,6 +213,21 @@ form.addEventListener('submit', async event => {
   setStatus(copy.running)
   const turnId = `mobile-turn-${crypto.randomUUID()}`
   window.__DSH_LAST_TURN_ID__ = turnId
+  let completed = false
+  const pollApproval = async () => {
+    if (completed) return
+    const status = await fetch(`/api/browser-native/session/durable?turnId=${encodeURIComponent(turnId)}`)
+    if (!status.ok) return
+    const current = await status.json()
+    if (current.pendingApproval === undefined) {
+      clearApproval()
+      return
+    }
+    if (document.querySelector(`[data-mobile-approval="${current.pendingApproval.approvalId}"]`) !== null) return
+    renderApproval(turnId, current.pendingApproval)
+  }
+  const approvalTimer = setInterval(() => void pollApproval(), 400)
+  void pollApproval()
   try {
     const started = await fetch('/api/browser-native/session/durable', {
       method: 'POST',
@@ -171,7 +243,6 @@ form.addEventListener('submit', async event => {
     if (!started.ok) throw new Error(copy.refused(started.status))
     const stream = await fetch(`/api/browser-native/session/durable/stream?turnId=${encodeURIComponent(turnId)}&fromSeq=0`)
     if (!stream.ok) throw new Error(copy.streamFailed(stream.status))
-    let completed = false
     await readStream(stream, item => {
       if (item.kind === 'settled') {
         completed = true
@@ -180,8 +251,8 @@ form.addEventListener('submit', async event => {
       }
       if (item.kind !== 'event') return
       const entry = item
-      if (entry.type === 'user/message' && typeof entry.data?.content === 'string') {
-        appendEntry('server user', entry.data.content)
+      if (entry.type === 'user/message') {
+        appendEntry('server user', eventText(entry))
         return
       }
       if (entry.type === 'assistant/message') appendEntry('assistant', eventText(entry))
@@ -198,6 +269,8 @@ form.addEventListener('submit', async event => {
     console.error(error)
     setStatus(String(error?.message ?? error), true)
   } finally {
+    clearInterval(approvalTimer)
+    clearApproval()
     send.disabled = false
     input.focus()
   }

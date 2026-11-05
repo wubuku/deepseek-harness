@@ -115,7 +115,13 @@ async function collectAttach(origin, cookie, { turnId, fromSeq }) {
   }
   if (buffer !== '') lines.push(JSON.parse(buffer))
   return {
-    events: lines.filter(line => line.kind === 'event').map(line => ({ seq: line.seq, type: line.type, data: line.data })),
+    events: lines.filter(line => line.kind === 'event').map(line => ({
+      seq: line.seq,
+      time: line.time,
+      type: line.type,
+      ...(line.surfaceOp === undefined ? {} : { surfaceOp: line.surfaceOp }),
+      data: line.data,
+    })),
     settled: lines.find(line => line.kind === 'settled'),
   }
 }

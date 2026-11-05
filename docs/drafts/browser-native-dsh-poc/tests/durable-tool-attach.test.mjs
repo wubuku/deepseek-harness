@@ -72,7 +72,13 @@ async function collectAttach(origin, cookie, { turnId, fromSeq }) {
     for (const part of parts) if (part !== '') lines.push(JSON.parse(part))
   }
   if (buffer !== '') lines.push(JSON.parse(buffer))
-  const events = lines.filter(line => line.kind === 'event').map(line => ({ seq: line.seq, type: line.type, data: line.data }))
+  const events = lines.filter(line => line.kind === 'event').map(line => ({
+    seq: line.seq,
+    time: line.time,
+    type: line.type,
+    ...(line.surfaceOp === undefined ? {} : { surfaceOp: line.surfaceOp }),
+    data: line.data,
+  }))
   const settled = lines.find(line => line.kind === 'settled')
   assert.ok(settled, 'the attach stream must end with a settled line')
   return { events, settled }

@@ -193,7 +193,7 @@ function journalText(value, name) {
 
 /**
  * Create the server-owned durable turn host.
- * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, authToken?: string, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, executeSubagent?: Function, journalPath?: string}} options - Session store, admission controller, served origin, local process token for the internal model route, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, the `subagent` executor, and the running-turn journal path.
+ * @param {{store: object, admission?: object, model: string, originOf: () => string|undefined, authToken?: string, timeoutMs: number, approvalTimeoutMs?: number, requiresApproval?: Function, tools?: object[], executeTool?: Function, executeSubagent?: Function, prepareUserMessage?: Function, resolveWriter?: Function, journalPath?: string}} options - Session store, admission controller, served origin, local process token for the internal model route, model timeout, approval policy and timeout, advertised tool definitions, their server-side executor, the `subagent` executor, the user-message builder that persists image attachments, the shared writer resolver, and the running-turn journal path.
  * @returns {{start: Function, status: Function, cancel: Function, decide: Function, subscribe: Function, snapshot: Function, recover: Function, version: number}} Host operations.
  */
 export function createDurableTurnHost({
@@ -208,6 +208,8 @@ export function createDurableTurnHost({
   tools = [],
   executeTool,
   executeSubagent,
+  prepareUserMessage,
+  resolveWriter,
   journalPath,
 }) {
   if (typeof store?.exclusive !== 'function') throw new TypeError('durable host requires the formal Session store')
@@ -219,6 +221,8 @@ export function createDurableTurnHost({
   if (!Array.isArray(tools)) throw new TypeError('durable host tools must be an array')
   if (tools.length > 0 && typeof executeTool !== 'function') throw new TypeError('durable host tools require an executeTool function')
   if (executeSubagent !== undefined && typeof executeSubagent !== 'function') throw new TypeError('durable host executeSubagent must be a function')
+  if (prepareUserMessage !== undefined && typeof prepareUserMessage !== 'function') throw new TypeError('durable host prepareUserMessage must be a function')
+  if (resolveWriter !== undefined && typeof resolveWriter !== 'function') throw new TypeError('durable host resolveWriter must be a function')
   const runs = new Map()
   const settledRuns = []
   const recoveredRuns = new Map()
@@ -343,6 +347,34 @@ export function createDurableTurnHost({
     ...(run.error === undefined ? {} : { error: { ...run.error } }),
   })
 
+  /**
+   * Verify that the run still holds its writer lease.
+   *
+   * Owner turns use the owner token; editor turns use the editor lease, whose
+   * token is bound to the principal that started the run. The token-only form
+   * settles a failure after the lease has expired, without extending it.
+   * @param {object} session - Current Session record under the store lock.
+   * @param {object} run - Running turn carrying the writer principal.
+   * @param {{kind?: string, ownerToken: string, ownerEpoch: number}} owner - Claimed writer lease.
+   * @param {boolean} [tokenOnly] - Check token and epoch without requiring a live lease.
+   */
+  const assertWriter = (session, run, owner, tokenOnly = false) => {
+    if (owner.kind === 'editor') {
+      const live = tokenOnly || session.editorExpiresAt > store.now()
+      if (session.writeBlocked
+        || typeof owner.ownerToken !== 'string'
+        || session.editorToken !== owner.ownerToken
+        || session.editorPrincipalId !== run.principalId
+        || (owner.ownerEpoch !== undefined && owner.ownerEpoch !== session.editorEpoch)
+        || !live) {
+        throw new DurableTurnError('SESSION_EDITOR_LEASE_LOST', 'the Session editor lease is no longer valid', 409)
+      }
+      return
+    }
+    if (tokenOnly) store.assertOwnerToken(session, owner.ownerToken, owner.ownerEpoch)
+    else store.assertOwner(session, owner.ownerToken, owner.ownerEpoch)
+  }
+
   const requestCompletion = async (run, messages, owner, requestTools = tools) => {
     const origin = originOf()
     if (typeof origin !== 'string') throw new DurableTurnError('DURABLE_HOST_NOT_READY', 'the durable host has no served origin', 503)
@@ -364,8 +396,14 @@ export function createDurableTurnHost({
             protocolVersion: 1,
             requestId: run.turnId,
             sessionId: run.sessionId,
-            ownerToken: owner.ownerToken,
-            ownerEpoch: owner.ownerEpoch,
+            ...(owner.kind === 'editor'
+              ? {
+                  writerRole: 'editor',
+                  editorPrincipalId: run.principalId,
+                  editorToken: owner.ownerToken,
+                  editorEpoch: owner.ownerEpoch,
+                }
+              : { ownerToken: owner.ownerToken, ownerEpoch: owner.ownerEpoch }),
             messages,
             tools: requestTools,
           }),
@@ -398,9 +436,9 @@ export function createDurableTurnHost({
   const appendEvents = async (run, owner, events) => {
     const written = await store.exclusive(run.sessionId, async () => {
       const session = store.get(run.sessionId)
-      store.assertOwner(session, owner.ownerToken, owner.ownerEpoch)
+      assertWriter(session, run, owner)
       const base = session.events.length
-      const rows = events.map((event, index) => ({ seq: base + index, ...event }))
+      const rows = events.map((event, index) => ({ seq: base + index, time: store.now(), ...event }))
       session.events.push(...rows)
       await store.flush(session)
       run.nextSeq = session.events.length
@@ -417,8 +455,8 @@ export function createDurableTurnHost({
     content,
   })
 
-  const driveTurn = async (run, prompt, owner) => {
-    const messages = [{ role: 'user', content: prompt }]
+  const driveTurn = async (run, owner) => {
+    const messages = [{ role: 'user', content: run.userMessage.wire }]
     let step = 1
     while (step <= MAX_DURABLE_STEPS) {
       if (run.stopRequested) {
@@ -437,7 +475,7 @@ export function createDurableTurnHost({
         const textBlocks = completion.blocks.filter(block => block.type === 'text' && block.text.trim() !== '')
         const content = [...textBlocks, ...calls]
         await appendEvents(run, owner, [
-          { type: 'assistant/message', data: { turn: run.turn, step, message: assistantMessage(run, step, content) } },
+          { type: 'assistant/message', surfaceOp: 'append', data: { turn: run.turn, step, stream: [], message: assistantMessage(run, step, content) } },
           { type: 'step/end', data: { turn: run.turn, step } },
         ])
         const toolMessages = []
@@ -458,6 +496,7 @@ export function createDurableTurnHost({
                   step,
                   callId: call.id,
                   arguments: call.arguments,
+                  depth: 1,
                   complete: (messages, childTools) => requestCompletion(run, messages, owner, childTools),
                 })
               : executeTool({
@@ -486,6 +525,7 @@ export function createDurableTurnHost({
                 : `tool ${call.name} was cancelled while awaiting approval`
               await appendEvents(run, owner, [{
                 type: 'tool/result',
+                surfaceOp: 'append',
                 data: {
                   turn: run.turn,
                   step,
@@ -515,7 +555,7 @@ export function createDurableTurnHost({
             content: [{ type: 'text', text: resultText }],
             ...(result?.isError === true ? { isError: true } : {}),
           }
-          await appendEvents(run, owner, [{ type: 'tool/result', data: { turn: run.turn, step, message: toolMessage } }])
+          await appendEvents(run, owner, [{ type: 'tool/result', surfaceOp: 'append', data: { turn: run.turn, step, message: toolMessage } }])
           toolMessages.push({ role: 'tool', tool_call_id: call.id, content: resultText })
         }
         messages.push({
@@ -537,7 +577,8 @@ export function createDurableTurnHost({
       const written = await appendEvents(run, owner, [
         {
           type: 'assistant/message',
-          data: { turn: run.turn, step, message: assistantMessage(run, step, [{ type: 'text', text: completion.text }]) },
+          surfaceOp: 'append',
+          data: { turn: run.turn, step, stream: [], message: assistantMessage(run, step, [{ type: 'text', text: completion.text }]) },
         },
         { type: 'step/end', data: { turn: run.turn, step } },
         { type: 'turn/end', data: { turn: run.turn, reason: { kind: 'completed' } } },
@@ -555,7 +596,7 @@ export function createDurableTurnHost({
   const settleFailure = async (run, owner, error) => {
     await store.exclusive(run.sessionId, async () => {
       const session = store.get(run.sessionId)
-      store.assertOwnerToken(session, owner.ownerToken, owner.ownerEpoch)
+      assertWriter(session, run, owner, true)
       if (run.turn === undefined) return
       const step = run.step ?? 1
       const hasStepEnd = session.events.some(event => event.type === 'step/end' && event.data?.turn === run.turn && event.data?.step === step)
@@ -582,7 +623,7 @@ export function createDurableTurnHost({
       }
       if (events.length === 0) return
       const base = session.events.length
-      const rows = events.map((event, index) => ({ seq: base + index, ...event }))
+      const rows = events.map((event, index) => ({ seq: base + index, time: store.now(), ...event }))
       session.events.push(...rows)
       await store.flush(session)
       run.endSeqs = rows.map(event => event.seq)
@@ -595,7 +636,13 @@ export function createDurableTurnHost({
   const releaseOwner = async (run, owner) => {
     await store.exclusive(run.sessionId, async () => {
       const session = store.sessions.get(run.sessionId)
-      if (session === undefined || session.ownerToken !== owner.ownerToken) return
+      if (session === undefined) return
+      if (owner.kind === 'editor') {
+        if (session.editorToken !== owner.ownerToken) return
+        store.releaseEditor(session, run.principalId, owner.ownerToken, owner.ownerEpoch)
+        return
+      }
+      if (session.ownerToken !== owner.ownerToken) return
       session.ownerToken = undefined
       session.ownerExpiresAt = 0
     })
@@ -616,7 +663,14 @@ export function createDurableTurnHost({
     const timer = setInterval(() => {
       void store.exclusive(run.sessionId, async () => {
         const session = store.sessions.get(run.sessionId)
-        if (session === undefined || session.ownerToken !== owner.ownerToken) return
+        if (session === undefined) return
+        if (owner.kind === 'editor') {
+          if (session.editorToken !== owner.ownerToken) return
+          if (session.editorExpiresAt <= store.now()) return
+          store.renewEditor(session, run.principalId, owner.ownerToken, owner.ownerEpoch)
+          return
+        }
+        if (session.ownerToken !== owner.ownerToken) return
         if (session.ownerExpiresAt <= store.now()) return
         store.renew(session, owner.ownerToken)
       }).catch(error => {
@@ -627,23 +681,42 @@ export function createDurableTurnHost({
     return timer
   }
 
-  const execute = async (run, prompt, header) => {
+  const execute = async (run, header) => {
     let owner
     try {
       owner = await store.exclusive(run.sessionId, async () => {
         let session = store.sessions.get(run.sessionId)
+        let claimed
         if (session === undefined) {
           session = store.create(run.sessionId, header, 0, run.principalId)
+          claimed = store.claim(session)
+          claimed = { kind: 'owner', ownerToken: claimed.ownerToken, ownerEpoch: claimed.ownerEpoch }
         } else if (session.principalId !== run.principalId) {
-          throw new DurableTurnError('SESSION_NOT_FOUND', 'session does not exist', 404)
+          if (typeof resolveWriter !== 'function') {
+            throw new DurableTurnError('SESSION_NOT_FOUND', 'session does not exist', 404)
+          }
+          claimed = await resolveWriter(session, run.principalId)
+        } else {
+          const claimedOwner = store.claim(session)
+          claimed = { kind: 'owner', ownerToken: claimedOwner.ownerToken, ownerEpoch: claimedOwner.ownerEpoch }
         }
         const turn = nextTurnNumber(session)
-        const claimed = store.claim(session)
         const base = session.events.length
         const events = [
-          { seq: base, type: 'turn/start', data: { turn } },
-          { seq: base + 1, type: 'user/message', data: { content: prompt } },
-          { seq: base + 2, type: 'step/start', data: { turn, step: 1 } },
+          { seq: base, time: store.now(), type: 'turn/start', data: { turn } },
+          {
+            seq: base + 1,
+            time: store.now(),
+            type: 'user/message',
+            surfaceOp: 'append',
+            data: {
+              id: `durable-user-${run.turnId}-${randomUUID()}`,
+              role: 'user',
+              source: { kind: 'user' },
+              content: run.userMessage.event,
+            },
+          },
+          { seq: base + 2, time: store.now(), type: 'step/start', data: { turn, step: 1 } },
         ]
         session.events.push(...events)
         await store.flush(session)
@@ -651,7 +724,7 @@ export function createDurableTurnHost({
         run.startSeqs = events.map(event => event.seq)
         run.nextSeq = session.events.length
         for (const event of events) publish(run, event)
-        return { ownerToken: claimed.ownerToken, ownerEpoch: claimed.ownerEpoch }
+        return claimed
       })
       admission?.mountSession(run.sessionId)
     } catch (error) {
@@ -661,7 +734,7 @@ export function createDurableTurnHost({
     run.phaseOne.resolve({ ok: true })
     const heartbeat = startLeaseHeartbeat(run, owner)
     try {
-      await driveTurn(run, prompt, owner)
+      await driveTurn(run, owner)
     } catch (error) {
       try {
         await settleFailure(run, owner, error)
@@ -753,6 +826,7 @@ export function createDurableTurnHost({
       for (const [callId, call] of openCalls) {
         events.push({
           type: 'tool/result',
+          surfaceOp: 'append',
           data: {
             turn: openTurn,
             step: call.step,
@@ -773,7 +847,7 @@ export function createDurableTurnHost({
         const current = store.sessions.get(sessionId)
         if (current === undefined) return undefined
         const base = current.events.length
-        const rows = events.map((event, index) => ({ seq: base + index, ...event }))
+        const rows = events.map((event, index) => ({ seq: base + index, time: store.now(), ...event }))
         current.events.push(...rows)
         current.ownerEpoch += 1
         current.ownerToken = undefined
@@ -812,12 +886,15 @@ export function createDurableTurnHost({
 
   /**
    * Start or replay a server-owned turn.
-   * @param {{sessionId: string, principalId: string, turnId: string, prompt: string, header: object}} request - Turn identity, owner principal, prompt, and Session header.
+   * @param {{sessionId: string, principalId: string, turnId: string, prompt: string, header: object, attachments?: object[]}} request - Turn identity, writer principal, prompt, Session header, and optional image attachments.
    * @returns {Promise<object>} Current run status; a replayed turn never executes twice.
    */
-  const start = async ({ sessionId, principalId, turnId, prompt, header }) => {
+  const start = async ({ sessionId, principalId, turnId, prompt, header, attachments = [] }) => {
     assertBoundedText(turnId, 'turnId', MAX_TURN_ID_LENGTH)
     assertBoundedText(prompt, 'prompt', MAX_PROMPT_CHARS)
+    const userMessage = typeof prepareUserMessage === 'function'
+      ? await prepareUserMessage({ principalId, prompt, attachments })
+      : { wire: prompt, event: [{ type: 'text', text: prompt }] }
     const existing = runs.get(turnId)
     if (existing !== undefined) {
       if (existing.sessionId !== sessionId || existing.principalId !== principalId) {
@@ -839,6 +916,7 @@ export function createDurableTurnHost({
       principalId,
       status: 'running',
       startedAt: Date.now(),
+      userMessage,
       phaseOne: Promise.withResolvers(),
       channelEvents: [],
       channelWaiters: new Set(),
@@ -856,7 +934,7 @@ export function createDurableTurnHost({
       journalEntries.delete(turnId)
       throw error
     }
-    void execute(run, prompt, header).catch(error => {
+    void execute(run, header).catch(error => {
       run.status = typeof error?.code === 'string' && error.code === 'DURABLE_TURN_CANCELLED' ? 'cancelled' : 'failed'
       run.error = {
         code: typeof error?.code === 'string' ? error.code : 'DURABLE_TURN_FAILED',

@@ -30,14 +30,35 @@ const device = playwright.devices[process.env.DSH_POC_DEVICE ?? 'iPhone 13']
 if (device === undefined) throw new Error('Playwright device descriptor is missing')
 
 const dataDir = await mkdtemp(join(tmpdir(), 'dsh-mobile-ui-only-'))
-const app = await createBrowserNativeV2Server({ dataDir, llmMode: 'scripted', requireLocalAuth: true })
+const app = await createBrowserNativeV2Server({
+  dataDir,
+  llmMode: 'scripted',
+  requireLocalAuth: true,
+  testHooks: {
+    scriptedLlmFault: body => {
+      const userText = body.messages.filter(message => message.role === 'user' && typeof message.content === 'string')
+        .at(-1)?.content ?? ''
+      if (!userText.includes('MOBILE APPROVAL PROBE')) return undefined
+      const toolMessages = body.messages.filter(message => message.role === 'tool')
+      if (toolMessages.length > 0) return { kind: 'text', text: 'MOBILE APPROVAL APPLIED' }
+      return {
+        kind: 'tool-call',
+        call: {
+          id: 'mobile-approval-write',
+          name: 'write',
+          arguments: { file_path: '/dsh/home/workspace/mobile-approval.txt', content: 'MOBILE_APPROVAL_BODY\n' },
+        },
+      }
+    },
+  },
+})
 const origin = await app.listen(0)
 const courseId = `mobile-e2e-${String(Date.now())}`
 let browser
 
 try {
   browser = await browserType.launch({ headless: true })
-  const context = await browser.newContext({ ...device })
+  const context = await browser.newContext({ ...device, locale: 'en-US' })
   await context.addCookies([{
     name: 'dsh-browser-native-auth',
     value: app.authToken,
@@ -120,6 +141,24 @@ try {
   const assistantContents = assistantEvents.flatMap(event => event.data?.message?.content ?? [])
     .filter(block => block.type === 'text').map(block => block.text).join('')
   assert.match(assistantContents, /MOBILE UI ONLY PROBE/)
+
+  await page.locator('[data-mobile-input]').fill('MOBILE APPROVAL PROBE')
+  await page.locator('[data-mobile-send]').click()
+  const approval = page.locator('[data-mobile-approval]')
+  await approval.waitFor({ state: 'visible', timeout: 20_000 })
+  assert.match(await approval.innerText(), /write/)
+  await approval.locator('[data-mobile-approve]').click()
+  await approval.waitFor({ state: 'detached', timeout: 20_000 })
+  await page.waitForFunction(() => /completed/.test(document.querySelector('[data-mobile-status]')?.textContent ?? ''), undefined, { timeout: 20_000 })
+  const approvalTurnId = await page.evaluate(() => window.__DSH_LAST_TURN_ID__)
+  const approvalStatus = await context.request.get(`${origin}/api/browser-native/session/durable?turnId=${encodeURIComponent(approvalTurnId)}`)
+  assert.equal(approvalStatus.status(), 200)
+  assert.equal((await approvalStatus.json()).status, 'completed')
+  const approvalTranscript = await page.locator('[data-mobile-transcript]').innerText()
+  assert.match(approvalTranscript, /MOBILE APPROVAL APPLIED/)
+  const approvalSession = app.store.get(courseId)
+  const approvalEvents = approvalSession.events.filter(event => event.type === 'turn/end')
+  assert.equal(approvalEvents.length, 2, 'both mobile turns settle on the backend')
 
   process.stdout.write(`${JSON.stringify({
     result: 'passed',

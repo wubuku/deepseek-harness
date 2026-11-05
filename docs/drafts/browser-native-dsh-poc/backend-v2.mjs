@@ -6142,6 +6142,7 @@ export async function createBrowserNativeV2Server(options) {
   const MAX_DURABLE_SEARCH_MATCHES = 50
   const MAX_DURABLE_GLOB_MATCHES = 200
   const MAX_DURABLE_SUBAGENT_STEPS = 3
+  const MAX_DURABLE_SUBAGENT_DEPTH = 2
   const DURABLE_WORKSPACE_ROOT = '/dsh/home/workspace/'
   const DURABLE_TOOL_DEFINITIONS = [
     {
@@ -6221,7 +6222,7 @@ export async function createBrowserNativeV2Server(options) {
       type: 'function',
       function: {
         name: 'subagent',
-        description: 'Delegate one research step to a child agent that can read, grep, and glob the same Workspace, then return its final text.',
+        description: 'Delegate one research step to a child agent that can read, grep, and glob the same Workspace, and may delegate one level deeper, then return its final text.',
         parameters: {
           type: 'object',
           properties: { prompt: { type: 'string', description: 'Instructions for the child agent.' } },
@@ -6232,6 +6233,18 @@ export async function createBrowserNativeV2Server(options) {
     },
   ]
   const DURABLE_CHILD_TOOLS = DURABLE_TOOL_DEFINITIONS.filter(tool => tool.function.name !== 'subagent' && tool.function.name !== 'write' && tool.function.name !== 'edit')
+  const DURABLE_SUBAGENT_TOOL = DURABLE_TOOL_DEFINITIONS.find(tool => tool.function.name === 'subagent')
+  /**
+   * Advertise child tools for one nesting depth.
+   *
+   * A child cannot write or edit the Workspace. It may delegate again until the
+   * depth limit, so a model cannot open an unbounded chain of child turns.
+   * @param {number} depth - Nesting depth of the child being started, starting at 1.
+   * @returns {object[]} Tool definitions available to that child.
+   */
+  const durableChildTools = depth => depth < MAX_DURABLE_SUBAGENT_DEPTH
+    ? [...DURABLE_CHILD_TOOLS, DURABLE_SUBAGENT_TOOL]
+    : DURABLE_CHILD_TOOLS
   const workspaceToolPath = value => {
     if (typeof value !== 'string' || value.length === 0 || value.length > 1_000) {
       throw new DurableTurnError('DURABLE_TOOL_INVALID', 'file_path must be a non-empty string of at most 1000 characters', 400)
@@ -6415,14 +6428,14 @@ export async function createBrowserNativeV2Server(options) {
   /**
    * Execute one `subagent` call as a bounded child model loop.
    *
-   * The child sees only read, grep, and glob so it cannot change the Workspace
-   * or recurse into another subagent. Its model requests reuse the parent
-   * turn's owner lease and abort controller, and its final text becomes the
-   * tool result.
-   * @param {{principalId: string, arguments: string, complete: Function}} call - Parent principal, raw JSON arguments, and the parent-scoped completion helper.
+   * The child sees only read, grep, and glob so it cannot change the Workspace.
+   * It may delegate one more level until `MAX_DURABLE_SUBAGENT_DEPTH`. Its
+   * model requests reuse the parent turn's writer lease and abort controller,
+   * and its final text becomes the tool result.
+   * @param {{principalId: string, arguments: string, complete: Function, depth?: number}} call - Parent principal, raw JSON arguments, the parent-scoped completion helper, and the child depth.
    * @returns {Promise<{text: string, isError?: boolean}>} Child final text.
    */
-  const executeDurableSubagent = async ({ principalId, arguments: raw, complete }) => {
+  const executeDurableSubagent = async ({ principalId, arguments: raw, complete, depth = 1 }) => {
     let input
     try {
       input = JSON.parse(raw)
@@ -6433,15 +6446,18 @@ export async function createBrowserNativeV2Server(options) {
       return { text: 'subagent requires a prompt of 1 to 10000 characters', isError: true }
     }
     let messages = [{ role: 'user', content: input.prompt }]
+    const childTools = durableChildTools(depth)
     for (let step = 1; step <= MAX_DURABLE_SUBAGENT_STEPS; step += 1) {
-      const completion = await complete(messages, DURABLE_CHILD_TOOLS)
+      const completion = await complete(messages, childTools)
       const calls = completion.blocks.filter(block => block.type === 'tool-call')
       if (completion.finishReason === 'tool-calls') {
         if (calls.length === 0) return { text: 'the subagent asked for tools without naming a call', isError: true }
         const textBlocks = completion.blocks.filter(block => block.type === 'text' && block.text.trim() !== '')
         const results = []
         for (const call of calls) {
-          const result = await executeDurableTool({ principalId, name: call.name, arguments: call.arguments })
+          const result = call.name === 'subagent' && depth < MAX_DURABLE_SUBAGENT_DEPTH
+            ? await executeDurableSubagent({ principalId, arguments: call.arguments, complete, depth: depth + 1 })
+            : await executeDurableTool({ principalId, name: call.name, arguments: call.arguments })
           results.push({ role: 'tool', tool_call_id: call.id, content: result.text })
         }
         messages = [
@@ -6497,6 +6513,89 @@ export async function createBrowserNativeV2Server(options) {
     collaborationAuditEntries.splice(0, collaborationAuditEntries.length - ACCESS_AUDIT_LIMIT)
   }
   usageAudit.push(...observabilityRestore.usage)
+  /**
+   * Resolve which Session lease a durable turn may claim.
+   *
+   * The owner claims the owner lease. A shared editor claims the editor lease
+   * under the same Session lock, and a viewer receives an explicit read-only
+   * refusal instead of a generic missing Session.
+   * @param {object} session - Session being written.
+   * @param {string} principalId - Principal that started the durable turn.
+   * @returns {{kind: string, ownerToken: string, ownerEpoch: number}} Claimed writer lease.
+   */
+  const resolveDurableWriter = (session, principalId) => {
+    const role = sessionShares.roleOf(session.id, principalId)
+    if (role === 'editor') {
+      const claim = store.claimEditor(session, principalId)
+      return { kind: 'editor', ownerToken: claim.editorToken, ownerEpoch: claim.editorEpoch }
+    }
+    if (role === 'viewer') {
+      throw new DurableTurnError('SESSION_READ_ONLY', 'a shared Session is read-only for its viewer', 403)
+    }
+    throw new DurableTurnError('SESSION_NOT_FOUND', 'session does not exist', 404)
+  }
+  const MAX_DURABLE_ATTACHMENTS = 4
+  /**
+   * Build the durable user message and persist any attached image bytes.
+   *
+   * The Session event stores authoritative ImageBlock references; the model
+   * request carries the same bytes as data URLs. Bytes, media type, dimensions,
+   * and content hash are validated before the Workspace object is published.
+   * @param {{principalId: string, prompt: string, attachments?: object[]}} call - Writer principal, prompt text, and caller-supplied image attachments.
+   * @returns {Promise<{wire: string|object[], event: string|object[]}>} Model wire content and Session event content.
+   */
+  const prepareDurableUserMessage = async ({ principalId, prompt, attachments = [] }) => {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+      return { wire: prompt, event: [{ type: 'text', text: prompt }] }
+    }
+    if (attachments.length > MAX_DURABLE_ATTACHMENTS) {
+      throw new DurableTurnError('DURABLE_ATTACHMENT_LIMIT', `a durable turn accepts at most ${String(MAX_DURABLE_ATTACHMENTS)} attachments`, 400)
+    }
+    const workspaceId = workspaces.workspaceIdForPrincipal(principalId)
+    const imageBlocks = []
+    const wireParts = []
+    for (const attachment of attachments) {
+      if (attachment === null || typeof attachment !== 'object' || Array.isArray(attachment)) {
+        throw new DurableTurnError('DURABLE_ATTACHMENT_INVALID', 'each attachment must be an object', 400)
+      }
+      const hash = attachment.hash
+      const data = attachment.data
+      const mediaType = attachment.mediaType
+      const width = attachment.width
+      const height = attachment.height
+      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)
+        || typeof data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0
+        || typeof mediaType !== 'string' || !/^image\/[a-z0-9.+-]{1,64}$/.test(mediaType)
+        || !Number.isSafeInteger(width) || width < 1 || width > 10_000
+        || !Number.isSafeInteger(height) || height < 1 || height > 10_000) {
+        throw new DurableTurnError('DURABLE_ATTACHMENT_INVALID', 'attachment needs a SHA-256 hash, base64 data, image media type, and positive pixel dimensions', 400)
+      }
+      const bytes = Buffer.from(data, 'base64')
+      if (bytes.byteLength > attachmentMaxBytes) {
+        throw new DurableTurnError('DURABLE_ATTACHMENT_TOO_LARGE', `attachment exceeds the ${String(attachmentMaxBytes)} byte limit`, 413)
+      }
+      if (hashBytesOf(bytes) !== hash) {
+        throw new DurableTurnError('DURABLE_ATTACHMENT_HASH_MISMATCH', 'attachment bytes do not match the declared SHA-256 digest', 400)
+      }
+      await writeBundleAttachment(workspaceId, { hash, data: bytes })
+      imageBlocks.push({
+        type: 'image',
+        attachment: {
+          attachmentId: `sha256:${hash}`,
+          name: attachmentName(attachment.name ?? `${hash.slice(0, 16)}`),
+          mediaType,
+          bytes: bytes.byteLength,
+          width,
+          height,
+        },
+      })
+      wireParts.push({ type: 'image_url', image_url: { url: `data:${mediaType};base64,${data}` } })
+    }
+    return {
+      wire: [{ type: 'text', text: prompt }, ...wireParts],
+      event: [{ type: 'text', text: prompt }, ...imageBlocks],
+    }
+  }
   const durableHost = createDurableTurnHost({
     store,
     admission,
@@ -6509,6 +6608,8 @@ export async function createBrowserNativeV2Server(options) {
     tools: DURABLE_TOOL_DEFINITIONS,
     executeTool: executeDurableTool,
     executeSubagent: executeDurableSubagent,
+    prepareUserMessage: prepareDurableUserMessage,
+    resolveWriter: resolveDurableWriter,
     journalPath: join(options.dataDir, 'durable-runs.json'),
   })
   const durableRecovery = await durableHost.recover()
@@ -7736,9 +7837,9 @@ export async function createBrowserNativeV2Server(options) {
         const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
         const prompt = boundedString(body.prompt, 'prompt', 10_000)
         const header = body.header === undefined
-          ? { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd: '/workspace' }
+          ? { id: sessionId, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), isSeeded: false, cwd: '/workspace' }
           : assertRecord(body.header, 'header')
-        const durable = await durableHost.start({ sessionId, principalId, turnId, prompt, header })
+        const durable = await durableHost.start({ sessionId, principalId, turnId, prompt, header, attachments: body.attachments ?? [] })
         sendJson(response, durable.replayed === true ? 200 : 202, durable)
         return
       }
@@ -8057,14 +8158,26 @@ export async function createBrowserNativeV2Server(options) {
           throw new BackendError('INVALID_REQUEST', 'purpose must be compaction or session-title')
         }
         if (body.sessionId !== undefined) {
-          if (typeof body.ownerToken !== 'string' || body.ownerToken.length === 0) {
-            throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
-          }
-          if (sharedStateOrigin === undefined) {
-            const session = store.get(body.sessionId)
-            store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+          if (body.writerRole === 'editor') {
+            if (typeof body.editorToken !== 'string' || body.editorToken.length === 0) {
+              throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+            }
+            if (sharedStateOrigin === undefined) {
+              const session = store.get(body.sessionId)
+              store.assertEditor(session, assertPrincipalId(body.editorPrincipalId), body.editorToken, body.editorEpoch)
+            } else {
+              await authorizeRemoteLlm(request, body, sharedStateOrigin, sharedStateToken)
+            }
           } else {
-            await authorizeRemoteLlm(request, body, sharedStateOrigin, sharedStateToken)
+            if (typeof body.ownerToken !== 'string' || body.ownerToken.length === 0) {
+              throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+            }
+            if (sharedStateOrigin === undefined) {
+              const session = store.get(body.sessionId)
+              store.assertOwner(session, body.ownerToken, body.ownerEpoch)
+            } else {
+              await authorizeRemoteLlm(request, body, sharedStateOrigin, sharedStateToken)
+            }
           }
         }
         if (options.testHooks?.failLlmRequest?.(body) === true) {

@@ -122,7 +122,27 @@ try {
     return ids
   }, { count: SEEDED_SESSIONS, alphaCwd: ALPHA_CWD, betaCwd: BETA_CWD })
   assert.equal(seeded.length, SEEDED_SESSIONS)
-  const alphaIds = seeded.filter((_, index) => index % 2 === 0)
+  const durable = await page.evaluate(async ({ alphaCwd }) => {
+    const sessionId = 'query-durable-session'
+    const post = async (operation, body) => {
+      const response = await fetch(`/api/browser-native/session/${operation}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ protocolVersion: 1, requestId: crypto.randomUUID(), ...body }),
+      })
+      return { status: response.status, body: await response.json() }
+    }
+    const started = await post('durable', { sessionId, turnId: 'query-durable-turn', prompt: 'NEEDLE_ALPHA durable payload' })
+    if (started.status !== 202) throw new Error(`durable start failed: ${JSON.stringify(started)}`)
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      const status = await fetch(`/api/browser-native/session/durable?turnId=query-durable-turn`).then(response => response.json())
+      if (status.status === 'completed') return { sessionId, cwd: alphaCwd }
+      if (status.status === 'failed') throw new Error(`durable turn failed: ${JSON.stringify(status)}`)
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 20))
+    }
+    throw new Error('the durable Session never completed')
+  }, { alphaCwd: ALPHA_CWD })
+  const alphaIds = [...seeded.filter((_, index) => index % 2 === 0), durable.sessionId]
   const betaIds = seeded.filter((_, index) => index % 2 === 1)
 
   const probe = await waitFor(async () => {
@@ -136,8 +156,8 @@ try {
     return response?.ok === true ? response.sessionQuery : undefined
   }, 'session-query probe', 120_000)
 
-  assert.ok(probe.sessions >= SEEDED_SESSIONS && probe.sessions <= SEEDED_SESSIONS + 1,
-    `corpus must contain all seeded Sessions plus at most one preview Session: ${probe.sessions}`)
+  assert.ok(probe.sessions >= SEEDED_SESSIONS + 1 && probe.sessions <= SEEDED_SESSIONS + 2,
+    `corpus must contain all seeded Sessions, the durable Session, and at most one preview Session: ${probe.sessions}`)
   assert.equal(probe.filtered, betaIds.length, `cwd filter must return the beta Sessions: ${probe.filtered}`)
   assert.deepEqual([...probe.filteredIds].sort(), [...betaIds].sort())
   assert.equal(probe.matched, alphaIds.length, `full-text search must find every alpha Session: ${probe.matched}`)
