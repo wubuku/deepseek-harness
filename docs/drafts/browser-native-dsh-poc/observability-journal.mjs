@@ -10,9 +10,10 @@
  * response a client already received, so write failures are counted instead of
  * thrown.
  */
-import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { applyStorageFault } from './storage-fault.mjs'
 
 const JOURNAL_VERSION = 1
 /** Envelope format version for chained ledger lines; raw records are v1 data and rejected. */
@@ -192,9 +193,10 @@ export async function redactObservabilityJournal({ dataDir, shouldRemove, cipher
  * @param options - Journal location and clock.
  * @param options.dataDir - Backend data directory that owns the journal.
  * @param options.now - Clock returning epoch milliseconds.
+ * @param options.storageFault - Optional durable-write fault hook.
  * @returns Append, restore, and close operations plus current write health.
  */
-export function createObservabilityJournal({ dataDir, now = () => Date.now(), cipher }) {
+export function createObservabilityJournal({ dataDir, now = () => Date.now(), cipher, storageFault }) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('observability journal requires dataDir')
   const directory = join(dataDir, 'observability')
   const contextFor = file => `observability/${file}`
@@ -216,9 +218,14 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     const path = headPath(state.file)
     const temporary = `${path}.${randomUUID()}.tmp`
     const text = `${JSON.stringify({ version: LEDGER_VERSION, seq: state.seq, hash: state.hash })}\n`
-    if (cipher === undefined) await writeFile(temporary, text, 'utf8')
-    else await cipher.writeFile(temporary, text, contextFor(`${state.file}.head`))
-    await rename(temporary, path)
+    try {
+      if (cipher === undefined) await writeFile(temporary, text, 'utf8')
+      else await cipher.writeFile(temporary, text, contextFor(`${state.file}.head`))
+      await rename(temporary, path)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      throw error
+    }
   }
 
   const ensureTail = async file => {
@@ -237,6 +244,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
   const append = (file, record) => {
     chain = chain.then(async () => {
       await prepare()
+      await applyStorageFault(storageFault, 'audit')
       const path = join(directory, file)
       let size = 0
       try {
@@ -246,15 +254,25 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
       }
       if (size > MAX_JOURNAL_BYTES) {
         await rename(path, `${path}.1`)
+        size = 0
         tails.set(file, { file, seq: 0, hash: GENESIS })
       }
       const state = await ensureTail(file)
       const seq = state.seq + 1
       const hash = envelopeHash(state.hash, seq, record)
-      await appendFile(path, encodeLine(cipher, contextFor(file), JSON.stringify({ v: LEDGER_VERSION, seq, prev: state.hash, hash, record })), 'utf8')
       const next = { file, seq, hash }
+      try {
+        await appendFile(path, encodeLine(cipher, contextFor(file), JSON.stringify({ v: LEDGER_VERSION, seq, prev: state.hash, hash, record })), 'utf8')
+        await writeHead(next)
+      } catch (error) {
+        // A torn append must not leave a shorter-but-inconsistent chain: truncate
+        // back to the previous tail and let the next append start from that state.
+        await truncate(path, size).catch(() => {})
+        tails.set(file, state)
+        throw error
+      }
       tails.set(file, next)
-      await writeHead(next)
+      healthy = true
     })
     chain = chain.catch(error => {
       healthy = false
@@ -342,11 +360,18 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     const payload = `${JSON.stringify({ version: JOURNAL_VERSION, capturedAt: now(), view })}\n`
     chain = chain.then(async () => {
       await prepare()
+      await applyStorageFault(storageFault, 'audit')
       const path = join(directory, METRICS_FILE)
       const temporary = `${path}.${randomUUID()}.tmp`
-      if (cipher === undefined) await writeFile(temporary, payload, 'utf8')
-      else await cipher.writeFile(temporary, payload, contextFor(METRICS_FILE))
-      await rename(temporary, path)
+      try {
+        if (cipher === undefined) await writeFile(temporary, payload, 'utf8')
+        else await cipher.writeFile(temporary, payload, contextFor(METRICS_FILE))
+        await rename(temporary, path)
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => {})
+        throw error
+      }
+      healthy = true
     })
     chain = chain.catch(error => {
       healthy = false
@@ -387,6 +412,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
   const reencrypt = () => {
     const run = chain.then(async () => {
       if (cipher === undefined) return 0
+      await applyStorageFault(storageFault, 'rotation')
       let rewritten = 0
       for (const file of [ACCESS_DENIALS_FILE, USAGE_FILE, COLLABORATION_FILE]) {
         const path = join(directory, file)
@@ -425,6 +451,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
         if (error?.code !== 'ENOENT') throw error
       }
       tails.clear()
+      healthy = true
       return rewritten
     })
     chain = run.then(() => undefined, error => {

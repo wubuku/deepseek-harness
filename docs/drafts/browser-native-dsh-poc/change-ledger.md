@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-167：磁盘故障韧性
+
+```text
+changeId: BN-P2-167
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/storage-fault.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/workspace-v2.mjs; docs/drafts/browser-native-dsh-poc/chunk-object-store.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/at-rest-rotation.mjs; docs/drafts/browser-native-dsh-poc/tests/storage-fault.test.mjs; docs/drafts/browser-native-dsh-poc/tests/disk-fault-resilience.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: ENOSPC、只读挂载与 I/O 超时在 Session、blob、附件、审计与轮换写入上只会表现为通用失败或静默的 journal 写失败；附件分块原地追加可能留下半个 chunk，审计 append 失败可能留下撕裂行使链不可验证。需要可分类的错误、写入前故障注入、无半写保证与可重试/可回滚的处置说明。
+existingExtensionPointsChecked: 复用 `FormalSessionStore` 的 temp+rename、`FileWorkspaceBlobStore`/`ChunkObjectWorkspaceBlobStore` 的原子发布、附件 staging/commit、journal 的 append 链与 head、`rotateAtRestData` 的逐文件重写；未改 packages/、Session format、Worker 协议或正式 profile。
+behaviorChange: 新增 `storage-fault.mjs`：`StorageFaultError`、`storageFailure` 把 ENOSPC/EROFS/ETIMEDOUT/EBUSY（仅文件 syscall）映射为 507 `STORAGE_DISK_FULL`、503 `STORAGE_READ_ONLY`、503 `STORAGE_TIMEOUT`（`retryAfterMs` 5000），并提供 `applyStorageFault` 在写前调用 `options.testHooks.storageFault(surface)`。五个写入面在写入前调用它：Session flush、Workspace blob/chunk、附件对象与暂存、journal append/metrics、轮换逐文件与 journal 重写。Session flush 在发布前保留原始存储错误；handleRequest 统一映射为 `BackendError`。附件分块改为读取已暂存内容 + 临时文件 + rename，不再原地追加。journal append 记录旧长度，行或 head 写入失败时截断回旧长度并恢复旧 tail，成功写后 `healthy = true`；head 临时文件失败会被清理。
+consumersUpdated: `FormalSessionStore`、`WorkspaceStore`、两个 blob store、journal 与 rotation 接收 `storageFault`；backend 路由把 hook 传给附件 staging/commit 与 bundle 导入；README 与托管部署新增磁盘故障处置章节与命令；本 ledger。
+tests: `node --test` 覆盖 `storage-fault.test.mjs`、`observability-journal`、`at-rest-encryption`、`backend-v2`、`chunk-object-workspace`、`chunk-object-store`、`attachment-backend`、`attachment-chunked-upload`、`workspace-durability`，180/180 通过。`node docs/drafts/browser-native-dsh-poc/tests/disk-fault-resilience.e2e.mjs` 通过：Session flush、blob、附件在 ENOSPC/EROFS/ETIMEDOUT 下返回对应状态与 `retryAfterMs`，无 `.tmp`/`.part` 残留，同一请求重试成功且内容/密文可读；审计慢盘故障后 `writeFailures` 可见、链仍验证、恢复后可再次读取；轮换在三种故障下中断后 health 200、附件与 blob 仍可读、无 `.rotate.tmp`，重试成功且全部信封为新 key id，新钥单独重启可读。`at-rest-encryption.e2e.mjs` 与 `at-rest-key-rotation.e2e.mjs` 回归 PASS。
+syncReplaySteps: 上游同步后复跑上述单测与三个 E2E；若写入路径新增临时文件或 rename 步骤，必须让 `applyStorageFault` 位于首字节之前，并在失败分支清理临时文件；若 journal 结构变化，保持 truncate 回滚与 `healthy` 语义。
+deleteCondition: 正式产品以平台级重试/配额与集中审计提供同等故障分类和恢复保证，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-166：at-rest 密钥轮换
 
 ```text

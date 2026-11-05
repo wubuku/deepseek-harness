@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs'
 import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { ChunkObjectWorkspaceBlobStore } from './chunk-object-store.mjs'
+import { applyStorageFault } from './storage-fault.mjs'
 
 const COOKIE_NAME = 'dsh-browser-native-principal'
 const SESSION_COOKIE_NAME = 'dsh-browser-native-session-principal'
@@ -40,10 +41,12 @@ class FileWorkspaceBlobStore {
   /**
    * @param root - Content-addressed blob directory.
    * @param atRest - Optional cipher; blobs are then stored as authenticated envelopes.
+   * @param storageFault - Optional durable-write fault hook.
    */
-  constructor(root, atRest) {
+  constructor(root, atRest, storageFault) {
     this.root = root
     this.atRest = atRest
+    this.storageFault = storageFault
   }
 
   async initialize() {
@@ -107,6 +110,7 @@ class FileWorkspaceBlobStore {
       return { reused: true }
     }
     const payload = this.atRest === undefined ? bytes : this.atRest.encryptBuffer(bytes, this.context(hash))
+    await applyStorageFault(this.storageFault, 'workspace-blob')
     await atomicWrite(this.path(hash), payload)
     return { reused: false }
   }
@@ -120,6 +124,7 @@ class FileWorkspaceBlobStore {
       return { reused: true }
     }
     const target = this.path(hash)
+    await applyStorageFault(this.storageFault, 'workspace-blob')
     await mkdir(dirname(target), { recursive: true })
     if (this.atRest === undefined) {
       await rename(sourcePath, target)
@@ -509,11 +514,12 @@ export class WorkspaceStore {
       throw new WorkspaceError('CHUNK_STORE_CONFIGURATION', 'chunk objects cannot wrap an external blob store')
     }
     this.atRest = options.atRest
+    this.storageFault = options.storageFault
     this.chunkObjects = options.chunkObjects === true
       ? new ChunkObjectWorkspaceBlobStore(join(this.root, 'chunk-objects'),
-        new FileWorkspaceBlobStore(this.blobsDir, this.atRest), this.atRest)
+        new FileWorkspaceBlobStore(this.blobsDir, this.atRest, this.storageFault), this.atRest, this.storageFault)
       : undefined
-    this.blobStore = this.chunkObjects ?? options.blobStore ?? new FileWorkspaceBlobStore(this.blobsDir, this.atRest)
+    this.blobStore = this.chunkObjects ?? options.blobStore ?? new FileWorkspaceBlobStore(this.blobsDir, this.atRest, this.storageFault)
     this.identitiesPath = join(this.root, 'identities.json')
     this.identities = new Map()
     this.workspaces = new Map()

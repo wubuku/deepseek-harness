@@ -1148,9 +1148,12 @@ DSH_POC_LLM=real DSH_POC_BROWSER=chrome DSH_POC_DURABLE_WORKSPACE=1 DSH_POC_ENV_
 node --test docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs
 node docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/at-rest-key-rotation.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/disk-fault-resilience.e2e.mjs
 ```
 
 E2E 覆盖磁盘无明文 marker、附件/Workspace 回读、同钥重启、备份副本恢复、Session bundle 导出/导入、缺钥/错钥/损坏密文拒绝启动；轮换 E2E 覆盖进行中健康检查与读取可用、状态变更排队、旧钥无法解密新数据、轮换后导出/导入/备份/重启一致，以及损坏密文失败后旧钥回滚。范围外：Workspace 上传暂存、manifest/identity 元数据、备份包本身、KMS/HSM 托管与多实例并发轮换。
+
+磁盘故障韧性由 `storage-fault.mjs` 与 `testHooks.storageFault` 验证：在 Session flush、Workspace blob、附件、审计 journal 与轮换写入前分别注入 ENOSPC、EROFS、ETIMEDOUT（含慢盘延迟）。失败映射为 507 `STORAGE_DISK_FULL`、503 `STORAGE_READ_ONLY`、503 `STORAGE_TIMEOUT`（带 `retryAfterMs`），不留下临时文件或半写对象，同一请求清除故障后可重试；审计失败后 `restore` 仍验证链；轮换中断后旧钥 + 新钥继续读取，重试轮换成功并能用新钥单独重启。处置建议见[托管模式部署](hosted-deployment.md#磁盘故障处置)。
 
 ## 本地后端请求准入
 

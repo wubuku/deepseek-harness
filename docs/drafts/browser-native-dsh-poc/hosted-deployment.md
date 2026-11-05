@@ -124,6 +124,29 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 - 轮换后的导出、导入与备份一致性：bundle 保存密文，恢复/导入时必须使用新密钥；明文内容与轮换前相同，密文字节因 IV 重新生成而不同。
 - 未覆盖：多实例同时对同一数据目录轮换（数据目录锁只允许单进程）、密钥文件热更新之外的 KMS/HSM 托管、备份包本身与 manifest/identity 元数据的加密。计划中的 retention 清理与附件 GC 只删除文件，轮换跳过已消失的目标。
 
+### 磁盘故障处置
+
+磁盘写满、只读挂载与 I/O 超时不会伪装成通用 500。`storage-fault.mjs` 在各写入边界之前把 ENOSPC、EROFS、ETIMEDOUT/EBUSY 归一为稳定的 `STORAGE_*` 错误，响应带状态码与处置提示：
+
+| 系统错误 | HTTP | code | 处置 |
+| --- | --- | --- | --- |
+| `ENOSPC` | 507 | `STORAGE_DISK_FULL` | 释放空间或扩容数据卷后重试同一请求 |
+| `EROFS` | 503 | `STORAGE_READ_ONLY` | 恢复数据目录可写挂载后重试 |
+| `ETIMEDOUT` / `EBUSY` | 503 | `STORAGE_TIMEOUT` | 等待卷恢复，按 `retryAfterMs`（5000）重试 |
+
+失败边界：
+
+- Session flush、Workspace blob/chunk、附件对象与分块暂存都先写临时文件再 `rename`；故障在任何写入之前被报告，临时文件删除，旧版本保持可读。附件分块现在整块重写临时文件，不会原地追加出半个 chunk。
+- 审计 journal 的 append 先从磁盘尾部读取大小；行写入或 head 更新失败时截断回旧长度并保留旧 tail，下一条记录从原位置继续，`restore` 仍能验证链。已失败的审计记录只在 `journal.writeFailures` 与 stderr 中出现，不是可读账本的一部分；客户端收到的原有 4xx 状态不变。
+- 轮换中断：进程内保留 successor 与 predecessor，已重写文件用新钥、未重写文件用旧钥，key-check 不变。重启时密钥文件必须同时包含两把钥；读取继续可用，清除故障后再次调用轮换端点即可完成。回滚用轮换前备份 + 旧密钥启动；旧钥在轮换成功前不要从密钥文件删除。
+
+运维处置：
+
+1. 5xx `STORAGE_*` 出现时先查 `df -h <dataDir>`、`findmnt <dataDir>` 与 `dmesg`，确认空间、只读重挂或设备超时，不要重启进程掩盖故障。
+2. 修复底层后直接重试原请求；Session flush 与 blob/attachment PUT 幂等，重复不会产生第二份对象。
+3. 用 `GET /api/browser-native/observability/reconciliation` 的 `journal.healthy`/`writeFailures` 判断审计是否恢复；`healthy` 反映最近一次审计写入。
+4. 轮换中断时先 `GET /health` 与读取附件/blob 确认服务可用，再重试轮换；完成后才从密钥文件移除旧钥并重启。
+
 ## 部署形态
 
 三种形态共用同一个 `start-hosted.mjs` 与同一套数据目录语义，只改变进程守护与传输层。

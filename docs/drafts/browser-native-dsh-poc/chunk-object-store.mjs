@@ -1,7 +1,8 @@
 /** Immutable chunks and atomic file descriptors, with legacy whole-blob fallback. */
 import { constants } from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { applyStorageFault } from './storage-fault.mjs'
 import { dirname, join, relative } from 'node:path'
 import { WorkspaceError } from './workspace-v2.mjs'
 import { isAtRestEnvelope } from './at-rest-crypto.mjs'
@@ -84,11 +85,13 @@ export class ChunkObjectWorkspaceBlobStore {
    * @param {string} root - Private directory containing chunks/ and files/.
    * @param {object} fallback - Existing FileWorkspaceBlobStore-compatible store.
    * @param {object} [atRest] - Optional cipher; chunks and descriptors are then authenticated envelopes.
+   * @param {Function} [storageFault] - Optional durable-write fault hook.
    */
-  constructor(root, fallback, atRest) {
+  constructor(root, fallback, atRest, storageFault) {
     this.root = root
     this.fallback = fallback
     this.atRest = atRest
+    this.storageFault = storageFault
     this.chunksDir = join(root, 'chunks')
     this.filesDir = join(root, 'files')
     this.mutationQueue = Promise.resolve()
@@ -548,6 +551,7 @@ export class ChunkObjectWorkspaceBlobStore {
 
   async #publish(path, bytes, metric) {
     const parent = dirname(path)
+    await applyStorageFault(this.storageFault, 'workspace-blob')
     await mkdir(parent, { recursive: true, mode: 0o700 })
     await this.#syncDirectory(dirname(parent))
     const temporary = join(parent, `${randomUUID()}.tmp`)

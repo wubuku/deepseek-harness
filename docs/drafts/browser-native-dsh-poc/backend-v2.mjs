@@ -23,6 +23,7 @@ import { DurableTurnError, createDurableTurnHost } from './durable-host-v2.mjs'
 import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal, redactObservabilityJournal } from './observability-journal.mjs'
+import { applyStorageFault, storageFailure } from './storage-fault.mjs'
 import {
   buildBudgetSnapshot,
   buildUsageReport,
@@ -842,6 +843,7 @@ async function storeAttachmentObject(
   onChunk = () => {},
   publish = async operation => await operation(),
   atRest,
+  storageFault,
 ) {
   const assertRequestActive = () => {
     if (!request.aborted) return
@@ -877,6 +879,7 @@ async function storeAttachmentObject(
   }
 
   const temporaryPath = join(directoryPath, `${randomUUID()}.part`)
+  await applyStorageFault(storageFault, 'attachment')
   const handle = await open(temporaryPath, 'wx', 0o600)
   const encryptor = atRest === undefined ? undefined : atRest.createEncryptor(attachmentContext(workspaceId, hash))
   let storedOffset = 0
@@ -960,10 +963,11 @@ async function storeAttachmentObject(
  * @param {number} maximumBytes - Configured attachment byte ceiling.
  * @returns {Promise<{uploadId: string, chunkBytes: number}>} Upload identifier and the largest accepted chunk.
  */
-async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, maximumBytes, atRest) {
+async function beginAttachmentUpload(dataDir, workspaceId, hash, name, bytes, maximumBytes, atRest, storageFault) {
   if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > maximumBytes) {
     throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment must declare a byte length from 0 through ${String(maximumBytes)}`, 413)
   }
+  await applyStorageFault(storageFault, 'attachment')
   const directoryPath = attachmentUploadRoot(dataDir, workspaceId)
   await mkdir(directoryPath, { recursive: true, mode: 0o700 })
   const uploadId = randomUUID()
@@ -1036,7 +1040,7 @@ async function readAttachmentUploadMeta(dataDir, workspaceId, uploadId) {
  * @param {number} maximumBytes - Configured attachment byte ceiling.
  * @returns {Promise<{uploadId: string, offset: number, received: number, bytes: number}>} Progress after the append.
  */
-async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash, offset, body, maximumBytes, atRest) {
+async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash, offset, body, maximumBytes, atRest, storageFault) {
   if (!(body instanceof Buffer) || body.byteLength > MAX_ATTACHMENT_CHUNK_BYTES) {
     throw new BackendError('ATTACHMENT_TOO_LARGE', `attachment chunks must not exceed ${String(MAX_ATTACHMENT_CHUNK_BYTES)} bytes`, 413)
   }
@@ -1057,17 +1061,22 @@ async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash,
     throw new BackendError('ATTACHMENT_TOO_LARGE', 'attachment chunk exceeds the declared attachment length', 413)
   }
   if (body.byteLength > 0) {
-    if (atRest === undefined) {
-      const handle = await open(partPath, 'r+')
-      try {
-        await writeAllAt(handle, body, offset)
-        await handle.sync()
-      } finally {
-        await handle.close()
+    await applyStorageFault(storageFault, 'attachment')
+    const staged = atRest === undefined
+      ? await readFile(partPath)
+      : await atRest.readFile(partPath, attachmentUploadContext(workspaceId, uploadId))
+    const next = Buffer.concat([staged, body])
+    const temporary = `${partPath}.${randomUUID()}.tmp`
+    try {
+      if (atRest === undefined) {
+        await writeFile(temporary, next, { mode: 0o600 })
+      } else {
+        await atRest.writeFile(temporary, next, attachmentUploadContext(workspaceId, uploadId), 0o600)
       }
-    } else {
-      const staged = await atRest.readFile(partPath, attachmentUploadContext(workspaceId, uploadId))
-      await atRest.writeFile(partPath, Buffer.concat([staged, body]), attachmentUploadContext(workspaceId, uploadId), 0o600)
+      await rename(temporary, partPath)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      throw error
     }
   }
   const received = offset + body.byteLength
@@ -1086,9 +1095,10 @@ async function appendAttachmentUploadChunk(dataDir, workspaceId, uploadId, hash,
  * @param {(operation: () => Promise<void>) => Promise<void>} publish - Publishes atomically under the attachment lock.
  * @returns {Promise<{bytes: number, reused: boolean}>} Committed size and whether an existing object served the receipt.
  */
-async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publish, atRest) {
+async function commitAttachmentUpload(dataDir, workspaceId, uploadId, hash, publish, atRest, storageFault) {
   const meta = await readAttachmentUploadMeta(dataDir, workspaceId, uploadId)
   if (meta.hash !== hash) throw new BackendError('ATTACHMENT_UPLOAD_HASH_MISMATCH', 'upload staging does not belong to this attachment hash', 409)
+  await applyStorageFault(storageFault, 'attachment')
   const partPath = attachmentUploadPartPath(dataDir, workspaceId, uploadId)
   const metaPath = attachmentUploadMetaPath(dataDir, workspaceId, uploadId)
   const info = await stat(partPath).catch(() => undefined)
@@ -1736,7 +1746,7 @@ function recordOf(session) {
 }
 
 class FormalSessionStore {
-  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename, atRest } = {}) {
+  constructor(dataDir, { ownerLeaseMs = DEFAULT_OWNER_LEASE_MS, now = Date.now, retentionMs = 0, failFlush, failFlushAfterRename, atRest, storageFault } = {}) {
     if (!Number.isSafeInteger(ownerLeaseMs) || ownerLeaseMs < 300) throw new Error('ownerLeaseMs must be an integer of at least 300')
     if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) throw new Error('retentionMs must be a non-negative safe integer')
     this.root = resolve(dataDir)
@@ -1750,6 +1760,7 @@ class FormalSessionStore {
     this.retentionMs = retentionMs
     this.failFlush = failFlush
     this.failFlushAfterRename = failFlushAfterRename
+    this.storageFault = storageFault
   }
 
   /** Session file context bound into the at-rest envelope AAD. */
@@ -2182,6 +2193,7 @@ class FormalSessionStore {
     let published = false
     try {
       if (this.failFlush?.(session) === true) throw new BackendError('E2E_INJECTED_SESSION_FLUSH_FAILURE', 'E2E injected Session flush failure', 503)
+      await applyStorageFault(this.storageFault, 'session')
       if (this.atRest !== undefined) {
         await this.atRest.writeFile(temporary, `${JSON.stringify(record)}\n`,
           this.sessionContext(`${session.id}.json`))
@@ -2199,12 +2211,16 @@ class FormalSessionStore {
       try { await directory.sync() } finally { await directory.close() }
     } catch (error) {
       await rm(temporary, { force: true })
-      if (published) session.writeBlocked = true
-      throw new BackendError(
-        published ? 'DURABILITY_UNKNOWN' : 'DURABILITY_FAILED',
-        `Session flush ${published ? 'outcome is unknown after file publish' : 'failed before file publish'}: ${String(error)}`,
-        503,
-      )
+      if (published) {
+        session.writeBlocked = true
+        throw new BackendError(
+          'DURABILITY_UNKNOWN',
+          `Session flush outcome is unknown after file publish: ${String(error)}`,
+          503,
+        )
+      }
+      if (storageFailure(error) !== undefined) throw error
+      throw new BackendError('DURABILITY_FAILED', `Session flush failed before file publish: ${String(error)}`, 503)
     }
     session.durableThroughSeq = record.durableThroughSeq
     session.lastActivityAt = this.now()
@@ -5740,6 +5756,7 @@ export async function createBrowserNativeV2Server(options) {
     failFlush: options.testHooks?.failSessionFlush,
     failFlushAfterRename: options.testHooks?.failSessionFlushAfterRename,
     atRest,
+    storageFault: options.testHooks?.storageFault,
   })
   await store.load()
   if (retentionMs > 0) {
@@ -5759,6 +5776,7 @@ export async function createBrowserNativeV2Server(options) {
     chunkObjects: options.workspaceChunkObjects === true,
     atRest,
     hostedAuth,
+    storageFault: options.testHooks?.storageFault,
   })
   await workspaces.load()
   const crossStoreLedger = new CrossStoreOperationLedger(options.dataDir, { now: options.testHooks?.now })
@@ -5997,7 +6015,11 @@ export async function createBrowserNativeV2Server(options) {
   const startedAt = Date.now()
   const metrics = createMetricsRegistry()
   const usageAudit = []
-  const observabilityJournal = createObservabilityJournal({ dataDir: options.dataDir, cipher: atRest })
+  const observabilityJournal = createObservabilityJournal({
+    dataDir: options.dataDir,
+    cipher: atRest,
+    storageFault: options.testHooks?.storageFault,
+  })
   const observabilityRestore = await observabilityJournal.restore()
   accessAuditEntries.push(...observabilityRestore.accessDenials)
   if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) {
@@ -6142,6 +6164,7 @@ export async function createBrowserNativeV2Server(options) {
     await mkdir(directoryPath, { recursive: true, mode: 0o700 })
     const target = attachmentPath(options.dataDir, workspaceId, attachment.hash)
     if (await verifyAttachmentObject(target, attachment.hash, workspaceId, atRest) !== undefined) return
+    await applyStorageFault(options.testHooks?.storageFault, 'attachment')
     const temporary = `${target}.${randomUUID()}.tmp`
     if (atRest === undefined) await writeFile(temporary, attachment.data, { mode: 0o600 })
     else await atRest.writeFile(temporary, attachment.data, attachmentContext(workspaceId, attachment.hash), 0o600)
@@ -6256,6 +6279,7 @@ export async function createBrowserNativeV2Server(options) {
         dataDir: options.dataDir,
         cipher: atRest,
         journal: observabilityJournal,
+        storageFault: options.testHooks?.storageFault,
       })
       const retired = []
       for (const keyId of atRest.keyIds()) {
@@ -6740,6 +6764,7 @@ export async function createBrowserNativeV2Server(options) {
             options.testHooks?.onAttachmentChunk,
             operation => publishAttachment(workspaceId, operation),
             atRest,
+            options.testHooks?.storageFault,
           )
           await options.testHooks?.beforeAttachmentReceipt?.({ workspaceId, hash, name, stored })
           if (response.destroyed) {
@@ -6778,6 +6803,7 @@ export async function createBrowserNativeV2Server(options) {
         }
         sendJson(response, 200, { name, ...await beginAttachmentUpload(
           options.dataDir, workspaceId, hash, name, body.bytes, attachmentMaxBytes, atRest,
+          options.testHooks?.storageFault,
         ) })
         return
       }
@@ -6804,7 +6830,8 @@ export async function createBrowserNativeV2Server(options) {
           const offset = Number(offsetText)
           if (!Number.isSafeInteger(offset) || offset < 0) throw new BackendError('INVALID_REQUEST', 'chunk offset is invalid')
           const appended = await withKeyedLock(attachmentUploadLocks, uploadId, async () =>
-            await appendAttachmentUploadChunk(options.dataDir, workspaceId, uploadId, hash, offset, body, attachmentMaxBytes, atRest))
+            await appendAttachmentUploadChunk(options.dataDir, workspaceId, uploadId, hash, offset, body, attachmentMaxBytes, atRest,
+              options.testHooks?.storageFault))
           await options.testHooks?.onAttachmentUploadChunk?.({
             workspaceId, hash, uploadId, offset, received: appended.received,
           })
@@ -6819,7 +6846,7 @@ export async function createBrowserNativeV2Server(options) {
             return {
               meta,
               stored: await commitAttachmentUpload(options.dataDir, workspaceId, uploadId, hash,
-                operation => publishAttachment(workspaceId, operation), atRest),
+                operation => publishAttachment(workspaceId, operation), atRest, options.testHooks?.storageFault),
             }
           })
           sendJson(response, 200, {
@@ -7729,9 +7756,13 @@ export async function createBrowserNativeV2Server(options) {
         countedMutation = false
         leaveMutation()
       }
-      metrics.recordFailure({ code: typeof error?.code === 'string' ? error.code : 'INTERNAL' })
-      if (url !== undefined) recordAccessDenial(url, request, error)
-      if (!response.headersSent && !response.destroyed) sendError(response, error)
+      const reported = storageFailure(error)
+      const failure = reported === undefined
+        ? error
+        : new BackendError(reported.code, reported.message, reported.status, reported.retryAfterMs, reported.details)
+      metrics.recordFailure({ code: typeof failure?.code === 'string' ? failure.code : 'INTERNAL' })
+      if (url !== undefined) recordAccessDenial(url, request, failure)
+      if (!response.headersSent && !response.destroyed) sendError(response, failure)
       else response.destroy()
     }
   }

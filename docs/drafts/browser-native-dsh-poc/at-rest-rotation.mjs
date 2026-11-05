@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { AtRestError, envelopeKeyId, writeAtRestKeyCheck } from './at-rest-crypto.mjs'
+import { applyStorageFault } from './storage-fault.mjs'
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 const BLOB_PREFIX_PATTERN = /^[a-f0-9]{2}$/
@@ -142,9 +143,10 @@ async function reencryptTarget(target, cipher) {
  * @param options.dataDir - Backend data directory.
  * @param options.cipher - Cipher whose active key is the rotation target.
  * @param options.journal - Observability journal exposing `reencrypt`.
+ * @param options.storageFault - Optional durable-write fault hook.
  * @returns Per-surface file counts and the target key id.
  */
-export async function rotateAtRestData({ dataDir, cipher, journal }) {
+export async function rotateAtRestData({ dataDir, cipher, journal, storageFault }) {
   if (cipher === undefined) throw new AtRestError('AT_REST_KEY_REQUIRED', 'at-rest rotation requires a configured key')
   const targetKeyId = cipher.keyId
   const targets = await listAtRestTargets(dataDir)
@@ -152,6 +154,7 @@ export async function rotateAtRestData({ dataDir, cipher, journal }) {
   let reencrypted = 0
   let skipped = 0
   for (const target of targets) {
+    await applyStorageFault(storageFault, 'rotation')
     const outcome = await reencryptTarget(target, cipher)
     if (outcome === 'missing') {
       skipped += 1
@@ -161,7 +164,6 @@ export async function rotateAtRestData({ dataDir, cipher, journal }) {
     if (outcome !== 'current') reencrypted += 1
   }
   const journalCount = journal === undefined ? 0 : await journal.reencrypt()
-
   const remaining = []
   for (const target of targets) {
     const bytes = await readFile(target.path).catch(() => undefined)
