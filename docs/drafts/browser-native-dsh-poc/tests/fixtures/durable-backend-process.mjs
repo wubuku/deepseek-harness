@@ -5,11 +5,25 @@ const modelMode = process.argv[3] ?? 'write'
 let modelRequests = 0
 let toolCalls = 0
 
+function parseKeyring(text) {
+  if (text === undefined || text === '') return undefined
+  const parsed = JSON.parse(text)
+  return {
+    keys: parsed.keys.map(entry => ({ keyId: entry.keyId, key: Buffer.from(entry.key, 'base64') })),
+    activeKeyId: parsed.activeKeyId,
+  }
+}
+
+const atRestKeyring = parseKeyring(process.env.CRASH_AT_REST_KEYS)
+const reloadKeyring = parseKeyring(process.env.CRASH_AT_REST_RELOAD_KEYS)
+
 const app = await createBrowserNativeV2Server({
   dataDir,
   llmMode: 'scripted',
   durableTurnTimeoutMs: 120_000,
   durableApprovalTimeoutMs: 600_000,
+  ...(atRestKeyring === undefined ? {} : { atRestKeyring }),
+  ...(reloadKeyring === undefined ? {} : { reloadAtRestKeyring: async () => reloadKeyring }),
   testHooks: {
     scriptedLlmFault: () => {
       modelRequests += 1

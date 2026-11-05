@@ -298,6 +298,18 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     }
   }
 
+  const rewriteLedger = async (path, text, file) => {
+    const temporary = `${path}.${randomUUID()}.tmp`
+    try {
+      if (cipher === undefined) await writeFile(temporary, text, 'utf8')
+      else await cipher.writeFile(temporary, text, contextFor(file))
+      await rename(temporary, path)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      throw error
+    }
+  }
+
   const readLedger = async (file, limit) => {
     const head = await readHead(file)
     if (head?.invalid === true) {
@@ -309,6 +321,62 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
       decodeLine(cipher, contextFor(file)))
     const truncated = parsed.records.length > limit
     return { ...parsed, records: parsed.records.slice(-limit), truncated }
+  }
+
+  /**
+   * Reconcile ledgers with their heads after an interrupted process.
+   *
+   * A SIGKILL can leave a line that never reached its newline, or a line that
+   * reached disk before its head did. When the complete lines still form an
+   * unbroken chain, this truncates the torn tail and re-anchors the head to the
+   * last verified envelope, so a restart sees a verifiable ledger. Invalid lines
+   * inside the chain are not rewritten and stay reported by `restore`.
+   * @returns Per-ledger repair details, including torn bytes and head rebuilds.
+   */
+  const recover = async () => {
+    const report = []
+    for (const file of [ACCESS_DENIALS_FILE, USAGE_FILE, COLLABORATION_FILE]) {
+      const path = join(directory, file)
+      const raw = await readIfExists(path, cipher, contextFor(file))
+      const torn = raw.endsWith('\n') || raw.length === 0 ? '' : raw.slice(raw.lastIndexOf('\n') + 1)
+      const complete = torn === '' ? raw : raw.slice(0, raw.length - torn.length)
+      const parsed = parseLedger(complete, undefined, decodeLine(cipher, contextFor(file)))
+      const head = await readHead(file)
+      const headValid = head !== undefined && head.invalid !== true ? head : undefined
+      const headMatches = parsed.tail === undefined
+        ? headValid === undefined
+        : headValid?.seq === parsed.tail.seq && headValid.hash === parsed.tail.hash
+      if (parsed.invalidLines > 0) {
+        report.push({ file, tornBytes: Buffer.byteLength(torn), chainIntact: false, repaired: false })
+        continue
+      }
+      if (torn === '' && headMatches) {
+        tails.set(file, parsed.tail === undefined
+          ? { file, seq: 0, hash: GENESIS }
+          : { file, seq: parsed.tail.seq, hash: parsed.tail.hash })
+        continue
+      }
+      if (torn !== '') {
+        const text = cipher === undefined
+          ? complete
+          : complete.split('\n').filter(line => line.length > 0)
+            .map(line => encodeLine(cipher, contextFor(file), cipher.decryptText(line, contextFor(file)))).join('')
+        await rewriteLedger(path, text, file)
+      }
+      if (parsed.tail === undefined) await rm(headPath(file), { force: true })
+      else await writeHead({ file, seq: parsed.tail.seq, hash: parsed.tail.hash })
+      tails.set(file, parsed.tail === undefined
+        ? { file, seq: 0, hash: GENESIS }
+        : { file, seq: parsed.tail.seq, hash: parsed.tail.hash })
+      report.push({
+        file,
+        tornBytes: Buffer.byteLength(torn),
+        chainIntact: true,
+        repaired: true,
+        headRebuilt: parsed.tail !== undefined,
+      })
+    }
+    return report
   }
 
   /**
@@ -467,6 +535,7 @@ export function createObservabilityJournal({ dataDir, now = () => Date.now(), ci
     appendUsage: entry => append(USAGE_FILE, entry),
     appendCollaboration: entry => append(COLLABORATION_FILE, entry),
     persistMetrics,
+    recover,
     restore,
     redact,
     reencrypt,

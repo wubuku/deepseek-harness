@@ -1149,11 +1149,14 @@ node --test docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.test.mjs
 node docs/drafts/browser-native-dsh-poc/tests/at-rest-encryption.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/at-rest-key-rotation.e2e.mjs
 node docs/drafts/browser-native-dsh-poc/tests/disk-fault-resilience.e2e.mjs
+node docs/drafts/browser-native-dsh-poc/tests/crash-consistency.e2e.mjs
 ```
 
 E2E 覆盖磁盘无明文 marker、附件/Workspace 回读、同钥重启、备份副本恢复、Session bundle 导出/导入、缺钥/错钥/损坏密文拒绝启动；轮换 E2E 覆盖进行中健康检查与读取可用、状态变更排队、旧钥无法解密新数据、轮换后导出/导入/备份/重启一致，以及损坏密文失败后旧钥回滚。范围外：Workspace 上传暂存、manifest/identity 元数据、备份包本身、KMS/HSM 托管与多实例并发轮换。
 
 磁盘故障韧性由 `storage-fault.mjs` 与 `testHooks.storageFault` 验证：在 Session flush、Workspace blob、附件、审计 journal 与轮换写入前分别注入 ENOSPC、EROFS、ETIMEDOUT（含慢盘延迟）。失败映射为 507 `STORAGE_DISK_FULL`、503 `STORAGE_READ_ONLY`、503 `STORAGE_TIMEOUT`（带 `retryAfterMs`），不留下临时文件或半写对象，同一请求清除故障后可重试；审计失败后 `restore` 仍验证链；轮换中断后旧钥 + 新钥继续读取，重试轮换成功并能用新钥单独重启。处置建议见[托管模式部署](hosted-deployment.md#磁盘故障处置)。
+
+随机崩溃一致性由 `crash-recovery.mjs` 与 `tests/crash-consistency.e2e.mjs` 验证：backend 取得数据目录锁后先清理孤儿临时文件（`*.tmp`、`*.rotate.tmp`、`attachments-v1/**/*.part` 与 `*.enc`、根目录 `.stale-*`），保留 `attachment-uploads-v1/*.part` 作为可续传暂存；journal 的 `recover()` 截断未写完的尾行并把 head 重锚到最后一条完整信封，链中间的坏行不重写、继续由 `restore` 报告。E2E 在 turn 执行、附件写入、审计追加与密钥轮换过程中随机 SIGKILL 60 次（hang/completing turn、分块上传中断与提交后、审计 append、轮换首个目标改写后），每次重启断言 Session 日志可读且 seq 连续无重复、每个 turn 只结算一次（重放同 turnId 不重复调用模型）、无孤儿临时文件、审计链验证通过；轮换中断后新旧信封并存且都可解密，重试轮换把全部目标与 journal 重写为新钥。故障定位：`recover()` 曾把 head 写到错误的 `undefined.head.json`，导致陈旧 head 永不自愈；`writeAtRestKeyCheck` 原本直接写目标路径，半写会使下次启动报 `AT_REST_KEY_INVALID`，现改为 temp+rename。范围外：分块暂存内被撕裂的 chunk（按 hash 提交失败后丢弃或 TTL 清理）。
 
 ## 本地后端请求准入
 

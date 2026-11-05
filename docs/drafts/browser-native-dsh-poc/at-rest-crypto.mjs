@@ -21,7 +21,7 @@
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, open, readdir, readFile as readFileRaw, stat, writeFile as writeFileRaw } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile as readFileRaw, rename, rm, stat, writeFile as writeFileRaw } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
 const MAGIC = Buffer.from('DSHENC', 'ascii')
@@ -473,8 +473,15 @@ export async function assertAtRestReady({ dataDir, cipher }) {
 export async function writeAtRestKeyCheck(dataDir, cipher) {
   const directory = resolve(dataDir)
   const checkPath = join(directory, KEY_CHECK_FILE)
+  const temporary = `${checkPath}.${randomBytes(8).toString('hex')}.tmp`
   const ciphertext = cipher.encryptBuffer(Buffer.from(KEY_CHECK_PLAINTEXT, 'utf8'), KEY_CHECK_CONTEXT)
-  await writeFileBytes(checkPath, `${JSON.stringify({ version: 1, keyId: cipher.keyId, ciphertext: ciphertext.toString('base64') })}\n`, 0o600)
+  try {
+    await writeFileBytes(temporary, `${JSON.stringify({ version: 1, keyId: cipher.keyId, ciphertext: ciphertext.toString('base64') })}\n`, 0o600)
+    await rename(temporary, checkPath)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 /** Whether any stored Session log at the root of `sessions/` is encrypted. */

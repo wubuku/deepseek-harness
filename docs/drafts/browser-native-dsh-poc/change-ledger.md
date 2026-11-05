@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-168：随机崩溃一致性
+
+```text
+changeId: BN-P2-168
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/crash-recovery.mjs; docs/drafts/browser-native-dsh-poc/observability-journal.mjs; docs/drafts/browser-native-dsh-poc/at-rest-crypto.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/fixtures/durable-backend-process.mjs; docs/drafts/browser-native-dsh-poc/tests/crash-consistency.e2e.mjs; docs/drafts/browser-native-dsh-poc/hosted-deployment.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: SIGKILL 可停在任意写步骤：journal 可能在行落盘后、head 落盘前被杀，key-check 可能半写，轮换可能停在部分文件已用新钥的状态。没有启动清理与 journal 重锚时，重启会看到孤儿 `.tmp`/`.rotate.tmp`/`.part`、陈旧 head 使审计链不可验证，或撕裂 key-check 直接拒绝启动。
+existingExtensionPointsChecked: 复用 `FormalSessionStore` 的 temp+rename、blob/chunk 原子发布、附件 staging/commit、journal 的 append 链/head/restore、`rotateAtRestData` 的逐文件重写与 durable host 的 `DURABLE_HOST_RESTARTED` 恢复；未改 packages/、Session format、Worker 协议或正式 profile。
+behaviorChange: 新增 `crash-recovery.mjs`：`listOrphanTemporaries`/`cleanupOrphanTemporaries` 在 backend 取得数据目录锁后删除孤儿临时文件（通用 `*.tmp`、`attachments-v1` 下的 `.part`/`.enc`、锁的 `.stale-*`、`*.rotate.tmp`），保留 `attachment-uploads-v1/*.part` 可续传暂存。`observability-journal.mjs` 新增 `recover()`：按文件读取 ledger，检测无结尾换行的撕裂尾行，仅在链完整时重写完整行、删除或重建 head、把 tail 缓存改成带 `file` 的新对象；`rewriteLedger` 原子替换。修复 `recover()` 把 head 写到 `undefined.head.json` 的路径错误。`writeAtRestKeyCheck` 改为 temp+rename 写入。`backend-v2.mjs` 在启动清理后调用 `journal.recover()` 再 `restore()`。fixture 支持 `CRASH_AT_REST_KEYS`/`CRASH_AT_REST_RELOAD_KEYS`。
+consumersUpdated: backend 启动序列、journal 的 `recover`/`restore`、at-rest key-check 写入、durable fixture；README 与托管部署新增崩溃恢复章节与命令；本 ledger。
+tests: `node docs/drafts/browser-native-dsh-poc/tests/crash-consistency.e2e.mjs` 通过（60 次随机 SIGKILL，覆盖 5 个阶段，含 hang turn 恢复、首个 chunk 后中断上传与提交后崩溃、审计 append、轮换首个目标改写后中断）。断言：Session 事件 seq 从 0 连续且不重复、每个 turn 恰好一次 `turn/end`、重放不重复调用模型、无孤儿临时文件、审计 `restore()` 三个 ledger `verified`、混合新旧信封均可解密、重试轮换后全部文件与 journal 只用新钥。稳定性复跑 3 次均通过。相关单测 `storage-fault`、`observability`、`observability-persistence`、`durable-host-restart`、`at-rest-encryption`、`attachment-chunked-upload`、`workspace-durability`、`chunk-object-store`、`backend-v2` 共 167/167 通过；`at-rest-encryption.e2e`、`at-rest-key-rotation.e2e`、`disk-fault-resilience.e2e` 回归 PASS。
+syncReplaySteps: 上游同步后复跑崩溃 E2E 与上述单测；新增写入路径必须使用 temp+rename 并纳入 `crash-recovery.mjs` 的孤儿规则；若 journal 结构变化，`recover()` 必须保持“只修撕裂尾与 head、不重写链中坏行”的语义。
+deleteCondition: 平台级存储与日志系统提供等价崩溃恢复保证，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-167：磁盘故障韧性
 
 ```text

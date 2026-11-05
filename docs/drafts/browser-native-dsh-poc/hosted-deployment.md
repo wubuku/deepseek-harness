@@ -147,6 +147,25 @@ hosted: admission ≤8 concurrent turns, ≤16 mounted Sessions
 3. 用 `GET /api/browser-native/observability/reconciliation` 的 `journal.healthy`/`writeFailures` 判断审计是否恢复；`healthy` 反映最近一次审计写入。
 4. 轮换中断时先 `GET /health` 与读取附件/blob 确认服务可用，再重试轮换；完成后才从密钥文件移除旧钥并重启。
 
+### 崩溃恢复
+
+进程被 SIGKILL 或掉电后不需要手工修复数据目录。backend 取得数据目录锁后依次执行：
+
+1. `crash-recovery.mjs` 递归删除孤儿临时文件：任意 `*.tmp`、轮换的 `*.rotate.tmp`、`attachments-v1/**/*.part` 与 `*.enc`、锁文件留下的 `.stale-*`。`attachment-uploads-v1/*.part` 与其 `.json` 元数据保留，它们是可按 offset 续传的暂存，由既有 TTL sweep 过期清理。
+2. Session、Workspace blob/chunk、附件对象与 key-check 都是 temp+rename 发布，磁盘上只会出现完整旧文件或完整新文件；key-check 写入现在也走 temp+rename，避免半写的 key-check 让下次启动误报 `AT_REST_KEY_INVALID`。
+3. observability journal 的 `recover()` 对三个 ledger 检查尾部：没有结尾换行的尾行视为撕裂，只解析完整行；链完整时删掉撕裂尾行并把 head 重锚到最后一条信封。链中间出现坏行时不重写文件，`restore` 继续以 `invalidLines` 报告。
+
+durable turn 的恢复沿用既有语义：被杀死的 run 在重启时结算为 `DURABLE_HOST_RESTARTED`，不重跑模型或工具；同一 `turnId` 重放返回已结算状态，Session 中只有一个 `turn/end`。
+
+随机崩溃套件 `node docs/drafts/browser-native-dsh-poc/tests/crash-consistency.e2e.mjs` 执行 60 次随机 SIGKILL 并断言日志可读、seq 连续无重复、结算一次、无孤儿临时文件、审计链可验证、轮换中断可读可续。它依赖真实 fork + SIGKILL，不是故障注入模拟。
+
+运维处置：
+
+1. 非正常退出后直接重启；不要手工删除 `attachment-uploads-v1/*.part`，否则客户端无法续传。
+2. 启动日志出现 `AT_REST_CIPHERTEXT_CORRUPT` 说明文件在进程外被改坏，用备份恢复；撕裂的 journal 行不会触发此错误。
+3. 若 `recovered` 大于 0，确认对应 turn 状态为 `failed`/`DURABLE_HOST_RESTARTED`，再让客户端用同一 `turnId` 重放。
+4. 轮换期间被杀：用含新旧两把钥的密钥文件重启，读取可用后重试轮换；旧钥在成功前不要移除。
+
 ## 部署形态
 
 三种形态共用同一个 `start-hosted.mjs` 与同一套数据目录语义，只改变进程守护与传输层。

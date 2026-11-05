@@ -24,6 +24,7 @@ import { createMetricsRegistry, metricRoute } from './observability-v2.mjs'
 import { createAlertEvaluator } from './observability-alerts.mjs'
 import { createObservabilityJournal, redactObservabilityJournal } from './observability-journal.mjs'
 import { applyStorageFault, storageFailure } from './storage-fault.mjs'
+import { cleanupOrphanTemporaries } from './crash-recovery.mjs'
 import {
   buildBudgetSnapshot,
   buildUsageReport,
@@ -5719,6 +5720,7 @@ export async function createBrowserNativeV2Server(options) {
   const atRest = options.atRestKeyring === undefined ? undefined : createAtRestCipher(options.atRestKeyring)
   const atRestStatus = await assertAtRestReady({ dataDir: options.dataDir, cipher: atRest })
   const dataDirLock = await acquireDataDirLock(options.dataDir)
+  await cleanupOrphanTemporaries(options.dataDir)
   let released = false
   const releaseDataDirLock = async () => {
     if (released) return
@@ -6020,6 +6022,7 @@ export async function createBrowserNativeV2Server(options) {
     cipher: atRest,
     storageFault: options.testHooks?.storageFault,
   })
+  await observabilityJournal.recover()
   const observabilityRestore = await observabilityJournal.restore()
   accessAuditEntries.push(...observabilityRestore.accessDenials)
   if (accessAuditEntries.length > ACCESS_AUDIT_LIMIT) {
