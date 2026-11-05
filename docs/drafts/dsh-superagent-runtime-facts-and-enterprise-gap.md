@@ -82,6 +82,21 @@ Runtime 构造时对 stateDir 加锁，然后打开 `orchestrator.sqlite`，见 
 
 部署范围是 github.com 上的单仓库、单团队，明确不支持 GitHub Enterprise Server，见 [006-deployment.md](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/docs/006-deployment.md#L25-L25)。部署文档提供安装、启动停止、升级和故障排查，没有卸载章节，见 [006-deployment.md](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/docs/006-deployment.md#L233-L248)。
 
+### 准入与策略版本：已比对，缺的是窗口、上限与租约
+
+原型并不是“只记录 `policyVersion`、判定回写时不比对”。`decideEval` 在回写前显式比较当前策略版本与这次评估开始时的版本：不一致时，仍活跃的 Eval 走 `reassess(thread, {code:'policyChanged'})`，已经结束的则记为 `unavailable`，见 [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L284-L288)。策略热更新由 `policyChanged(from, to)` 处理：遍历所有活跃 Thread，对其中仍在进行的 Eval 主动重排，并广播 `policy.changed`，见 [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L218-L221)。评估 ID 已把 `policy.version` 编进幂等键，超时截止时间从启动或领取时刻起算，见 [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L107-L108)。
+
+因此这一层的判断应落在缺口上，而不是“没有比对”：
+
+| 真实缺口 | 现状 | 证据 |
+|---|---|---|
+| 合并/去抖窗口缺失 | `policyChanged` 对每个活跃 Eval 立即重排，没有等待窗口；策略连续变更会反复取消进行中的评估 | [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L218-L221) |
+| 重判次数无上限 | `reassess` 无条件把 Trigger 放回队列，没有次数计数；只有评估超时路径受 `REQUEUES = 2` 约束 | [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L222-L230)、[evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L18-L19)、[evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L60-L69) |
+| 缺 lease 与 attempt fencing | `Assignment` 只有 id、状态、时间戳、报告和投递/空闲时刻，没有所有者、租约、代际或 fencing token；唯一的跨进程互斥是 stateDir 的 `proper-lockfile` | [model.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/model.ts#L218-L233)、[runtime.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/app/runtime.ts#L93) |
+| 饥饿与升级不可观测 | 没有 `escalated` 状态，也没有重判次数、排队时长或线程饥饿指标；重排只在 Decision 上留下 `policyChanged` 原因码 | [evals.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/evals.ts#L285-L288)、[reasons.ts](file:///Users/yangjiefeng/Documents/deepseek-ai/dsh-superagent-prototype/src/core/reasons.ts#L8) |
+
+〔待验证〕“策略连续变更会让活跃评估长期无法完成、并让其他 Thread 排队被饿”是从上述机制推断的结果，本轮没有构造高频策略变更负载实测；〔待验证〕“升级转人工”是目标形态的能力，公开 checkout 的 `src/` 中没有 `escalated` 一类状态，内部实现是否已有无法从本仓库判断。
+
 ### DSH 侧的能力边界
 
 DSH 的 Gateway 是 **Client→Host**，不是 Host→Host：业务服务用 `@Remote` 把方法暴露给 Client，Host 在调用前把 wire 上的 `agentId` 解析成 Host 对象，见 [api-gateway.md](file:///Users/yangjiefeng/Documents/deepseek-ai/deepseek-harness/docs/api-gateway.md#L9-L11)。它让远程客户端驱动本地 Session，不提供“一个 Host 驱动另一个 Host 的 Session”。
@@ -165,7 +180,7 @@ workspace 记录还有一处未验证的并发风险：`attachSession` 走应用
 按优先级排列，每一项都是边界问题，不是功能清单：
 
 1. **身份与权限边界。** 谁以什么身份发起、哪台机器执行、能读到哪些数据。原型只有一个操作者 OS 用户和 `danger-full-access`，没有执行节点身份。
-2. **控制面（租约、配额、审计、租户）。** 谁拥有哪个任务、并发多少、资源上限、操作如何留痕。原型有应用内状态和面板，没有跨进程控制面。
+2. **控制面（租约、配额、审计、租户）。** 谁拥有哪个任务、并发多少、资源上限、操作如何留痕。准入层已经比对 `policyVersion`，并能在策略变更后重排活跃评估，但缺合并/去抖窗口、重判次数上限、执行 attempt 的 lease 与 fencing，也没有饥饿和升级（`escalated`）的可观测指标；这些才是控制面要补的具体项。原型有应用内状态和面板，没有跨进程控制面。
 3. **状态所有权（Session log 不等于业务账本）。** Session 记录模型交互事实；Ticket、Mandate、审批和验收属于业务账本。把两者混为一谈，恢复时就会把“模型说过”当成“业务已批准”。
 4. **副作用语义（拒绝、已提交、结果未知）。** GitHub 评论、PR、CI 操作必须区分这三种结果，并带幂等键与 receipt。原型的 Outbox 有回执和重试，但没有远端幂等键。
 5. **组织责任（谁批、谁验收、冲突谁裁）。** 系统可以保留要求和来源，不能自行赋予裁决权。原型记录 Mandate 与 Decision，但冲突裁决仍要回到人。
