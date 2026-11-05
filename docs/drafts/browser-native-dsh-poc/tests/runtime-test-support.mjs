@@ -79,7 +79,9 @@ export async function waitForPreview(page) {
   // The preview notice mounts after the frame; wait briefly so it cannot intercept the picker.
   await notice.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => {})
   if (await notice.isVisible() && await notice.isEnabled()) await notice.click({ timeout: 15_000 })
-  const chooser = page.getByRole('textbox', { name: /^(Choose workspace|选择工作区)$/ }).first()
+  // The inert workspace trigger is a menu button, not a textbox; locate it by
+  // the composer marker and popup semantics rather than a role that changes.
+  const chooser = page.locator('[data-composer-input][aria-haspopup="menu"]').first()
   if (await chooser.isVisible()) {
     await chooser.click()
     const dialog = page.getByRole('dialog', { name: /^(Select Workspace Directory|选择工作区目录)$/ })

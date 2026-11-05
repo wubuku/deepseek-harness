@@ -31,6 +31,10 @@ let app
 let browser
 let context
 let queueContext
+let budgetContext
+let budgetApp
+let budgetDataDir
+const zhContexts = []
 let page
 let holdStarted = false
 let releaseQueue
@@ -105,6 +109,34 @@ async function scan(target, label) {
 async function assertClean(report, output) {
   output.push(report)
   assert.deepEqual(report.serious, [], `${report.label}: serious/critical accessibility violations\n${JSON.stringify(report.serious, null, 2)}`)
+}
+
+async function assertFocusRing(page, target, label) {
+  // Programmatic focus alone matches :focus but not :focus-visible. Press a
+  // keyboard key first so Chromium treats the following focus as keyboard
+  // driven, then sample the ring the user would actually see.
+  await page.keyboard.press('Tab')
+  await target.focus()
+  const ring = await target.evaluate(node => {
+    const style = getComputedStyle(node)
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, boxShadow: style.boxShadow }
+  })
+  assert.ok(ring.outlineStyle !== 'none' || ring.boxShadow !== 'none', `${label}: focused control has no visible focus ring`)
+}
+
+async function assertContained(target, selector, label) {
+  const box = await target.locator(selector).evaluate(node => {
+    const rect = node.getBoundingClientRect()
+    return {
+      left: rect.left,
+      right: rect.right,
+      width: window.innerWidth,
+      scrollWidth: node.scrollWidth,
+      clientWidth: node.clientWidth,
+    }
+  })
+  assert.ok(box.left >= 0 && box.right <= box.width + 1, `${label}: content overflows the viewport (${JSON.stringify(box)})`)
+  assert.ok(box.scrollWidth <= box.clientWidth + 1, `${label}: content is horizontally truncated (${JSON.stringify(box)})`)
 }
 
 try {
@@ -224,6 +256,46 @@ try {
   }
   await page2.close()
 
+  // Archived marker and its menus: archive through the row menu, then reveal
+  // the grayed archived row through the keyboard-driven view options.
+  const row = page.locator('[data-row-key^="session:"]').first()
+  await waitFor(async () => await row.count() > 0, 'session row', 20_000)
+  await row.hover()
+  const rowMenu = row.getByRole('button', { name: /Session actions for/ })
+  await rowMenu.focus()
+  await assertFocusRing(page, rowMenu, 'session row menu')
+  await rowMenu.click()
+  const archiveItem = page.getByRole('menuitem', { name: 'Archive session', exact: true })
+  await archiveItem.waitFor({ state: 'visible', timeout: 10_000 })
+  await injectAxe(page)
+  await assertClean(await scan(page, 'archive-menu'), reports)
+  await page.keyboard.press('Escape')
+  await waitFor(async () => await archiveItem.count() === 0, 'session menu closed by Escape', 10_000)
+
+  await rowMenu.click()
+  await archiveItem.waitFor({ state: 'visible', timeout: 10_000 })
+  await archiveItem.click()
+  await waitFor(async () => await page.locator('[data-row-key^="session:"]').count() === 0, 'archived row hidden', 15_000)
+
+  const viewOptions = page.getByRole('button', { name: 'View options' })
+  await viewOptions.focus()
+  await assertFocusRing(page, viewOptions, 'view options')
+  await viewOptions.press('Enter')
+  const showArchived = page.getByRole('menuitem', { name: 'All conversations (show archived)', exact: true })
+  await showArchived.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.keyboard.press('Escape')
+  await waitFor(async () => await showArchived.count() === 0, 'view options closed by Escape', 10_000)
+  await viewOptions.press('Enter')
+  await showArchived.waitFor({ state: 'visible', timeout: 10_000 })
+  await showArchived.focus()
+  await showArchived.press('Enter')
+  const archivedRow = page.locator('[data-row-key^="session:"]').first()
+  await waitFor(async () => await archivedRow.count() > 0, 'archived row visible', 15_000)
+  assert.match(await archivedRow.getAttribute('aria-description') ?? '', /archiv/i,
+    'the archived row must expose its inactive state to assistive technology')
+  await injectAxe(page)
+  await assertClean(await scan(page, 'archived-row'), reports)
+
   const mobile = await context.newPage()
   await mobile.setViewportSize({ width: 390, height: 844 })
   mobile.on('pageerror', error => pageErrors.push(`mobile: ${error.message}`))
@@ -232,10 +304,106 @@ try {
   await assertClean(await scan(mobile, 'mobile-ui-only'), reports)
   await mobile.close()
 
+  // Chinese locale: failure guidance, archived copy, and the mobile page must
+  // render locale-owned text without horizontal overflow at a phone width.
+  const zhContext = await browser.newContext({
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    viewport: { width: 390, height: 844 },
+    acceptDownloads: true,
+  })
+  zhContexts.push(zhContext)
+  const zhPage = await zhContext.newPage()
+  zhPage.on('pageerror', error => pageErrors.push(`zh: ${error.message}`))
+  const zhRequests = []
+  trackRequests(zhPage, zhRequests)
+  await openPreview(zhPage, previewUrl)
+  await waitForPreview(zhPage)
+  await submitPrompt({ page: zhPage, origin, requests: zhRequests, prompt: 'A11Y_ZH_MAIN', timeout: 120_000 })
+  const zhSessionId = zhRequests.find(request => request.path.endsWith('/session/create'))?.body?.sessionId
+  assert.equal(typeof zhSessionId, 'string')
+  await submitPrompt({ page: zhPage, origin, requests: zhRequests, sessionId: zhSessionId, prompt: 'A11Y_FAIL', expectedReason: 'error', timeout: 120_000 })
+  const zhGuidance = zhPage.locator('[data-browser-native-failure-guidance]')
+  await zhGuidance.waitFor({ state: 'visible', timeout: 15_000 })
+  const zhTitle = await zhGuidance.locator('[data-browser-native-failure-guidance-title]').innerText()
+  const zhExplanation = await zhGuidance.locator('[data-browser-native-failure-guidance-explanation]').innerText()
+  assert.ok(/[\u4e00-\u9fff]/.test(zhTitle), `failure guidance title must be Chinese: ${zhTitle}`)
+  assert.ok(/[\u4e00-\u9fff]/.test(zhExplanation), `failure guidance explanation must be Chinese: ${zhExplanation}`)
+  assert.ok(!zhExplanation.includes('(turn'), 'the Chinese failure copy must not embed English turn labels')
+  const zhAction = zhGuidance.locator('[data-browser-native-failure-action]')
+  if (await zhAction.count() > 0) {
+    assert.ok(/[\u4e00-\u9fff]/.test(await zhAction.innerText()), 'the failure action label must be Chinese')
+  }
+  await assertContained(zhPage, '[data-browser-native-failure-guidance]', 'failure guidance zh 390px')
+  await injectAxe(zhPage)
+  await assertClean(await scan(zhPage, 'failure-zh'), reports)
+
+  const zhMobile = await zhContext.newPage()
+  await zhMobile.goto(`${origin}/mobile`, { waitUntil: 'domcontentloaded' })
+  await injectAxe(zhMobile)
+  await assertClean(await scan(zhMobile, 'mobile-ui-only-zh'), reports)
+  await zhMobile.close()
+
+  // Budget bar in the exhausted state: localized copy, axe scan, keyboard
+  // reachability of both actions, and a visible focus ring.
+  budgetDataDir = await mkdtemp(join(tmpdir(), 'dsh-browser-a11y-budget-'))
+  budgetApp = await createBrowserNativeV2Server({
+    dataDir: budgetDataDir,
+    distRoot: image.distRoot,
+    llmMode: 'scripted',
+    budgetLimits: { sessionTokens: 1, tenantTokens: 2, tenantId: 'a11y-tenant', warnRatio: 0.8 },
+    testHooks: {
+      allowScriptedBudget: true,
+      scriptedUsage: body => body.purpose === undefined ? { inputTokens: 2, outputTokens: 2 } : undefined,
+    },
+  })
+  const budgetOrigin = await budgetApp.listen(0)
+  budgetContext = await browser.newContext({
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    viewport: { width: 390, height: 844 },
+    acceptDownloads: true,
+  })
+  await budgetContext.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: budgetOrigin })
+  const budgetPage = await budgetContext.newPage()
+  budgetPage.on('pageerror', error => pageErrors.push(`budget: ${error.message}`))
+  const budgetRequests = []
+  trackRequests(budgetPage, budgetRequests)
+  await openPreview(budgetPage, `${budgetOrigin}/preview.html?browser-native=1&browser-native-durable=1&preview-fixture=none`)
+  await waitForPreview(budgetPage)
+  await submitPrompt({ page: budgetPage, origin: budgetOrigin, requests: budgetRequests, prompt: 'A11Y_BUDGET', timeout: 120_000 })
+  const budgetPanel = budgetPage.locator('[data-browser-native-budget]')
+  await waitFor(async () => await budgetPanel.getAttribute('data-state') === 'exceeded',
+    'exhausted budget panel', 20_000)
+  const budgetTitle = await budgetPanel.locator('[data-browser-native-budget-title]').count() > 0
+    ? await budgetPanel.locator('[data-browser-native-budget-title]').innerText()
+    : await budgetPanel.locator('span').first().innerText()
+  assert.equal(budgetTitle, '预算', 'the budget title must be localized')
+  const budgetNote = await budgetPanel.locator('[data-browser-native-budget-note]').innerText()
+  assert.match(budgetNote, /发送已禁用/, `the blocked note must be Chinese: ${budgetNote}`)
+  const budgetAdmin = budgetPanel.locator('[data-browser-native-budget-admin]')
+  const budgetDiagnostics = budgetPanel.locator('[data-browser-native-budget-diagnostics]')
+  assert.equal(await budgetAdmin.innerText(), '复制管理员说明')
+  assert.equal(await budgetDiagnostics.innerText(), '导出诊断包')
+  await assertContained(budgetPage, '[data-browser-native-budget]', 'budget panel zh 390px')
+  await injectAxe(budgetPage)
+  await assertClean(await scan(budgetPage, 'budget-exceeded-zh'), reports)
+  await budgetAdmin.focus()
+  await assertFocusRing(budgetPage, budgetAdmin, 'budget admin action')
+  await budgetPage.keyboard.press('Tab')
+  assert.notEqual(await budgetPage.evaluate(() => document.activeElement?.getAttribute('data-browser-native-budget-diagnostics')),
+    null, 'Tab must move from the admin action to the diagnostics action')
+  const budgetDownload = budgetPage.waitForEvent('download')
+  await budgetDiagnostics.press('Enter')
+  await budgetDownload
+  await waitFor(async () => await budgetPanel.locator('[data-browser-native-budget-result]').innerText() !== '',
+    'budget diagnostics result', 10_000)
+  assert.match(await budgetPanel.locator('[data-browser-native-budget-result]').innerText(), /诊断包已导出/)
+
   assert.deepEqual(pageErrors, [], pageErrors.join('\n'))
   console.log(JSON.stringify({
     result: 'passed',
-    scope: 'main-export-failure-queued-offline-conflict-mobile',
+    scope: 'main-export-failure-queued-offline-conflict-archive-zh-mobile-budget-keyboard',
     reports,
     pageErrors,
     note: 'Only serious and critical axe-core violations block. Scans cover the rendered document, including fixed status/export overlays; they do not cover native browser chrome, screen-reader speech output, or interaction timing.',
@@ -243,9 +411,13 @@ try {
 } finally {
   releaseQueue?.()
   await queueContext?.close().catch(() => {})
+  for (const zhContext of zhContexts) await zhContext.close().catch(() => {})
+  await budgetContext?.close().catch(() => {})
   await context?.close().catch(() => {})
   await browser?.close().catch(() => {})
+  await budgetApp?.close().catch(() => {})
   await app?.close().catch(() => {})
   await image?.cleanup().catch(() => {})
   await rm(dataDir, { recursive: true, force: true })
+  if (budgetDataDir !== undefined) await rm(budgetDataDir, { recursive: true, force: true })
 }

@@ -955,7 +955,12 @@ export async function connectBrowserNativePageControl(
     panel.thresholdLine.textContent = copy.thresholdLine
     panel.note.style.display = snapshot.state === 'ok' ? 'none' : 'block'
     panel.note.textContent = snapshot.state === 'exceeded' ? copy.blocked : copy.warning
-    panel.note.style.color = snapshot.state === 'exceeded' ? browserNativeSurface.error : browserNativeSurface.warn
+    // The raw error token sits at 4.49:1 on the light surface, just under the
+    // WCAG AA floor for 13px text. Blend it toward the theme's label color so
+    // the same expression darkens on light and lightens on dark surfaces.
+    panel.note.style.color = snapshot.state === 'exceeded'
+      ? 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 78%, var(--dsw-alias-label-primary))'
+      : browserNativeSurface.warn
     panel.actions.style.display = snapshot.state === 'exceeded' ? 'flex' : 'none'
     panel.admin.textContent = copy.adminAction
     panel.diagnostics.textContent = copy.diagnosticsAction

@@ -6753,7 +6753,7 @@ export async function createBrowserNativeV2Server(options) {
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/budget') {
-        if (llm.mode !== 'real') {
+        if (llm.mode !== 'real' && options.testHooks?.allowScriptedBudget !== true) {
           sendJson(response, 404, { error: 'budget usage is available only in real-LLM mode' })
           return
         }
@@ -7825,6 +7825,19 @@ export async function createBrowserNativeV2Server(options) {
                 )
               } finally {
                 response.off('close', onClose)
+              }
+              const scriptedUsage = fault?.kind === 'error'
+                ? undefined : options.testHooks?.scriptedUsage?.(body)
+              if (scriptedUsage !== undefined) {
+                const recorded = {
+                  sessionId: body.sessionId,
+                  inputTokens: scriptedUsage.inputTokens ?? 0,
+                  outputTokens: scriptedUsage.outputTokens ?? 0,
+                  provider: llm.mode,
+                  at: Date.now(),
+                }
+                usageAudit.push(recorded)
+                void observabilityJournal.appendUsage(recorded)
               }
               if (fault?.kind === 'error') {
                 modelOutcome = typeof fault.code === 'string' ? fault.code : 'MODEL_FAILED'

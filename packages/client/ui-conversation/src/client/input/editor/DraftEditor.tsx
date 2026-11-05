@@ -45,6 +45,9 @@ export function DraftEditor({
           // The placeholder was the textarea's accessible name; a div's
           // data attribute is not, so the label restores it.
           aria-label={ariaLabel}
+          // The inert workspace trigger opens a menu, so it must not claim the
+          // textbox role that aria-expanded is invalid on.
+          role={workspaceTrigger ? 'button' : undefined}
           aria-haspopup={workspaceTrigger ? 'menu' : undefined}
           aria-expanded={workspaceTrigger ? workspacePickerOpen : undefined}
           tabIndex={workspaceTrigger ? 0 : undefined}

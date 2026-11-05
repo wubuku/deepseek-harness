@@ -370,7 +370,9 @@ export function browserNativeFailureGuidanceCopy(
   const normalized = code === undefined || code.length === 0 ? 'UNKNOWN_FAILURE' : code
   const entry = FAILURES[normalized] ?? UNKNOWN_FAILURE_ENTRY
   const copy = language.startsWith('zh') ? entry.zh : entry.en
-  const turn = context.turn === undefined ? '' : ` (turn ${String(context.turn)})`
+  const turn = context.turn === undefined
+    ? ''
+    : language.startsWith('zh') ? `（第 ${String(context.turn)} 轮）` : ` (turn ${String(context.turn)})`
   return {
     code: normalized,
     title: copy.title,

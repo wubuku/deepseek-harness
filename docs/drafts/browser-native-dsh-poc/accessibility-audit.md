@@ -21,7 +21,12 @@ description: "Browser-Native DSH PoC 用 axe-core 扫描主界面与新增状态
 | queued | `maxConcurrentTurns: 1` 下先用 barrier 占住唯一 turn 槽，再由第二个标签页提交 turn，等待 `[data-browser-native-queue-status]` |
 | offline-recovery | `context.setOffline(true)` 后等待 `[data-browser-native-offline-status]` |
 | collaboration | 第二个标签页打开同一 Session，等待 `[data-browser-native-workspace-status]` 的 `lease-conflict`/`session-conflict`/`recovery-conflict` |
+| archive-menu | 侧边栏 Session 行菜单打开归档动作，再按 Escape 关闭 |
+| archived-row | 归档后通过 View options 的键盘 Enter 选择 “All conversations (show archived)”，扫描灰显行 |
 | mobile-ui-only | 390×844 视口打开 `/mobile` |
+| failure-zh | `zh-CN` 视口 390×844 下产生失败 turn，检查中英文案与溢出 |
+| mobile-ui-only-zh | `zh-CN` 视口打开 `/mobile` |
+| budget-exceeded-zh | scripted usage 触发预算耗尽，检查预算条文案、对比度、Tab 顺序与 Enter 动作 |
 
 ## 修复
 
@@ -32,9 +37,18 @@ description: "Browser-Native DSH PoC 用 axe-core 扫描主界面与新增状态
 
 两处都没有新增用户可见文案：品牌按钮复用了已有 `session.new.label`，账号菜单复用已有 `menu`/`signedIn`/`more` 词条。组件测试中的精确名称查询改为正则，快照按新标记重新生成。
 
+本轮新增状态又发现两处：
+
+- 无 Workspace 时 composer 触发区同时声明 `role="textbox"`、`aria-expanded` 与 `aria-haspopup="menu"`，`aria-expanded` 不允许出现在 textbox 上。现在该触发区渲染为 `button`，且仅在 `textbox` 角色下输出 `aria-multiline`；可编辑 composer 不受影响。
+- 预算耗尽提示用的 `--dsw-alias-state-error-primary` 在浅色 13px 文本上只有 4.49:1，低于 WCAG AA 4.5:1。提示颜色改为与主题 `label` 混合的表达式，浅色下变深、深色下变浅。
+
+失败建议的 zh 文案原先嵌入英文 `(turn N)`，现已改为 `（第 N 轮）`。
+
 ## 结果与边界
 
-- 7 个状态全部 0 个 `serious`/`critical` 违规，无 pageerror。
+- 12 个状态全部 0 个 `serious`/`critical` 违规，无 pageerror。
+- 键盘检查覆盖：Session 行菜单与 View options 的 `Enter` 打开、`Escape` 关闭；预算条的 Tab 顺序（管理员说明 → 导出诊断包）、两个动作的可见焦点环与 `Enter` 触发；归档行的 `aria-description` 暴露归档状态。
+- zh/en 文案检查覆盖预算条、失败建议、归档菜单/标记与移动端页面；390px 视口下预算条与失败建议无横向溢出，`verify-client-ui-i18n` 无硬编码告警。
 - 仍报告的 `moderate` 项是页面级地标与标题（`landmark-one-main`、`page-has-heading-one`、`region`），它们属于既有 AppFrame 结构，不是本轮新增状态；axe 的 `best-practice` 规则把它们归为 `moderate`。
 - 审计不能替代屏幕阅读器实测：它不覆盖朗读顺序、焦点管理、键盘陷阱和动画时序；这些仍按各状态的手动验收记录检查。
 

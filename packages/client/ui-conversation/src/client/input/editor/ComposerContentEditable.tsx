@@ -23,7 +23,7 @@ export interface ComposerContentEditableProps extends HTMLAttributes<HTMLDivElem
  * @param props - editor binding, editability, and div passthroughs.
  * @returns the resident contenteditable div.
  */
-export function ComposerContentEditable({ editor, editable, ...rest }: ComposerContentEditableProps): ReactNode {
+export function ComposerContentEditable({ editor, editable, role = 'textbox', ...rest }: ComposerContentEditableProps): ReactNode {
   const ref = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -41,8 +41,10 @@ export function ComposerContentEditable({ editor, editable, ...rest }: ComposerC
       // renders it, and setEditable above keeps the editor's own gate in step.
       contentEditable={editor !== null && editable}
       suppressContentEditableWarning
-      role="textbox"
-      aria-multiline="true"
+      role={role}
+      // Only a textbox role accepts aria-multiline; the workspace-trigger state
+      // renders this element as a menu button instead.
+      {...(role === 'textbox' ? { 'aria-multiline': 'true' as const } : {})}
       data-composer-input
       {...rest}
     />
