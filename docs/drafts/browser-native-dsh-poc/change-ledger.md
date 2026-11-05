@@ -12,6 +12,22 @@ description: "Browser-native DSH PoC 的目录外改动账本和重要目录内�
 
 当前 PoC 的 backend、Worker、profile overlay、launcher 和测试均位于本目录；`apps/web/src/preview.ts`、`apps/web/src/browser-native-page-control.ts` 与 `apps/web/src/locales/browser-native-workspace.ts` 提供 preview 接线、页面生命周期 bridge 和页面文案，另有 `packages/core/tools` 跨浏览器 schema 兼容修复和中文 scratch 文档登记。上述目录外改动均有记录；当前没有 DSH Agent Loop、Session format、普通 Web profile、Desktop profile 或 Headless profile 的未登记修改。
 
+### BN-P2-170：Session 归档与按需加载
+
+```text
+changeId: BN-P2-170
+upstreamBaseline: research checkout at batch start; 2026-11-05; no isolated worktree
+file: docs/drafts/browser-native-dsh-poc/session-archive.mjs; docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/at-rest-rotation.mjs; docs/drafts/browser-native-dsh-poc/storage-fault.mjs; docs/drafts/browser-native-dsh-poc/tests/session-archive.e2e.mjs; docs/drafts/browser-native-dsh-poc/session-archive.md; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: 启动规模测量显示 `store.load()` 与堆随活跃 Session 线性增长；需要把离开工作集的 Session 移出启动路径，同时保留列表可发现、打开/导出可恢复、附件不丢、审计与成本账不变，并让误删的活跃文件能从冷存储恢复。
+existingExtensionPointsChecked: 复用 `FormalSessionStore.load()`、`archive()` 路径、`sessions/*.json` 原子 flush、Workspace 附件对象与 `collectAttachments()`、at-rest `cipher.readFile/writeFile`、`applyStorageFault()`、`createBrowserNativeV2Server` 管理员路由；未改 Session format、packages/、Worker 协议或正式 profile。
+behaviorChange: 新增 `archives-v1/index.json` 元数据索引与 `archives-v1/<id>.json.gz` gzip 包（含 durable 记录与引用附件字节；at-rest 配置时加密）。`FormalSessionStore.load()` 只解析活跃 Session 与索引；`archived` 元数据参与 list（标记 `archived: true`）、搜索与附件引用集合。`activateArchived()` 在 open/read/export/durable/trace/budget/turn-retry 首次访问时解压并写回缺失附件；`archive()`/`restore()` 提供冷存储迁移与恢复；`POST /admin/session/archive|restore` 暴露操作入口。归档先写包与索引再删活跃文件，失败显式报告；归档不进入活跃 retention 清理。
+consumersUpdated: `at-rest-rotation.mjs` 把归档文件与索引加入重加密目标；README 新增“Session 归档与按需加载”节与复跑命令；`session-archive.md` 记录布局、策略、实测、边界；`storage-fault.mjs` 的 surface 文档加入 `archive`/`archive-index`；本 ledger。
+tests: `node --expose-gc docs/drafts/browser-native-dsh-poc/tests/session-archive.e2e.mjs` 通过：300 Session 归档 250 后 `load()` 41–65→8–11 ms（多次运行）、堆 5.5→1.0 MiB；列表 300 条含 250 archived；归档 Session open/read 50 事件、删除附件对象后打开并从归档写回、export 带原始 base64；归档前后审计与 usage ledger 字节一致且链校验通过；删除恢复后的活跃文件后可从索引重列并再次 restore。相关单测 109/109 通过；`startup-scale.e2e.mjs` 仍通过（1,000 Session load 138.5 ms）。
+syncReplaySteps: 上游同步后复跑该 E2E；若 Session 记录布局、附件路径/加密上下文、`collectAttachments()` 引用集合或 at-rest 信封变化，更新 `session-archive.mjs` 与测试；归档索引格式变更使用版本化测试与显式失败。
+deleteCondition: 正式产品提供分层冷存储/索引式 Session 读取并由其覆盖归档恢复语义，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
+
 ### BN-P2-169：大数据量启动可行性
 
 ```text

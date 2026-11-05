@@ -25,8 +25,8 @@ async function entries(directory) {
 /**
  * List every stored file an at-rest rotation must rewrite.
  * @param dataDir - Backend data directory.
- * @returns `{path, context, surface}` entries for Sessions, Workspace blobs,
- * chunk objects, attachment objects, and attachment staging parts.
+ * @returns `{path, context, surface}` entries for Sessions, archived Sessions,
+ * Workspace blobs, chunk objects, attachment objects, and attachment staging parts.
  */
 export async function listAtRestTargets(dataDir) {
   const targets = []
@@ -37,6 +37,24 @@ export async function listAtRestTargets(dataDir) {
         path: join(sessionsDir, entry.name),
         context: `session/${entry.name}`,
         surface: 'sessions',
+      })
+    }
+  }
+
+  const archiveDir = join(dataDir, 'archives-v1')
+  for (const entry of await entries(archiveDir)) {
+    if (!entry.isFile()) continue
+    if (entry.name.endsWith('.json.gz')) {
+      targets.push({
+        path: join(archiveDir, entry.name),
+        context: `archive/${entry.name}`,
+        surface: 'archives',
+      })
+    } else if (entry.name === 'index.json') {
+      targets.push({
+        path: join(archiveDir, entry.name),
+        context: 'archive-index/index.json',
+        surface: 'archives',
       })
     }
   }

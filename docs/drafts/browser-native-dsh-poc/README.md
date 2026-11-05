@@ -65,7 +65,7 @@ DSH_POC_LLM=real DSH_POC_ENV_FILE=docs/drafts/.env DSH_POC_BROWSER=chrome \
 | durable host 与关页 | [服务端 durable turn host](#服务端-durable-turn-host最小原型)、[durable 工具执行](#durable-工具执行与中途接管)、[durable 重启恢复](#durable-重启恢复)、[跨标签审批归属](#跨标签审批归属) |
 | 审批与权限 | [权限预设与审批生命周期](#权限预设与审批生命周期)、[审批完整性与刷新恢复](#审批完整性与-worker-刷新恢复)、[审批授权与取消结算](#审批授权与取消结算) |
 | 服务端边界与安全 | [本地后端请求准入](#本地后端请求准入)、[系统级幂等](state-change-idempotency.md)、[路径穿越与文件边界](#路径穿越与文件边界)、[提示注入驱动的危险动作](#提示注入驱动的危险动作)、[工具输出可信标注](tool-output-trust.md)、[凭据隔离与服务端代理](#凭据隔离与服务端代理原型)、[MCP 浏览器接入判定](mcp-browser-feasibility.md)、[Worker 隔离与安全](#worker-隔离与安全)、[威胁模型](#威胁模型客户端执行服务端权威) |
-| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[跨 Session 检索规模](session-query-large-scale.md)、[横向扩展可行性](multi-instance-feasibility.md)、[启动规模与单节点上限](startup-scale.md) |
+| 性能与容量 | [性能基线](#性能基线)、[性能回归守门](#性能回归守门)、[资源与内存泄漏长跑](resource-lifecycle-long-run.md)、[多 Session 争用上限](#多-session-争用上限)、[多 Principal 并发压测与拐点](multi-principal-load.md)、[准入控制](#准入控制并发-turn-上限与挂载租约)、[长转录渲染成本](#长转录渲染成本与主线程占用)、[300 turn 长会话可用性](long-session-usability.md)、[跨 Session 检索规模](session-query-large-scale.md)、[横向扩展可行性](multi-instance-feasibility.md)、[启动规模与单节点上限](startup-scale.md)、[Session 归档与按需加载](session-archive.md) |
 | 产品与就绪度 | [首次使用体验](#首次使用体验)、[用户旅程叙事 E2E](user-journey.md)、[产品可见性](#产品可见性)、[16 Session 仪表盘](#16-session-下的仪表盘-ui)、[可访问性自动审计](accessibility-audit.md)、[双语字典与伪本地化窄屏验证](pseudo-localization-narrow.md)、[暗色主题与视觉一致性](dark-theme-contrast.md)、[Session 关闭后的资源回收](session-close-resources.md)、[浏览器支持矩阵](#浏览器支持矩阵)、[移动端 UI-only 策略](mobile-ui-only.md)、[产品就绪度](#产品就绪度)、[PoC 到产品迁移映射](poc-to-product-migration-map.md) |
 | 历史与范围 | [历史协议实验：运行](#历史协议实验运行)、[历史协议实验：测试](#历史协议实验测试)、[后台常驻可行性](#后台常驻可行性)、[移动端能力探测](#移动端能力探测)、[Dev Note](#dev-note) |
 
@@ -1472,6 +1472,18 @@ node --test docs/drafts/browser-native-dsh-poc/tests/multi-instance-feasibility.
 
 ```sh
 node --expose-gc docs/drafts/browser-native-dsh-poc/tests/startup-scale.e2e.mjs
+```
+
+## Session 归档与按需加载
+
+[Session 归档](session-archive.md)把未活跃 Session 移入 `archives-v1/`：每个 Session 是一个 gzip 包，保存 durable 记录与引用附件，索引只存元数据。启动时不再解析归档事件；列表仍列出并标记 `archived`，open/read/export/durable 首次访问时才解压，并把缺失的附件对象写回 Workspace。
+
+管理员用 `POST /api/browser-native/admin/session/archive`（`sessionIds` 或 `inactiveMs` + `limit`）归档，用 `POST /api/browser-native/admin/session/restore` 恢复。归档先写包与索引、后删活跃文件，归档不进入 retention 清理，误删活跃文件后可由归档恢复；审计与 cost ledger 不受影响。300 Session 实测归档 250 个后 `store.load()` 41–65 ms → 8–11 ms、堆增量 5.5 MiB → 1.0 MiB。
+
+复跑：
+
+```sh
+node --expose-gc docs/drafts/browser-native-dsh-poc/tests/session-archive.e2e.mjs
 ```
 
 ## 实时协作、editor 共编与执行权移交

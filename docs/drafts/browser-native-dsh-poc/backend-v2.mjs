@@ -40,6 +40,7 @@ import { SessionEventHub } from './session-event-hub.mjs'
 import { assertDataFormatReadable } from './hosted/data-format.mjs'
 import { assertAtRestReady, createAtRestCipher } from './at-rest-crypto.mjs'
 import { rotateAtRestData } from './at-rest-rotation.mjs'
+import { readArchiveIndex, readArchivedSession, writeArchiveIndex, writeArchivedSession } from './session-archive.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PROTOCOL_VERSION = 1
@@ -621,7 +622,7 @@ function attachmentUploadMetaPath(dataDir, workspaceId, uploadId) {
 
 const ATTACHMENT_HASH_PATTERN = /^sha256:([a-f0-9]{64})$/
 
-function referencedAttachmentHashes(sessions) {
+function referencedAttachmentHashes(sessions, archived = []) {
   const referenced = new Set()
   for (const session of sessions) {
     for (const event of session.events) {
@@ -632,6 +633,9 @@ function referencedAttachmentHashes(sessions) {
         if (match?.[1] !== undefined) referenced.add(match[1])
       }
     }
+  }
+  for (const meta of archived) {
+    for (const hash of meta.attachmentHashes ?? []) referenced.add(hash)
   }
   return referenced
 }
@@ -1755,6 +1759,8 @@ export class FormalSessionStore {
     this.sessionsDir = join(this.root, 'sessions')
     this.atRest = atRest
     this.sessions = new Map()
+    /** Metadata for every archived Session, including ones currently loaded. */
+    this.archived = new Map()
     this.unsupported = new Map()
     this.locks = new Map()
     this.ownerLeaseMs = ownerLeaseMs
@@ -1775,29 +1781,25 @@ export class FormalSessionStore {
     return this.atRest === undefined ? await readFile(path, 'utf8') : await this.atRest.readText(path, this.sessionContext(name))
   }
 
-  async load() {
-    await mkdir(this.sessionsDir, { recursive: true })
-    for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-      const entryPath = join(this.sessionsDir, entry.name)
-      const raw = JSON.parse(await this.readSessionText(entry.name))
-      const modifiedAt = await stat(entryPath).then(info => Math.floor(info.mtimeMs)).catch(() => 0)
-      const id = assertSessionId(raw.id)
-      if (raw.header?.id !== id || !Array.isArray(raw.events)) continue
-      const principalId = raw.principalId === undefined ? undefined : assertPrincipalId(raw.principalId)
-      if (raw.header.version !== SESSION_FORMAT_VERSION) {
-        this.unsupported.set(id, { principalId, header: clone(raw.header), eventCount: raw.events.length, version: raw.header.version })
-        process.stderr.write(`browser-native backend: session "${id}" uses log format ${String(raw.header.version)}, not v${String(SESSION_FORMAT_VERSION)}; stored but refused until a compatible harness reads it\n`)
-        continue
+  sessionFromRecord(raw, modifiedAt) {
+    const id = assertSessionId(raw.id)
+    if (raw.header?.id !== id || !Array.isArray(raw.events)) return undefined
+    const principalId = raw.principalId === undefined ? undefined : assertPrincipalId(raw.principalId)
+    if (raw.header.version !== SESSION_FORMAT_VERSION) {
+      return {
+        unsupported: { principalId, header: clone(raw.header), eventCount: raw.events.length, version: raw.header.version },
       }
-      const handoffs = new Map()
-      let handoffsMigrated = false
-      for (const [handoffId, record] of Object.entries(raw.handoffs ?? {})) {
-        const normalized = normalizeHandoffRecord(handoffId, record)
-        handoffs.set(handoffId, clone(normalized.record))
-        handoffsMigrated ||= normalized.migrated
-      }
-      const session = {
+    }
+    const handoffs = new Map()
+    let handoffsMigrated = false
+    for (const [handoffId, record] of Object.entries(raw.handoffs ?? {})) {
+      const normalized = normalizeHandoffRecord(handoffId, record)
+      handoffs.set(handoffId, clone(normalized.record))
+      handoffsMigrated ||= normalized.migrated
+    }
+    return {
+      handoffsMigrated,
+      session: {
         id,
         principalId,
         header: clone(raw.header),
@@ -1815,10 +1817,205 @@ export class FormalSessionStore {
         writeBlocked: false,
         handoffs,
         lastActivityAt: Math.max(activityAt(raw.header?.createdAt), modifiedAt),
-      }
-      this.sessions.set(id, session)
-      if (handoffsMigrated) await this.flush(session)
+      },
     }
+  }
+
+  async load() {
+    await mkdir(this.sessionsDir, { recursive: true })
+    for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const entryPath = join(this.sessionsDir, entry.name)
+      const raw = JSON.parse(await this.readSessionText(entry.name))
+      const modifiedAt = await stat(entryPath).then(info => Math.floor(info.mtimeMs)).catch(() => 0)
+      const parsed = this.sessionFromRecord(raw, modifiedAt)
+      if (parsed === undefined) continue
+      if (parsed.unsupported !== undefined) {
+        const id = raw.id
+        this.unsupported.set(id, parsed.unsupported)
+        process.stderr.write(`browser-native backend: session "${id}" uses log format ${String(parsed.unsupported.version)}, not v${String(SESSION_FORMAT_VERSION)}; stored but refused until a compatible harness reads it\n`)
+        continue
+      }
+      this.sessions.set(parsed.session.id, parsed.session)
+      if (parsed.handoffsMigrated) await this.flush(parsed.session)
+    }
+    const index = await readArchiveIndex(this.root, { cipher: this.atRest })
+    for (const entry of index.entries) {
+      const id = assertSessionId(entry.id)
+      if (entry.header.id !== id) {
+        throw new BackendError('SESSION_ARCHIVE_INDEX_INVALID', `archive index entry "${id}" has a mismatched header id`, 500)
+      }
+      this.archived.set(id, {
+        id,
+        principalId: entry.principalId === undefined ? undefined : assertPrincipalId(entry.principalId),
+        header: clone(entry.header),
+        inheritedEventCount: entry.inheritedEventCount ?? 0,
+        eventCount: entry.eventCount,
+        durableThroughSeq: entry.durableThroughSeq ?? entry.eventCount - 1,
+        revision: entry.revision,
+        lastActivityAt: entry.lastActivityAt ?? entry.archivedAt,
+        archivedAt: entry.archivedAt,
+        attachmentHashes: Array.isArray(entry.attachmentHashes) ? entry.attachmentHashes : [],
+        compressedBytes: entry.compressedBytes ?? 0,
+      })
+    }
+  }
+
+  /**
+   * Load an archived Session into memory on first read, open, export, or turn.
+   *
+   * Metadata alone is present after startup, so list queries do not decompress
+   * events. Attachments embedded in the archive are republished when their live
+   * object is missing.
+   * @param id - Session id.
+   * @returns The active Session, or `undefined` when the id is not archived.
+   */
+  async activateArchived(id) {
+    const normalized = assertSessionId(id)
+    const active = this.sessions.get(normalized)
+    if (active !== undefined) return active
+    const meta = this.archived.get(normalized)
+    if (meta === undefined) return undefined
+    return this.exclusive(normalized, async () => {
+      const loaded = this.sessions.get(normalized)
+      if (loaded !== undefined) return loaded
+      const archived = await readArchivedSession(this.root, normalized, { cipher: this.atRest })
+      const parsed = this.sessionFromRecord(archived.session, this.now())
+      if (parsed === undefined) {
+        throw new BackendError('SESSION_ARCHIVE_INVALID', `archive for "${normalized}" has an invalid Session record`, 500)
+      }
+      if (parsed.unsupported !== undefined) throw unsupportedSessionFormat(normalized, parsed.unsupported.version)
+      await this.restoreArchivedAttachments(normalized, archived.attachments)
+      parsed.session.lastActivityAt = this.now()
+      this.sessions.set(normalized, parsed.session)
+      return parsed.session
+    })
+  }
+
+  async restoreArchivedAttachments(id, attachments) {
+    for (const attachment of attachments) {
+      const workspaceId = attachment?.workspaceId
+      const hash = attachment?.hash
+      if (typeof workspaceId !== 'string' || typeof hash !== 'string' || typeof attachment.data !== 'string') {
+        throw new BackendError('SESSION_ARCHIVE_INVALID', `archive for "${id}" has an invalid attachment entry`, 500)
+      }
+      const target = attachmentPath(this.root, workspaceId, hash)
+      if (await verifyAttachmentObject(target, hash, workspaceId, this.atRest) !== undefined) continue
+      await applyStorageFault(this.storageFault, 'attachment')
+      await mkdir(join(this.root, 'attachments-v1', workspaceId, hash.slice(0, 2)), { recursive: true, mode: 0o700 })
+      const temporary = `${target}.${randomUUID()}.tmp`
+      const bytes = Buffer.from(attachment.data, 'base64')
+      if (this.atRest === undefined) await writeFile(temporary, bytes, { mode: 0o600 })
+      else await this.atRest.writeFile(temporary, bytes, attachmentContext(workspaceId, hash), 0o600)
+      await rename(temporary, target)
+    }
+  }
+
+  archivedSnapshot(meta) {
+    return {
+      header: clone(meta.header),
+      revision: meta.revision,
+      eventCount: meta.eventCount,
+      archived: true,
+    }
+  }
+
+  /**
+   * Move one Session from `sessions/` into compressed cold storage.
+   *
+   * The archive file and attachment bytes are written before the active file
+   * is removed. A crash therefore leaves either the active record or a
+   * recoverable archive, never only a missing Session.
+   * @param id - Session id.
+   * @param principalId - Principal that must own the active Session.
+   * @returns Archive metadata, or the existing metadata when already archived.
+   */
+  async archive(id, principalId) {
+    const normalized = assertSessionId(id)
+    const session = this.sessions.get(normalized)
+    if (session === undefined) {
+      const meta = this.archived.get(normalized)
+      if (meta === undefined) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      if (meta.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      return meta
+    }
+    if (session.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    if (session.writeBlocked) throw new BackendError('SESSION_RECOVERY_REQUIRED', 'Session ownership is blocked until the backend reloads its durable state', 503)
+    return this.exclusive(normalized, async () => {
+      const current = this.sessions.get(normalized)
+      if (current === undefined) return this.archived.get(normalized)
+      if (current.durableThroughSeq < current.events.length - 1) await this.flush(current)
+      const hashes = referencedAttachmentHashes([current])
+      const attachments = await this.collectArchivedAttachments(hashes)
+      const archivedAt = this.now()
+      const compressedBytes = await writeArchivedSession(
+        this.root,
+        normalized,
+        { archivedAt, session: recordOf(current), attachments },
+        { cipher: this.atRest, storageFault: this.storageFault },
+      )
+      const meta = {
+        id: normalized,
+        ...(current.principalId === undefined ? {} : { principalId: current.principalId }),
+        header: clone(current.header),
+        inheritedEventCount: current.inheritedEventCount,
+        eventCount: current.events.length,
+        durableThroughSeq: current.durableThroughSeq,
+        revision: revisionOf(current),
+        lastActivityAt: current.lastActivityAt,
+        archivedAt,
+        attachmentHashes: [...hashes],
+        compressedBytes,
+      }
+      this.archived.set(normalized, meta)
+      await writeArchiveIndex(this.root, [...this.archived.values()], {
+        cipher: this.atRest,
+        storageFault: this.storageFault,
+      })
+      try {
+        await rm(join(this.sessionsDir, `${normalized}.json`), { force: true })
+      } catch (error) {
+        throw new BackendError('SESSION_ARCHIVE_ACTIVE_DELETE_FAILED', `archived Session remains active: ${String(error)}`, 503)
+      }
+      this.sessions.delete(normalized)
+      return meta
+    })
+  }
+
+  async collectArchivedAttachments(hashes) {
+    if (hashes.size === 0) return []
+    const attachments = []
+    for (const workspaceId of await listAttachmentWorkspaces(this.root)) {
+      for (const hash of hashes) {
+        const path = attachmentPath(this.root, workspaceId, hash)
+        let bytes
+        try {
+          bytes = this.atRest === undefined
+            ? await readFile(path)
+            : await this.atRest.readFile(path, attachmentContext(workspaceId, hash))
+        } catch (error) {
+          if (error?.code === 'ENOENT') continue
+          throw error
+        }
+        attachments.push({ workspaceId, hash, data: bytes.toString('base64') })
+      }
+    }
+    return attachments
+  }
+
+  /**
+   * Bring an archived Session back to active storage.
+   * @param id - Session id.
+   * @returns Snapshot of the restored Session.
+   */
+  async restore(id) {
+    const normalized = assertSessionId(id)
+    let session = this.sessions.get(normalized)
+    if (session === undefined) session = await this.activateArchived(normalized)
+    if (session === undefined) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+    if (!this.archived.has(normalized)) return this.snapshot(session)
+    await this.flush(session)
+    return this.snapshot(session)
   }
 
   async exclusive(id, operation) {
@@ -1913,6 +2110,11 @@ export class FormalSessionStore {
     if (unsupported !== undefined) {
       if (unsupported.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
       throw unsupportedSessionFormat(id, unsupported.version)
+    }
+    const archived = this.archived.get(id)
+    if (archived !== undefined) {
+      if (archived.principalId !== principalId) throw new BackendError('SESSION_NOT_FOUND', 'session does not exist', 404)
+      throw new BackendError('SESSION_ALREADY_EXISTS', 'session already exists in cold storage; restore it instead', 409)
     }
     if (header.id !== id) throw new BackendError('INVALID_REQUEST', 'header id does not match session id')
     if (header.version !== SESSION_FORMAT_VERSION) throw unsupportedSessionFormat(id, header.version)
@@ -2358,30 +2560,36 @@ async function sessionOperation(store, operation, body, principalId, shares, tes
       const limit = body.limit === undefined ? 50 : boundedInteger(body.limit, 'limit', MAX_CATALOG_PAGE_SIZE)
       if (limit === 0) throw new BackendError('INVALID_REQUEST', 'limit must be at least 1')
       const after = body.cursor === undefined ? undefined : sessionIdFromCatalogCursor(body.cursor, principalId)
-      const sessions = [...store.sessions.values()]
-        .filter(session => session.principalId === principalId && !store.isExpired(session))
-        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
-      const page = sessions.filter(session => after === undefined || session.id > after).slice(0, limit)
-      const snapshots = page.map(session => store.snapshot(session))
-      const items = snapshots.map(snapshot => ({
+      const snapshots = [
+        ...[...store.sessions.values()]
+          .filter(session => session.principalId === principalId && !store.isExpired(session))
+          .map(session => store.snapshot(session)),
+        ...[...store.archived.values()]
+          .filter(meta => meta.principalId === principalId && !store.sessions.has(meta.id))
+          .map(meta => store.archivedSnapshot(meta)),
+      ].sort((left, right) => left.header.id < right.header.id ? -1 : left.header.id > right.header.id ? 1 : 0)
+      const page = snapshots.filter(snapshot => after === undefined || snapshot.header.id > after).slice(0, limit)
+      const items = page.map(snapshot => ({
         agentAvailable: false,
         sessionId: snapshot.header.id,
         updatedAt: snapshot.header.createdAt,
         running: false,
         blank: snapshot.eventCount === 0,
         cwd: snapshot.header.cwd,
+        ...(snapshot.archived === true ? { archived: true } : {}),
       }))
       return {
-        snapshots,
+        snapshots: page,
         items,
-        hasMore: page.length > 0 && sessions.some(session => session.id > page.at(-1).id),
-        ...(page.length > 0 && sessions.some(session => session.id > page.at(-1).id)
-          ? { nextCursor: catalogCursorFor(principalId, page.at(-1).id) }
+        hasMore: page.length > 0 && snapshots.some(snapshot => snapshot.header.id > page.at(-1).header.id),
+        ...(page.length > 0 && snapshots.some(snapshot => snapshot.header.id > page.at(-1).header.id)
+          ? { nextCursor: catalogCursorFor(principalId, page.at(-1).header.id) }
           : {}),
       }
     })
   }
   const id = assertSessionId(body.sessionId)
+  await store.activateArchived(id)
   testHooks.onSessionOperationQueued?.(operation, body)
   return store.exclusive(id, async () => {
     await testHooks.beforeSessionOperation?.(operation, body)
@@ -5677,8 +5885,8 @@ export async function createBrowserNativeV2Server(options) {
     skipped: 'scan-stale',
     failures: [],
   })
-  const collectAttachments = async (workspaceId, expectedGeneration, sessions) => {
-    const referenced = referencedAttachmentHashes(sessions)
+  const collectAttachments = async (workspaceId, expectedGeneration, sessions, archived = []) => {
+    const referenced = referencedAttachmentHashes(sessions, archived)
     const objects = await listAttachmentObjects(options.dataDir, workspaceId)
     const now = attachmentGcNow()
     const candidates = objects.filter(object => !referenced.has(object.hash)
@@ -5796,7 +6004,7 @@ export async function createBrowserNativeV2Server(options) {
       try {
         workspaces.push({
           workspaceId,
-          ...await collectAttachments(workspaceId, attachmentGenerationFor(workspaceId), store.sessions.values()),
+          ...await collectAttachments(workspaceId, attachmentGenerationFor(workspaceId), store.sessions.values(), store.archived.values()),
         })
       } catch (error) {
         workspaces.push({
@@ -6410,6 +6618,60 @@ export async function createBrowserNativeV2Server(options) {
         sendJson(response, 200, await rotateAtRest())
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/admin/session/archive') {
+        const body = await readBody(request)
+        const limit = boundedInteger(body.limit ?? 100, 'limit', 1_000)
+        const inactiveMs = body.inactiveMs === undefined ? undefined : boundedInteger(body.inactiveMs, 'inactiveMs', Number.MAX_SAFE_INTEGER)
+        let candidates
+        if (Array.isArray(body.sessionIds)) {
+          if (body.sessionIds.length === 0 || body.sessionIds.length > limit) {
+            throw new BackendError('INVALID_REQUEST', 'sessionIds must contain between 1 and limit entries')
+          }
+          candidates = body.sessionIds.map(sessionId => assertSessionId(sessionId))
+        } else if (inactiveMs !== undefined) {
+          const cutoff = store.now() - inactiveMs
+          candidates = [...store.sessions.values()]
+            .filter(session => session.lastActivityAt <= cutoff)
+            .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
+            .slice(0, limit)
+            .map(session => session.id)
+        } else {
+          throw new BackendError('INVALID_REQUEST', 'provide sessionIds or inactiveMs')
+        }
+        const archived = []
+        const skipped = []
+        for (const sessionId of candidates) {
+          const session = store.sessions.get(sessionId)
+          if (session?.principalId === undefined) {
+            skipped.push({ sessionId, reason: 'principal-missing' })
+            continue
+          }
+          try {
+            const meta = await store.archive(sessionId, session.principalId)
+            archived.push({
+              sessionId,
+              archivedAt: meta.archivedAt,
+              eventCount: meta.eventCount,
+              compressedBytes: meta.compressedBytes,
+            })
+          } catch (error) {
+            if (error?.code === 'SESSION_NOT_FOUND') {
+              skipped.push({ sessionId, reason: 'not-active' })
+              continue
+            }
+            throw error
+          }
+        }
+        sendJson(response, 200, { archived, skipped })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/browser-native/admin/session/restore') {
+        const body = await readBody(request)
+        const sessionId = assertSessionId(body.sessionId)
+        const snapshot = await store.restore(sessionId)
+        sendJson(response, 200, { sessionId, restored: true, snapshot })
+        return
+      }
       const mcpMatch = url.pathname.match(/^\/api\/browser-native\/mcp\/([A-Za-z0-9._-]{1,64})$/)
       if (mcpMatch !== null) {
         if (request.method !== 'POST' && request.method !== 'GET' && request.method !== 'DELETE') {
@@ -6501,6 +6763,7 @@ export async function createBrowserNativeV2Server(options) {
         }
         const sessionId = assertSessionId(url.searchParams.get('sessionId'))
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        await store.activateArchived(sessionId)
         store.getForPrincipal(sessionId, principalId)
         sendJson(response, 200, buildBudgetSnapshot(retainedUsage(), {
           sessionId,
@@ -6578,6 +6841,7 @@ export async function createBrowserNativeV2Server(options) {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const sessionId = url.searchParams.get('sessionId')
         if (sessionId === null) throw new BackendError('INVALID_REQUEST', 'sessionId is required')
+        await store.activateArchived(sessionId)
         const session = store.getForPrincipal(sessionId, principalId)
         sendJson(response, 200, buildTraceReport(store, retainedUsage(), {
           pricing: usagePricing,
@@ -6591,6 +6855,7 @@ export async function createBrowserNativeV2Server(options) {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const sessionId = url.searchParams.get('sessionId')
         if (sessionId === null) throw new BackendError('INVALID_REQUEST', 'sessionId is required')
+        await store.activateArchived(sessionId)
         const session = store.getForPrincipal(sessionId, principalId)
         const retryable = latestRetryableTurn(session)
         sendJson(response, 200, {
@@ -6891,7 +7156,7 @@ export async function createBrowserNativeV2Server(options) {
           sendJson(response, 200, staleAttachmentGc(workspaceId))
           return
         }
-        sendJson(response, 200, await collectAttachments(workspaceId, issued.generation, store.sessions.values()))
+        sendJson(response, 200, await collectAttachments(workspaceId, issued.generation, store.sessions.values(), store.archived.values()))
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/browser-native/workspace/upload-capabilities') {
@@ -7194,6 +7459,7 @@ export async function createBrowserNativeV2Server(options) {
         assertProtocol(body)
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const sessionId = assertSessionId(body.sessionId)
+        await store.activateArchived(sessionId)
         const turnId = boundedString(body.turnId, 'turnId', MAX_HANDOFF_ID_LENGTH)
         const prompt = boundedString(body.prompt, 'prompt', 10_000)
         const header = body.header === undefined
@@ -7256,6 +7522,7 @@ export async function createBrowserNativeV2Server(options) {
       if (request.method === 'GET' && url.pathname === '/api/browser-native/session/events') {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const sessionId = assertSessionId(url.searchParams.get('sessionId') ?? undefined)
+        await store.activateArchived(sessionId)
         const fromSeqParam = url.searchParams.get('fromSeq')
         const fromSeq = fromSeqParam === null ? 0 : boundedInteger(Number(fromSeqParam), 'fromSeq', MAX_EVENTS)
         const subscription = sessionEvents.subscribe(sessionId)
@@ -7457,7 +7724,9 @@ export async function createBrowserNativeV2Server(options) {
           // authorizes both resources with the identity's Session cookie.
           workspaces.requireWorkspace(principalId, workspaceId)
           if (operation === 'export') {
-            const session = store.getForPrincipal(assertSessionId(body.sessionId), principalId)
+            const sessionId = assertSessionId(body.sessionId)
+            await store.activateArchived(sessionId)
+            const session = store.getForPrincipal(sessionId, principalId)
             const bundle = await store.exclusive(session.id, async () => await buildSessionBundle(session, workspaceId))
             sendJson(response, 200, bundle)
             return

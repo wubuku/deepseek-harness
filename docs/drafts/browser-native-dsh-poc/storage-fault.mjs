@@ -100,7 +100,7 @@ export function storageFailure(error) {
  * so callers can retry the same operation without repairing partial state.
  * @param storageFault - Optional hook, usually `options.testHooks.storageFault`.
  * @param surface - Durable writer identity: `session`, `workspace-blob`,
- * `attachment`, `audit`, or `rotation`.
+ * `attachment`, `audit`, `rotation`, `archive`, or `archive-index`.
  * @returns Resolves when the write may proceed.
  */
 export async function applyStorageFault(storageFault, surface) {
