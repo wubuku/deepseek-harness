@@ -45,7 +45,7 @@ Browser-Native 的交互恢复证据区分默认 legacy HITL 与临时 timed HIT
 2. 阅读[Browser-Native 环境下实现 Agentic UI：DSH 综合深度调研报告](dsh-browser-native-agentic-ui-research.md)的 Summary、[PoC 事实核查](dsh-browser-native-agentic-ui-research.md#dsh-与-poc-的事实核查)和[最终判断](dsh-browser-native-agentic-ui-research.md#最终判断)。
 3. 阅读 [DSH Web UI 实现质量与 Agentic UI 框架选型评估](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md)的[结论先行](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#结论先行)、[三份 PoC 后的路线重评](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#三份-poc-后的路线重评)和[按产品场景选择集成位置](dsh-web-ui-quality-and-agentic-ui-framework-assessment.md#按产品场景选择集成位置)。
 4. 阅读[外部 SaaS Agentic UI 报告审阅](saas-agentic-ui-report-review.md)，区分可保留的工程方法、已核实的官方能力和不应继续传播的行业化表述。
-5. 阅读 [Browser-native DSH PoC README](browser-native-dsh-poc/README.md) 的当前实现快照和验证章节。
+5. 阅读 [Browser-native DSH PoC 现状入口](browser-native-dsh-poc/CURRENT-STATE.md) 的架构结论、回归入口与未闭环项，再按需读 [PoC README](browser-native-dsh-poc/README.md) 的当前实现快照和验证章节。
 6. 如果要验证“assistant-ui 接管聊天、DSH 保留执行和 Session 事实”，运行 [assistant-ui + Browser-Native DSH 增量 PoC](assistant-ui-browser-native-dsh-poc/README.md)。
 7. 阅读 [Browser-Native 工具清单与配置裁剪调研](browser-native-dsh-poc/browser-native-tool-roster-and-configuration-research.md)，理解为什么当前 PoC 会继承不适用的主机工具，以及 Browser-specific preset 的配置落点。
 8. 需要理解复杂 SaaS 场景时，继续读[复杂续约实验设计](saas-agentic-ui-comparison-poc/complex/design-and-assessment.md)和[复杂实验测试记录](saas-agentic-ui-comparison-poc/complex/test-results.md)；前者拥有架构判断，后者拥有实际通过与未执行边界。
@@ -436,6 +436,7 @@ Cloud/Durable 研究回答的是 Browser-Native 的“后半程”：浏览器�
 
 | 文件 | 事实所有权 |
 |---|---|
+| [CURRENT-STATE.md](browser-native-dsh-poc/CURRENT-STATE.md) | 零上下文现状入口：durable-first 架构结论、一键回归与关键测试入口、已验证硬结论、未闭环项与下一批候选。 |
 | [README.md](browser-native-dsh-poc/README.md) | 运行入口、v2 当前快照、验证命令、目录边界和历史版本说明。 |
 | [browser-native-dsh-plan-v2.md](browser-native-dsh-poc/browser-native-dsh-plan-v2.md) | v2 设计目标、接入决策、profile、backend 协议要求和验收定义；不代表条目均已实现。 |
 | [browser-native-dsh-progress-v2.md](browser-native-dsh-poc/browser-native-dsh-progress-v2.md) | 当前人工验收、测试结果、已修复缺口和未完成范围。 |
