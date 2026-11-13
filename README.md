@@ -56,7 +56,7 @@ Start with the [development guide](docs/development.md) and [architecture docume
 
 `pnpm run dev:web` builds, serves, and rebuilds client bundles on source edits in one terminal, and `make help` lists the matching Make targets for Web and Desktop; the guide's application commands section owns the full table.
 
-For agents, follow [AGENTS.md](AGENTS.md).
+For agents, follow [AGENTS.md](AGENTS.md). Research drafts, including the browser-native PoC's zero-context [current state](docs/drafts/browser-native-dsh-poc/CURRENT-STATE.md), are indexed in [docs/drafts](docs/drafts/README.md).
 
 ## Citation
 

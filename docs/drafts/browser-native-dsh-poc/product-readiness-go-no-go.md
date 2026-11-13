@@ -64,6 +64,8 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 | Session 持久化与恢复 | GO（强证据，依赖服务端） | AES-256-GCM 信封加密；缺钥/损坏密文显式拒绝；在线轮换期间读操作可用、写操作排队；60 次随机 SIGKILL 后日志可读、seq 单调无重复、结算一次、无孤儿临时文件、审计链可验证；ENOSPC/EROFS/IO 超时按面归一为 `STORAGE_*` 并保留可重试状态 |
 | Durable Workspace（OPFS） | GO（有边界） | 配额失败无半份数据、未确认保存撤下工具、刷新 hydrate 后可重试；无三方合并、无块级 delta |
 | 文件工具 | GO（同一 6 工具 roster） | 两侧均跑通 `read`/`write`/`edit`/`glob`/`grep`/`subagent`；基准 roster 已移除 `todo_write`、禁用 `working_directory`；无 `bash`/`pwsh`/`web_*`/`browser_*` |
+| durable 工具发布链 | GO（单节点） | 工具按声明→probe→发布；`edit` 被探测为只读时模型 wire 剩 5 个工具且报告给出原因，无故障时 6 个全部发布；`durable-capability-publication.test.mjs` 通过，真实端点冒烟 `published`=6 且 turn `completed` |
+| durable 事件流续读 | GO（单节点） | 中途断流后从 last+1 续读事件连续、不重放 prompt、模型请求仍为 1、末事件 `turn/end`；跳号续读 `409 DURABLE_STREAM_GAP`；`durable-stream-reconnect.test.mjs` 通过 |
 | 审批与策略 | GO（仅验证 roster） | deny 经 `ctx.tools.guard` 不可绕过、prepended allow 无效、真实模型被拒后继续；策略仅按工具名；durable 待决审批已在正式 Web preview UI 显示工具名与目标并支持键盘批准/拒绝，决策后 turn 继续；正式主 composer 默认走 durable 服务端 host，失败时降级 Worker 并标明原因 |
 | Token 计量与预算 | GO（单一来源，Session 执行） | 限额只由部署配置一处注入，`/config` 与 Worker `budget-state` 同步为 12,000/24,000，改一处两侧同变为 15,000/30,000；未传限额在 probe 阶段拒绝启动。租户汇总只读，硬阻断仍限 Session |
 | 错误码与可操作建议 | GO | 失败码映射到 `retry`/`reload`/`request-access`/`contact-admin`/`diagnostics` 五类动作；预算超限不提供盲重试；未知码保留一次重试并附诊断包；`browser-native-failure-guidance.spec.ts` 7/7 |
@@ -94,6 +96,8 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 | “Worker 106,879 tokens / durable 22,965”“Worker 广告 8 工具” | 由削减后运行替代：**91,734 / 23,318**，双方 6 工具 | 移除未使用的 `todo_write` 与 `working_directory`、压缩 per-roster 提示后重跑同一基准；每完整请求静态字符 10,985 → 9,519 |
 | “会话检索：浏览器内部分 GO（121 Session）” | **未被替代** | 1,000 Session 只证明启动与容量，不外推到全文检索规模或排名质量 |
 | “跨主机未验证”“Safari/iOS 未验证”“费用/账单未实现” | **未被替代** | 新证据不覆盖跨主机、真机与计费 |
+| durable host 把声明的工具整表交给模型 | **被“声明→probe→发布”替代**：probe 不通过的工具不进模型 `tools` 与子代理子工具面 | `durable-capability-publication.test.mjs`；`GET /session/durable/capabilities` 报告 `declared/probed/published/reason` |
+| “断线只能从头重放或静默跳过” | **被显式续读语义替代**：last+1 续读、跳号 409 | `durable-stream-reconnect.test.mjs`；`409 DURABLE_STREAM_GAP` |
 
 ## 必须的服务端依赖
 
@@ -140,3 +144,4 @@ description: "汇总 Browser-Native DSH PoC 已落档的验证结论、环境限
 - 安全：[威胁模型](threat-model.md)、[egress 与凭据隔离](credential-isolation-proxy.md)、[principal 隔离](principal-scoped-session-isolation-progress.md)、[提示注入边界](prompt-injection-boundaries.md)、[本地后端加固](local-backend-hardening.md)、[Worker 隔离](worker-isolation-and-security.md)
 - 性能：[性能基线](performance-baseline.md)、[多 Session 争用](multi-session-contention.md)、[长转录](long-transcript-rendering.md)
 - 本批结论：[审批策略](approval-policy-configuration.md)、[token 预算](token-budget-metering.md)、[会话检索](session-query-browser-scale.md)、[16 Session 仪表盘](session-dashboard-16.md)
+- durable 执行面新增证据：`tests/durable-capability-publication.test.mjs`（工具发布链）、`tests/durable-stream-reconnect.test.mjs`（流续读与跳号拒绝）、[第二批候选](next-batch-candidates.md)（候选评估与取舍）

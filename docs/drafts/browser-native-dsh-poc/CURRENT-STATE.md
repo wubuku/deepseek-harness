@@ -28,6 +28,7 @@ node docs/drafts/browser-native-dsh-poc/tests/poc-gate.mjs --prepare
 | `tests/accessibility-audit.e2e.mjs` | axe 全页扫描（仅 serious/critical 阻断） | 同上 |
 | `tests/first-use.e2e.mjs` | 首用空态引导与首轮后抑制 | 同上 |
 | `tests/durable-feature-alignment.test.mjs`、`tests/durable-host-restart.test.mjs` | durable 功能对齐、进程重启结算 | Node 测试，秒级 |
+| `tests/durable-capability-publication.test.mjs`、`tests/durable-stream-reconnect.test.mjs` | 工具发布链（probe→模型 wire→报告）、断线续读与跳号拒绝 | Node 测试，秒级 |
 
 浏览器 E2E 统一使用 `DSH_POC_BROWSER=chrome`；Playwright 不在默认解析位置时用 `DSH_POC_PLAYWRIGHT_MODULE` 指过去。`poc-gate --group` / `--filter` / `--list` 可只跑单项。
 
@@ -39,7 +40,7 @@ node docs/drafts/browser-native-dsh-poc/tests/poc-gate.mjs --prepare
 - **审批主 UI**：`durable-ui-approval.e2e` 在正式 preview 键盘批准后落盘、键盘拒绝无写入，两次均为 11 个事件、seq 0–10，`pageErrors=0`；失败时面板提供可操作建议与“重试该轮”。见[审批进度](durable-host-progress.md)与[失败 turn 的界面重试](turn-retry.md)。
 - **重试面板不再遮挡 Send**：`retry-panel-send.e2e` 在 1440/390/320px 下断言面板与 composer、Send 均不相交，Send 中心点命中自身，面板可见时 Enter 提交仍得到 `completed` turn；此前失败的 `product-visibility.e2e` 已真正通过。
 - **关页续跑与重启结算**：`durable-host-restart.test.mjs` 覆盖宿主被杀后结算未完成 turn（`DURABLE_HOST_RESTARTED`），恢复 1 个 turn，重启后模型请求与工具调用均为 0，owner epoch 1→2，下一 turn 正常完成。见[重启恢复](durable-host-restart.md)。
-- **工具发布链**：durable host 的工具面走“声明 → 运行时 probe → 发布”，probe 失败的工具不进模型 `tools` 也不进子代理子工具面；`GET /session/durable/capabilities` 给出 `declared/probed/published/requiresApproval/reason`。`durable-capability-publication.test.mjs` 通过：`edit` 被判只读时模型 wire 为 5 个工具且报告有原因，无故障时 6 个全部发布。
+- **工具发布链**：durable host 的工具面走“声明 → 运行时 probe → 发布”，probe 失败的工具不进模型 `tools` 也不进子代理子工具面；`GET /session/durable/capabilities` 给出 `declared/probed/published/requiresApproval/reason`。`durable-capability-publication.test.mjs` 通过：`edit` 被判只读时模型 wire 为 5 个工具且报告有原因，无故障时 6 个全部发布。真实端点冒烟同步完成：以 `docs/drafts/.env` 的 OpenAI 兼容端点跑一条 durable turn，`published`=6、turn `completed`、无 LLM 错误（密钥只在进程环境使用）。
 - **流重连连续性**：`durable-stream-reconnect.test.mjs` 在 turn 中途断流后从“最后 seq + 1”续读，事件连续、无重复、`user/message` 与 `turn/start` 各 1、模型请求 1 次、末事件 `turn/end`；跳号续读返回 `409 DURABLE_STREAM_GAP`。
 - **可达性**：`accessibility-audit.e2e` 无 serious/critical axe 违规、无页面错误；窄屏 320px 与 390px 渲染已由伪本地化与重试面板 E2E 覆盖。见[无障碍审计](accessibility-audit.md)。
 

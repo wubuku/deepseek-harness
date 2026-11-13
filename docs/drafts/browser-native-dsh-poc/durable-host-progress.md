@@ -55,6 +55,8 @@ backend 新增：
 | `node tests/session-query-scale.e2e.mjs` | 122 Session（含 1 个 durable Session）检索探针通过：列表/过滤/全文/会话内命中均可索引 durable 事件；alpha 命中 61、beta 60。 |
 | `node tests/durable-composer.e2e.mjs` | 正式 Web preview（`preview.html?browser-native=1&browser-native-durable=1&browser-native-durable-turn=1`）：首用新 Session 下主 composer 状态条为 `durable`；Enter 提交得到服务端 durable turn 并 `completed`；刷新后同一 `sessionId` 仍路由 durable，第二 turn 独立完成、`turn/start` 计 2、两条 prompt 均落库、末事件为 `turn/end`；`pageErrors=0`。 |
 | `node tests/retry-panel-send.e2e.mjs` | 失败重试面板出现后，1440/390/320px 下均不与 composer 或 Send 控件相交，Send 中心点命中自身；面板可见时用 Enter 提交仍得到 `completed` turn；`pageErrors=0`。`product-visibility.e2e.mjs` 随之通过。 |
+| `node --test tests/durable-capability-publication.test.mjs` | 工具按声明→probe→发布：`edit` 被探测为只读时模型 wire 为 5 个工具且报告带 `reason`；无故障时 6 个全部发布；`GET /session/durable/capabilities` 返回 `declared/probed/published/requiresApproval`。真实端点冒烟 `published`=6、turn `completed`。 |
+| `node --test tests/durable-stream-reconnect.test.mjs` | turn 中途断流后从 last+1 续读：事件连续、不重放 prompt、模型请求 1 次、末事件 `turn/end`；跳号续读返回 `409 DURABLE_STREAM_GAP`。 |
 
 ## 复跑
 
