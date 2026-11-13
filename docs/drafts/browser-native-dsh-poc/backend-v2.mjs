@@ -6242,9 +6242,12 @@ export async function createBrowserNativeV2Server(options) {
    * @param {number} depth - Nesting depth of the child being started, starting at 1.
    * @returns {object[]} Tool definitions available to that child.
    */
-  const durableChildTools = depth => depth < MAX_DURABLE_SUBAGENT_DEPTH
-    ? [...DURABLE_CHILD_TOOLS, DURABLE_SUBAGENT_TOOL]
-    : DURABLE_CHILD_TOOLS
+  const durableChildTools = depth => {
+    const available = DURABLE_CHILD_TOOLS.filter(tool => durablePublishedToolNames.has(tool.function.name))
+    return depth < MAX_DURABLE_SUBAGENT_DEPTH && durablePublishedToolNames.has('subagent')
+      ? [...available, DURABLE_SUBAGENT_TOOL]
+      : available
+  }
   const workspaceToolPath = value => {
     if (typeof value !== 'string' || value.length === 0 || value.length > 1_000) {
       throw new DurableTurnError('DURABLE_TOOL_INVALID', 'file_path must be a non-empty string of at most 1000 characters', 400)
@@ -6476,6 +6479,53 @@ export async function createBrowserNativeV2Server(options) {
     }
     return { text: `the subagent did not finish within ${String(MAX_DURABLE_SUBAGENT_STEPS)} model steps`, isError: true }
   }
+  /**
+   * Probe one declared durable tool against its runtime prerequisites.
+   *
+   * Declaration, probe, and publication stay separate: a tool reaches the
+   * model only after its executor exists and the deployment's optional probe
+   * reports it usable. A degraded tool carries a reason instead of silently
+   * appearing in the model schema and failing at call time.
+   * @param {string} name - Declared tool name.
+   * @returns {{supported: boolean, reason?: string}} Probe outcome.
+   */
+  const probeDurableTool = name => {
+    if (typeof executeDurableTool !== 'function') {
+      return { supported: false, reason: 'durable tool executor is not installed' }
+    }
+    if (name === 'subagent') {
+      if (typeof executeDurableSubagent !== 'function') return { supported: false, reason: 'subagent executor is not installed' }
+      if (DURABLE_CHILD_TOOLS.length === 0) return { supported: false, reason: 'subagent has no child tool surface' }
+    }
+    const injected = options.testHooks?.durableCapabilityProbe?.(name)
+    if (injected?.supported === false) {
+      return { supported: false, reason: typeof injected.reason === 'string' ? injected.reason : 'runtime probe reported this tool unsupported' }
+    }
+    return { supported: true }
+  }
+  const durableCapabilityTools = DURABLE_TOOL_DEFINITIONS.map(tool => {
+    const name = tool.function.name
+    const probe = probeDurableTool(name)
+    return {
+      name,
+      declared: true,
+      probed: probe.supported,
+      published: probe.supported,
+      requiresApproval: name === 'write' || name === 'edit',
+      ...(probe.reason === undefined ? {} : { reason: probe.reason }),
+    }
+  })
+  const durablePublishedToolNames = new Set(durableCapabilityTools.filter(tool => tool.published).map(tool => tool.name))
+  const DURABLE_PUBLISHED_TOOLS = DURABLE_TOOL_DEFINITIONS.filter(tool => durablePublishedToolNames.has(tool.function.name))
+  /**
+   * Snapshot the durable tool publication chain for operators and tests.
+   * @returns {{tools: object[], published: string[], unsupported: string[]}} Report.
+   */
+  const durableCapabilityReport = () => ({
+    tools: durableCapabilityTools.map(tool => ({ ...tool })),
+    published: [...durablePublishedToolNames],
+    unsupported: durableCapabilityTools.filter(tool => !tool.published).map(tool => tool.name),
+  })
   const durableTurnTimeoutMs = timeoutMs(options.durableTurnTimeoutMs === undefined
     ? (options.llmTimeoutMs ?? 120_000) : options.durableTurnTimeoutMs, 'durableTurnTimeoutMs')
   const durableApprovalTimeoutMs = timeoutMs(options.durableApprovalTimeoutMs ?? 60_000, 'durableApprovalTimeoutMs')
@@ -6605,7 +6655,7 @@ export async function createBrowserNativeV2Server(options) {
     timeoutMs: durableTurnTimeoutMs,
     approvalTimeoutMs: durableApprovalTimeoutMs,
     requiresApproval: call => call.name === 'write' || call.name === 'edit',
-    tools: DURABLE_TOOL_DEFINITIONS,
+    tools: DURABLE_PUBLISHED_TOOLS,
     executeTool: executeDurableTool,
     executeSubagent: executeDurableSubagent,
     prepareUserMessage: prepareDurableUserMessage,
@@ -7847,6 +7897,11 @@ export async function createBrowserNativeV2Server(options) {
         const principalId = workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
         const turnId = boundedString(url.searchParams.get('turnId') ?? undefined, 'turnId', MAX_HANDOFF_ID_LENGTH)
         sendJson(response, 200, durableHost.status({ turnId, principalId }))
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/browser-native/session/durable/capabilities') {
+        workspaces.principalFromRequest(request, 'dsh-browser-native-session-principal')
+        sendJson(response, 200, { protocolVersion: PROTOCOL_VERSION, ...durableCapabilityReport() })
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/browser-native/session/durable/stop') {

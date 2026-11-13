@@ -45,7 +45,7 @@ description: "基于 dsh-TUI 只读参考的第二批 Browser-Native DSH PoC 高
 
 理由：当前 durable host 把 `DURABLE_TOOL_DEFINITIONS` 整表交给模型，工具能否执行只由运行期 try/catch 体现。这违反备忘的三段纪律：声明不等于 probe，更不等于已对模型发布。它同时是“模型先看到工具再反复试错”这一产品体验问题的根因，且可用 scripted 模型直接断言“发给模型的 tool 列表”。
 
-本批做法：为每个工具记录声明、probe 结果与发布状态；probe 失败的工具不进入模型 wire；新增只读报告入口，列出每个工具的 `declared/probed/published/reason`，并纳入 metrics 快照。验收断言是“未 probe 通过的工具不出现在模型请求的 `tools` 中，且报告能解释原因”。
+本批做法：为每个工具记录声明、probe 结果与发布状态；probe 失败的工具不进入模型 wire，也不进入子代理的子工具面；新增只读报告入口 `GET /api/browser-native/session/durable/capabilities`，列出每个工具的 `declared/probed/published/reason`。验收断言是“未 probe 通过的工具不出现在模型请求的 `tools` 中，且报告能解释原因”。
 
 ### 选中 2：durable 流重连连续性（#4）
 
