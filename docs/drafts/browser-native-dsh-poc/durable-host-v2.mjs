@@ -1090,6 +1090,24 @@ export function createDurableTurnHost({
   }
 
   /**
+   * Reject an attach request that skipped events instead of silently replaying
+   * a suffix. `fromSeq` may equal the last sequence plus one, which resumes
+   * exactly where the dropped stream stopped.
+   * @param {number} fromSeq - First requested sequence.
+   * @param {number|undefined} lastSeq - Last persisted sequence on this turn.
+   */
+  const assertAttachableSeq = (fromSeq, lastSeq) => {
+    const highest = lastSeq ?? -1
+    if (fromSeq > highest + 1) {
+      throw new DurableTurnError(
+        'DURABLE_STREAM_GAP',
+        `fromSeq ${fromSeq} skips sequence ${highest + 1}; resume at ${highest + 1} or earlier`,
+        409,
+      )
+    }
+  }
+
+  /**
    * Follow a turn's persisted events from a sequence number until it settles.
    *
    * The snapshot is read synchronously with the waiter registration, so an
@@ -1109,6 +1127,7 @@ export function createDurableTurnHost({
       if (recovered === undefined || recovered.principalId !== principalId) {
         throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
       }
+      assertAttachableSeq(fromSeq, recovered.events.at(-1)?.seq)
       let index = 0
       const next = async () => {
         if (signal?.aborted === true) return undefined
@@ -1123,6 +1142,7 @@ export function createDurableTurnHost({
     if (run.principalId !== principalId) {
       throw new DurableTurnError('TURN_NOT_FOUND', 'durable turn does not exist', 404)
     }
+    assertAttachableSeq(fromSeq, run.channelEvents.at(-1)?.seq)
     let cursor = fromSeq
     const next = async () => {
       while (true) {

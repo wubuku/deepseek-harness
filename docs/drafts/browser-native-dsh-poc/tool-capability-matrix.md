@@ -4,6 +4,8 @@
 
 本矩阵描述浏览器 Worker 降级/离线路径。产品默认执行面是 durable 服务端 host（见[生产执行路径](product-readiness-go-no-go.md#生产执行路径durable-主路径与-worker-降级)）：它提供 `read`/`write`/`edit`/`glob`/`grep`/`subagent` 与审批，基准 roster 已裁掉未使用的 `todo_write` 与 `working_directory`；Worker 侧仍保留这些工具供产品 profile 使用。
 
+durable host 的工具面按“声明 → 运行时 probe → 发布”三段处理：probe 不通过的工具既不进入模型请求的 `tools`，也不进入子代理子工具面，只读报告 `GET /api/browser-native/session/durable/capabilities` 会给出 `declared/probed/published/requiresApproval/reason`。当前 probe 校验执行器是否安装、subagent 是否有子工具面，并接受部署侧注入的能力探测；probe 全通过时 6 个工具全部发布。证据：[durable-capability-publication.test.mjs](tests/durable-capability-publication.test.mjs)。
+
 ## 矩阵
 
 | 能力 | Worker 可用性 | 模型可见 | 限制 | 不可用或失败时的降级 | 证据 |

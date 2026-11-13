@@ -148,6 +148,12 @@ http://127.0.0.1:<port>/preview.html?browser-native=1&browser-native-durable=1&p
 
 本批次实现只把 `MemoryVfs` 的文件变更异步写入 durable store，没有把 OPFS 伪装成完整 Node 文件系统，也没有改变 Session 与 Workspace 的非原子关系。规划、实际进度、失败记录和经验教训见 [durable-workspace-plan.md](durable-workspace-plan.md) 与 [durable-workspace-progress.md](durable-workspace-progress.md)；目录外 opt-in 接线见 [change-ledger.md](change-ledger.md)。事实核查进一步说明：VFS、结构化 command provider、WASI adapter 和 Shell/VM runtime 是不同层，当前 PoC 只验证前两层。
 
+## Durable 工具发布链与流重连
+
+durable host 不再把声明的工具整表交给模型：每个工具先 probe 执行器与可选的部署能力探测，只有 probe 通过的工具才进入模型 `tools` 与子代理子工具面；`GET /api/browser-native/session/durable/capabilities` 返回每个工具的 `declared/probed/published/requiresApproval/reason`，降级工具因此有解释而不是调用期才暴露。`durable-capability-publication.test.mjs` 通过：`edit` 被探测为只读 Workspace 时模型 wire 只剩 5 个工具，报告给出原因；无故障时 6 个全部发布。
+
+durable 事件流支持从 `fromSeq` 续读：断线后从“最后已收 seq + 1”重连不会重复事件、不会重放 prompt，也不会重新触发模型请求；跳号续读显式返回 `409 DURABLE_STREAM_GAP`，而不是静默补一个缺口。`durable-stream-reconnect.test.mjs` 通过：中途断流后续读首事件紧接上次 `seq`、事件连续、`user/message` 与 `turn/start` 各 1、模型请求 1 次、末事件 `turn/end`。
+
 ## 多 Workspace 管理
 
 浏览器原生模式的左下角提供 Workspace 切换器：列出当前 principal 拥有的 Workspace（短 id、文件数、revision），可新建或切换。切换沿用同一 principal cookie，只更新服务端记录的 active Workspace，然后刷新页面；刷新前清空本标签页的 `sessionStorage` 恢复记录，避免旧 Workspace 的 lease/receipt 被新 Worker 恢复。每个 Worker 启动时只读取 active Workspace 的 manifest，切换前后的文件与 Session 不共享；backend 仍按 `workspaceId` 的 owner 授权，跨 principal 的显式 Workspace id 返回 403/404，writer lease 仍按 Workspace 独立计量。

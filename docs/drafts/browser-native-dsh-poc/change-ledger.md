@@ -3487,3 +3487,19 @@ syncReplaySteps: 上游同步后重建 preview，复跑单元测试、这个 E2E
 deleteCondition: 正式产品提供统一的失败分类与可操作建议，或 Browser-Native DSH PoC 被移除。
 status: implemented
 ```
+
+### BN-P2-163：durable 工具发布链与流重连连续性
+
+```text
+changeId: BN-P2-163
+upstreamBaseline: research branch; 2026-11-13; 主工作区，无隔离 worktree
+file: docs/drafts/browser-native-dsh-poc/backend-v2.mjs; docs/drafts/browser-native-dsh-poc/durable-host-v2.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-capability-publication.test.mjs; docs/drafts/browser-native-dsh-poc/tests/durable-stream-reconnect.test.mjs; docs/drafts/browser-native-dsh-poc/README.md; docs/drafts/browser-native-dsh-poc/tool-capability-matrix.md; docs/drafts/browser-native-dsh-poc/next-batch-candidates.md; docs/drafts/browser-native-dsh-poc/change-ledger.md
+reason: durable host 原先把声明的工具整表交给模型，执行器缺位只能靠调用期 try/catch 暴露，违反“声明/探测/发布分阶段”的参考纪律；`fromSeq` 续读没有证据证明不重放 prompt、不重复事件、对跳号显式失败，刷新/断线后的产品承诺缺底层保证。
+existingExtensionPointsChecked: 复用 durable host 的 `tools` 构造点与 `durableChildTools` 子工具面、`/session/durable/stream` 的 `fromSeq` 订阅、`testHooks.scriptedLlmFault` 的 wire 观察与 barrier；未改 Agent Loop、Session format、`packages/`、正式 profile 或 Worker 协议。
+behaviorChange: durable host 新增 per-tool probe（执行器是否安装、subagent 是否有子工具面、可选部署注入的 `durableCapabilityProbe`），只有 `published` 的工具进入模型 `tools` 与子代理子工具面；新增只读 `GET /api/browser-native/session/durable/capabilities` 报告 `declared/probed/published/requiresApproval/reason`。durable 事件流续读对跳号 `fromSeq` 显式返回 `409 DURABLE_STREAM_GAP`（消息给出应续读的 seq），不再静默补洞；已结算（recovered）turn 的续读同样校验可接续性。
+consumersUpdated: backend-v2 路由、durable-host 订阅、工具能力矩阵与 README 章节、候选评估页、CURRENT-STATE 硬结论、本 ledger。
+tests: `node --test tests/durable-capability-publication.test.mjs` 通过：`edit` 被探测为只读时模型 wire 为 5 个工具且报告 `reason`，无故障时 6 个全部发布；`node --test tests/durable-stream-reconnect.test.mjs` 通过：中途断流后从“最后 seq + 1”续读首事件紧接上次 seq、事件连续、`user/message` 与 `turn/start` 各 1、模型请求 1 次、末事件 `turn/end`，跳号续读 `409 DURABLE_STREAM_GAP`。回归：`durable-feature-alignment.test.mjs`、`durable-host.test.mjs`、`durable-host-restart.test.mjs` 均通过。真实端点冒烟：以 `docs/drafts/.env` 的 OpenAI 兼容端点跑一条 durable turn，`published` 6、turn `completed`、无 LLM 错误（密钥只在进程环境，未落盘）。未改 `packages/`，无需 `build:check`。
+syncReplaySteps: 上游同步后复跑 `durable-capability-publication.test.mjs` 与 `durable-stream-reconnect.test.mjs`；若 durable 工具清单或事件订阅协议变化，同步更新 probe 表与订阅校验。
+deleteCondition: 正式产品提供按执行面的工具发布与断线续读语义，或 Browser-Native DSH PoC 被移除。
+status: implemented
+```
